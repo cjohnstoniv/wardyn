@@ -140,6 +140,18 @@ describe("Name this run: the fresh check (U12)", () => {
     await waitFor(() => expect(preflight).toHaveBeenCalledTimes(2));
   });
 
+  it.each([[500, "The server could not answer."], [429, "Too many checks."]])(
+    "a check that failed or was rate-limited (%i) leaves Launch available: the create is the authority (FR-0100)",
+    async (status, message) => {
+      preflight.mockRejectedValue(refusal(status, message));
+      open();
+      const box = await dialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "x");
+      await waitFor(() => expect(within(box).queryByText(NR_LAUNCH.CHECKING)).not.toBeInTheDocument());
+      expect(launchButton()).toBeEnabled();
+    },
+  );
+
   it("Launch needs a title", async () => {
     open();
     const box = await dialog();

@@ -2700,3 +2700,13 @@ func TestWaitForRun_TransientErrorsStillTolerated(t *testing.T) {
 		t.Fatalf("err = %v, want success after transient 502s", err)
 	}
 }
+
+// A --reason over the server's 512-character bound is refused before any request (FUG-L725).
+func TestCheckReasonLength(t *testing.T) {
+	if err := checkReasonLength(strings.Repeat("é", maxReasonLen)); err != nil {
+		t.Fatalf("512 characters must pass: %v", err)
+	}
+	if err := checkReasonLength(strings.Repeat("é", maxReasonLen+1)); err == nil {
+		t.Fatal("513 characters must be refused")
+	}
+}

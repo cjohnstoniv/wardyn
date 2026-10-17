@@ -61,6 +61,10 @@ describe("Service identities I sponsor card", () => {
     ["Revoked", SERVICES.REVOKED],
     ["Revoked 38 days ago", SERVICES.REVOKED_AT(inWords(at(-38 * D), NOW))],
     ["Revoked just now", SERVICES.REVOKED_AT(inWords(at(-1000), NOW))],
+    // FR-0126: a count that rounds up to the next unit's size steps up a unit.
+    ["Created 1 hour ago", SERVICES.CREATED(inWords(at(-3_599_000), NOW))],
+    ["Created 1 day ago", SERVICES.CREATED(inWords(at(-86_000_000), NOW))],
+    ["Created 59 minutes ago", SERVICES.CREATED(inWords(at(-59 * 60_000), NOW))],
     ["Never", SERVICES.NEVER],
     ["No tokens yet.", SERVICES.NO_TOKENS],
     ["Mint one to let release-notes start runs.", SERVICES.NO_TOKENS_MINT("release-notes")],
@@ -107,7 +111,7 @@ describe("Token dialog", () => {
     ["You haven't copied it yet. Once you close this, it can't be shown again.", TOKEN_DIALOG.REVEAL_UNCOPIED],
     ["Name", TOKEN_DIALOG.DETAIL_NAME],
     ["Acts as", TOKEN_DIALOG.DETAIL_ACTS_AS],
-    ["you (Member)", TOKEN_DIALOG.ACTS_AS_YOU(ROLE_WORDS.user)],
+    ["you (User)", TOKEN_DIALOG.ACTS_AS_YOU(ROLE_WORDS.user)],
     ["you (Security admin)", TOKEN_DIALOG.ACTS_AS_YOU(ROLE_WORDS.security_admin)],
     ["you (Super admin)", TOKEN_DIALOG.ACTS_AS_YOU(ROLE_WORDS.admin)],
     ["Expires", TOKEN_DIALOG.DETAIL_EXPIRES],
@@ -141,6 +145,8 @@ describe("Admin > Credentials state column", () => {
     ["Revoked 2 days ago, when they claimed their own.", DISPOSITION.replaced_by_owner.sub("2 days ago")],
     ["Moved to a service identity", DISPOSITION.moved_to_service_identity.label],
     ["Revoked 9 days ago, after the move.", DISPOSITION.moved_to_service_identity.sub("9 days ago")],
+    ["Expired", MINTED.EXPIRED],
+    ["No longer works. Nothing to decide.", MINTED.EXPIRED_SUB],
     ["Revoked", DISPOSITION.revoked.label],
     ["Revoked 30 days ago, with no replacement.", DISPOSITION.revoked.sub("30 days ago")],
   ])("%s", (mock, actual) => expect(actual).toBe(mock));

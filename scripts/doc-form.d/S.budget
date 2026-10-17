@@ -135,6 +135,8 @@
 # docs/sdk.md 18359 = 18349 + 10 (RV4a), measured at the wave-B merge.
 # K4 (0.9.3): docs/sdk.md 17786 measured, +78 for the runner_trust_changed row and the trust class on the placement_credential and credential_delivery_invalid rows.
 # docs/sdk.md 18437 = 18359 + 78 (K4), measured at the wave-B merge.
+# docs/sdk.md 17942 adds 6 over 17936, measured (0.9.3 RV6 merge of UIM into batch/093): the credential_delivery_stale reason UIb added.
+# docs/sdk.md 18437 = 18437 + 0 (RV6), measured at the wave-C merge.
 docs/sdk.md=18437 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

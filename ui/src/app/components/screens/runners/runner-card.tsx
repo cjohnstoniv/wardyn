@@ -101,7 +101,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>
-              {RUNNER_V6.LAST_SEEN(online ? "now" : relativeTime(self.last_seen_at ?? ""))}
+              {RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
             </span>
           )}
         </div>

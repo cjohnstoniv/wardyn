@@ -87,6 +87,8 @@ export function useAdoLaunchDoor(): {
     if (!mountedRef.current) return;
     setOpen(false);
     if (connected) {
+      // The note under the refusal asked for this connect; it is answered.
+      setRefusal(null);
       toast.success(ADO.RELAUNCH_TOAST_TITLE, { description: ADO.RELAUNCH_TOAST_BODY });
     }
   };

@@ -156,6 +156,33 @@ describe("InvitationsCard", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: new RegExp(`^${T.TITLE}`) })).toHaveFocus());
   });
 
+  it("claiming the last waiting invitation moves focus to the main region, not <body> (FUG-L356)", async () => {
+    invitations = [withTTL];
+    route = (m, p) => {
+      if (m === "POST" && p === `/api/v1/me/invitations/${withTTL.id}/claim`) {
+        invitations = [];
+        return json(minted(), 201);
+      }
+      return m === "GET" && p.startsWith("/api/v1/me/tokens") ? json([{ id: OLD, name: "ci-old-key" }]) : json(invitations);
+    };
+    const main = document.createElement("main");
+    main.id = "main-content";
+    main.tabIndex = -1;
+    document.body.appendChild(main);
+    try {
+      mount();
+      await openCard();
+      await user.click(screen.getByRole("button", { name: T.CLAIM_LABEL("security-lee@example.com") }));
+      await user.click(screen.getByRole("button", { name: D.CLAIM_SUBMIT }));
+      await screen.findByTestId("show-once-token");
+      await user.click(screen.getByRole("button", { name: D.COPY }));
+      await user.click(screen.getByRole("button", { name: D.DONE }));
+      await waitFor(() => expect(main).toHaveFocus());
+    } finally {
+      main.remove();
+    }
+  });
+
   it("a second claim never shows the first token again", async () => {
     const SECOND = SECRET.replace("0001", "0002");
     let n = 0;

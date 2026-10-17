@@ -12,6 +12,7 @@ import { HttpError } from "../../../lib/api/core";
 import { SCENARIO_TEMPLATES } from "../../../lib/new-run-fixtures/scenarios/templates";
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 import type { TemplateList, TemplateSummary } from "../../../lib/types/templates";
+import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { NR_RUN } from "../../wardyn/copy/new-run/run";
 import { TemplatesScreen } from "./templates-screen";
@@ -233,7 +234,7 @@ describe("Templates screen: who can change a row", () => {
   });
 });
 
-describe("Templates screen: Publish to organisation (A9)", () => {
+describe("Templates screen: Publish to organization (A9)", () => {
   it("is offered in the Admin view on rows that are not already the organisation's", async () => {
     mount({ templates: [MINE, { ...ORG, writable: true }], publish: ADMIN }, "/admin/templates");
     await screen.findByText("Nightly tests");
@@ -253,15 +254,29 @@ describe("Templates screen: Publish to organisation (A9)", () => {
     expect(screen.queryByRole("button", { name: T.PUBLISH })).toBeNull();
   });
 
-  it("copies the row to the organisation and reloads; a refusal shows the server's sentence", async () => {
+  it("asks first with what a shared template shows, and publishes only on confirm, with a toast (FR-0120)", async () => {
     mount({ templates: [MINE], publish: ADMIN }, "/admin/templates");
     await userEvent.click(await screen.findByRole("button", { name: T.PUBLISH }));
-    expect(api.publishToOrg).toHaveBeenCalledWith(ID(1));
-    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    const dialog = await screen.findByRole("alertdialog", { name: T.PUBLISH_TITLE("Nightly tests") });
+    expect(within(dialog).getByText(NR_SAVE.SHARED_DISCLOSURE)).toBeInTheDocument();
+    expect(api.publishToOrg).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: T.CANCEL }));
+    expect(api.publishToOrg).not.toHaveBeenCalled();
 
-    api.publishToOrg.mockRejectedValueOnce(new HttpError(409, "Another template available to the same people already uses this name.", "template_name_taken"));
     await userEvent.click(screen.getByRole("button", { name: T.PUBLISH }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.PUBLISH }));
+    expect(api.publishToOrg).toHaveBeenCalledWith(ID(1));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.PUBLISHED("Nightly tests")));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+  });
+
+  it("a refusal shows the server's sentence, and no success toast", async () => {
+    mount({ templates: [MINE], publish: ADMIN }, "/admin/templates");
+    api.publishToOrg.mockRejectedValueOnce(new HttpError(409, "Another template available to the same people already uses this name.", "template_name_taken"));
+    await userEvent.click(await screen.findByRole("button", { name: T.PUBLISH }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.PUBLISH }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Another template available to the same people already uses this name."));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 

@@ -64,8 +64,10 @@ export function AddSecretDialog({ names, namesFailure, hosts, residentAllowed, m
   const error = submitted ? errors[mode] : "";
 
   const confirm = () => {
+    // With no secret to add (none saved, or the names could not be read) the field errors would blame the host.
+    if (!secret) return;
     setSubmitted(true);
-    if (!secret || errors[mode]) return;
+    if (errors[mode]) return;
     if (mode === "header") {
       onAdd({ kind: "header", secret: { secret_name: secret, host: hostValue, ...(header.trim() && { header: header.trim() }), ...(format.trim() && { format: format.trim() }) } });
     } else if (mode === "env") {
@@ -93,9 +95,10 @@ export function AddSecretDialog({ names, namesFailure, hosts, residentAllowed, m
       onClose={onClose}
     >
       <ToolField id={fieldId("secret")} label={NR_TOOLS.SECRET_LABEL}>
-        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setPicked(e.target.value)}>
+        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} disabled={names.length === 0} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setPicked(e.target.value)}>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
+        {names.length === 0 && !namesFailure && <p className="text-sm text-foreground">{NR_TOOLS.SECRET_NONE}</p>}
         <p id={`${fieldId("secret")}-help`} className="text-sm text-muted-foreground">{NR_TOOLS.SECRET_HELP}</p>
         <NamesFailed failure={namesFailure} />
       </ToolField>

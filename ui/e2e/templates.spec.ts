@@ -473,3 +473,32 @@ test.describe("Start from a saved template and Run again", () => {
     await expect(page.getByText(NR_SHAPE.EMPTY_TEMPLATES)).toBeVisible();
   });
 });
+
+test.describe("Templates: Publish to organization (FR-0120)", () => {
+  test("asks first with what a shared template shows, and publishes only on confirm, with a toast", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: { org: true, groups: [], groups_unverified: false } });
+    const copies: unknown[] = [];
+    await page.route("**/api/v1/templates/*/copy", (route) => {
+      copies.push(route.request().postDataJSON());
+      return route.fulfill({ status: 201, json: revisionOf(NIGHTLY) });
+    });
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/templates");
+    await expect(page.getByRole("heading", { name: T.TITLE, level: 1 })).toBeVisible();
+
+    await rowOf(page, NIGHTLY.name).getByRole("button", { name: T.PUBLISH }).click();
+    const dialog = page.getByRole("alertdialog", { name: T.PUBLISH_TITLE(NIGHTLY.name) });
+    await expect(dialog.getByText(NR_SAVE.SHARED_DISCLOSURE)).toBeVisible();
+    expect(copies).toHaveLength(0);
+
+    await dialog.getByRole("button", { name: T.CANCEL }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(copies).toHaveLength(0);
+
+    await rowOf(page, NIGHTLY.name).getByRole("button", { name: T.PUBLISH }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: T.PUBLISH }).click();
+    await expect(page.getByText(T.PUBLISHED(NIGHTLY.name))).toBeVisible();
+    expect(copies).toEqual([{ scope: "org" }]);
+  });
+});
+

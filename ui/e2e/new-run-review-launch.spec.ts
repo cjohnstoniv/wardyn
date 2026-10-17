@@ -120,6 +120,19 @@ test.describe("New Run, Review: blockers and Check again", () => {
     await expect(launch(page)).toBeDisabled();
   });
 
+  test("a document edited after it was accepted holds Launch with a sentence of its own (FR-0099, doc_invalid)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    await openReview(page);
+    await expect(launch(page)).toBeEnabled();
+    await page.goBack();
+    const editor = page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") });
+    await editor.fill(`${DOCUMENT}# edited\n`);
+    await page.goForward();
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await expect(page.locator("#nr-blockers").getByText(NR_DOCUMENT.DOC_INVALID)).toBeVisible();
+    await expect(launch(page)).toBeDisabled();
+  });
+
   test("Check again reads the server again and releases Launch", async ({ page }) => {
     const checks: Checks = { preflight: MISSING };
     await stub(page, checks);
@@ -158,6 +171,21 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
 
     await page.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }).click();
     await expect(page).toHaveURL(new RegExp(`/runs/${RUN_ID}`));
+  });
+
+  test("a queued run with under an hour left names the time it gives up, not 'In 1 hour' (FR-0101)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
+    const queued = new Date(Date.now() - 2 * 60_000).toISOString();
+    await page.route(`**/api/v1/runs/${RUN_ID}`, (route) =>
+      route.fulfill({ json: { id: RUN_ID, state: "QUEUED", queue: { pool_id: "p-e2e", queued_at: queued, deadline_at: deadline, position: 1, reason: "runner_pool_at_capacity" } } }),
+    );
+    await gotoConsole(page);
+    await page.goto(`/runs/new?launched=${RUN_ID}`);
+    const givesUp = page.getByText(NR_LAUNCH.GIVES_UP, { exact: true }).locator("xpath=following-sibling::dd");
+    const clock = await page.evaluate((iso) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }), deadline);
+    await expect(givesUp).toHaveText(clock);
+    await expect(givesUp).not.toContainText(/In 1 hour/);
   });
 
   test("Start another run opens a blank Start", async ({ page }) => {

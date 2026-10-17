@@ -298,6 +298,21 @@ test.describe("New Run, Files: repositories", () => {
     expect(last(sent).workspaces).toHaveLength(1);
   });
 
+  test("editing the item the run starts in moves the start to what it became (FR-0108)", async ({ page }) => {
+    const sent = await stub(page, { branches: ["main"] });
+    await toFiles(page);
+    await addRepo(page, "web");
+    await expect.poll(() => last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[0].repo });
+    await press(page, NR_FILES.EDIT_NAMED("web"));
+    await dialog(page).getByRole("button", { name: NR_SHARED.BACK, exact: true }).click();
+    await dialog(page).getByRole("radio", { name: /^docs/ }).check();
+    await dialog(page).getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+    await dialog(page).getByRole("button", { name: NR_FILES.SAVE, exact: true }).click();
+    await expect(dialog(page)).toBeHidden();
+    await expect.poll(() => last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[1].repo });
+    await expect(cards(page).filter({ hasText: "docs" })).toContainText(NR_FILES.STARTS_HERE);
+  });
+
   test("the mount map and the summary follow what is added and where it starts", async ({ page }) => {
     await stub(page, { branches: ["main"] });
     await toFiles(page);
@@ -382,6 +397,33 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     await expect(cards(page).filter({ hasText: DRIVE.name })).toContainText(NR_FILES.STARTS_HERE);
     await expect.poll(() => last(sent).drives).toEqual([{ drive_id: DRIVE.id }]);
     expect(last(sent).start_folder).toEqual({ kind: "attachment", drive_id: DRIVE.id });
+  });
+
+  test("a drive the person removed is not attached again when the step is opened again (FR-0109)", async ({ page }) => {
+    const sent = await stub(page, { drives: [DRIVE] });
+    await toFiles(page, "environment");
+    await expect(cards(page).filter({ hasText: DRIVE.name })).toBeVisible();
+    await press(page, NR_FILES.REMOVE_NAMED(DRIVE.name));
+    await expect(cards(page)).toHaveCount(0);
+    await expect.poll(() => last(sent).drives).toBeUndefined();
+    await press(page, NR_SHARED.BACK);
+    await next(page, NR_SHARED.STEP_FILES);
+    await expect(page.getByRole("heading", { name: NR_FILES.TITLE })).toBeVisible();
+    // The step reads the catalogue again as it opens; give an attach that was going to happen the time to show.
+    await page.waitForTimeout(750);
+    await expect(cards(page)).toHaveCount(0);
+    expect(last(sent).drives).toBeUndefined();
+  });
+
+  test("a kind that is not available yet is hatched, disabled and still fully legible (FR-0094)", async ({ page }) => {
+    await stub(page, {});
+    await toFiles(page, "application");
+    await press(page, NR_FILES.ADD_ARIA);
+    const computer = dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.COMPUTER_TITLE}`) });
+    await expect(computer).toBeDisabled();
+    await expect(computer).toContainText(NR_FILES.COMPUTER_SOON);
+    // The reason line is the explanation, so the tile must not also be dimmed under it.
+    await expect(computer).toHaveCSS("opacity", "1");
   });
 
   test("a drive the profile refuses is one sentence where the drives would be", async ({ page }) => {

@@ -35,6 +35,8 @@ export const NR_RUN = {
   APP_SERVER: "Application / server",
   APP_SERVER_BODY: "App servers and MCP servers.",
   COMMAND_LABEL: "Command",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
+  COMMAND_REQUIRED: "A command run needs a command to run.",
   COMMAND_HELP: "Run verbatim in the sandbox. The run ends when the command exits.",
   WHERE_LABEL: "Where should it run?",
   POOL_LABEL: "Pool",

@@ -22,7 +22,6 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../ne
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { MISSING_COPY } from "./missing-copy";
 import { importRunDocument, type ImportDocument } from "./import-door";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
@@ -60,7 +59,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const [lines, setLines] = React.useState<string[]>([]);
   const [valid, setValid] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  // undefined while the roster loads, null when it holds no enabled harness.
+  // undefined while the roster loads (or could not be read), null when it holds no enabled harness.
   const [harness, setHarness] = React.useState<string | null | undefined>(undefined);
   const check = React.useRef<{ id: number; abort?: AbortController }>({ id: 0 });
   const fileInput = React.useRef<HTMLInputElement>(null);
@@ -71,7 +70,8 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     let off = false;
     loadHarnesses().then(
       (roster) => !off && setHarness(roster.find((h) => h.enabled !== false)?.id ?? null),
-      () => !off && setHarness(null),
+      // A roster that could not be read says nothing about the harnesses: the button stays off with no reason given.
+      () => undefined,
     );
     return () => { off = true; };
   }, [loadHarnesses]);
@@ -124,7 +124,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     check.current = mine;
     setBusy(true);
     try {
-      if (tooLarge(source)) return void refuse(mine.id, [MISSING_COPY.TOO_LARGE]);
+      if (tooLarge(source)) return void refuse(mine.id, [copy.TOO_LARGE]);
       // A document that does not parse is refused here, without a request.
       if (!parsePolicySource(source, as).ok) return void refuse(mine.id, [as === "json" ? copy.JSON_INVALID : copy.YAML_INVALID]);
       const answer = await importDocument(as, source, mine.abort.signal);
@@ -159,13 +159,13 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     read.current = cancelRead(read.current);
     if (file.size > MAX_DOCUMENT_BYTES) {
       supersede();
-      return refuse(check.current.id, [MISSING_COPY.TOO_LARGE]);
+      return refuse(check.current.id, [copy.TOO_LARGE]);
     }
     const reader = new FileReader();
     const mine = { id: read.current.id, reader };
     read.current = mine;
     reader.onload = () => mine.id === read.current.id && setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
-    reader.onerror = () => mine.id === read.current.id && refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
+    reader.onerror = () => mine.id === read.current.id && refuse(check.current.id, [copy.FILE_UNREADABLE]);
     reader.readAsText(file);
   };
 
@@ -214,13 +214,13 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
                 importFile(file);
               }}
             />
-            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
+            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null ? NO_HARNESS_ID : undefined}
               onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
               {copy.LOAD_EXAMPLE}
             </Button>
           </div>
         </div>
-        {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
+        {harness === null && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{copy.NO_HARNESS}</p>}
         <DocumentEditor
           id={EDITOR_ID}
           value={text}

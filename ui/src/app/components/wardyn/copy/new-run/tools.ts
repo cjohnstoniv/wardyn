@@ -133,6 +133,8 @@ export const NR_TOOLS = {
     "Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox.",
   SECRET_LABEL: "Secret",
   SECRET_HELP: "Values are stored encrypted and never shown again. Add new secrets under Your account.",
+  /** Owner-approved 2026-10-17 (FR-0110): shown with the empty secret picker. */
+  SECRET_NONE: "You have no saved secrets yet.",
   DELIVERY_LABEL: "Delivery",
   /** pending W-39: the recommended text until the owner answers. */
   DELIVERY_HEADER_OPTION: "Request header",

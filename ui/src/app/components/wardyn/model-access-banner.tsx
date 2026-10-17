@@ -38,7 +38,7 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
 import { useOperatorResolved, usePrincipal } from "./operator-context";
-import { screenPath, viewOfPath } from "./console-view";
+import { currentView, screenPath, useViewAccess, viewOfPath, viewVerdict } from "./console-view";
 import { DoorDialog } from "./door-dialog";
 import { BANNER, CONNECTIONS } from "./copy/door";
 
@@ -161,11 +161,17 @@ export function ModelAccessBanner() {
   // The difference decides where focus goes: a cancellation leaves every
   // control exactly where it was, a completion takes the surface away.
   const completed = React.useRef(false);
+  // The strip's own Re-check: disabled while the status read is out, so a press that changes nothing still shows it ran.
+  const [rechecking, setRechecking] = React.useState(false);
 
   // The same screen in either view (the Admin view's /admin/setup is /setup).
   const path = screenPath(pathname);
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
-  const userView = viewOfPath(pathname) === "user";
+  // The session decides when it holds the view (an SSO admin tier); the path decides on a one-operator install.
+  // FUG-L772: only on a page that renders. A "switch to Admin / User" page (any non-pass verdict) is not a
+  // model-access screen, and the strip must not draw above it.
+  const access = useViewAccess();
+  const userView = currentView(access, viewOfPath(pathname)) === "user" && viewVerdict(pathname, access).kind === "pass";
   // `model_providers` is `omitzero` on the wire, so an admin who set up
   // providers but granted THIS caller none reads `[]` — a real block — never
   // the same wire shape as no block at all (absent). `!= null` (not `!!`) is
@@ -221,13 +227,15 @@ export function ModelAccessBanner() {
               type="button"
               onClick={() => {
                 if (one.a.state === "not_configured" && one.a.cause === "store_unreadable") {
-                  void door.refresh();
+                  setRechecking(true);
+                  void Promise.resolve(door.refresh()).finally(() => setRechecking(false));
                   return;
                 }
                 openedHere.current = true;
                 door.openDoor({ for: { provider: one.a.provider.id } });
               }}
-              className={LINK_CLASS}
+              disabled={rechecking}
+              className={LINK_CLASS + " disabled:opacity-60"}
             >
               {one.line.button}
             </button>

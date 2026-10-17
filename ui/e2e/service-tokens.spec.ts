@@ -18,12 +18,12 @@ import { test, expect, asRealMember, asRealSecurityAdmin, expandCard, gotoConsol
 
 const SECRET = "wdn_e2eonly0001_Qm3xV7pLzK9aRt2WbN8yHc5dJf4sUe6gEXAMPLE";
 
-function seedAdminMinted(email: string, opts: { revoked?: boolean; service?: string } = {}): string {
+function seedAdminMinted(email: string, opts: { revoked?: boolean; revokedAgo?: string; expired?: boolean; service?: string } = {}): string {
   const raw = `wdn_${randomBytes(32).toString("hex")}`;
   const hash = createHash("sha256").update(raw).digest("hex");
   const id = sql(
-    `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by, revoked_at)
-     VALUES (gen_random_uuid(), 'sub-${hash.slice(0, 8)}', '${email}', 'user', 'standard', '[]'::jsonb, false, 'job-${hash.slice(0, 6)}', '${hash}', now() - interval '3 days', 'e2e-ops@e2e.wardyn.invalid', ${opts.revoked ? "now() - interval '1 day'" : "NULL"})
+    `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by, revoked_at, expires_at)
+     VALUES (gen_random_uuid(), 'sub-${hash.slice(0, 8)}', '${email}', 'user', 'standard', '[]'::jsonb, false, 'job-${hash.slice(0, 6)}', '${hash}', now() - interval '3 days', 'e2e-ops@e2e.wardyn.invalid', ${opts.revokedAgo ? `now() - interval '${opts.revokedAgo}'` : opts.revoked ? "now() - interval '1 day'" : "NULL"}, ${opts.expired ? "now() - interval '2 days'" : "NULL"})
      RETURNING id`,
   )
     .split("\n")[0]
@@ -42,6 +42,9 @@ test.describe("Admin > Credentials: the State column (#1508)", () => {
     seedAdminMinted(`needs-${tag}@e2e.wardyn.invalid`);
     seedAdminMinted(`linked-${tag}@e2e.wardyn.invalid`, { service });
     seedAdminMinted(`gone-${tag}@e2e.wardyn.invalid`, { revoked: true });
+    seedAdminMinted(`lapsed-${tag}@e2e.wardyn.invalid`, { expired: true });
+    // 59 minutes 45 seconds ago: whole minutes would round up to "60 minutes", which is an hour.
+    seedAdminMinted(`hour-${tag}@e2e.wardyn.invalid`, { revokedAgo: "59 minutes 45 seconds" });
 
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
@@ -57,23 +60,48 @@ test.describe("Admin > Credentials: the State column (#1508)", () => {
     await expect(rowOf("gone")).toHaveCount(0);
     await expect(section).toContainText("Invite the owner with wardyn person invite, or move the token with wardyn token move. The console does neither.");
 
+    // FUG-L260: past its expiry and never revoked, so there is nothing left to decide.
+    await expect(rowOf("lapsed")).toContainText("Expired");
+    await expect(rowOf("lapsed")).toContainText("No longer works. Nothing to decide.");
+    await expect(rowOf("lapsed")).not.toContainText("Needs a decision");
+
     await section.getByRole("checkbox", { name: "Also show revoked tokens" }).click();
+    await expect(rowOf("hour")).toContainText("Revoked 1 hour ago");
+    await expect(rowOf("hour")).not.toContainText("60 minutes");
     await expect(rowOf("gone")).toContainText("Revoked");
     await expect(rowOf("gone")).toContainText("with no replacement.");
     await expect(rowOf("gone").getByRole("button", { name: "Revoke" })).toHaveCount(0);
     await expect(rowOf("needs").getByRole("button", { name: "Revoke" })).toBeVisible();
+
+    // FUG-L356: a slow read for "on" that lands after the person has turned it "off" must not put the revoked rows back.
+    await page.route((url) => url.pathname === "/api/v1/tokens" && url.searchParams.get("include_revoked") === "true", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.fallback();
+    });
+    const toggle = section.getByRole("checkbox", { name: "Also show revoked tokens" });
+    await toggle.click(); // off
+    await expect(rowOf("gone")).toHaveCount(0);
+    await toggle.click(); // on: its read is the slow one
+    await toggle.click(); // off again before it lands
+    await page.waitForTimeout(2500);
+    await expect(toggle).not.toBeChecked();
+    await expect(rowOf("gone")).toHaveCount(0);
   });
 });
 
 async function stubAccountRoutes(page: Page): Promise<void> {
+  // The one waiting invitation is gone once it is claimed, as the server would list it.
+  let claimed = false;
   await page.route("**/api/v1/me/invitations**", async (route) => {
     const req = route.request();
     if (req.method() === "POST") {
+      claimed = true;
       return route.fulfill({
         status: 201,
         json: { id: "tok-claimed", principal: "e2e-member", role: "user", user_type: "standard", name: "ci-laptop", created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString(), token: SECRET },
       });
     }
+    if (claimed) return route.fulfill({ json: [] });
     return route.fulfill({
       json: [{ id: "6f2a1c90-5b7e-4d21-8a43-c0e9d2b71f05", target: "e2e-member", created_by: "ops-admin@example.com", created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 2 * 86_400_000).toISOString(), token_name: "ci-laptop", state: "pending" }],
     });
@@ -121,7 +149,7 @@ test.describe("Your account: the token cards (#1508)", () => {
 
     await expect(dialog.getByRole("heading", { name: "Your new token" })).toBeVisible();
     await expect(dialog.getByTestId("show-once-token")).toHaveText(SECRET);
-    await expect(dialog.getByText("you (Member)")).toBeVisible();
+    await expect(dialog.getByText("you (User)")).toBeVisible();
     // A first Done without a copy only warns; a click outside never closes a token.
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog.getByText("You haven't copied it yet. Once you close this, it can't be shown again.")).toBeVisible();
@@ -130,6 +158,9 @@ test.describe("Your account: the token cards (#1508)", () => {
     await dialog.getByRole("button", { name: "Close without copying" }).click();
     await expect(dialog).toHaveCount(0);
     await expectTokenGone(page);
+    // The last waiting invitation was claimed, so the card is gone and focus lands on the page, not <body> (FUG-L356).
+    await expect(card).toHaveCount(0);
+    await expect(page.locator("#main-content")).toBeFocused();
   });
 
   test("minting a service token shows it once, and nothing keeps it", async ({ page }) => {

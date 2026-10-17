@@ -7,7 +7,7 @@ import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { Label } from "../../../../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../ui/select";
 import { relativeTime } from "../../../../../lib/format";
-import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/scenarios/templates";
+import type { LaunchIntentSummary } from "../../../../../lib/types/launch-intents";
 import { launchIntentSource } from "./shape-sources";
 import { INLINE_CHOICE, INLINE_LABEL, useShown } from "./inline-choice";
 import { useLoaded } from "./use-loaded";

@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
-import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import { buildBlockers, groupsBlockedBy, missingSetup, specifies, type BlockerInput } from "./blockers";
@@ -36,9 +36,22 @@ describe("Review blockers", () => {
     expect(setup).toMatchObject({ text: "Add the deploy key.", to: { screen: "step", step: "tools" } });
   });
 
-  it("falls back to the screen's name for a local issue the canon has no sentence for, and links a refusal to nowhere when it is not known", () => {
-    const out = buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }], refusal: { text: "Refused.", reason: "something_new" } });
-    expect(out[0].text).toBe(NR_SHARED.STEP_RUN);
+  it("says a missing pool in the canon's words (FR-0099)", () => {
+    expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
+  });
+
+  it.each([
+    ["run", "command_required", "nr-command", "A command run needs a command to run."],
+    ["shape", "shape_required", "nr-workload", "Choose a shape for this run."],
+    ["harnesses", "harness_required", "nr-harness", "A run needs at least one harness."],
+    ["files", "starts_here_required", "nr-starts-here", "Choose the folder the run starts in."],
+    ["document", "doc_invalid", "nr-doc", "Fix the errors in the document."],
+  ] as const)("says what a missing %s issue needs in a sentence of its own (FR-0099, %s)", (home, code, focus, text) => {
+    expect(buildBlockers({ ...NOTHING, issues: [{ home, code, focus }] })[0].text).toBe(text);
+  });
+
+  it("links a refusal to nowhere when its reason is not known", () => {
+    const out = buildBlockers({ ...NOTHING, issues: [{ home: "shape", code: "shape_required", focus: "nr-workload" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[1].to).toBeUndefined();
   });
 

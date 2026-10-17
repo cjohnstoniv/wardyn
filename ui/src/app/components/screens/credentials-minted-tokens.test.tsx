@@ -68,6 +68,17 @@ describe("the State column", () => {
     expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(3);
   });
 
+  it("reads an expired, unrevoked token as Expired, not as awaiting a decision, and does not count it as working (FUG-L260)", async () => {
+    listMintedMock.mockResolvedValue([...live, token("m7", "gus", "needs_decision", { expires_at: aheadByHours(-48) })]);
+    render(<AdminMintedTokens />);
+    await screen.findByText("gus@example.com");
+    const gus = rowOf("gus@example.com");
+    expect(gus.getByText("Expired")).toBeInTheDocument();
+    expect(gus.getByText("No longer works. Nothing to decide.")).toBeInTheDocument();
+    expect(gus.queryByText("Needs a decision")).not.toBeInTheDocument();
+    expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
+  });
+
   it("counts only the tokens that still work, and points to the CLI for what the console does not do", async () => {
     render(<AdminMintedTokens />);
     await screen.findByText("alice@example.com");
@@ -100,6 +111,24 @@ describe("the State column", () => {
     expect(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED })).toBeChecked();
     await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
     await waitFor(() => expect(screen.queryByText("dana@example.com")).not.toBeInTheDocument());
+  });
+
+  it("a slow earlier read never overwrites the toggle's current choice (FUG-L356)", async () => {
+    render(<AdminMintedTokens />);
+    await screen.findByText("alice@example.com");
+    const toggle = () => screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED });
+    await user.click(toggle()); // on: answers at once
+    expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
+    let release: (rows: AdminMintedToken[]) => void = () => {};
+    listMintedMock.mockImplementationOnce(() => new Promise<AdminMintedToken[]>((r) => { release = r; }));
+    await user.click(toggle()); // off: the slow read
+    await user.click(toggle()); // on again: answers at once
+    await waitFor(() => expect(listMintedMock).toHaveBeenLastCalledWith(true));
+    expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
+    release(live); // the old read ends last, with no revoked rows
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText("dana@example.com")).toBeInTheDocument();
+    expect(toggle()).toBeChecked();
   });
 
   it("with only revoked tokens, says none work and keeps the toggle", async () => {

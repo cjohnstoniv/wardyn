@@ -263,7 +263,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
                   className={cn(
                     "flex w-full items-center gap-3.5 rounded-[10px] border border-border bg-card px-3.5 py-[13px] text-left transition-colors hover:border-border-strong max-[520px]:gap-2.5 max-[520px]:p-3",
                     s.kind === kind && "border-primary bg-primary/10",
-                    reason && "cursor-not-allowed opacity-60 hatch-unavailable hover:border-border",
+                    reason && "cursor-not-allowed hatch-unavailable hover:border-border",
                   )}
                 >
                   <KindTile kind={kind} />

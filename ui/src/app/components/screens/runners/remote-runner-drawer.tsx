@@ -157,6 +157,13 @@ export function RemoteRunnerDrawer({
         onOpenChange={(o) => !o && setEditing(null)}
         onSave={(limits) => onSaveLimits(editing ?? runner, limits)}
         onSaved={onChanged}
+        onReload={async () => {
+          const fresh = (await remoteRunners.list()).find((r) => r.id === runner.id);
+          if (!fresh) return null;
+          setEditing(fresh);
+          onChanged();
+          return { name: fresh.name, limits: fresh.limits, running: fresh.usage.in_use.runs, self: false };
+        }}
       />
     </>
   );

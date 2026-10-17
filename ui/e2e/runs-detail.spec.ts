@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading, sql } from "./fixtures";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
+import { RUN_SYNC } from "../src/app/components/wardyn/copy/runners";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import type { Page } from "@playwright/test";
 
@@ -566,6 +567,50 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
 
     await page.unroute("**/api/v1/audit*");
     await page.unroute("**/api/v1/approvals*");
+  });
+});
+
+// DR-0167, FR-0113: a remote run's Sync rows. The seeded backend runs no remote runner and no ssh door, so the
+// run, /healthz and the audit read are spliced; what this proves is what the page does with the answers over time.
+test.describe("Run detail: the Sync rows of a live remote run", () => {
+  test("are read again while the run is live, and a read that fails keeps the last good one", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    let phase: "empty" | "row" | "fail" = "empty";
+    await page.clock.install();
+    await page.route("**/healthz", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, ssh: { ...json.ssh, enabled: true } } });
+    });
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      await route.fulfill({ response, json: { ...json, state: "RUNNING", placement: "remote", sync: { open: [] } } });
+    });
+    await page.route((url) => url.pathname === "/api/v1/audit" && url.searchParams.get("action") === "ssh.sync.transfer", (route) => {
+      if (phase === "fail") return route.fulfill({ status: 500, json: { error: "boom" } });
+      const rows = phase === "row"
+        ? [{ id: "sync-e2e-1", time: new Date().toISOString(), run_id: runId, actor_type: "system", actor: "sync", action: "ssh.sync.transfer", outcome: "success", data: { dir: "/work/app", bytes_in: 2048, bytes_out: 0 } }]
+        : [];
+      return route.fulfill({ json: rows });
+    });
+
+    await gotoConsole(page);
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByText(RUN_SYNC.NONE)).toBeVisible();
+
+    // A session that opened and ended between two polls is found by the next poll.
+    phase = "row";
+    await page.clock.fastForward(16_000);
+    await expect(page.getByText("/work/app")).toBeVisible();
+
+    // A read that fails does not blank what the last good one found.
+    phase = "fail";
+    await page.clock.fastForward(16_000);
+    await page.waitForTimeout(500);
+    await expect(page.getByText("/work/app")).toBeVisible();
+    await expect(page.getByText(RUN_SYNC.NONE)).toHaveCount(0);
   });
 });
 

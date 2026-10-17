@@ -137,7 +137,7 @@ describe("edit", () => {
     expect(await screen.findByText("account page")).toBeInTheDocument();
   });
 
-  // The form shows durations in whole minutes and an unset default as 1 hour; a rename sends the pool's
+  // The form shows durations exactly (seconds, minutes, hours or days) and an unset default as 1 hour; a rename sends the pool's
   // durations as they were read.
   it("a rename sends 90 s and an idle stop that never stops by default exactly as read", async () => {
     const limits = {
@@ -180,6 +180,20 @@ describe("edit", () => {
     await userEvent.click(screen.getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(field("Name")).toHaveValue("Laptop (renamed)"));
     expect(screen.queryByText("Reload the pool to see the other change, then redo yours.")).toBeNull();
+  });
+
+  it("FR-0116: says so when Reload cannot re-read the pool, and keeps Reload", async () => {
+    updateMineMock.mockRejectedValue(new HttpError(409, "Laptop changed while this was open.", "runner_pool_stale"));
+    renderAt("/account/pools/p-lap/edit", "mine");
+    await screen.findByRole("heading", { name: "Edit Laptop" });
+    setField(field("Name"), "Laptop 2");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("Laptop changed while this was open.", { exact: false });
+    getMock.mockRejectedValue(new HttpError(500, "boom"));
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("Couldn't reload this pool. Your changes are still here. Try Reload again.")).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong reaching the server.", { exact: false })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
   });
 
   it("shows any other refusal as the server's sentence, without Reload", async () => {
