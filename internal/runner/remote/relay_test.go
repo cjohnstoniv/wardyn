@@ -233,3 +233,79 @@ func TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote(t *testing.T) {
 		t.Fatal("the stream did not finish once the runner closed its end too")
 	}
 }
+
+// TestRelayConn_CloseUnblocksAStalledWrite: net.Conn requires Close to release a Write waiting on a peer
+// that stopped reading, and tls.Conn.Close relies on it to break a stalled close_notify.
+func TestRelayConn_CloseUnblocksAStalledWrite(t *testing.T) {
+	c, _, _ := relayPair(t)
+	res := stalledWrite(c)
+	time.Sleep(100 * time.Millisecond) // the Write is waiting for credit
+	_ = c.Close()
+	select {
+	case <-res:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not release an in-flight Write")
+	}
+}
+
+// TestRelayConn_CloseFreesTheLinkWindowFromUnreadUploads: runners keep sending to relays the org already
+// closed (a request body the org answered early). The bytes already buffered, and the ones that arrive
+// afterwards, are discarded and returned at once; they must not hold the runner link's shared window,
+// which every other stream on that link waits on.
+func TestRelayConn_CloseFreesTheLinkWindowFromUnreadUploads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const (
+		chunk = runnerwire.StreamWindow / 2
+		fill  = runnerwire.ConnWindow / chunk // streams whose first chunk together hold the whole link window
+	)
+	got := make(chan net.Conn, 64)
+	srv := relayRunner(t, func(_ string, c net.Conn) error { got <- c; return nil })
+	open := func() (*runnerwire.Stream, net.Conn) {
+		st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st, <-got
+	}
+	write := func(st *runnerwire.Stream, n int) <-chan error {
+		res := make(chan error, 1)
+		go func() { _, err := st.Write(make([]byte, n)); res <- err }()
+		return res
+	}
+	var runners []*runnerwire.Stream
+	var orgs []net.Conn
+	for range fill {
+		st, c := open()
+		if err := waitErr(t, write(st, chunk), "an upload that fits the link window"); err != nil {
+			t.Fatal(err)
+		}
+		runners, orgs = append(runners, st), append(orgs, c)
+	}
+	blocked, _ := open()
+	res := write(blocked, chunk)
+	select {
+	case <-res:
+		t.Fatal("a write went through a full link window: the setup does not fill it")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	for _, c := range orgs {
+		_ = c.Close()
+	}
+	if err := waitErr(t, res, "a write on another stream after the relays were closed"); err != nil {
+		t.Fatalf("write on another stream: %v", err)
+	}
+	// The runners go on sending to the relays the org closed; those bytes are discarded and returned too.
+	for _, st := range runners {
+		if err := waitErr(t, write(st, chunk-1), "an upload to a closed relay"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 8 { // nearly half the window again, in streams the closed relays left room for
+		st, _ := open()
+		if err := waitErr(t, write(st, runnerwire.StreamWindow), "a write after the discarded uploads"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

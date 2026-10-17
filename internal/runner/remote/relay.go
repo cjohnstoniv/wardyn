@@ -44,6 +44,7 @@ type writeDeadline struct {
 	mu      sync.Mutex
 	timer   *time.Timer
 	expired atomic.Bool
+	writing atomic.Int32 // Writes in flight
 }
 
 func newRelayConn(st *runnerwire.Stream, runner string) relayConn {
@@ -79,6 +80,8 @@ func (c relayConn) expire() {
 }
 
 func (c relayConn) Write(b []byte) (int, error) {
+	c.wd.writing.Add(1)
+	defer c.wd.writing.Add(-1)
 	n, err := c.Stream.Write(b)
 	if err != nil && c.wd.expired.Load() {
 		err = os.ErrDeadlineExceeded
@@ -109,10 +112,13 @@ func (c relayConn) SetDeadline(t time.Time) error {
 // before the stream is reset.
 const relayCloseGrace = 10 * time.Second
 
-// Close stops the write deadline and half-closes the stream, so the runner reads what the org wrote
-// (an error answer written and closed at once) to its end; resetting here would discard bytes the runner
-// has received and not yet read. A runner that never closes its end is reset after relayCloseGrace. A
-// stream that already ended needs nothing.
+// Close stops the write deadline and ends this end. A Write still in flight is released by resetting
+// the stream (net.Conn requires it, and tls.Conn.Close relies on it to break a stalled Write). With none
+// in flight, the write half is closed and the stream is left to the runner, so it reads what the org
+// wrote (an error answer written and closed at once) to its end; resetting there would discard bytes the
+// runner has received and not yet read. The read half is closed at once, so bytes the runner keeps
+// sending are discarded and cannot hold the runner link's shared window. A runner that never closes its
+// end is reset after relayCloseGrace. A stream that already ended needs nothing.
 func (c relayConn) Close() error {
 	c.armWrite(time.Time{})
 	select {
@@ -123,7 +129,10 @@ func (c relayConn) Close() error {
 	if err := c.Stream.CloseWrite(); err != nil {
 		return c.Stream.Close()
 	}
-	_ = c.Stream.SetReadDeadline(time.Now()) // a Read still waiting on this end returns, as on a closed conn
+	if c.wd.writing.Load() > 0 { // a Write is still waiting: only a reset releases it
+		return c.Stream.Close()
+	}
+	_ = c.Stream.CloseRead()
 	time.AfterFunc(relayCloseGrace, func() {
 		select {
 		case <-c.Done():

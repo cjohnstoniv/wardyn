@@ -35,6 +35,7 @@ type Stream struct {
 	buf          []byte
 	remoteClosed bool
 	localClosed  bool
+	readClosed   bool // this end stopped reading: the buffer was dropped and later bytes are discarded
 	reset        error
 	opened       chan struct{}
 	done         chan struct{}
@@ -101,7 +102,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 	s.mu.Lock()
-	for len(s.buf) == 0 && s.reset == nil && !s.remoteClosed {
+	for len(s.buf) == 0 && s.reset == nil && !s.remoteClosed && !s.readClosed {
 		if !s.readBy.IsZero() && !time.Now().Before(s.readBy) {
 			s.mu.Unlock()
 			return 0, os.ErrDeadlineExceeded
@@ -112,6 +113,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 		err := s.reset
 		s.mu.Unlock()
 		return 0, err
+	}
+	if s.readClosed {
+		s.mu.Unlock()
+		return 0, io.ErrClosedPipe
 	}
 	if len(s.buf) == 0 {
 		s.mu.Unlock()
@@ -200,6 +205,26 @@ func (s *Stream) CloseWrite() error {
 	return err
 }
 
+// CloseRead stops this end reading while leaving the write half as it is. The unread buffer is dropped
+// and the connection credit it held returned at once; bytes the peer sends afterwards are discarded and
+// their connection credit returned too, so a stream nobody reads cannot pin the connection's window. The
+// peer's per-stream window is not refilled: a peer still writing waits on it until it closes its end or
+// the stream is reset. A Read returns io.ErrClosedPipe from here on.
+func (s *Stream) CloseRead() error {
+	s.mu.Lock()
+	if s.readClosed || s.reset != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.readClosed = true
+	owed := s.releaseHeldLocked()
+	s.buf = nil
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	s.p.returnCredit(owed)
+	return nil
+}
+
 // Reset aborts the stream with code and tells the peer.
 func (s *Stream) Reset(code uint32) error {
 	if !s.abort(code) {
@@ -244,6 +269,11 @@ func (s *Stream) deliver(b []byte) error {
 	if s.reset != nil {
 		s.mu.Unlock()
 		s.p.returnCredit(int64(len(b))) // discarded, so it is the sender's again
+		return nil
+	}
+	if s.readClosed {
+		s.mu.Unlock()
+		s.p.returnCredit(int64(len(b))) // nobody will read it, so it is the sender's again
 		return nil
 	}
 	defer s.mu.Unlock()
