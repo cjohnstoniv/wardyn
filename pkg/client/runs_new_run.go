@@ -214,7 +214,8 @@ type PushRuleOverride struct {
 	// DevOps Server. Empty is the provider's public host.
 	Host string `json:"host,omitempty"`
 	// Org is the GitHub owner or the Azure DevOps organisation, in the
-	// canonical spelling types.CanonicalPushOrg accepts.
+	// canonical spelling types.CanonicalPushOrg accepts; for an Azure DevOps
+	// Server host it is the collection, in types.CanonicalPushCollection's.
 	Org                string   `json:"org"`
 	DenyPaths          []string `json:"deny_paths,omitempty"`
 	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
