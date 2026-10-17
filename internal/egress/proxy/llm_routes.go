@@ -136,23 +136,6 @@ func llm404Detail(configured string) string {
 	return detail + " — " + llmBelowPolicyClause
 }
 
-// refuseNoLLMCredential is the brokered-LLM 404: no credential is keyed on
-// host, so nothing is forwarded.
-func (p *Proxy) refuseNoLLMCredential(w http.ResponseWriter, r *http.Request, host string, port int, source string) {
-	p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
-	extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
-	if shape := p.shapeOf(r, host); shape != shapePlain {
-		dest := p.hostPortLabel(shape, host, port)
-		writeProviderError(w, shape, http.StatusNotFound, reasonCredentialUnavailable,
-			brokeredMessage(reasonCredentialUnavailable, dest, source, extra["detail"].(string), ""), extra)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotFound)
-	body, _ := json.Marshal(extra)
-	_, _ = w.Write(body)
-}
-
 // proxyLLMRequest is the shared reverse-proxy + inspection path for a
 // brokered LLM upstream: applies the startup-minted credential, strips every
 // sandbox-supplied credential header, optionally inspects the body (blocking
@@ -162,7 +145,18 @@ func (p *Proxy) refuseNoLLMCredential(w http.ResponseWriter, r *http.Request, ho
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok {
-		p.refuseNoLLMCredential(w, r, host, port, ruleSourceLLM)
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
+		if shape := p.shapeOf(r, host); shape != shapePlain {
+			dest := p.hostPortLabel(shape, host, port)
+			writeProviderError(w, shape, http.StatusNotFound, reasonCredentialUnavailable,
+				brokeredMessage(reasonCredentialUnavailable, dest, ruleSourceLLM, extra["detail"].(string), ""), extra)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		body, _ := json.Marshal(extra)
+		_, _ = w.Write(body)
 		return
 	}
 	if ierr != nil && r.Context().Err() != nil {

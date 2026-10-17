@@ -570,14 +570,6 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)
-	// SECURITY: a vendor host this run routes through a configured gateway has
-	// its credential keyed on the gateway. With no rule of its own, a direct
-	// request is refused as the brokered route refuses it, never forwarded to
-	// the vendor host with the sandbox's placeholder and the request body.
-	if _, routed := p.llmUpstreams[strings.TrimSuffix(strings.ToLower(host), ".")]; routed && !ok {
-		p.refuseNoLLMCredential(w, r, host, port, mitmSource)
-		return
-	}
 	var injectHdr *injectedHeader
 	if ok {
 		injectHdr = &hdr
