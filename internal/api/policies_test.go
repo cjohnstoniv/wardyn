@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -281,5 +283,81 @@ func TestRedactScopeSecretRefsIgnoresKeyCase(t *testing.T) {
 	got := string(redactScopeSecretRefs(json.RawMessage(`{"host":"github.com","Secret_Name":"n","KEY_SECRET_REF":"k"}`)))
 	if got != `{"host":"github.com"}` {
 		t.Errorf("redactScopeSecretRefs = %s, want only the host kept", got)
+	}
+}
+
+// A member must not read the operator's llm_inspection.workspace_secret_names on any of the three
+// policy reads; an admin still sees them.
+func TestPolicyReadsRedactWorkspaceSecretNamesForMembers(t *testing.T) {
+	spec := types.RunPolicySpec{
+		MinConfinementClass: types.CC2,
+		LLMInspection: &types.LLMInspectionSpec{
+			Mode: "alert", DetectSecrets: true,
+			WorkspaceSecretNames: []string{"prod-db-password", "stripe-key"},
+		},
+	}
+	pol := types.RunPolicy{ID: uuid.New(), Name: "p", Spec: spec}
+	names := func(t *testing.T, body []byte, route string) []string {
+		t.Helper()
+		var rp types.RunPolicy
+		switch route {
+		case "list":
+			var l []types.RunPolicy
+			if err := json.Unmarshal(body, &l); err != nil || len(l) != 1 {
+				t.Fatalf("list body: %v %s", err, body)
+			}
+			rp = l[0]
+		default: // get and default both carry the spec at the top level or under spec
+			if route == "get" {
+				if err := json.Unmarshal(body, &rp); err != nil {
+					t.Fatalf("get body: %v %s", err, body)
+				}
+			} else if err := json.Unmarshal(body, &rp.Spec); err != nil {
+				t.Fatalf("default body: %v %s", err, body)
+			}
+		}
+		if rp.Spec.LLMInspection == nil {
+			t.Fatalf("%s: llm_inspection dropped: %s", route, body)
+		}
+		return rp.Spec.LLMInspection.WorkspaceSecretNames
+	}
+	for _, leg := range []struct {
+		role string
+		want []string
+	}{
+		{oidc.RoleUser, []string{"<2 name(s) redacted>"}},
+		{oidc.RoleAdmin, []string{"prod-db-password", "stripe-key"}},
+	} {
+		for _, route := range []string{"list", "get", "default"} {
+			t.Run(leg.role+"/"+route, func(t *testing.T) {
+				h := newHarness(t)
+				h.srv.cfg.Store = &policyListStore{capStore: &capStore{}, pols: []types.RunPolicy{pol}}
+				h.srv.cfg.DefaultPolicy = spec
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("id", pol.ID.String())
+				ctx := context.WithValue(utCtx(leg.role, "", []string{}), chi.RouteCtxKey, rctx)
+				req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
+				w := httptest.NewRecorder()
+				switch route {
+				case "list":
+					h.srv.handleListPolicies(w, req)
+				case "get":
+					h.srv.handleGetPolicy(w, req)
+				default:
+					h.srv.handleGetDefaultPolicy(w, req)
+				}
+				if w.Code != http.StatusOK {
+					t.Fatalf("%s = %d: %s", route, w.Code, w.Body.String())
+				}
+				got := names(t, w.Body.Bytes(), route)
+				if strings.Join(got, ",") != strings.Join(leg.want, ",") {
+					t.Errorf("%s names = %v, want %v", route, got, leg.want)
+				}
+			})
+		}
+	}
+	// The stored row and the default are not edited in place.
+	if got := spec.LLMInspection.WorkspaceSecretNames; len(got) != 2 || got[0] != "prod-db-password" {
+		t.Errorf("redaction edited the source spec: %v", got)
 	}
 }

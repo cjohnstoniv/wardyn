@@ -215,10 +215,11 @@ func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolic
 // member reaches because the ceiling is what clamps them.
 var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hosts_secret_ref"}
 
-// redactSpecForUser strips the two operator-only details a policy spec
+// redactSpecForUser strips the operator-only details a policy spec
 // carries out of a MEMBER-reachable read: the host filesystem paths behind
 // workspace_mounts[].source (the blessed ~/.claude credential mount among
-// them) and the stored-secret names on the eligible grants. Everything else —
+// them), the stored-secret names on the eligible grants and
+// llm_inspection.workspace_secret_names. Everything else —
 // the egress allowlist, the confinement floor, the grant KINDS and hosts — is
 // exactly what a member is being clamped by and stays visible.
 //
@@ -239,6 +240,13 @@ func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
 			grants[i].Scope = redactScopeSecretRefs(grants[i].Scope)
 		}
 		spec.EligibleGrants = grants
+	}
+	// The workspace secret names are the operator's secret names too, the same
+	// thing memberSecretScopeKeys hides on the grants, so they are counted, not listed.
+	if li := spec.LLMInspection; li != nil && len(li.WorkspaceSecretNames) > 0 {
+		cp := *li
+		cp.WorkspaceSecretNames = []string{fmt.Sprintf("<%d name(s) redacted>", len(li.WorkspaceSecretNames))}
+		spec.LLMInspection = &cp
 	}
 	return spec
 }
