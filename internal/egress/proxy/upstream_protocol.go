@@ -247,6 +247,8 @@ func h2ResendClass(err error) string {
 		return http2.ErrCode(conn).String()
 	case errors.As(err, &nerr) && nerr.Timeout():
 		return "timeout"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "connection closed"
 	}
 	return "failed"
 }

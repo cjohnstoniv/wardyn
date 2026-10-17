@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -265,6 +266,10 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 // (never the 500 an SDK retries ~26 times), the AWS SDK JSON error shape, and
 // a cause naming both attempts.
 func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
+	logged := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	peer := startH2Peer(t)
 	up, err := parseUpstreamProxy("http://" + peer.addr())
 	if err != nil {
@@ -297,6 +302,14 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 	if !strings.Contains(body["message"], "peer answered HTTP/2") || !strings.Contains(body["message"], "ALPN: none") ||
 		!strings.Contains(body["message"], "the HTTP/2 resend also failed") {
 		t.Errorf("message = %q, want the h2-mismatch sentence with ALPN: none and the failed resend", body["message"])
+	}
+	// The peer closes the resend: the sentence and the operator's log line (h2MismatchError.Error) both
+	// name that as a fixed class, never the error's own text.
+	if !strings.HasSuffix(body["message"], "the HTTP/2 resend also failed: connection closed") {
+		t.Errorf("message = %q, want it to end with the resend's class, connection closed", body["message"])
+	}
+	if !strings.Contains(logged.String(), "; HTTP/2 resend: connection closed") {
+		t.Errorf("log = %q, want the raw error to name the resend's class, connection closed", logged.String())
 	}
 
 	d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch)
@@ -1036,6 +1049,7 @@ func TestH2ResendClassNeverEchoesPeerText(t *testing.T) {
 		"goaway":  {fmt.Errorf("resend: %w", http2.GoAwayError{ErrCode: http2.ErrCodeEnhanceYourCalm, DebugData: peerText}), "GOAWAY ENHANCE_YOUR_CALM"},
 		"stream":  {http2.StreamError{StreamID: 1, Code: http2.ErrCodeRefusedStream, Cause: errors.New(peerText)}, "REFUSED_STREAM"},
 		"timeout": {fmt.Errorf("resend: %w", context.DeadlineExceeded), "timeout"},
+		"eof":     {fmt.Errorf("resend: %w", io.ErrUnexpectedEOF), "connection closed"},
 		"other":   {errors.New(peerText), "failed"},
 	} {
 		got := h2ResendClass(tc.err)
