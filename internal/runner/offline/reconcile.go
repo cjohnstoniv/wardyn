@@ -279,7 +279,11 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 		})
 		closeErr := spool.Close()
 		if errors.Is(err, errReplayHeld) {
-			err = nil
+			// Held mid-replay: like a run held before it began, its exit is not sent either.
+			if closeErr != nil {
+				return closeErr
+			}
+			continue
 		}
 		if err := errors.Join(err, closeErr); err != nil {
 			return err

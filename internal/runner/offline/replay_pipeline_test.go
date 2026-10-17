@@ -258,10 +258,16 @@ func TestSpoolReplayGoesOnPastAnUnopenableSpool(t *testing.T) {
 	}
 }
 
-// A quarantine that lands while a run's backlog is being replayed stops the batches after it.
+// A quarantine that lands while a run's backlog is being replayed stops the batches after it and its exit.
 func TestSpoolReplayStopsWhenTheRunIsQuarantinedMidReplay(t *testing.T) {
 	const k = 3 * runnerspool.ReplayBatch
 	m, id, _ := spoolBacklog(t, k)
+	// An unsent exit: the held run's exit stays unsent, as for a run held before the replay began.
+	m.mu.Lock()
+	r := m.state.Runs[id]
+	r.Exit = &runnerwire.AgentExit{}
+	m.state.Runs[id] = r
+	m.mu.Unlock()
 	rows, _, err := replayAgainstOrg(t, m, func(n int, _ runnerspool.Record) orgReply {
 		if n == 1 {
 			m.mu.Lock()
