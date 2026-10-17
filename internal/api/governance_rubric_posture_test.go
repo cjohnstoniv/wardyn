@@ -15,41 +15,52 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The adopter's measured deployment: one Bedrock provider (an AWS credential, graded powerful), a
-// substrate that offers CC1 alone. Every secrets row but secrets_powerful, and every barrier row but
-// confinement_cc1, caps nothing there; the egress rows all can, because a run may always narrow its egress.
-const adopterPosture = "on this deployment a run under this profile on one of its model providers grades " +
-	"egress sealed, reviewed or open; secrets powerful; and confinement CC1 — so only egress_open, " +
-	"egress_reviewed, egress_sealed, secrets_powerful and confinement_cc1 can cap it, and secrets_baseline, " +
-	"secrets_none, confinement_cc2 and confinement_cc3 cap nothing here"
+// The adopter's measured deployment: one Bedrock provider serving Claude Code (an AWS credential,
+// graded powerful), a substrate that offers CC1 alone. A run on Codex CLI or Your own tools resolves
+// no provider and carries no credential, so every secrets row can still bind; what the provider forces
+// is said on its own, for runs on it.
+const adopterPosture = "on this deployment a run under this profile grades egress sealed, reviewed or open; " +
+	"secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, " +
+	"secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and " +
+	"confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful"
 
 func TestRubricPostureSentence(t *testing.T) {
 	bedrock := bedrockCredGrade{graded: true, host: "bedrock.llm.corp.example"}
-	apiKey := bedrockCredGrade{graded: true} // a provider whose credential the secrets axis does not read
+	none := bedrockCredGrade{graded: true} // a run on no provider, or on one whose credential is not graded
 	cc1 := []types.ConfinementClass{types.CC1}
 	for _, tc := range []struct {
 		name string
 		r    rubricReach
 		want string
 	}{
-		{"the adopter's deployment", rubricReach{creds: []bedrockCredGrade{bedrock}, providers: true, offered: cc1}, adopterPosture},
-		{"the model host declared baseline: its credential grades baseline, not powerful",
-			rubricReach{baseline: composer.Baseline{Hosts: []string{"bedrock.llm.corp.example"}}, creds: []bedrockCredGrade{bedrock}, providers: true, offered: cc1},
-			"on this deployment a run under this profile on one of its model providers grades egress sealed, reviewed or open; " +
-				"secrets baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, " +
-				"secrets_baseline and confinement_cc1 can cap it, and secrets_none, confinement_cc2 and confinement_cc3 cap nothing here"},
-		{"a second provider whose credential is not graded: a run on it holds none",
-			rubricReach{creds: []bedrockCredGrade{bedrock, apiKey}, providers: true, offered: cc1},
-			"on this deployment a run under this profile on one of its model providers grades egress sealed, reviewed or open; " +
-				"secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, " +
-				"secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here"},
+		{"the adopter's deployment: a no-provider harness can launch, so secrets_none binds",
+			rubricReach{launch: []bedrockCredGrade{none, none, bedrock}, provider: []bedrockCredGrade{bedrock}, offered: cc1}, adopterPosture},
+		{"the model host declared baseline: a run on the provider grades baseline, not powerful",
+			rubricReach{baseline: composer.Baseline{Hosts: []string{"bedrock.llm.corp.example"}},
+				launch: []bedrockCredGrade{none, bedrock}, provider: []bedrockCredGrade{bedrock}, offered: cc1},
+			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
+				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, " +
+				"secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; " +
+				"a run on one of its model providers always grades secrets baseline or powerful"},
+		// Not reachable on today's catalog, which always offers Your own tools; the arithmetic is still
+		// what a deployment whose every launchable run sits on a Bedrock provider would get.
+		{"every launchable run on a Bedrock provider: secrets_none and secrets_baseline are inert",
+			rubricReach{launch: []bedrockCredGrade{bedrock}, provider: []bedrockCredGrade{bedrock}, offered: cc1},
+			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets powerful; " +
+				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful and confinement_cc1 " +
+				"can cap it, and secrets_baseline, secrets_none, confinement_cc2 and confinement_cc3 cap nothing here"},
+		{"a second provider whose credential is not graded: nothing forced on provider runs either",
+			rubricReach{launch: []bedrockCredGrade{none, bedrock, none}, provider: []bedrockCredGrade{bedrock, none}, offered: cc1},
+			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
+				"and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, " +
+				"secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here"},
 		{"the profile's floor cuts the offered classes",
-			rubricReach{offered: []types.ConfinementClass{types.CC1, types.CC2}, floor: types.CC2},
+			rubricReach{launch: []bedrockCredGrade{none}, offered: []types.ConfinementClass{types.CC1, types.CC2}, floor: types.CC2},
 			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
 				"and confinement CC2 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none " +
 				"and confinement_cc2 can cap it, and confinement_cc1 and confinement_cc3 cap nothing here"},
 		{"classes unknown (runners on, or no executor answer): nothing is pinned",
-			rubricReach{},
+			rubricReach{launch: []bedrockCredGrade{none}},
 			"on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; " +
 				"and confinement CC1, CC2 or CC3 — so every rubric row can cap it"},
 	} {
@@ -58,6 +69,33 @@ func TestRubricPostureSentence(t *testing.T) {
 				t.Errorf("sentence:\n got  %q\n want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Every catalog harness is a launchable run shape: one a provider serves folds that provider's
+// credential, and one no provider serves (Codex CLI here) or with no model gateway (Your own tools)
+// folds none.
+func TestLaunchModelCredentialsCountEveryHarness(t *testing.T) {
+	provider := bedrockKeyTestProvider() // serves claude-code only
+	launch, onProvider := launchModelCredentials(types.SiteConfig{ModelProviders: providerBlock(provider)})
+	host := providerBedrockRuntimeHost(provider)
+	hosts := func(gs []bedrockCredGrade) []string {
+		var out []string
+		for _, g := range gs {
+			out = append(out, g.host)
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got, want := hosts(launch), []string{"", "", host}; !slices.Equal(got, want) {
+		t.Errorf("launch credential hosts = %q, want %q (codex-cli and none fold no credential)", got, want)
+	}
+	if got := hosts(onProvider); !slices.Equal(got, []string{host}) {
+		t.Errorf("provider credential hosts = %q, want only %q", got, host)
+	}
+	if launch, onProvider := launchModelCredentials(types.SiteConfig{}); len(onProvider) != 0 || len(launch) != len(harnessCatalog) ||
+		slices.ContainsFunc(launch, func(g bedrockCredGrade) bool { return g.host != "" }) {
+		t.Errorf("no providers: launch = %+v provider = %+v, want one empty grade per harness", launch, onProvider)
 	}
 }
 

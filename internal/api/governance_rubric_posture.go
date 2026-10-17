@@ -4,7 +4,7 @@
 // The rubric half of a profile write's advisory: what the autonomy rubric can actually see on this
 // deployment. An admin who sets a rubric row cannot tell, at write time, that the deployment pins an
 // axis — a substrate that offers one barrier class, a model provider whose credential grades powerful
-// for every run — so a row they set can cap nothing, or bind every run. The run create warning names
+// for every run on it — so a row they set can cap nothing, or bind every run of a kind. The run create warning names
 // the bound row; this names it before anyone launches.
 //
 // Only LOWER bounds are claimed. A run can always reach wider: a workspace's approved egress, an SCM
@@ -37,9 +37,9 @@ func (s *Server) rubricPostureAdvisory(ctx context.Context, res *ResolvedProfile
 			return ""
 		}
 	}
-	creds := providerModelCredentials(sc)
+	launch, provider := launchModelCredentials(sc)
 	return rubricPostureSentence(rubricReach{
-		baseline: egressBaselineOf(sc), creds: creds, providers: len(creds) > 0,
+		baseline: egressBaselineOf(sc), launch: launch, provider: provider,
 		offered: s.offeredBarriers(ctx, sc), floor: res.Ceiling.MinConfinementClass,
 	})
 }
@@ -65,35 +65,56 @@ func (s *Server) offeredBarriers(ctx context.Context, sc types.SiteConfig) []typ
 	return pc.ConfinementClasses
 }
 
-// providerModelCredentials is, per enabled provider that serves a model harness, the Bedrock grade
-// autonomyPostureSpec folds for a run on it (empty host: a credential the secrets axis does not read).
-func providerModelCredentials(sc types.SiteConfig) []bedrockCredGrade {
-	var out []bedrockCredGrade
-	for _, p := range modelProviderRows(sc) {
-		if p.Disabled || !slices.ContainsFunc(p.Harnesses, func(h types.ProviderHarness) bool {
-			_, model := agentLLMProvider(h.Harness)
-			return model
-		}) {
-			continue
+// launchModelCredentials is the model credential autonomyPostureSpec folds for each run shape this
+// deployment can launch, and the subset for runs on a model provider. Every catalog harness counts as
+// launchable: a capability restriction narrows it per person, which a profile write cannot evaluate
+// for everyone the profile binds, and counting a harness nobody may launch only over-states what can
+// bind. A harness with no model gateway (Your own tools), or one no enabled provider serves, resolves
+// no provider (chooseModelProvider) and folds no credential: the empty-host grade, secrets none.
+func launchModelCredentials(sc types.SiteConfig) (launch, provider []bedrockCredGrade) {
+	for _, h := range harnessCatalog {
+		served := false
+		for _, p := range modelProviderRows(sc) {
+			if h.Gateway == nil || p.Disabled || !p.Serves(h.ID) {
+				continue
+			}
+			g := bedrockCredGrade{graded: true}
+			if p.Kind.IsBedrock() {
+				g.host = providerBedrockRuntimeHost(p)
+			}
+			served = true
+			provider = append(provider, g)
 		}
-		g := bedrockCredGrade{graded: true}
-		if p.Kind.IsBedrock() {
-			g.host = providerBedrockRuntimeHost(p)
+		if !served {
+			launch = append(launch, bedrockCredGrade{graded: true})
 		}
-		out = append(out, g)
 	}
-	return out
+	return append(launch, provider...), provider
 }
 
 // rubricReach is what the advisory grades from.
 type rubricReach struct {
 	baseline composer.Baseline
-	// creds is each provider's model credential; providers says the deployment has any, which scopes the
-	// sentence to runs on one of them (a run on no provider carries no graded credential).
-	creds     []bedrockCredGrade
-	providers bool
-	offered   []types.ConfinementClass // nil: every class is reachable
-	floor     types.ConfinementClass
+	// launch is the model credential of every run shape this deployment can launch (empty host: none);
+	// provider is the subset for runs on a model provider, which the sentence names on its own.
+	launch, provider []bedrockCredGrade
+	offered          []types.ConfinementClass // nil: every class is reachable
+	floor            types.ConfinementClass
+}
+
+// secretsReach is the secrets grades a run carrying one of creds can reach: from the weakest
+// credential's grade up (a run can always ask for a stronger grant). No credentials: every grade.
+func secretsReach(creds []bedrockCredGrade, b composer.Baseline) []types.AutonomySecretsPosture {
+	if len(creds) == 0 {
+		return secretsOrder
+	}
+	lowest := len(secretsOrder) - 1
+	for _, g := range creds {
+		var spec types.RunPolicySpec
+		unionBedrockCredential(&spec, g)
+		lowest = min(lowest, slices.Index(secretsOrder, composer.AutonomyPostureOf(spec, "", b).Secrets))
+	}
+	return secretsOrder[lowest:]
 }
 
 var (
@@ -105,19 +126,10 @@ var (
 // rubricPostureSentence renders the reach: each axis's reachable grades, the rubric rows they select,
 // and the rows nothing here selects.
 func rubricPostureSentence(r rubricReach) string {
-	// The narrowest run: no egress and no grant, plus the credential of the provider it runs on.
+	// The narrowest run: no egress and no grant, plus the model credential its harness folds.
 	floor := composer.AutonomyPostureOf(types.RunPolicySpec{}, "", r.baseline)
 	egress := egressOrder[slices.Index(egressOrder, floor.Egress):]
-	secrets := secretsOrder
-	if len(r.creds) > 0 {
-		lowest := len(secretsOrder) - 1
-		for _, g := range r.creds {
-			var spec types.RunPolicySpec
-			unionBedrockCredential(&spec, g)
-			lowest = min(lowest, slices.Index(secretsOrder, composer.AutonomyPostureOf(spec, "", r.baseline).Secrets))
-		}
-		secrets = secretsOrder[lowest:]
-	}
+	secrets := secretsReach(r.launch, r.baseline)
 	var classes []types.ConfinementClass
 	for _, c := range classOrder {
 		if (r.offered == nil || slices.Contains(r.offered, c)) && c.Rank() >= r.floor.Rank() {
@@ -152,16 +164,19 @@ func rubricPostureSentence(r rubricReach) string {
 		place(slices.Contains(classes, c), row(types.AutonomyPosture{Confinement: c}))
 	}
 
-	scope := ""
-	if r.providers {
-		scope = " on one of its model providers"
-	}
-	head := fmt.Sprintf("on this deployment a run under this profile%s grades egress %s; secrets %s; and confinement %s",
-		scope, orList(egress), orList(secrets), orList(classes))
+	out := fmt.Sprintf("on this deployment a run under this profile grades egress %s; secrets %s; and confinement %s",
+		orList(egress), orList(secrets), orList(classes))
 	if len(inert) == 0 {
-		return head + " — so every rubric row can cap it"
+		out += " — so every rubric row can cap it"
+	} else {
+		out += fmt.Sprintf(" — so only %s can cap it, and %s cap nothing here", andList(bindable), andList(inert))
 	}
-	return fmt.Sprintf("%s — so only %s can cap it, and %s cap nothing here", head, andList(bindable), andList(inert))
+	// What a run on a model provider is forced to, when that is more than every run is: the secrets row
+	// that binds such a run whatever it asks for.
+	if onProvider := secretsReach(r.provider, r.baseline); len(r.provider) > 0 && len(onProvider) < len(secrets) {
+		out += fmt.Sprintf("; a run on one of its model providers always grades secrets %s", orList(onProvider))
+	}
+	return out
 }
 
 // everyRow sets all nine rows, so FoldAutonomy names exactly the rows a posture selects.

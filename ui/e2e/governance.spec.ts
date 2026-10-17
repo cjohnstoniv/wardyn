@@ -344,7 +344,7 @@ test.describe("governance — the security admin's authoring walk", () => {
     // The write's advisory names what the rubric can see on this deployment, before anyone launches.
     await expect(page.getByText(GOV.OMISSION_TITLE)).toBeVisible();
     await expect(
-      page.getByText(/^on this deployment a run under this profile.* grades egress .*; secrets .*; and confinement .* — so (only .* can cap it, and .* cap nothing here|every rubric row can cap it)$/),
+      page.getByText(/^on this deployment a run under this profile.* grades egress .*; secrets .*; and confinement .* — so (only .* can cap it, and .* cap nothing here|every rubric row can cap it)(; a run on one of its model providers always grades secrets .*)?$/),
     ).toBeVisible();
 
     // The profiles list chip: the strictest cap, on the chip face itself.
