@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -64,7 +65,7 @@ func TestReRegistrationSetsTheEarlierRunStateAside(t *testing.T) {
 	if sub.stops != 3 {
 		t.Fatalf("proxy stops %d", sub.stops)
 	}
-	moved, _ := filepath.Glob(filepath.Join(dir, "previous", earlier.String()+"-*"))
+	moved, _ := filepath.Glob(filepath.Join(dir, "previous", earlier.String()))
 	if len(moved) != 1 {
 		t.Fatalf("set aside into %v", moved)
 	}
@@ -87,5 +88,107 @@ func TestReRegistrationSetsTheEarlierRunStateAside(t *testing.T) {
 	}
 	if again, _ := filepath.Glob(filepath.Join(dir, "previous", "*")); len(again) != 1 {
 		t.Fatalf("own state set aside: %v", again)
+	}
+}
+
+// earlierRegistration leaves m's state, with one live run that has spools and output, for a new
+// registration of the same computer, and returns the state directory, the live run and both ids.
+func earlierRegistration(t *testing.T) (*localSub, string, uuid.UUID, uuid.UUID, uuid.UUID) {
+	t.Helper()
+	m, sub, _, org := managerFixture(t)
+	live := createLocal(t, m, org)
+	for _, name := range []string{"spools", "output"} {
+		if err := os.MkdirAll(filepath.Join(m.dir, name, live.String()), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return sub, m.dir, live, m.runnerID, uuid.New()
+}
+
+// TestReRegistrationRetryKeepsOneDirectory fails the move after spools/ has gone: the retry at the
+// next start finishes it in the same previous/<runner id>, so one registration's state stays together.
+func TestReRegistrationRetryKeepsOneDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root renames a directory it cannot write")
+	}
+	sub, dir, live, earlier, registered := earlierRegistration(t)
+	// A directory moved to another parent needs write permission on itself, for its .. entry.
+	if err := os.Chmod(filepath.Join(dir, "output"), 0500); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAsidePrevious(t.Context(), dir, registered, sub, uuid.UUID.String); err == nil {
+		t.Fatal("the move of an unwritable output/ succeeded")
+	}
+	if err := os.Chmod(filepath.Join(dir, "output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAsidePrevious(t.Context(), dir, registered, sub, uuid.UUID.String); err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := filepath.Glob(filepath.Join(dir, "previous", "*"))
+	if len(moved) != 1 || moved[0] != filepath.Join(dir, "previous", earlier.String()) {
+		t.Fatalf("set aside into %v", moved)
+	}
+	for _, name := range []string{"offline/state.json", "spools/" + live.String(), "output/" + live.String()} {
+		if _, err := os.Stat(filepath.Join(moved[0], name)); err != nil {
+			t.Errorf("%s was not set aside with the rest: %v", name, err)
+		}
+	}
+}
+
+// TestReRegistrationBesideAFullerOlderSetAside restores a complete older set-aside of the same
+// earlier registration: the state moves into a fresh sibling, and the older one is left as it was.
+func TestReRegistrationBesideAFullerOlderSetAside(t *testing.T) {
+	sub, dir, live, earlier, registered := earlierRegistration(t)
+	older := filepath.Join(dir, "previous", earlier.String())
+	for _, name := range []string{"spools", "output", "offline"} {
+		if err := os.MkdirAll(filepath.Join(older, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(older, name, "older"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetAsidePrevious(t.Context(), dir, registered, sub, uuid.UUID.String); err != nil {
+		t.Fatalf("a restored older set-aside blocks the start: %v", err)
+	}
+	for _, name := range []string{"spools", "output", "offline"} {
+		if _, err := os.Stat(filepath.Join(older, name, "older")); err != nil {
+			t.Errorf("the older set-aside's %s changed: %v", name, err)
+		}
+	}
+	fresh, _ := filepath.Glob(filepath.Join(dir, "previous", earlier.String()+"-*"))
+	if len(fresh) != 1 {
+		t.Fatalf("fresh siblings %v", fresh)
+	}
+	for _, name := range []string{"offline/state.json", "spools/" + live.String(), "output/" + live.String()} {
+		if _, err := os.Stat(filepath.Join(fresh[0], name)); err != nil {
+			t.Errorf("%s was not set aside into the sibling: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "offline")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the earlier registration's offline state stayed in place: %v", err)
+	}
+}
+
+// TestReRegistrationLeavesAnUnprovenContainerAlone sets aside a run whose container the substrate
+// cannot prove the earlier registration created: its proxy is not stopped, and the state still moves.
+func TestReRegistrationLeavesAnUnprovenContainerAlone(t *testing.T) {
+	sub, dir, _, earlier, registered := earlierRegistration(t)
+	sub.foreign = fmt.Errorf("labelled for another runner: %w", runner.ErrNotRunnerSandbox)
+	if err := SetAsidePrevious(t.Context(), dir, registered, sub, uuid.UUID.String); err != nil {
+		t.Fatal(err)
+	}
+	if sub.stops != 0 {
+		t.Fatalf("stopped the proxy of a container it could not prove the earlier registration created: %d stops", sub.stops)
+	}
+	if sub.provedFor != earlier.String() {
+		t.Fatalf("proved against runner %q, want the earlier registration %s", sub.provedFor, earlier)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "previous", earlier.String(), "offline", "state.json")); err != nil {
+		t.Fatalf("the state was not set aside: %v", err)
 	}
 }

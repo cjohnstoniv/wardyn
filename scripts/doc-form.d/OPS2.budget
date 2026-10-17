@@ -56,4 +56,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 3926 adds 62, measured: runner trust classes (with the required --reason) and by_trust in Resident credentials and posture.
 # docs/operations/hybrid-laptops.md 4022 adds 96 over 3926, measured: the control-plane restart and re-registration rows in Offline and revocation.
 # docs/operations/hybrid-laptops.md 4039 = 4022 + 17, measured at the K7 merge: the line pointing at the organisation runner in a cluster.
-docs/operations/hybrid-laptops.md=4039 share=35
+# docs/operations/hybrid-laptops.md 4041 = 4039 + 2, measured: merge of the containment-only kill sentence beside the organisation-runner pointer.
+docs/operations/hybrid-laptops.md=4041 share=35
+# docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
