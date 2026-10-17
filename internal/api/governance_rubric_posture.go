@@ -69,13 +69,14 @@ func (s *Server) offeredBarriers(ctx context.Context, sc types.SiteConfig) []typ
 // deployment can launch, and the subset for runs on a model provider. Every catalog harness counts as
 // launchable: a capability restriction narrows it per person, which a profile write cannot evaluate
 // for everyone the profile binds, and counting a harness nobody may launch only over-states what can
-// bind. A harness with no model gateway (Your own tools), or one no enabled provider serves, resolves
-// no provider (chooseModelProvider) and folds no credential: the empty-host grade, secrets none.
+// bind. A harness no enabled provider serves (Your own tools has no model gateway, so none can) resolves
+// no provider, by the same test chooseModelProvider uses, and folds no credential: the empty-host grade,
+// secrets none.
 func launchModelCredentials(sc types.SiteConfig) (launch, provider []bedrockCredGrade) {
 	for _, h := range harnessCatalog {
 		served := false
 		for _, p := range modelProviderRows(sc) {
-			if h.Gateway == nil || p.Disabled || !p.Serves(h.ID) {
+			if p.Disabled || !p.Serves(h.ID) {
 				continue
 			}
 			g := bedrockCredGrade{graded: true}
