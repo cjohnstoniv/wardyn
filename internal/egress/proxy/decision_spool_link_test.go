@@ -255,7 +255,7 @@ func TestSpoolRefusalShapeIsRetryable(t *testing.T) {
 				t.Fatalf("%s: admitted into a full spool", tc.name)
 			}
 			ra, err := strconv.Atoi(w.Header().Get("Retry-After"))
-			if w.Code != http.StatusServiceUnavailable || w.Header().Get("X-Should-Retry") != "true" || err != nil || ra <= 0 || ra > 60 || (tc.mitm != "" && w.Header().Get(egressHeaderWardynReason) != reasonAuditUnavailable) {
+			if w.Code != http.StatusServiceUnavailable || w.Header().Get("X-Should-Retry") != "true" || err != nil || ra <= 0 || ra > 60 || w.Header().Get(egressHeaderWardynReason) != reasonAuditUnavailable {
 				t.Fatalf("%s: status %d headers %v, want a retryable 503", tc.name, w.Code, w.Header())
 			}
 			var msg string
