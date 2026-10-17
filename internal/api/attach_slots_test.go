@@ -353,8 +353,19 @@ func TestAttachSlots_TicketMintNamesThePrincipalCap(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonAttachSessionCapReached) {
 		t.Fatalf("mint at the principal cap = %d %s, want 503 %s", w.Code, w.Body, reasonAttachSessionCapReached)
 	}
-	if srv.attachSlotsFull(run, "bob@example.com") {
-		t.Error("another principal reads as full while the run has room")
+	// The sentence names the cap that refused: the person's seven, not the run's eight.
+	if got := decodeErrorBody(t, w).Error; got != "you have too many open terminal sessions on this run (max 7 per person) — close one and retry" {
+		t.Errorf("mint at the principal cap said %q", got)
+	}
+	if refused := srv.attachSlotsFull(run, "bob@example.com"); refused != "" {
+		t.Errorf("another principal reads as full while the run has room: %q", refused)
+	}
+	// Fill the run: everyone is now told the run's cap.
+	if _, ok := srv.reserveAttachSlot(run, "bob@example.com"); !ok {
+		t.Fatal("the run's last slot was refused")
+	}
+	if got := srv.attachSlotsFull(run, "carol@example.com"); got != "too many open terminal sessions for this run (max 8) — close one and retry" {
+		t.Errorf("a full run said %q", got)
 	}
 }
 

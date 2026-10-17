@@ -216,8 +216,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them
 	// again, since slots can fill between the ticket and the upgrade.
 	at, principal := actorFromRequest(r)
-	if s.attachSlotsFull(run, principal) {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, attachSessionCapMsg)
+	if refused := s.attachSlotsFull(run, principal); refused != "" {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 		return
 	}
 	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
