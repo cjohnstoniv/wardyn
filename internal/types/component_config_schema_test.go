@@ -62,7 +62,7 @@ func TestComponentConfigSchemaRefusals(t *testing.T) {
 		{"secret-named config key", strings.Replace(field(""), `A_KEY`, `GITHUB_TOKEN`, 1), "plain text"},
 		{"secret into config", `{"schema_version":1,"fields":[{"id":"a","kind":"secret_ref","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "secret target"},
 		{"secret default", `{"schema_version":1,"fields":[{"id":"a","kind":"secret_ref","label":"A","default":"token","bind":{"target":"secret","key":"A_KEY"}}]}`, "no default"},
-		{"list into config", `{"schema_version":1,"fields":[{"id":"a","kind":"string_list","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "cannot feed a config"},
+		{"string_list is an unknown kind", `{"schema_version":1,"fields":[{"id":"a","kind":"string_list","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "not a supported kind"},
 		{"enum without options", `{"schema_version":1,"fields":[{"id":"a","kind":"enum","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "needs 1 to"},
 		{"enum default outside options", `{"schema_version":1,"fields":[{"id":"a","kind":"enum","label":"A","options":[{"value":"x","label":"X"}],"default":"y","bind":{"target":"config","key":"A_KEY"}}]}`, "one of the field's options"},
 		{"min above max", `{"schema_version":1,"fields":[{"id":"a","kind":"integer","label":"A","min":5,"max":1,"bind":{"target":"config","key":"A_KEY"}}]}`, "min is above max"},
