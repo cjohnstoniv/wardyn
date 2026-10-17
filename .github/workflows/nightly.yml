@@ -1515,6 +1515,60 @@ jobs:
           path: test/reports/e2e/kind-upgrade-walk.log
           if-no-files-found: error
 
+  # scripts/runner-compat-walk.sh: this tree's wardyn-runnerd against the newest
+  # published 0.9.Z organisation and the released wardyn-runnerd against this
+  # tree's organisation, each through registration, claim and one exec run, then
+  # the released runnerd serving a candidate runner's state directory (rollback).
+  # Released binaries come from the release assets, released images from ghcr.io
+  # (both public); the candidate images are built here from the tree.
+  runner-compat-walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|postgres:17|registry:3)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Runner/organisation version compatibility walk
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          GH_TOKEN: ${{ github.token }} # the releases API read that resolves the released tag
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/runner-compat-walk.sh 2>&1 | tee test/reports/e2e/runner-compat-walk.log
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/runner-compat-walk.log
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::runner-compat-walk.sh self-skipped (exit 77): WARDYN_TEST_DOCKER did not reach the walk step, or the engine is not native"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::runner-compat-walk.sh exited ${WALK_EXIT:-<unset>}; see the uploaded log"
+            exit 1
+          fi
+          grep -q '^runner-compat-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence (log, wardynd and serve logs, run reads)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runner-compat-walk-results
+          path: |
+            test/reports/e2e/runner-compat-walk.log
+            local/evidence/runner-compat-walk/**
+          if-no-files-found: error
+
   # ── Key services: Vault + OpenBao dev servers, and Vault on kind (T-33) ─────
   # The docker leg is the PR `conformance` job's step, run again here against
   # the same pins; the kind leg installs Vault from its Helm chart and logs in
@@ -1834,7 +1888,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -1859,7 +1913,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg or managed-settings-drift." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift or runner-compat-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
