@@ -304,7 +304,8 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 // the stream's stored identity and runID the event's run; both must be the
 // action's own. The outcomes are success, deferred and refused; only refused
 // carries a reason, and its first receipt closes the action and writes
-// runner.action.refuse in the same transaction. observedAt is the
+// runner.action.refuse in the same transaction, and a first success writes
+// runner.action.apply. observedAt is the
 // runner's assertion and applied_at is the org clock. The first receipt
 // rechecks the owner, ref and execution generation the action was bound to;
 // a stop_proxy success on the still-kept loss records late containment in the
@@ -367,6 +368,11 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	}
 	if outcome == types.RunnerActionRefused {
 		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
+	}
+	if outcome == types.RunnerActionSuccess {
+		if err := recordRunnerActionApplyTx(ctx, tx, a, &runID, observedAt, prepare); err != nil {
 			return types.RunnerPendingAction{}, false, err
 		}
 	}

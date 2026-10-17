@@ -392,10 +392,10 @@ func TestLease_ABackgroundRunKeptAfterAnOutageIsKilledAtItsEnd(t *testing.T) {
 	}
 }
 
-// TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure (N1): only the lifetime
-// kill treats a pending kill on an offline runner as clean. A person's kill audits
-// run.kill as a failure carrying runner_error, so they retry it.
-func TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure(t *testing.T) {
+// TestKill_APersonsKillRecordsAQueuedSandboxStop: a person's kill on an offline
+// runner records the sandbox stop as queued, not as a failed step, and the queued
+// action is audited as runner.action.request; the runner's receipt is audited later.
+func TestKill_APersonsKillRecordsAQueuedSandboxStop(t *testing.T) {
 	f := newAdmissionFixture(t)
 	audit := &syncAudit{}
 	f.srv.cfg.Audit = audit
@@ -408,11 +408,14 @@ func TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure(t *testing.T) {
 	if err != nil || !applied {
 		t.Fatalf("killRunCascade = %v, %v", applied, err)
 	}
-	if killData["runner_error"] == nil {
-		t.Errorf("kill data = %v; want runner_error for a queued kill", killData)
+	if killData["runner_error"] != nil {
+		t.Errorf("kill data = %v; want no runner_error for a queued kill", killData)
 	}
 	kills := audit.eventsFor(f.run.ID, "run.kill")
-	if len(kills) != 1 || kills[0].Outcome != "failure" {
-		t.Fatalf("run.kill rows = %+v, want one failure", kills)
+	if len(kills) != 1 || kills[0].Outcome != "success" || leaseAuditData(t, kills[0])["sandbox_stop"] != "queued" {
+		t.Fatalf("run.kill rows = %+v, want one success with sandbox_stop queued", kills)
+	}
+	if reqs := audit.eventsFor(f.run.ID, "runner.action.request"); len(reqs) != 1 || reqs[0].Outcome != "success" || leaseAuditData(t, reqs[0])["action"] != "kill" {
+		t.Fatalf("runner.action.request rows = %+v, want one for the queued kill", reqs)
 	}
 }
