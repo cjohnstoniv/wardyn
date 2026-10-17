@@ -797,6 +797,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CONFIRM_TEMPLATE` | mock | Save template |
 | `CONFIRM_POLICY` | mock | Save policy |
 | `NOTHING_PICKED` | deviation (lead wording 2026-10-17, FUG-L771) | Choose at least one part to include. |
+| `OWN_DRIVES_LEFT_OUT` | deviation (DS-2, FUG-L771) | Your own drives are left out of shared templates. |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
 | `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 | `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |

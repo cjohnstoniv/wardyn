@@ -210,10 +210,12 @@ describe("SaveAsDialog", () => {
       expect((sent(save).document.intent as { drives: unknown }).drives).toEqual([{ drive_id: "team" }]);
     });
 
-    it("still leaves them out of the document while the canon has no sentence for it", async () => {
+    it("says so in the canon's own words once the audience is shared", async () => {
       const { user, save } = setup({ publish: MANAGER, intent: withDrives, ownDriveIds: new Set(["mine"]) });
-      expect(SAVE_AS_COPY.ownDrivesLeftOut).toBe("");
+      expect(SAVE_AS_COPY.ownDrivesLeftOut).toBe(NR_SAVE.OWN_DRIVES_LEFT_OUT);
+      expect(screen.queryByText("Your own drives are left out of shared templates.")).toBeNull();
       await user.selectOptions(screen.getByLabelText("Available to"), "Platform group");
+      expect(screen.getByText("Your own drives are left out of shared templates.")).toBeVisible();
       setField(screen.getByLabelText("Name"), "Team");
       await user.click(saveButton());
       expect((sent(save).document.intent as { drives: unknown }).drives).toEqual([{ drive_id: "team" }]);
