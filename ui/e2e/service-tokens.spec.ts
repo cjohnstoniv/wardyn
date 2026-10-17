@@ -66,14 +66,18 @@ test.describe("Admin > Credentials: the State column (#1508)", () => {
 });
 
 async function stubAccountRoutes(page: Page): Promise<void> {
+  // The one waiting invitation is gone once it is claimed, as the server would list it.
+  let claimed = false;
   await page.route("**/api/v1/me/invitations**", async (route) => {
     const req = route.request();
     if (req.method() === "POST") {
+      claimed = true;
       return route.fulfill({
         status: 201,
         json: { id: "tok-claimed", principal: "e2e-member", role: "user", user_type: "standard", name: "ci-laptop", created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString(), token: SECRET },
       });
     }
+    if (claimed) return route.fulfill({ json: [] });
     return route.fulfill({
       json: [{ id: "6f2a1c90-5b7e-4d21-8a43-c0e9d2b71f05", target: "e2e-member", created_by: "ops-admin@example.com", created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 2 * 86_400_000).toISOString(), token_name: "ci-laptop", state: "pending" }],
     });
@@ -121,7 +125,7 @@ test.describe("Your account: the token cards (#1508)", () => {
 
     await expect(dialog.getByRole("heading", { name: "Your new token" })).toBeVisible();
     await expect(dialog.getByTestId("show-once-token")).toHaveText(SECRET);
-    await expect(dialog.getByText("you (Member)")).toBeVisible();
+    await expect(dialog.getByText("you (User)")).toBeVisible();
     // A first Done without a copy only warns; a click outside never closes a token.
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog.getByText("You haven't copied it yet. Once you close this, it can't be shown again.")).toBeVisible();
@@ -130,6 +134,9 @@ test.describe("Your account: the token cards (#1508)", () => {
     await dialog.getByRole("button", { name: "Close without copying" }).click();
     await expect(dialog).toHaveCount(0);
     await expectTokenGone(page);
+    // The last waiting invitation was claimed, so the card is gone and focus lands on the page, not <body> (FUG-L356).
+    await expect(card).toHaveCount(0);
+    await expect(page.locator("#main-content")).toBeFocused();
   });
 
   test("minting a service token shows it once, and nothing keeps it", async ({ page }) => {
