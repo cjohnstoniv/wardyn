@@ -67,6 +67,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
 			fenced, err := s.eraseCredentialsScope(ctx, person, want, &rep)
+			if err == nil {
+				err = s.eraseLoginGroups(ctx, person, want)
+			}
 			if credRep != nil {
 				*credRep = rep
 			}

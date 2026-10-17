@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -442,6 +443,7 @@ type keyCustody struct {
 	RootKeyCreds  int // person-owned credentials still under the credential key
 	ExternalCreds int // person-owned credentials kept in an external secret store, which no principal key seals
 	Changes       keydomain.Changes
+	Undeclared    []keydomain.UndeclaredDomain // domains assignments name that the file no longer declares
 	Now           time.Time
 }
 
@@ -458,6 +460,17 @@ func keyCustodyChecks(k keyCustody) []SetupCheck {
 		}
 		domains.Status = "ok"
 		domains.Detail = fmt.Sprintf("%d %s%s.", n, noun, strings.Join(k.Domains, ", "))
+	}
+	var undeclared []SetupCheck
+	if len(k.Undeclared) > 0 {
+		parts := make([]string, len(k.Undeclared))
+		for i, u := range k.Undeclared {
+			parts[i] = fmt.Sprintf("%s (%d)", u.Domain, u.Assignments)
+		}
+		undeclared = []SetupCheck{{ID: "key_domain_assignments", Label: "Key domain assignments", Status: "warn",
+			Detail: "Key-domain assignments name domains that WARDYN_KEY_DOMAINS_FILE does not declare: " + strings.Join(parts, ", ") +
+				". Every person such an assignment covers fails to get a key.",
+			Fix: "Declare each domain in WARDYN_KEY_DOMAINS_FILE again and restart, or assign those people to a declared domain."}}
 	}
 	pk := SetupCheck{ID: "principal_keys", Label: "Per-person keys"}
 	switch {
@@ -488,10 +501,20 @@ func keyCustodyChecks(k keyCustody) []SetupCheck {
 		}
 		ch.Status = "warn"
 		ch.Detail = fmt.Sprintf("%d key-domain assignment change%s in the last 30 days, the latest %s by %s. Each one moves where that person's next keys are made.",
-			n, s, keyChangeWhen(k.Now, k.Changes.Latest), k.Changes.LatestBy)
+			n, s, keyChangeWhen(k.Now, k.Changes.Latest), keyChangeBy(k.Changes.LatestBy))
 		ch.Fix = "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete."
 	}
-	return []SetupCheck{domains, pk, ch}
+	return slices.Concat([]SetupCheck{domains}, undeclared, []SetupCheck{pk, ch})
+}
+
+// keyChangeBy names who made a change. Under WARDYN_AUDIT_SEAL=full every human
+// actor is stored as a "subject:<id>" pseudonym, which is never resolved here,
+// so it reads as a phrase instead of an opaque id.
+func keyChangeBy(actor string) string {
+	if strings.HasPrefix(actor, audit.SubjectActorPrefix) {
+		return "an admin whose name the audit seal hides"
+	}
+	return actor
 }
 
 // keyChangeWhen says how long ago t was, in days.
@@ -525,6 +548,9 @@ func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
 		return nil
 	}
 	if k.Changes, err = svc.ChangesSince(ctx, now.Add(-30*24*time.Hour)); err != nil {
+		return nil
+	}
+	if k.Undeclared, err = svc.Undeclared(ctx); err != nil {
 		return nil
 	}
 	return keyCustodyChecks(k)

@@ -720,12 +720,13 @@ The console shows the same under Admin, Credentials.
 - A Key domain column in the Stored credentials table says where each person's next key is made and why.
 - A write answered `202` (held for a second person) shows as submitted for approval, and changes nothing until it is approved.
 
-`/setup/status` carries four rows for key custody:
+`/setup/status` carries four rows for key custody, and a fifth while a problem needs it:
 
 - `platform_split`: the boot keys have a key and identity of their own in the key service.
 - `key_domains`: the declared domains, each proven at boot.
+- `key_domain_assignments`: amber, and only present, while an assignment names a domain `WARDYN_KEY_DOMAINS_FILE` no longer declares. Every person it covers fails to get a key, so declare the domain again or assign those people to a declared one.
 - `principal_keys`: the `WARDYN_PRINCIPAL_KEYS` mode, and how many stored credentials still use the credential key.
-- `key_domain_changes`: amber while any assignment changed in the last 30 days. Moving where a person's next keys are made is what a database writer could do, so check each change in Audit.
+- `key_domain_changes`: amber while any assignment changed in the last 30 days. Moving where a person's next keys are made is what a database writer could do, so check each change in Audit. With `WARDYN_AUDIT_SEAL=full` the row cannot name who made the latest one and says "an admin whose name the audit seal hides"; Audit shows the name.
 
 **Resolution** for a person's next key generation is user, then group, then `all`, then `default`:
 

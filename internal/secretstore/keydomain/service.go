@@ -266,6 +266,27 @@ func (s *Service) Usage(ctx context.Context) ([]Usage, error) {
 	return out, nil
 }
 
+// UndeclaredDomain is a domain assignments name that WARDYN_KEY_DOMAINS_FILE no longer declares.
+type UndeclaredDomain struct {
+	Domain      string
+	Assignments int
+}
+
+// Undeclared lists the domains the assignments name that the file does not
+// declare, with how many assignments name each: every person such an
+// assignment covers fails to get a key (ErrUnknownDomain).
+func (s *Service) Undeclared(ctx context.Context) ([]UndeclaredDomain, error) {
+	rows, err := s.pool.Query(ctx, `SELECT domain, count(*) FROM key_domain_assignments WHERE domain <> $1 AND NOT domain = ANY($2) GROUP BY domain ORDER BY domain`, Default, s.Declared())
+	if err != nil {
+		return nil, unavailable("list the assignments to undeclared domains", err)
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[UndeclaredDomain])
+	if err != nil {
+		return nil, unavailable("list the assignments to undeclared domains", err)
+	}
+	return out, nil
+}
+
 // Querier is what an assignment read or write runs on: the pool, or a
 // transaction it joins (a held governance change applies inside the decision
 // transaction).
