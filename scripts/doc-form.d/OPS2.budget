@@ -58,7 +58,8 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 4039 = 4022 + 17, measured at the K7 merge: the line pointing at the organisation runner in a cluster.
 # docs/operations/hybrid-laptops.md 4041 = 4039 + 2, measured: merge of the containment-only kill sentence beside the organisation-runner pointer.
 # docs/operations/hybrid-laptops.md 4509 = 4041 + 468, measured: merge of the runner decision sink section, plus the pinned-image clause.
-docs/operations/hybrid-laptops.md=4509 share=35
+# docs/operations/hybrid-laptops.md 4579 = 4509 + 70, measured: the runner and organisation version property and the 0.9.2 rollback
+docs/operations/hybrid-laptops.md=4579 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.

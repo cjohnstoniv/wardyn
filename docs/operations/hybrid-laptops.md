@@ -162,6 +162,9 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - The proxy dials `host.docker.internal`, which its hosts map to the relay's address, at the port `wardyn-runnerd` keeps in `decision-sink.addr`. The connection is pinned to `decision-sink.key`, and each proxy has its own key: one run's proxy cannot write another run's decisions.
 - A request whose decision cannot be recorded is not sent. A decision a stopped proxy never delivered is counted, and the organisation gets a `builtin:spool-lost` deny carrying the count.
 - After a restart `wardyn-runnerd` listens on the same port before it stops the runs' proxies, so a proxy still running delivers what it holds first.
+- The runner and organisation share one wire protocol version, and each side uses a newer feature only when the other advertised it. An older runner keeps working with fewer features.
+  - A newer runner is not promised to work against an older organisation, which is why the organisation goes first. See [Runner and organisation versions](../runner-registration.md#runner-and-organisation-versions).
+  - Rolling back to 0.9.2 after a run with captured output needs the runner's state directory cleared.
 - Upgrade the organisation before its runners. A runner newer than 0.9.3-rc.2 configures its proxy with `decision_sink`, which a proxy image from 0.9.3-rc.2 or older does not know. An unpinned runner of an older organisation takes that image (below), so its runs fail to start; a pinned runner needs an image at least as new as its own release.
 
 ### The proxy image a laptop runner uses
