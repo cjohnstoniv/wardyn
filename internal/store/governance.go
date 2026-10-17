@@ -30,9 +30,9 @@ const governanceProfileCols = `id, name, ceiling, limits, created_at, updated_at
 // governanceProfileColsP is governanceProfileCols qualified for a join or a recursive term.
 const governanceProfileColsP = `p.id, p.name, p.ceiling, p.limits, p.created_at, p.updated_at, p.created_by, p.contact, p.base_profile_id, p.overlay, p.overlay_limits`
 
-// GovernanceProfileBuild produces the row a graph write stores, given every profile as the write
-// transaction sees it under the graph lock. A refusal it returns aborts the write unchanged.
-type GovernanceProfileBuild func(all []types.GovernanceProfile) (types.GovernanceProfile, error)
+// GovernanceProfileBuild produces the row a graph write stores, given every profile and every assignment
+// as the write transaction sees them under the graph lock. A refusal it returns aborts the write unchanged.
+type GovernanceProfileBuild func(all []types.GovernanceProfile, assignments []types.GovernanceAssignment) (types.GovernanceProfile, error)
 
 // ErrProfileHasChildren is DeleteGovernanceProfile's refusal when other profiles still compose on
 // the row: Names are those children, sorted.
@@ -47,7 +47,9 @@ const governanceAssignmentCols = `id, subject_type, subject, profile_id, priorit
 // UpsertGovernanceProfile writes one profile exactly as given. It is WriteGovernanceProfile with
 // nothing to decide, so it takes the same graph lock and a write can never skip it.
 func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error) {
-	return s.WriteGovernanceProfile(ctx, p.ID, func([]types.GovernanceProfile) (types.GovernanceProfile, error) { return p, nil })
+	return s.WriteGovernanceProfile(ctx, p.ID, func([]types.GovernanceProfile, []types.GovernanceAssignment) (types.GovernanceProfile, error) {
+		return p, nil
+	})
 }
 
 // WriteGovernanceProfile writes one profile keyed on its PRIMARY KEY: an unminted id INSERTs, an
@@ -97,7 +99,11 @@ func WriteGovernanceProfileQ(ctx context.Context, q Querier, id uuid.UUID, build
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}
-	p, err := build(all)
+	assignments, err := ListGovernanceAssignmentsQ(ctx, q)
+	if err != nil {
+		return types.GovernanceProfile{}, err
+	}
+	p, err := build(all, assignments)
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}
@@ -106,7 +112,8 @@ func WriteGovernanceProfileQ(ctx context.Context, q Querier, id uuid.UUID, build
 }
 
 // LockGovernanceGraph takes the transaction-scoped lock every write to the governance profile graph
-// holds, so one write at a time sees and changes it. q must be a pgx.Tx.
+// holds, so one write at a time sees and changes it. Every assignment write takes it too, so a profile
+// write reads the assignments no other write is changing. q must be a pgx.Tx.
 func LockGovernanceGraph(ctx context.Context, q Querier) error {
 	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.GovernanceGraphLockClass); err != nil {
 		return fmt.Errorf("store: lock the governance profile graph: %w", err)
@@ -321,7 +328,11 @@ func (s PG) UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAs
 		return types.GovernanceAssignment{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	// The key lock a held change's approval takes too: the upsert and that approval never interleave.
+	// The locks a held change's approval takes too, in its order: the upsert and that approval never
+	// interleave, and neither does a profile write.
+	if err := LockGovernanceGraph(ctx, tx); err != nil {
+		return types.GovernanceAssignment{}, err
+	}
 	if err := LockGovernanceAssignmentKey(ctx, tx, string(a.SubjectType), a.Subject); err != nil {
 		return types.GovernanceAssignment{}, err
 	}
@@ -372,7 +383,18 @@ func UpsertGovernanceAssignmentQ(ctx context.Context, q Querier, a types.Governa
 // no row matched. Unassigning is the SUPPORTED way to widen someone back to
 // the deployment ceiling.
 func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error {
-	return DeleteGovernanceAssignmentQ(ctx, s.Pool, id)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if err := LockGovernanceGraph(ctx, tx); err != nil {
+		return err
+	}
+	if err := DeleteGovernanceAssignmentQ(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // DeleteGovernanceAssignmentQ is DeleteGovernanceAssignment's statement on q.
@@ -417,9 +439,14 @@ func lockSuffix(forUpdate bool) string {
 // resolver itself would rank them (tier, then priority, then subject), so
 // the console's table reads top-down as the precedence rule.
 func (s PG) ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error) {
-	const q = `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments
+	return ListGovernanceAssignmentsQ(ctx, s.Pool)
+}
+
+// ListGovernanceAssignmentsQ is ListGovernanceAssignments on q.
+func ListGovernanceAssignmentsQ(ctx context.Context, q Querier) ([]types.GovernanceAssignment, error) {
+	const stmt = `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments
 		ORDER BY ` + subjectTierOrder + `, priority DESC, subject`
-	return collect(ctx, s.Pool, "list", "governance assignments", q, nil, scanGovernanceAssignment)
+	return collect(ctx, q, "list", "governance assignments", stmt, nil, scanGovernanceAssignment)
 }
 
 // ResolveGovernanceProfile returns THE ONE profile that applies to a caller, or

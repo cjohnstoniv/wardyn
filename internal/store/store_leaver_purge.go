@@ -32,6 +32,12 @@ type PendingLeaver struct {
 	Purged bool
 }
 
+// PendingRefusalAudit is an identity and ledger kind that still owe a refusal row (JobStepRefusalAudit).
+type PendingRefusalAudit struct {
+	IdentityID uuid.UUID
+	Kind       string
+}
+
 // ownSuspension is true when identity row i's current deactivation is its own suspension's: the cutoff
 // step a suspension of i records holds the deactivated_at it left on i (SuspendIdentity), and a
 // reactivation followed by any later deactivation changes deactivated_at. A suspend row from an earlier
@@ -234,18 +240,32 @@ func (s PG) ListDeactivatedIdentities(ctx context.Context, limit int) ([]Princip
 
 // ListDeprovisionFailures is the suspend and purge ledger rows that are pending with a recorded error
 // for an identity still deactivated or purged (the sweeper's scope: a reactivated person's leftover
-// rows are not unfinished work), oldest identity first, at most limit. One row per identity, kind and step: a step that fails for
+// rows are not unfinished work) and every owed refusal row whatever the identity's state, oldest identity first, at most limit. One row per identity, kind and step: a step that fails for
 // several targets is listed once, with the error of the one touched last.
 func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error) {
 	return collect(ctx, s.Pool, "list", "deprovision failures", `
 		SELECT j.identity_id, j.kind, j.step, (array_agg(j.last_error ORDER BY j.updated_at DESC))[1]
 		  FROM deprovision_jobs j JOIN principal_identities i ON i.id = j.identity_id
 		 WHERE j.state = 'pending' AND j.last_error <> '' AND j.kind IN ('suspend', 'purge')
-		   AND (i.deactivated_at IS NOT NULL OR i.purged_at IS NOT NULL)
+		   AND (i.deactivated_at IS NOT NULL OR i.purged_at IS NOT NULL OR starts_with(j.step, $2))
 		 GROUP BY j.identity_id, j.kind, j.step
-		 ORDER BY min(j.created_at), j.identity_id, j.kind, j.step LIMIT $1`, []any{limit}, func(r pgx.Row) (DeprovisionFailure, error) {
+		 ORDER BY min(j.created_at), j.identity_id, j.kind, j.step LIMIT $1`, []any{limit, JobStepRefusalAudit}, func(r pgx.Row) (DeprovisionFailure, error) {
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
+	})
+}
+
+// PendingRefusalAudits is every identity and kind with an owed refusal row that no attempt has touched for
+// idleFor, at most limit. Unlike PendingLeavers and PendingGroupRemovals it does not ask whether the person is
+// still a leaver or out of the group: a row owed before a reactivation or a re-add is owed all the same.
+func (s PG) PendingRefusalAudits(ctx context.Context, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error) {
+	return collect(ctx, s.Pool, "list", "pending refusal audits", `
+		SELECT DISTINCT identity_id, kind FROM deprovision_jobs
+		 WHERE state = 'pending' AND starts_with(step, $1)
+		   AND updated_at <= now() - $2::bigint * interval '1 microsecond'
+		 ORDER BY 1, 2 LIMIT $3`, []any{JobStepRefusalAudit, idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingRefusalAudit, error) {
+		var p PendingRefusalAudit
+		return p, r.Scan(&p.IdentityID, &p.Kind)
 	})
 }
 

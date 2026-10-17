@@ -894,6 +894,117 @@ func TestPG_GovernanceChanges_AssignmentGoesStaleWhenItsProfileChanges(t *testin
 	}
 }
 
+// An equal-priority group assignment approved while a rename waits for the profile graph makes that rename a
+// tie-break: the rename is held, and the profile a member of both groups resolves to does not change.
+func TestPG_GovernanceChanges_RenameSeesAnAssignmentApprovedWhileItWaits(t *testing.T) {
+	e := newGovEnv(t)
+	ctx := context.Background()
+	mike := e.seedProfile("mike", "pypi.org")
+	zulu := e.seedProfile("zulu", "pypi.org")
+	group := func(subject string, p types.GovernanceProfile) types.GovernanceAssignment {
+		return types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: p.ID, Priority: 5, CreatedBy: "seed"}
+	}
+	if _, err := e.pg.UpsertGovernanceAssignment(ctx, group("eng", mike)); err != nil {
+		t.Fatal(err)
+	}
+	resolved := func() string {
+		t.Helper()
+		p, _, err := e.pg.ResolveGovernanceProfile(ctx, []string{"sub-both"}, []string{"eng", "ops"}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Name
+	}
+
+	// The approval of ops -> zulu, frozen before its commit, holding the locks the decision takes.
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	var holder int32
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LockGovernanceGraph(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LockGovernanceAssignmentKey(ctx, tx, string(types.CapabilitySubjectGroup), "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertGovernanceAssignmentQ(ctx, tx, group("ops", zulu)); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doSSO(t, e.srv, http.MethodPut, "/api/v1/governance/profiles/"+zulu.ID.String(), e.alice, profileBody("aaa", "pypi.org"))
+	}()
+	waitFor(t, "the rename to wait for the profile graph", func() bool { return blockedBy(t, e.pool, holder, "%") })
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved(); got != "mike" {
+		t.Fatalf("with the tie approved, a member of both groups resolves to %q, want mike", got)
+	}
+
+	w := <-done
+	if w.Code != http.StatusAccepted {
+		t.Errorf("the rename = %d %s, want 202 held", w.Code, w.Body)
+	}
+	if got := e.profile(zulu.ID).Name; got != "zulu" {
+		t.Errorf("the profile was renamed to %q", got)
+	}
+	if got := resolved(); got != "mike" {
+		t.Errorf("a member of both groups now resolves to %q, want mike", got)
+	}
+}
+
+// A direct assignment write waits for a profile write's hold on the graph, so the profile write's view of
+// the assignments stands until it commits.
+func TestPG_GovernanceChanges_AssignmentWritesWaitForTheProfileGraph(t *testing.T) {
+	e := newGovEnv(t)
+	ctx := context.Background()
+	prof := e.seedProfile("mike", "pypi.org")
+	seeded, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup,
+		Subject: "eng", ProfileID: prof.ID, Priority: 5, CreatedBy: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, write := range map[string]func() error{
+		"an upsert": func() error {
+			_, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup,
+				Subject: "ops", ProfileID: prof.ID, Priority: 5, CreatedBy: "seed"})
+			return err
+		},
+		"a delete": func() error { return e.pg.DeleteGovernanceAssignment(ctx, seeded.ID) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			tx, err := e.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+			var holder int32
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.LockGovernanceGraph(ctx, tx); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- write() }()
+			waitFor(t, name+" to wait for the profile graph", func() bool { return blockedBy(t, e.pool, holder, "%") })
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // TestPG_GovernanceChanges_RejectReasonIsBounded: a reject reason over 512 characters or with a control
 // character is a 400 that leaves the change pending; a good one is stored on the row and in the audit
 // row only.

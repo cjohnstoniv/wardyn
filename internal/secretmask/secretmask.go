@@ -702,22 +702,63 @@ func (m Masker) Secrets() [][]byte { return m.secrets }
 
 // Mask replaces all verbatim occurrences of each registered secret in p with
 // "<secret-hidden>". Exact byte match only — no regex, no entropy scoring.
-// The longest registered secret is tried first to handle overlapping values.
-// Returns p unchanged if no secrets are registered.
+// Occurrences that overlap or nest are one run, replaced by one placeholder, so
+// no byte of any secret present in p is returned. Returns p unchanged when no
+// secret occurs in it.
 //
 // HONEST RESIDUAL: base64/hex/encoded/model-narrated representations are NOT
 // masked. This only catches verbatim byte-identical leakage.
 func (m Masker) Mask(p []byte) []byte {
-	if len(m.secrets) == 0 {
+	runs := m.runs(p)
+	if len(runs) == 0 {
 		return p
 	}
-	out := p
+	out := make([]byte, 0, len(p))
+	last := 0
+	for _, r := range runs {
+		out = append(append(out, p[last:r[0]]...), placeholder...)
+		last = r[1]
+	}
+	return append(out, p[last:]...)
+}
+
+// runs is the maximal [start, end) runs of p covered by occurrences of a secret, in order. Occurrences that
+// overlap join one run; occurrences that only touch stay two.
+func (m Masker) runs(p []byte) [][2]int {
+	var occ [][2]int
 	for _, s := range m.secrets {
-		if bytes.Contains(out, s) {
-			out = bytes.ReplaceAll(out, s, placeholder)
+		for i := 0; ; {
+			j := bytes.Index(p[i:], s)
+			if j < 0 {
+				break
+			}
+			occ = append(occ, [2]int{i + j, i + j + len(s)})
+			i += j + 1
+		}
+	}
+	if len(occ) == 0 {
+		return nil
+	}
+	slices.SortFunc(occ, func(a, b [2]int) int { return a[0] - b[0] })
+	out := occ[:1]
+	for _, o := range occ[1:] {
+		if last := &out[len(out)-1]; o[0] < last[1] {
+			last[1] = max(last[1], o[1])
+		} else {
+			out = append(out, o)
 		}
 	}
 	return out
+}
+
+// covered is where the run that the first hidden bytes of p belong to ends, given p's runs.
+func covered(hidden int, runs [][2]int) int {
+	for _, r := range runs {
+		if r[0] < hidden {
+			hidden = max(hidden, r[1])
+		}
+	}
+	return hidden
 }
 
 // ─── MaskingWriter ───────────────────────────────────────────────────────────
@@ -726,15 +767,21 @@ func (m Masker) Mask(p []byte) []byte {
 // stream, even when a secret spans two adjacent Write calls (chunked PTY or
 // asciicast frames).
 //
-// Invariant: after each Write, it retains a tail of (maxSecretLen-1) bytes
-// from the masked buffer, prepended to the next chunk before masking again.
-// Close() flushes the retained tail.
+// Invariant (the retention bound): after each Write it holds back exactly the
+// last min(len, maxSecretLen-1) bytes of the stream, as they arrived, and
+// forwards everything before them. A secret that begins in those bytes is seen
+// whole by a later Write or by Close; one that begins earlier is already whole.
+// A run of overlapping secrets that crosses into the held bytes is forwarded as
+// its placeholder at once, and hidden records how many held bytes it stands
+// for, so they are never forwarded and a secret overlapping them joins the run.
+// Close() flushes the held bytes masked.
 //
 // A nil downstream or a Masker with no secrets is safe (pass-through).
 type MaskingWriter struct {
-	m    Masker
-	dst  io.Writer
-	tail []byte // pending bytes not yet forwarded
+	m      Masker
+	dst    io.Writer
+	tail   []byte // held bytes not yet forwarded, as they arrived
+	hidden int    // leading bytes of tail an already-forwarded placeholder stands for
 }
 
 // NewMaskingWriter wraps dst with masking. If m has no secrets the writer
@@ -744,7 +791,7 @@ func NewMaskingWriter(dst io.Writer, m Masker) *MaskingWriter {
 }
 
 // Write masks p (with any retained tail prepended) and forwards the safe
-// prefix downstream, retaining a tail of up to (maxSecretLen-1) bytes.
+// prefix downstream, retaining a tail of at most (maxSecretLen-1) bytes.
 //
 // Fail-CLOSED on masker panic: a recovered panic causes the placeholder (not
 // the raw input) to be written downstream, then returns the panic as an error
@@ -756,28 +803,29 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 	// Append new data to retained tail to detect cross-boundary secrets.
 	buf := append(w.tail, p...) //nolint:gocritic // intentional re-use
 
-	// Apply masking with panic recovery (fail-closed: see safeMask).
-	masked, panicErr := safeMask(w.m, buf)
-
-	if w.m.maxLen <= 1 {
-		// No tail needed when there is at most one-byte overlap.
-		w.tail = nil
-		if _, werr := w.dst.Write(masked); werr != nil {
-			return 0, werr
+	// The retention bound is enforced here: the held bytes start at at.
+	at := len(buf)
+	if w.m.maxLen > 1 {
+		at = max(0, len(buf)-(w.m.maxLen-1))
+	}
+	runs := w.m.runs(buf)
+	lo := covered(w.hidden, runs) // bytes before lo are already forwarded as a placeholder
+	end := at
+	for _, r := range runs {
+		if r[0] < at && r[1] > at {
+			end = r[1] // a run crossing at is forwarded whole, as its placeholder
 		}
-		return len(p), panicErr
 	}
-
-	// Retain up to (maxLen-1) bytes so the next write can detect splits.
-	tailLen := w.m.maxLen - 1
-	if tailLen > len(masked) {
-		tailLen = len(masked)
+	var masked []byte
+	var panicErr error
+	if lo < at {
+		// Apply masking with panic recovery (fail-closed: see safeMask).
+		masked, panicErr = safeMask(w.m, buf[lo:end])
 	}
-	forward := masked[:len(masked)-tailLen]
-	w.tail = bytes.Clone(masked[len(masked)-tailLen:])
+	w.tail, w.hidden = bytes.Clone(buf[at:]), max(lo, end)-at
 
-	if len(forward) > 0 {
-		if _, werr := w.dst.Write(forward); werr != nil {
+	if len(masked) > 0 {
+		if _, werr := w.dst.Write(masked); werr != nil {
 			return 0, werr
 		}
 	}
@@ -789,15 +837,52 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 // OWNERSHIP: Close does NOT close dst — dst is borrowed, not owned. Closing a
 // borrowed stream here could hide the caller's source error behind a clean
 // EOF, making a truncated recording look like a successful upload.
-func (w *MaskingWriter) Close() error {
-	if len(w.tail) > 0 {
-		masked, _ := safeMask(w.m, w.tail)
-		if _, err := w.dst.Write(masked); err != nil {
-			return err
+func (w *MaskingWriter) Close() error { return w.flush(0) }
+
+// CloseCut is Close for a stream cut short where it ends: a trailing run that begins a secret, the part of
+// it that arrived before the cut, is masked as well.
+func (w *MaskingWriter) CloseCut() error { return w.flush(w.m.cutPrefixLen(w.tail)) }
+
+// flush forwards the held tail masked, its last cut bytes, with any run of secrets they overlap, as a placeholder.
+func (w *MaskingWriter) flush(cut int) error {
+	tail, runs := w.tail, w.m.runs(w.tail)
+	lo := covered(w.hidden, runs)
+	w.tail, w.hidden = nil, 0
+	q := len(tail) - cut
+	for _, r := range runs {
+		if cut > 0 && r[0] < q && r[1] > q {
+			q = r[0]
 		}
-		w.tail = nil
 	}
-	return nil
+	if q < lo {
+		return nil // the cut run joins the run a placeholder already stands for
+	}
+	var masked []byte
+	if lo < q {
+		masked, _ = safeMask(w.m, tail[lo:q])
+	}
+	if cut > 0 {
+		masked = append(masked[:len(masked):len(masked)], placeholder...)
+	}
+	if len(masked) == 0 {
+		return nil
+	}
+	_, err := w.dst.Write(masked)
+	return err
+}
+
+// cutPrefixLen is the length of the longest end of p that is the start of a secret.
+func (m Masker) cutPrefixLen(p []byte) int {
+	best := 0
+	for _, s := range m.secrets {
+		for k := min(len(s)-1, len(p)); k > best; k-- {
+			if bytes.HasSuffix(p, s[:k]) {
+				best = k
+				break
+			}
+		}
+	}
+	return best
 }
 
 // MaskCallForTest is a package-level seam so that tests can inject a panicking

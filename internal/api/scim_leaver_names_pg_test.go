@@ -178,7 +178,8 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAddressNeverReachesATokenEmailClaimant(t 
 }
 
 // An unbound leaver whose address two people claimed at sign-in: the address names nobody alone, so
-// neither is reached. The suspension and the purge refuse, answer 5xx and say why in the audit trail.
+// neither is reached. The suspension deactivates the leaver's identity row alone; it and the purge refuse
+// the rest, answer 5xx and say why in the audit trail.
 func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.T) {
 	e := newSCIMEnv(t)
 	var claimants []bystander
@@ -189,15 +190,17 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.
 	id := e.postUserID(e.a, leaverOID, earlyName, earlyName)
 
 	e.removeLeaver(t, id, http.StatusInternalServerError, http.StatusInternalServerError, claimants...)
-	if e.identity(id).DeactivatedAt != nil {
-		t.Error("the refused suspension deactivated the identity")
+	if e.identity(id).DeactivatedAt == nil {
+		t.Error("the refused suspension left the leaver's identity active")
 	}
-	// DELETE completes the suspension first, so its refusal is the suspension's too.
-	for req, n := range map[string]*scimNode{"suspend": e.a, "DELETE": e.b} {
-		rows := e.rows(n, "person.deprovision")
-		if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindSuspend {
-			t.Errorf("%s: person.deprovision rows = %+v, want one denied %s", req, rows, reasonOwnerAmbiguous)
-		}
+	// DELETE completes the suspension first, so its refusal is the suspension's: step 1 already stopped for this
+	// reason on the suspend, and the retry writes no second row.
+	rows := e.rows(e.a, "person.deprovision")
+	if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindSuspend {
+		t.Errorf("suspend: person.deprovision rows = %+v, want one denied %s", rows, reasonOwnerAmbiguous)
+	}
+	if rows := e.rows(e.b, "person.deprovision"); len(rows) != 0 {
+		t.Errorf("DELETE: person.deprovision rows = %+v, want none: the step already stopped for this reason", rows)
 	}
 }
 

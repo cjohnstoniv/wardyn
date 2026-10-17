@@ -394,14 +394,16 @@ func TestSCIMCovSuspensionStopsAtAFailedStoreStep(t *testing.T) {
 		name, method string
 		wantPlans    int
 		wantRevoked  bool
+		// wantRefusals is the person.deprovision rows: an unreadable directory still cuts the exact row.
+		wantRefusals int
 	}{
-		{"reading the identity", "GetIdentity", 0, false},
-		{"reading the aliases", "IdentityAliasValues", 0, false},
-		{"reading the ledger", "ListDeprovisionJobs", 0, false},
-		{"the cutoff transaction", "SuspendIdentity", 1, false},
-		{"opening the ledger rows", "EnsureDeprovisionJobs", 1, false},
-		{"listing the person's runs", "ListNonTerminalRunsBy", 1, true},
-		{"recording a finished step", "FinishDeprovisionJob", 1, true},
+		{"reading the identity", "GetIdentity", 0, false, 0},
+		{"reading the aliases", "IdentityAliasValues", 1, false, 1},
+		{"reading the ledger", "ListDeprovisionJobs", 0, false, 0},
+		{"the cutoff transaction", "SuspendIdentity", 1, false, 0},
+		{"opening the ledger rows", "EnsureDeprovisionJobs", 1, false, 0},
+		{"listing the person's runs", "ListNonTerminalRunsBy", 1, true, 0},
+		{"recording a finished step", "FinishDeprovisionJob", 1, true, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -419,10 +421,11 @@ func TestSCIMCovSuspensionStopsAtAFailedStoreStep(t *testing.T) {
 			if revoked, _ := e.rev.snapshot(); (len(revoked) > 0) != c.wantRevoked {
 				t.Errorf("sessions revoked = %v, want revoked %t", revoked, c.wantRevoked)
 			}
-			for _, action := range []string{"scim.user.deactivate", "person.deprovision"} {
-				if rows := e.auditRows(action); len(rows) != 0 {
-					t.Errorf("%s was written after a failed step: %+v", action, rows)
-				}
+			if rows := e.auditRows("scim.user.deactivate"); len(rows) != 0 {
+				t.Errorf("scim.user.deactivate was written after a failed step: %+v", rows)
+			}
+			if rows := e.auditRows("person.deprovision"); len(rows) != c.wantRefusals {
+				t.Errorf("person.deprovision rows = %+v, want %d", rows, c.wantRefusals)
 			}
 		})
 	}
@@ -599,8 +602,8 @@ func TestSCIMCovALedgerReadFailureStopsOnlyItsStep(t *testing.T) {
 	}
 }
 
-// An email that cannot be resolved (store.PrincipalsNamed fails) stops a suspension, and a purge whose
-// suspension is already done, before either touches anything, with a person.deprovision failure row.
+// An email that cannot be resolved (store.PrincipalsNamed fails) stops a suspension after its partial step 1,
+// and a purge whose suspension is already done before it touches anything, with a person.deprovision failure row.
 func TestSCIMCovAnUnresolvableEmailRefusesTheDeprovision(t *testing.T) {
 	for _, kind := range []string{store.JobKindSuspend, store.JobKindPurge} {
 		t.Run(kind, func(t *testing.T) {
@@ -621,8 +624,8 @@ func TestSCIMCovAnUnresolvableEmailRefusesTheDeprovision(t *testing.T) {
 			if err := run(context.Background(), st, l.id, scimSlotPrimary); !errors.Is(err, errSCIMCovBoom) {
 				t.Fatalf("err = %v, want the store's error", err)
 			}
-			if kind == store.JobKindSuspend && (len(st.plans) != 0 || st.tokenRevoked(l.tokSub)) {
-				t.Errorf("the suspension acted: %d plans, token revoked %t", len(st.plans), st.tokenRevoked(l.tokSub))
+			if kind == store.JobKindSuspend && (len(st.plans) != 1 || st.plans[0].Partial != reasonIdentityDirectoryUnreadable || st.tokenRevoked(l.tokSub)) {
+				t.Errorf("the suspension acted past its partial step 1: plans %+v, token revoked %t", st.plans, st.tokenRevoked(l.tokSub))
 			}
 			if kind == store.JobKindPurge && st.callCount("DeleteUserSubjectRows") != 0 {
 				t.Error("the purge deleted rows")

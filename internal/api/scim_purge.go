@@ -122,6 +122,10 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
+	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the purge's steps.
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", id.String()), slog.Any("err", err))
+	}
 	steps := []error{
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepWorkspaces}, func() (map[string]int, error) {
 			return s.reassignWorkspaces(ctx, forms.targets)
@@ -159,6 +163,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 
 // refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
 // ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
+// A row neither the store nor the audit spool accepted is owed (oweRefusalAudit) until a drain writes it.
 // No retry finishes it, so the refusal says what an admin does instead.
 func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
 	id := ident.ID
@@ -172,11 +177,15 @@ func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.P
 	if err != nil {
 		return err
 	}
-	if j, ok := jobByKey(jobs, key.Step, key.Target); !ok || j.LastError != refused.Error() {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
-			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": c})))
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		return err
 	}
-	return errors.Join(refused, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
+	var owed error
+	if j, ok := jobByKey(jobs, key.Step, key.Target); (!ok || j.LastError != refused.Error()) &&
+		!s.recordDeprovisionRefusal(ctx, ident, store.JobKindPurge, "denied", reasonOwnerAmbiguous, c) {
+		owed = oweRefusalAudit(ctx, st, id, store.JobKindPurge, store.JobKey{Step: store.JobStepRefusalAudit + "denied/" + reasonOwnerAmbiguous, Target: c})
+	}
+	return errors.Join(refused, owed, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
 }
 
 // purgeStep runs fn unless the ledger already holds key done, and records the outcome.
@@ -452,6 +461,19 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)
 }
 
+// drainOwedRefusals drains the refusal rows one identity's ledger of one kind still owes.
+func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.PendingRefusalAudit) error {
+	ident, err := st.GetIdentity(ctx, o.IdentityID)
+	if err != nil {
+		return err
+	}
+	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
+	if err != nil {
+		return err
+	}
+	return s.drainRefusalAudits(ctx, st, ident, o.Kind, jobs)
+}
+
 // SweepSCIMPurge is one tick of the purge sweeper, run on the elected sweeper leader: it purges every
 // suspended person past their purge_after (unless WARDYN_SCIM_PURGE_AFTER is zero) and resumes any
 // suspension, purge or group removal whose identity provider stopped retrying. Idempotent, and a
@@ -504,6 +526,14 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			err = s.removeGroupMember(ctx, st, g, p.IdentityID, scimSweeperSlot, true)
 		}
 		errs = append(errs, err)
+	}
+	// An owed refusal row is drained whatever became of the person since: a reactivated person or a member
+	// added back is no longer leaver or mover work above (run last, so a row those resumes just drained or
+	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
+	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
+	errs = append(errs, err)
+	for _, o := range owed {
+		errs = append(errs, s.drainOwedRefusals(ctx, st, o))
 	}
 	return errors.Join(errs...)
 }

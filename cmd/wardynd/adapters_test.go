@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -336,5 +339,24 @@ func TestMaskingRecorder_MasksJSONEscapedSecretInData(t *testing.T) {
 	}
 	if !strings.Contains(string(inner.last.Data), "<secret-hidden>") {
 		t.Fatalf("expected placeholder in Data, got %s", inner.last.Data)
+	}
+}
+
+// A row the store refuses and the spool holds answers audit.ErrSpooled with the store's error, so a caller can
+// tell it durably accepted; a row neither takes answers the store's error alone.
+func TestSpoolingRecorderMarksASpooledRow(t *testing.T) {
+	refused := errors.New("store down")
+	spool, err := api.NewAuditSpool(filepath.Join(t.TempDir(), "audit-spool.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := types.AuditEvent{ID: uuid.New(), Action: "person.deprovision", Time: time.Now().UTC()}
+	err = spoolingRecorder{inner: &fakeAuditRecorder{retErr: refused}, spool: spool}.Record(t.Context(), ev)
+	if !errors.Is(err, audit.ErrSpooled) || !errors.Is(err, refused) || spool.Lines() != 1 {
+		t.Errorf("spooled row: err %v, spool %d rows; want ErrSpooled wrapping the store's error and 1 row", err, spool.Lines())
+	}
+	err = spoolingRecorder{inner: &fakeAuditRecorder{retErr: refused}}.Record(t.Context(), ev)
+	if errors.Is(err, audit.ErrSpooled) || !errors.Is(err, refused) {
+		t.Errorf("row with no spool: err %v, want the store's error and not ErrSpooled", err)
 	}
 }
