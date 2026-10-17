@@ -64,3 +64,37 @@ func TestNewServerHoldsAnEntryWithNoSetToThePushRuleBase(t *testing.T) {
 			rec.Code, rec.Body.String(), out.String(), ruleSourceGitRules)
 	}
 }
+
+// TestLoadConfigRefusesPushRulesCarriedTwoWays: the base rules travel with the sets and never beside
+// policy.push_rules, and the sets never beside policy.push_rules either; a config that breaks one is
+// refused at boot rather than resolving to whichever the proxy reads first.
+func TestLoadConfigRefusesPushRulesCarriedTwoWays(t *testing.T) {
+	set := []types.PushRuleSet{{Provider: string(types.GitProviderAzureDevOps), Host: prSetsServerHost, Org: "coll", BasePath: "/tfs",
+		Rules: types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}}}
+	base, rules := &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}, &types.PushRulesSpec{DenyPaths: []string{"x/**"}}
+	for name, tc := range map[string]struct {
+		mutate func(*Config)
+		want   string
+	}{
+		"base without sets":      {func(c *Config) { c.PushRuleBase = base }, "push_rule_base is carried with push_rule_sets"},
+		"base beside policy":     {func(c *Config) { c.PushRuleSets, c.PushRuleBase, c.Policy.PushRules = set, base, rules }, "push_rule_base is carried with push_rule_sets"},
+		"sets beside policy":     {func(c *Config) { c.PushRuleSets, c.Policy.PushRules = set, rules }, "both set"},
+		"sets and base together": {func(c *Config) { c.PushRuleSets, c.PushRuleBase = set, base }, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &Config{RunID: uuid.New(), ControlPlaneURL: "http://127.0.0.1:1", RunToken: "tok", Listen: "127.0.0.1:0"}
+			tc.mutate(cfg)
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadConfigBytes(raw)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("a valid carrying was refused: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("LoadConfigBytes = %v, want a refusal naming %q", err, tc.want)
+			}
+		})
+	}
+}
