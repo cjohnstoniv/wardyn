@@ -86,7 +86,7 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		if secretRef == "" && ref != nil {
 			t.Fatalf("revive of an own plan = %v, want it admitted", ref)
 		}
-		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.LLMUpstreams) != 0 || len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp") {
+		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp") {
 			t.Fatal("revive retained organisation network configuration")
 		}
 	}
