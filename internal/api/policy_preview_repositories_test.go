@@ -28,7 +28,7 @@ func TestPolicyPreviewRepositoryLocators(t *testing.T) {
 		{"ipv6", "https://[2001:db8::1]:8443/Group/one.git", "https://[2001:db8::1]:8443/Group/one.git", "other"},
 		{"scp", "PRIVATE-USER@GitHub.com:acme/one.git", "ssh://github.com/acme/one.git", "github"},
 		{"scp alias", "PRIVATE-USER@ssh.github.com:acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "ssh://github.com/acme/one.git", "github"},
-		{"ssh", "ssh://PRIVATE-USER:PRIVATE-PASSWORD@github.com/acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "ssh://github.com/acme/one.git", "github"},
+		{"ssh", "ssh://PRIVATE-USER@github.com/acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "ssh://github.com/acme/one.git", "github"},
 		{"ssh alias port", "ssh://PRIVATE-USER@ssh.github.com:443/acme/one.git", "ssh://github.com/acme/one.git", "github"},
 		{"ssh alias trailing dot", "ssh://PRIVATE-USER@SSH.GitHub.com.:443/acme/one.git", "ssh://github.com/acme/one.git", "github"},
 		{"ado scp", "PRIVATE-USER@ssh.dev.azure.com:v3/contoso/project/one", "ssh://dev.azure.com/v3/contoso/project/one", "azure_devops"},

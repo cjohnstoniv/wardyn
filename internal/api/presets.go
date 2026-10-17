@@ -91,6 +91,14 @@ func presetView(p types.LaunchPreset) (client.Preset, error) {
 	return out, nil
 }
 
+// presetReadView is presetView for a read: a legacy request's repository URLs
+// are served without their credential. A launch reads presetView, so the door
+// still refuses such a row.
+func presetReadView(p types.LaunchPreset) (client.Preset, error) {
+	p.Request = redactRepoURLsInJSON(p.Request)
+	return presetView(p)
+}
+
 func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListLaunchPresets(r.Context())
 	if err != nil {
@@ -102,7 +110,7 @@ func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 		if !s.presetOpenTo(r, p) {
 			continue
 		}
-		v, err := presetView(p)
+		v, err := presetReadView(p)
 		if err != nil {
 			writeServerError(w, r, "decode preset", err)
 			return
@@ -125,7 +133,7 @@ func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get preset", err)
 		return
 	}
-	v, err := presetView(p)
+	v, err := presetReadView(p)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
 		return
@@ -236,7 +244,7 @@ func (s *Server) handlePutPreset(w http.ResponseWriter, r *http.Request) {
 				"version": saved.Version, "user_types": saved.UserTypes, "request": saved.Request,
 			})))
 	}
-	v, err := presetView(saved)
+	v, err := presetReadView(saved)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
 		return

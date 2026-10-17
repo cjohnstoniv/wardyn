@@ -110,8 +110,8 @@
 # docs/sdk.md 17560 measured after merging the Files-step seam lane (RP-3 runner limits reasons) into E6b-pdc over the member drives chain's 17473.
 # docs/sdk.md 17645 adds 16 over 17629 (0.9 release text for the fix sets merged at release); measured.
 # docs/sdk.md 17669 adds 24 over 17645 (0.9.3 D), measured: the runner_pool_run_type_missing reason.
-# docs/sdk.md 17727 adds 58 over 17669 (0.9.3 SEC3), measured: the repo_url_credentials reason, its Azure DevOps exception and read redaction.
-docs/sdk.md=17727 share=21
+# docs/sdk.md 17742 adds 73 over 17669 (0.9.3 SEC3), measured: the repo_url_credentials reason, its Azure DevOps and ssh:// rules and the reads it redacts.
+docs/sdk.md=17742 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

@@ -35,6 +35,15 @@ var credentialedRepoURLs = []struct{ url, secret string }{
 	{"https://contoso:@dev.azure.com/contoso/proj/_git/app", "contoso:@"},
 	{"https://contoso@evil.example/contoso/proj/_git/app", "contoso@evil"},
 	{"https://contoso@dev.azure.com.evil/contoso/proj/_git/app", "contoso@dev.azure.com.evil"},
+	{"ssh://git:sshpw-x7@ssh.github.com:443/acme/app.git", "sshpw-x7"}, // a password in an ssh:// URL
+	// The token repeats as the first segment and a dot segment or escape climbs
+	// out of it: git's curl squashes the path and sends the token.
+	{"https://PAT-x7@dev.azure.com/PAT-x7/../contoso/proj/_git/app", "PAT-x7@"},
+	{"https://PAT-x7@dev.azure.com/PAT-x7/./../contoso/proj/_git/app", "PAT-x7@"},
+	{"https://PAT-x7@dev.azure.com/PAT-x7//../contoso/proj/_git/app", "PAT-x7@"},
+	{"https://PAT-x7@dev.azure.com/PAT-x7/%2e%2e/contoso/proj/_git/app", "PAT-x7@"},
+	{"https://PAT-x7@dev.azure.com/PAT-x7/..%2Fcontoso/proj/_git/app", "PAT-x7@"},
+	{"\u200bhttps://zw-tok9@github.com/acme/app.git", "zw-tok9"}, // a zero-width space before the scheme
 }
 
 // allowedUserRepoURLs carry a user name that is no secret: the SSH login user
@@ -49,6 +58,7 @@ func TestRepoURLHasUserinfo(t *testing.T) {
 		"https://contoso:@dev.azure.com/contoso/p/_git/r", "https://contoso@evil.com/contoso/p/_git/r",
 		"https://contoso@dev.azure.com.evil/contoso/p/_git/r", "https://contoso@dev.azure.com:443/contoso/p/_git/r",
 		"https://contoso@dev.azure.com", "https://contoso@dev.azure.com?x/contoso", "https://a@contoso@dev.azure.com/contoso/p",
+		"ssh://u:pw@h/r", "ssh://git:@h/r", "SSH://git:pw@h:443/r",
 	} {
 		if !repoURLHasUserinfo(raw) {
 			t.Errorf("repoURLHasUserinfo(%q) = false, want true", raw)
@@ -58,6 +68,9 @@ func TestRepoURLHasUserinfo(t *testing.T) {
 		"git@h:r", "ssh://git@h/r", "https://h/r", "https://h/r@x", "https://h/r?u=a@b", "https://h#a@b",
 		"acme/app", "", "ftp://u@h/r",
 		adoCloneButtonURL, "https://Contoso@DEV.azure.com/contoso/p/_git/r", "http://contoso@dev.azure.com/CONTOSO/p",
+		"ssh://git@h/r:x", "ssh://h/r",
+		"https://contoso@dev.azure.com/contoso/Payments%20Platform/_git/Card%20Auth%20(v2).Service",
+		"https://contoso@dev.azure.com/contoso/proj/_git/app/",
 	} {
 		if repoURLHasUserinfo(raw) {
 			t.Errorf("repoURLHasUserinfo(%q) = true, want false", raw)
@@ -77,6 +90,7 @@ func TestRedactRepoURL(t *testing.T) {
 		"acme/app":                   "acme/app",
 		"https://github.com/acme/ap": "https://github.com/acme/ap",
 		adoCloneButtonURL:            adoCloneButtonURL, // the stored spelling is kept
+		"ssh://git:pw@h:443/r":       "ssh://h:443/r",
 	} {
 		if got := redactRepoURL(raw); got != want {
 			t.Errorf("redactRepoURL(%q) = %q, want %q", raw, got, want)
@@ -248,6 +262,9 @@ func TestRepoURLUserinfoRefusedAtStoringDoors(t *testing.T) {
 // branch-list audit row, all without the secret.
 func TestStoredRepoURLRedactedInLogsAndAudit(t *testing.T) {
 	for _, c := range credentialedRepoURLs {
+		if repoCloneURL(c.url) == "" {
+			continue // never cloned, so never in a clone record
+		}
 		hostPath := c.url[strings.LastIndex(c.url, "@")+1:]
 		logged := captureSlog(t)
 		_, warnings := buildRepoRecords("", []types.WorkspaceRepo{
@@ -325,9 +342,11 @@ func TestADOCloneButtonNameKeptInLogs(t *testing.T) {
 // legacyRepoStore serves rows stored before the doors refused userinfo.
 type legacyRepoStore struct {
 	store.Store
-	run  types.AgentRun
-	ws   types.Workspace
-	srcs []types.Source
+	run    types.AgentRun
+	ws     types.Workspace
+	srcs   []types.Source
+	policy types.RunPolicy
+	intent json.RawMessage
 }
 
 func (s *legacyRepoStore) ListRuns(context.Context) ([]types.AgentRun, error) {
@@ -341,6 +360,18 @@ func (s *legacyRepoStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]t
 }
 func (s *legacyRepoStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
+}
+func (s *legacyRepoStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
+	return s.policy, nil
+}
+func (s *legacyRepoStore) GetLaunchIntent(context.Context, uuid.UUID, string) (store.LaunchIntentRecord, error) {
+	return store.LaunchIntentRecord{RunID: s.run.ID, Document: s.intent}, nil
+}
+func (s *legacyRepoStore) ListLaunchIntents(context.Context, string, int) ([]store.LaunchIntentRecord, error) {
+	return nil, nil
+}
+func (s *legacyRepoStore) DeleteLaunchIntentsCreatedBy(context.Context, string) (int, error) {
+	return 0, nil
 }
 func (s *legacyRepoStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return []types.Workspace{s.ws}, nil
@@ -409,4 +440,111 @@ func TestGovernanceAndGradeAnswerTheUserinfoReason(t *testing.T) {
 	w := do(t, h.srv, http.MethodPost, "/api/v1/policies/grade", adminToken,
 		`{"spec":{"min_confinement_class":"CC2","workspace_repos":[{"repo":`+quote(credentialedRepoURLs[1].url)+`}]}}`)
 	assertRepoURLRefused(t, h.srv, w, &lockedBuffer{}, credentialedRepoURLs[1].secret)
+}
+
+// legacyRunDocument is a stored run request naming url in every repository
+// field, with a number a float round trip would round.
+func legacyRunDocument(url string) string {
+	return `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":{"repo":` + quote(url) +
+		`,"devcontainer_repo":` + quote(url) + `,"ends_after_sec":9007199254740993,` +
+		`"inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":` + quote(url) + `}]}}}`
+}
+
+// TestLegacyRepoURLRedactedOnDocumentReads (F1/F2): the launch-intent read, the
+// policy read (and every spec read through redactSpecForRead), a preset read and
+// a template read serve a legacy row's repository URLs without their credential,
+// and keep the Azure DevOps spelling. A preset launch still reads the raw row,
+// so the door refuses it.
+func TestLegacyRepoURLRedactedOnDocumentReads(t *testing.T) {
+	for _, c := range credentialedRepoURLs {
+		hostPath := c.url[strings.LastIndex(c.url, "@")+1:]
+		check := func(what, body string) {
+			t.Helper()
+			if !strings.Contains(body, hostPath) || strings.Contains(body, c.secret) {
+				t.Errorf("%s with %s: %s, want %s without the credential", what, c.secret, body, hostPath)
+			}
+		}
+		id := uuid.New()
+		st := &legacyRepoStore{
+			run:    types.AgentRun{ID: id, Agent: "claude-code", CreatedBy: "admin-token", State: types.RunRunning},
+			intent: json.RawMessage(legacyRunDocument(c.url)),
+			policy: types.RunPolicy{ID: id, Name: "p", Spec: types.RunPolicySpec{MinConfinementClass: types.CC2,
+				WorkspaceRepos: []types.WorkspaceRepo{{Repo: "acme/one"}, {Repo: c.url}}}},
+		}
+		srv := New(baseTestConfig(newHarness(t), st))
+		for _, path := range []string{"/runs/" + id.String() + "/launch-intent", "/policies/" + id.String()} {
+			w := do(t, srv, http.MethodGet, "/api/v1"+path, adminToken, "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d %s", path, w.Code, w.Body.String())
+			}
+			check("GET "+path, w.Body.String())
+		}
+		if !strings.Contains(do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/launch-intent", adminToken, "").Body.String(), "9007199254740993") {
+			t.Error("the launch-intent read rounded a number")
+		}
+		if st.policy.Spec.WorkspaceRepos[1].Repo != c.url {
+			t.Error("the policy read rewrote the stored row")
+		}
+		spec := redactSpecForRead(st.policy.Spec, false)
+		if spec.WorkspaceRepos[1].Repo == c.url || spec.WorkspaceRepos[0].Repo != "acme/one" {
+			t.Errorf("redactSpecForRead = %+v", spec.WorkspaceRepos)
+		}
+
+		req := `{"agent":"claude-code","repo":` + quote(c.url) + `,"inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":` + quote(c.url) + `}]}}`
+		preset := types.LaunchPreset{Name: "p", Version: 1, Request: json.RawMessage(req)}
+		v, err := presetReadView(preset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(v)
+		check("preset read", string(b))
+		if raw, err := presetView(preset); err != nil || raw.Request.Repo != c.url {
+			t.Errorf("presetView (the launch read) = %q, %v; want the stored URL, which the door refuses", raw.Request.Repo, err)
+		}
+
+		tv, err := templateView(templateCaller{}, types.RunTemplate{ID: id, Name: "t", Document: json.RawMessage(legacyRunDocument(c.url))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ = json.Marshal(tv)
+		check("template read", string(b))
+	}
+	doc := []byte(legacyRunDocument(adoCloneButtonURL))
+	if got := redactRepoURLsInJSON(doc); string(got) != string(doc) {
+		t.Errorf("a document with nothing to redact was rewritten: %s", got)
+	}
+}
+
+// TestProviderModeRefusalComesFirst (F7): with provider rows, a credentialed URL
+// is refused for its credential before admission could answer with a sentence
+// that names the URL.
+func TestProviderModeRefusalComesFirst(t *testing.T) {
+	const pat = "https://PAT-x7@dev.azure.com/PAT-x7/../contoso/proj/_git/app"
+	for _, door := range admitDoors() {
+		_, w := door.fire(t, admitSite(), pat, true)
+		if body := w.Body.String(); !strings.Contains(body, reasonRepoURLCredentials) || strings.Contains(body, "PAT-x7@") ||
+			strings.Contains(body, "outside every enabled provider") {
+			t.Errorf("%s: %d %s, want the credentials refusal and no echo", door.name, w.Code, body)
+		}
+	}
+}
+
+// TestLegacyRepoURLRedactedOnSpecViews (F6): the governance profile view and the
+// run effective-policy view's change list serve a legacy spec's repository URLs
+// without their credential.
+func TestLegacyRepoURLRedactedOnSpecViews(t *testing.T) {
+	for _, c := range credentialedRepoURLs {
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, WorkspaceRepos: []types.WorkspaceRepo{{Repo: c.url, Ref: "main"}}}
+		b, _ := json.Marshal(newProfileView(types.GovernanceProfile{Name: "g", Ceiling: spec}, nil, nil))
+		if strings.Contains(string(b), c.secret) {
+			t.Errorf("governance profile view serves %s: %s", c.secret, b)
+		}
+		got := strings.Join(policyFieldSets(spec)[fieldRepos], " ")
+		if strings.Contains(got, c.secret) || !strings.HasSuffix(got, "@main") {
+			t.Errorf("effective-policy change keys = %q, want the repository without %s", got, c.secret)
+		}
+		if spec.WorkspaceRepos[0].Repo != c.url {
+			t.Error("a view rewrote the spec it read")
+		}
+	}
 }

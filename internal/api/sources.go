@@ -136,6 +136,9 @@ func validateSourceWrite(src types.Source, adoServerHosts []string) string {
 		// The write-door half of the traversal guard: refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
 		// AUTHORED and sit in the library waiting for a provider row to widen.
+		if repoURLHasUserinfo(src.Locator) {
+			return repoURLUserinfo400 // ahead of the shape check, which names no reason of its own
+		}
 		if !repoLocatorPathSafe(src.Locator, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "locator")
 		}
@@ -234,7 +237,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if msg := validateSourceWrite(src, ado); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonSourceWriteInvalid, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonSourceWriteInvalid), storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
