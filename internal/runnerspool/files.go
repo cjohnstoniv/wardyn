@@ -50,6 +50,14 @@ func (s *Spool) writeJSON(name string, v any) error {
 }
 
 func (s *Spool) writeBytes(name string, b []byte) error {
+	if err := s.writeFile(name, b); err != nil {
+		return err
+	}
+	return s.syncDir()
+}
+
+// writeFile replaces name with b, synced, without the directory sync that makes the rename durable.
+func (s *Spool) writeFile(name string, b []byte) error {
 	// The process-shared lock gives this fixed temporary name one writer. A
 	// prior crash's temporary file is never mistaken for committed state.
 	tmp := "write.tmp"
@@ -68,9 +76,10 @@ func (s *Spool) writeBytes(name string, b []byte) error {
 	if err := errors.Join(ownErr, writeErr, syncErr, closeErr); err != nil {
 		return err
 	}
-	if err := s.root.Rename(tmp, name); err != nil {
-		return err
-	}
+	return s.root.Rename(tmp, name)
+}
+
+func (s *Spool) syncDir() error {
 	d, err := s.root.Open(".")
 	if err != nil {
 		return err

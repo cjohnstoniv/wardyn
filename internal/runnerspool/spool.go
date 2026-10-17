@@ -128,6 +128,21 @@ type Spool struct {
 	root  *os.Root
 	lock  *os.File
 	runID uuid.UUID
+
+	// Group commit (append): appenders queue under qmu, and whichever holds commitMu writes every
+	// queued record under one manifest write. Each appender returns once the manifest covering its
+	// record is durable, so a burst of decisions shares the fsyncs one decision used to pay alone.
+	qmu      sync.Mutex
+	queue    []*queuedAppend
+	commitMu sync.Mutex
+	// manifestWrites counts this handle's manifest commits, under mu (the group-commit pin reads it).
+	manifestWrites uint64
+}
+
+// queuedAppend is one appender's record and the channel its outcome is sent on.
+type queuedAppend struct {
+	decision egress.DecisionLog
+	done     chan error
 }
 
 // Open refuses unsafe or corrupt existing state. A missing directory starts a
@@ -208,8 +223,16 @@ func (s *Spool) Close() error {
 	return errors.Join(s.lock.Close(), s.root.Close())
 }
 
+// locked runs fn holding the spool lock. Both waits end with ctx: a commit may hold s.mu while it waits
+// on the file lock, and a proxy's admission check must still answer within its own deadline.
 func (s *Spool) locked(ctx context.Context, fn func() error) error {
-	s.mu.Lock()
+	for !s.mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 	defer s.mu.Unlock()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -266,7 +289,10 @@ func (m manifest) validOverflow(runID uuid.UUID) bool {
 		r.DropEnd != m.Reported+r.Count || r.Decision.Decision != egress.Deny || r.Decision.RuleSource != "builtin:spool-full")
 }
 
-func (s *Spool) writeManifest(m manifest) error { return s.writeJSON("state.json", m) }
+func (s *Spool) writeManifest(m manifest) error {
+	s.manifestWrites++
+	return s.writeJSON("state.json", m)
+}
 
 // Append commits before returning. An unreserved producer must refuse on any
 // error; the proxy separately reserves capacity before forwarding requests.
@@ -284,42 +310,79 @@ func (s *Spool) AppendAdmitted(ctx context.Context, decision egress.DecisionLog)
 // waits in Drops for replay to report it; it does not close a spool with room,
 // which a dropped runner link would otherwise keep closed until reconnect.
 func (s *Spool) append(ctx context.Context, decision egress.DecisionLog) error {
-	return s.locked(ctx, func() error {
-		m, err := s.readManifest()
-		if err != nil {
-			return err
+	q := &queuedAppend{decision: decision, done: make(chan error, 1)}
+	s.qmu.Lock()
+	s.queue = append(s.queue, q)
+	s.qmu.Unlock()
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	select {
+	case err := <-q.done: // the committer before this one wrote it
+		return err
+	default:
+	}
+	s.qmu.Lock()
+	batch := s.queue
+	s.queue = nil
+	s.qmu.Unlock()
+	errs := make([]error, len(batch))
+	err := s.locked(ctx, func() error { return s.commit(batch, errs) })
+	for i, b := range batch {
+		b.done <- errors.Join(err, errs[i])
+	}
+	return <-q.done
+}
+
+// commit writes batch's records and then one manifest that covers them all; errs[i] is record i's own
+// refusal. Each record file is synced and renamed, one directory sync makes the renames durable, and
+// only then does the manifest name them: the manifest stays the single commit point, and a crash
+// before it leaves an uncommitted tail that the next append replaces, as before.
+func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
+	m, err := s.readManifest()
+	if err != nil {
+		return err
+	}
+	if m.Sealed {
+		return ErrSealed
+	}
+	wrote, changed := false, false
+	for i, q := range batch {
+		if q.decision.Request.RunID != s.runID {
+			errs[i] = errors.New("decision belongs to another run")
+			continue
 		}
-		if m.Sealed {
-			return ErrSealed
-		}
-		if decision.Request.RunID != s.runID {
-			return errors.New("decision belongs to another run")
-		}
-		r := Record{SpoolID: m.SpoolID, Seq: m.Last + 1, Decision: decision}
+		r := Record{SpoolID: m.SpoolID, Seq: m.Last + 1, Decision: q.decision}
 		r.Hash = r.digest()
 		b, err := json.Marshal(r)
 		if err != nil {
-			return err
+			errs[i] = err
+			continue
 		}
 		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes {
 			if m.Drops == ^uint64(0) {
-				return errors.New("spool overflow counter exhausted")
+				errs[i] = errors.New("spool overflow counter exhausted")
+				continue
 			}
 			m.Drops++
-			if err := s.writeManifest(m); err != nil {
-				return err
-			}
-			return ErrFull
+			errs[i], changed = ErrFull, true
+			continue
 		}
-		// A crash after the record rename but before the manifest commit left only
-		// an uncommitted tail. Replacing it is safe: Append never acknowledged it.
-		if err := s.writeBytes(recordName(r.Seq), b); err != nil {
+		if err := s.writeFile(recordName(r.Seq), b); err != nil {
 			return err
 		}
 		m.Last = r.Seq
 		m.Bytes += int64(len(b))
-		return s.writeManifest(m)
-	})
+		wrote, changed = true, true
+	}
+	if !changed {
+		return nil
+	}
+	if wrote {
+		if err := s.syncDir(); err != nil {
+			return err
+		}
+	}
+	return s.writeManifest(m)
 }
 
 // Stats reports unacknowledged decisions and the total refused-overflow count.
