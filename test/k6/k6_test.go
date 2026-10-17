@@ -74,7 +74,7 @@ const (
 type env struct {
 	admin, sa                                        kubernetes.Interface
 	runsNS, ownNS, saName, runnerID, relayIP, orgURL string
-	orgCA, proxyImage, agentImage, arch, cluster     string
+	orgCA, proxyImage, agentImage, arch              string
 	peerLabels                                       map[string]string
 	pin, other                                       string // the two workers: pin carries runs, other is spare
 	nodes                                            []string
@@ -111,7 +111,7 @@ func TestK6(t *testing.T) {
 		runsNS: must(t, "K6_RUNS_NS"), ownNS: must(t, "K6_OWN_NS"), saName: must(t, "K6_SA"),
 		runnerID: must(t, "K6_RUNNER_ID"), relayIP: must(t, "K6_RELAY_IP"), orgURL: must(t, "K6_ORG_URL"),
 		proxyImage: must(t, "WARDYN_PROXY_IMAGE"), agentImage: must(t, "K6_AGENT_IMAGE"),
-		arch: must(t, "K6_ARCH"), cluster: must(t, "K6_CLUSTER"),
+		arch:  must(t, "K6_ARCH"),
 		store: newStore(), fences: newFences(),
 	}
 	ca, err := os.ReadFile(must(t, "K6_ORG_CA"))
@@ -623,7 +623,8 @@ func (e *env) nodeUID(t *testing.T, node string) string {
 	return string(n.UID)
 }
 
-// sh runs a host command (docker, kind) for the node-level cases.
+// sh runs a command (docker, kubectl) for the node-level cases; the suite's container carries the
+// docker CLI and the host's docker socket.
 func sh(t *testing.T, name string, args ...string) string {
 	t.Helper()
 	out, err := exec.Command(name, args...).CombinedOutput()

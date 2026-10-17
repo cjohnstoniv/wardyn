@@ -581,7 +581,9 @@ func (e *env) containerdRef() string {
 // would, and loads it back when the case ends.
 func (e *env) withoutProxyImage(t *testing.T) {
 	sh(t, "docker", "exec", e.pin, "crictl", "rmi", e.containerdRef())
-	t.Cleanup(func() { sh(t, "kind", "load", "docker-image", e.proxyImage, "--name", e.cluster, "--nodes", e.pin) })
+	t.Cleanup(func() {
+		sh(t, "sh", "-c", fmt.Sprintf("docker save %s | docker exec -i %s ctr --namespace=k8s.io images import --digests -", e.proxyImage, e.pin))
+	})
 }
 
 func (e *env) assertNeverInit(t *testing.T, id uuid.UUID) {
@@ -813,7 +815,7 @@ func caseHardDenyConfig(t *testing.T, e *env) {
 	if !slices.Contains(hd.Hosts, e.relayIP) {
 		t.Errorf("hard_deny hosts %v lack the relay ClusterIP %s", hd.Hosts, e.relayIP)
 	}
-	note(t, "hard_deny suffixes %v hosts %v (the apiserver entry here is the suite's out-of-cluster address; runnerd's in-cluster boot resolves its own)", hd.Suffixes, hd.Hosts)
+	note(t, "hard_deny suffixes %v hosts %v (the apiserver entry here is the control plane's node address the suite dials; runnerd in a pod resolves its own)", hd.Suffixes, hd.Hosts)
 	e.stopRun(t, id)
 }
 

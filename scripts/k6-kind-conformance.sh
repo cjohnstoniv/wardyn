@@ -17,7 +17,8 @@
 # on both versions.
 #
 # Usage: WARDYN_TEST_K8S=1 scripts/k6-kind-conformance.sh   (needs docker, kind, kubectl, helm,
-# go, openssl, jq). K6_NODE_IMAGES overrides the node images; K6_CALICO_VERSION the Calico pin.
+# go, openssl, jq). The suite runs in a docker:cli container on the kind network, with the docker
+# socket for its node-level steps. K6_NODE_IMAGES overrides the node images; K6_CALICO_VERSION the Calico pin.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,6 +54,8 @@ had() { docker image inspect "$1" >/dev/null 2>&1 && echo yes || echo no; }
 HAD_RUNNERD_LOCAL="$(had wardyn/wardyn-runnerd:local)"
 HAD_PROXY_LOCAL="$(had wardyn/wardyn-proxy:local)"
 HAD_BUSYBOX="$(had busybox:1.36)"
+RUNNER_IMAGE="docker:27.3.1-cli"
+HAD_RUNNER="$(had "$RUNNER_IMAGE")"
 
 # shellcheck disable=SC2317  # reached through the EXIT trap
 cleanup() {
@@ -64,6 +67,7 @@ cleanup() {
   [ "$HAD_RUNNERD_LOCAL" = no ] && docker rmi wardyn/wardyn-runnerd:local >/dev/null 2>&1
   [ "$HAD_PROXY_LOCAL" = no ] && docker rmi wardyn/wardyn-proxy:local >/dev/null 2>&1
   [ "$HAD_BUSYBOX" = no ] && docker rmi busybox:1.36 >/dev/null 2>&1
+  [ "$HAD_RUNNER" = no ] && docker rmi "$RUNNER_IMAGE" >/dev/null 2>&1
   rm -rf "$WORK"
   return "$rc"
 }
@@ -71,6 +75,12 @@ cleanup() {
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && die "a kind cluster named $CLUSTER already exists"
 # Installed only after the guard, so a pre-existing cluster of this name is never deleted.
 trap cleanup EXIT
+
+# load_image IMAGE NODE imports a local image into a kind node's containerd directly. kind load
+# cannot detect the snapshotter of newer node images (containerd 2) on older kind releases.
+load_image() {
+  docker save "$1" | docker exec -i "$2" ctr --namespace=k8s.io images import --digests - >/dev/null
+}
 
 mem_check() {
   local avail
@@ -80,7 +90,15 @@ mem_check() {
 
 # Host memory in use, sampled every 5 s, for the peak this run reports.
 free -m | awk '/^Mem:/{print $3}' >"$WORK/mem.base"
-( while true; do free -m | awk '/^Mem:/{print $3}'; sleep 5; done ) >"$WORK/mem.log" &
+# The kind nodes' own use comes from docker stats (Docker Desktop's VM is outside free's view).
+( while true; do
+    free -m | awk '/^Mem:/{print $3}' >>"$WORK/mem.log"
+    docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' | awk -v c="$CLUSTER" '
+      index($1, c) == 1 { v = $2; u = v; gsub(/[0-9.]/, "", u); n = v + 0
+        if (u == "GiB") n *= 1024; else if (u == "KiB") n /= 1024; s += n }
+      END { printf "%d\n", s }' >>"$WORK/kind-mem.log"
+    sleep 5
+  done ) &
 SAMPLER=$!
 
 mem_check
@@ -96,6 +114,9 @@ docker build -q -f test/k6/fakeorg/Dockerfile -t "$ORG_IMAGE" . >>"$WORK/build.l
 # multi-platform index from Docker Desktop's containerd store (content digest not found).
 printf 'FROM busybox:1.36\n' | docker build -q -t "$AGENT_IMAGE" - >>"$WORK/build.log" 2>&1 \
   || { tail -20 "$WORK/build.log"; die "agent image build failed"; }
+
+docker pull -q "$RUNNER_IMAGE" >/dev/null
+CGO_ENABLED=0 go test -c -tags k8s -o "$WORK/k6.test" ./test/k6/ || die "building test/k6 failed"
 
 log "fake org TLS ($ORG_HOST)"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=k6 org CA" \
@@ -169,8 +190,10 @@ for image in $NODE_IMAGES; do
   kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s >/dev/null
   kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s >/dev/null
   kubectl wait --for=condition=Ready nodes --all --timeout=180s >/dev/null
-  for img in "$RUNNERD_IMAGE" "$PROXY_IMAGE" "$ORG_IMAGE" "$AGENT_IMAGE"; do
-    kind load docker-image "$img" --name "$CLUSTER" >/dev/null
+  for node in $(kind get nodes --name "$CLUSTER"); do
+    for img in "$RUNNERD_IMAGE" "$PROXY_IMAGE" "$ORG_IMAGE" "$AGENT_IMAGE"; do
+      load_image "$img" "$node"
+    done
   done
   ARCH="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
   RUNNER_ID="$(cat /proc/sys/kernel/random/uuid)"
@@ -213,12 +236,16 @@ EOF
   sed "s/arch: ARCH/arch: $ARCH/" "$WORK/values.yaml" >"$WORK/values-$VERSION.yaml"
   helm install "$RELEASE" deploy/helm/wardyn-runnerd -n "$OWN_NS" -f "$WORK/values-$VERSION.yaml" >/dev/null
   DEPLOY="$(kubectl -n "$OWN_NS" get deploy -l app.kubernetes.io/instance=$RELEASE -o jsonpath='{.items[0].metadata.name}')"
-  # The chart's register init container does not mount trustedCA.configMap, so registration against
-  # an org behind a private CA cannot verify it. The harness gives it the bundle through SSL_CERT_FILE
-  # (reported as a chart follow-up); runnerd serve reads the bundle through the chart's own flag.
-  kubectl -n "$OWN_NS" patch deployment "$DEPLOY" --type=json -p='[
-    {"op":"add","path":"/spec/template/spec/initContainers/0/env","value":[{"name":"SSL_CERT_FILE","value":"/etc/wardyn/trusted-ca/ca.pem"}]},
-    {"op":"add","path":"/spec/template/spec/initContainers/0/volumeMounts/-","value":{"name":"trusted-ca","mountPath":"/etc/wardyn/trusted-ca","readOnly":true}}]' >/dev/null
+  # Two chart gaps the harness works around (reported as K5 follow-ups):
+  # - the register init container does not mount trustedCA.configMap, so registration against an org
+  #   behind a private CA cannot verify it; the harness hands it the bundle through SSL_CERT_FILE;
+  # - --state-dir is the PVC's root, which fsGroup makes group-accessible, and runnerd refuses a state
+  #   directory that is not 0700; the harness points both containers at a subdirectory runnerd creates.
+  kubectl -n "$OWN_NS" get deployment "$DEPLOY" -o json | jq '
+    .spec.template.spec.initContainers[0].env = [{"name":"SSL_CERT_FILE","value":"/etc/wardyn/trusted-ca/ca.pem"}]
+    | .spec.template.spec.initContainers[0].volumeMounts += [{"name":"trusted-ca","mountPath":"/etc/wardyn/trusted-ca","readOnly":true}]
+    | (.spec.template.spec.initContainers[0].args, .spec.template.spec.containers[0].args) |=
+        map(if startswith("--state-dir=") then . + "/state" else . end)' | kubectl replace -f - >/dev/null
   boot=FAIL
   if kubectl -n "$OWN_NS" rollout status "deployment/$DEPLOY" --timeout=300s >/dev/null &&
      timeout 300 bash -c "until kubectl -n $OWN_NS logs deployment/$DEPLOY -c runnerd 2>/dev/null | grep -q 'k8s runner ready to connect'; do sleep 3; done"; then
@@ -245,7 +272,11 @@ EOF
   SELECTOR="$(kubectl -n "$OWN_NS" get deployment "$DEPLOY" -o jsonpath='{.spec.selector.matchLabels}')"
   RELAY_IP="$(kubectl -n "$OWN_NS" get svc -l app.kubernetes.io/instance=$RELEASE -o jsonpath='{.items[0].spec.clusterIP}')"
   TOKEN="$(kubectl -n "$OWN_NS" create token "$SA" --duration=4h)"
-  SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+  # The canary's apiserver probe dials the kubeconfig's address from a pod, so the suite uses the
+  # control plane's address on the kind network and runs in a container attached to it.
+  CP_IP="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}' "$CLUSTER-control-plane")"
+  SERVER="https://$CP_IP:6443"
+  kind get kubeconfig --name "$CLUSTER" --internal | sed "s#https://$CLUSTER-control-plane:6443#$SERVER#" >"$WORK/admin-internal.kc"
   CADATA="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
   cat >"$WORK/runnerd.kc" <<EOF
 apiVersion: v1
@@ -258,11 +289,13 @@ EOF
 
   log "[$VERSION] cases (test/k6, under runnerd's token)"
   set +e
-  WARDYN_TEST_K6=1 KUBECONFIG="$WORK/runnerd.kc" K6_ADMIN_KUBECONFIG="$WORK/admin.kc" \
-    K6_RUNS_NS="$RUNS_NS" K6_OWN_NS="$OWN_NS" K6_SA="$SA" K6_RUNNER_ID="$RUNNER_ID" K6_RELAY_IP="$RELAY_IP" \
-    K6_ORG_URL="$ORG_URL" K6_ORG_CA="$WORK/ca.pem" K6_RUNNERD_SELECTOR="$SELECTOR" K6_ARCH="$ARCH" \
-    K6_CLUSTER="$CLUSTER" K6_AGENT_IMAGE="$AGENT_IMAGE" WARDYN_PROXY_IMAGE="$PROXY_IMAGE" \
-    go test -tags k8s -count=1 -v -timeout 90m -run '^TestK6$' ./test/k6/ >"$WORK/test-$VERSION.log" 2>&1
+  docker run --rm --network kind -v /var/run/docker.sock:/var/run/docker.sock -v "$WORK:$WORK" \
+    -v "$(command -v kubectl):/usr/local/bin/kubectl:ro" \
+    -e WARDYN_TEST_K6=1 -e KUBECONFIG="$WORK/runnerd.kc" -e K6_ADMIN_KUBECONFIG="$WORK/admin-internal.kc" \
+    -e K6_RUNS_NS="$RUNS_NS" -e K6_OWN_NS="$OWN_NS" -e K6_SA="$SA" -e K6_RUNNER_ID="$RUNNER_ID" -e K6_RELAY_IP="$RELAY_IP" \
+    -e K6_ORG_URL="$ORG_URL" -e K6_ORG_CA="$WORK/ca.pem" -e K6_RUNNERD_SELECTOR="$SELECTOR" -e K6_ARCH="$ARCH" \
+    -e K6_AGENT_IMAGE="$AGENT_IMAGE" -e WARDYN_PROXY_IMAGE="$PROXY_IMAGE" \
+    "$RUNNER_IMAGE" "$WORK/k6.test" -test.count=1 -test.v -test.timeout=90m -test.run '^TestK6$' >"$WORK/test-$VERSION.log" 2>&1
   trc=$?
   set -e
   grep -E '^\s*--- (FAIL|PASS|SKIP)|^(FAIL|ok) |panic:' "$WORK/test-$VERSION.log" | tail -60 || true
@@ -281,11 +314,12 @@ kill "$SAMPLER" 2>/dev/null
 SAMPLER=""
 base="$(cat "$WORK/mem.base")"
 peak="$(sort -n "$WORK/mem.log" | tail -1)"
+kpeak="$(sort -n "$WORK/kind-mem.log" 2>/dev/null | tail -1)"
 echo
 printf '%-10s %-40s %-16s %s\n' VERSION CASE STATUS DETAIL
 awk -F'\t' '{printf "%-10s %-40s %-16s %s\n", $1, $2, $3, $4}' "$SUMMARY"
 echo
-echo "commit $(git rev-parse --short HEAD); wall $((SECONDS - START)) s; host memory in use ${base} MiB at start, peak ${peak} MiB"
+echo "commit $(git rev-parse --short HEAD); wall $((SECONDS - START)) s; host memory in use ${base} MiB at start, peak ${peak} MiB; kind node containers peak ${kpeak:-?} MiB"
 if [ "$rc" = 0 ] && ! awk -F'\t' '$3=="FAIL"{f=1} END{exit !f}' "$SUMMARY"; then
   echo "k6-kind-conformance: PASS"
 else
