@@ -128,3 +128,19 @@ func TestCredentialDeliveryWrite_IfMatch(t *testing.T) {
 		t.Fatalf("current If-Match = %d %s, want 202 (held)", w.Code, w.Body)
 	}
 }
+
+// The ETag a direct save answers with is the one the next GET reports, so a console that sends it back as If-Match is
+// never refused for a document nobody else touched (U3).
+func TestCredentialDeliveryWrite_DirectSaveETagIsTheNextGETs(t *testing.T) {
+	e := newGovEnv(t)
+	const body = `{"classes":{"api_key":{"mode":"via_org"},"env_secret":{"mode":"runner_resident","require_posture":{"mdm_managed":true,"os_min":{"linux":"1.2.3"}}}}}`
+	put := e.admin(http.MethodPut, credentialDeliveryPath, body)
+	if put.Code != http.StatusOK {
+		t.Fatalf("direct PUT = %d %s, want 200", put.Code, put.Body)
+	}
+	saved := put.Header().Get("ETag")
+	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	if got.Code != http.StatusOK || saved == "" || got.Header().Get("ETag") != saved {
+		t.Fatalf("PUT ETag %q, next GET %d ETag %q, want the same non-empty ETag", saved, got.Code, got.Header().Get("ETag"))
+	}
+}
