@@ -455,7 +455,7 @@ func packagingWrite(method string, r route) Capability {
 		case "feedrecyclebin", "globalpermissions":
 			return CapPackagingManage
 		case "feeds":
-			if r.at(3) == "" || !slices.Contains(packageProtocols, r.at(4)) {
+			if r.at(3) == "" || !slices.Contains(packageProtocols, r.at(4)) || r.at(5) == "recyclebin" {
 				return CapPackagingManage
 			}
 		}
