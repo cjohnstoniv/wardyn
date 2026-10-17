@@ -611,6 +611,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOKEN_LABEL` | mock | Token |
 | `TOKEN_CONFIRM` | mock | Save token |
 | `TOKEN_SAVED` | mock | Token saved. |
+| `NOT_CHECKED` | deviation (approved 2026-10-17) | Not checked yet — too many checks this minute. Check again in a moment. |
 | `STICKY_ONE` | mock | 1 item still needs setup |
 | `STICKY_MANY(n)` | mock | {n} items still need setup |
 | `STICKY_DONE` | mock | Everything is set up |

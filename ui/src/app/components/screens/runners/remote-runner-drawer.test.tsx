@@ -20,6 +20,7 @@ const RUNNER: RemoteRunnerView = {
   updated_at: "2026-10-02T00:00:00Z",
   configured: true,
   online: true,
+  limits: { runs_at_once: 6, total: { cpu_millis: 24000, memory_mib: 98304, disk_mib: 1024000 }, per_run: { cpu_millis: 4000, memory_mib: 16384, disk_mib: 102400 } },
   pools: [],
   usage: { online: true, in_use: { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 }, available: { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 }, disk_capped: true },
 };

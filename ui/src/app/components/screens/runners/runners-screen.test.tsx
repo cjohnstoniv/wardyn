@@ -607,7 +607,7 @@ describe("Admin -> Runners remote-hosted runner", () => {
     expect(remoteUpdateMock.mock.calls[1][1]).toMatchObject({ revision: 4 });
   });
 
-  it("a super admin makes it available to people's pools; a held change says so; a security admin reads only", async () => {
+  it("a super admin makes it available to people's pools; a held change says so; a security admin who is not a super admin switches it but reads the limits only", async () => {
     setPeopleMock.mockResolvedValueOnce(SHARED).mockRejectedValueOnce(new PendingChangeError({ id: "chg-1" } as never));
     const user = userEvent.setup();
     const { unmount } = renderScreen();
@@ -623,7 +623,7 @@ describe("Admin -> Runners remote-hosted runner", () => {
     renderScreen({ operator: false });
     await user.click(await screen.findByRole("button", { name: "shared-docker" }));
     drawer = await screen.findByRole("dialog");
-    expect(within(drawer).getByRole("checkbox")).toBeDisabled();
+    expect(within(drawer).getByRole("checkbox")).toBeEnabled();
     expect(within(drawer).queryByRole("button", { name: "Edit limits" })).toBeNull();
     expect(within(drawer).getByText("Only a super admin changes a remote-hosted runner's limits.")).toBeInTheDocument();
   });
