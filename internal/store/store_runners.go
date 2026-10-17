@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -178,6 +179,15 @@ type RunnerRevocation struct {
 	Killed []RunnerKilledRun
 }
 
+// ErrRunnerBusy: a revoke waited revokeLockTimeout for a lock another operation holds on the runner or
+// its runs, and revoked nothing. It is a lock refusal (db.LockRefused), answered with a retry.
+var ErrRunnerBusy = fmt.Errorf("store: the runner is locked by another operation: %w", db.ErrLockBusy)
+
+// revokeLockTimeout bounds each lock wait of a revoke. The runner transactions that hold its row and
+// wait on another lock give up at 2s, so 5s outlasts them and their work; it is also the lock
+// refusal's Retry-After.
+const revokeLockTimeout = "5s"
+
 // RunnerKilledRun is one run a runner revocation ended KILLED.
 type RunnerKilledRun struct {
 	ID   uuid.UUID
@@ -190,13 +200,22 @@ type RunnerKilledRun struct {
 // and is not ended here: the caller ends the ones waiting for this runner alone. Rows are kept as evidence. The fence lifts only
 // because the run is terminal in the same commit, never before. Already
 // revoked or unknown is ErrNotFound, so a second call ends nothing. Lock order
-// is runner, then runs by id, then actions, as everywhere else.
-func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, reason string) (RunnerRevocation, error) {
+// is runner, then runs by id, then actions, as everywhere else. A lock held past
+// revokeLockTimeout is ErrRunnerBusy, and nothing is revoked.
+func (s PG) RevokeRunner(ctx context.Context, id uuid.UUID, now time.Time, by, reason string) (_ RunnerRevocation, err error) {
+	defer func() {
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			err = fmt.Errorf("%w: %w", ErrRunnerBusy, err)
+		}
+	}()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return RunnerRevocation{}, fmt.Errorf("store: begin revoke runner: %w", err)
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+revokeLockTimeout+`'`); err != nil {
+		return RunnerRevocation{}, fmt.Errorf("store: revoke runner lock timeout: %w", err)
+	}
 	const q = `UPDATE runners SET state = 'revoked', revoked_at = $2, revoked_by = $3, revoke_reason = $4
 		WHERE id = $1 AND state <> 'revoked' RETURNING ` + runnerCols
 	out := RunnerRevocation{}
