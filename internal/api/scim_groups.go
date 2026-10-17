@@ -324,6 +324,9 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		}
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
 	}
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindGroupRemove, jobs); err != nil {
+		return err
+	}
 	forms, err := s.leaverForms(ctx, st, ident)
 	if forms.refusal != "" {
 		// Nothing is cut or revoked while the person's forms do not resolve. The removal stays pending with the
@@ -333,8 +336,11 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 			return nil
 		}
 		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
-		accepted, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
-		return errors.Join(refused, finish(store.GroupRemovalSteps[i], errors.New(ledgerReason(forms.refusal, accepted)), nil))
+		owed, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
+		if owed != "" {
+			refused = errors.Join(refused, oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}))
+		}
+		return errors.Join(refused, finish(store.GroupRemovalSteps[i], errors.New(forms.refusal), nil))
 	}
 	if err != nil {
 		return err

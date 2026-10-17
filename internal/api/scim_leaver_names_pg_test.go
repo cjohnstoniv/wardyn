@@ -193,12 +193,14 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.
 	if e.identity(id).DeactivatedAt == nil {
 		t.Error("the refused suspension left the leaver's identity active")
 	}
-	// DELETE completes the suspension first, so its refusal is the suspension's too.
-	for req, n := range map[string]*scimNode{"suspend": e.a, "DELETE": e.b} {
-		rows := e.rows(n, "person.deprovision")
-		if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindSuspend {
-			t.Errorf("%s: person.deprovision rows = %+v, want one denied %s", req, rows, reasonOwnerAmbiguous)
-		}
+	// DELETE completes the suspension first, so its refusal is the suspension's: step 1 already stopped for this
+	// reason on the suspend, and the retry writes no second row.
+	rows := e.rows(e.a, "person.deprovision")
+	if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindSuspend {
+		t.Errorf("suspend: person.deprovision rows = %+v, want one denied %s", rows, reasonOwnerAmbiguous)
+	}
+	if rows := e.rows(e.b, "person.deprovision"); len(rows) != 0 {
+		t.Errorf("DELETE: person.deprovision rows = %+v, want none: the step already stopped for this reason", rows)
 	}
 }
 

@@ -299,6 +299,11 @@ func nonEmptyStrings(in []string) []string {
 // a principal (1) or not (0).
 const CutoffDetailBound = "principal_bound"
 
+// JobStepRefusalAudit prefixes the ledger step that owes a refused step's person.deprovision row
+// (JobStepRefusalAudit + outcome + "/" + reason): pending until the row is durably accepted. No reset of
+// a ledger deletes it, so a resolution, a completion or a new reason never loses the row.
+const JobStepRefusalAudit = "refusal_audit/"
+
 // ErrIdentityRebound is a SuspendPlan made before a sign-in bound the identity row: its forms miss the
 // newly bound principal, so the caller reads the row again and makes a new plan.
 var ErrIdentityRebound = errors.New("store: the identity was bound since the suspension was planned")
@@ -379,7 +384,8 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: deactivate person: %w", err)
 	}
 	if res.WasActive {
-		if _, err = tx.Exec(ctx, `DELETE FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2`, p.IdentityID, JobKindSuspend); err != nil {
+		if _, err = tx.Exec(ctx, `DELETE FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 AND NOT starts_with(step, $3)`,
+			p.IdentityID, JobKindSuspend, JobStepRefusalAudit); err != nil {
 			return SuspendResult{}, fmt.Errorf("store: reset deprovision jobs: %w", err)
 		}
 	}

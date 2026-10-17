@@ -172,8 +172,8 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 		return fmt.Errorf("store: read group removal ledger: %w", err)
 	}
 	if tag.RowsAffected() > 0 && existing > 0 {
-		if _, err = tx.Exec(ctx, `DELETE FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 AND target = $3`,
-			identityID, JobKindGroupRemove, target); err != nil {
+		if _, err = tx.Exec(ctx, `DELETE FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 AND target = $3 AND NOT starts_with(step, $4)`,
+			identityID, JobKindGroupRemove, target, JobStepRefusalAudit); err != nil {
 			return fmt.Errorf("store: reset group removal ledger: %w", err)
 		}
 		existing = 0

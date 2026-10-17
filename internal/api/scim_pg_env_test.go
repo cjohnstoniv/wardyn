@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/scim"
@@ -158,27 +160,53 @@ func (r *pgTestRevocations) setLateCheck(f func()) {
 	r.mu.Unlock()
 }
 
-// flakyAudit fails the audit write of the actions it is told to fail, as a store and spool that both refuse
-// it, and counts every write it is asked for.
+// flakyAudit fails the audit write of the actions it is told to fail (an action, or action/outcome), as a
+// store and spool that both refuse it, or of those it is told to spool, as a store that refuses it and a spool that holds it; it counts every
+// write it is asked for, and the rows it spooled.
 type flakyAudit struct {
 	*recRecorder
-	mu      sync.Mutex
-	failing map[string]bool
-	tried   map[string]int
+	mu       sync.Mutex
+	failing  map[string]bool
+	spooling map[string]bool
+	tried    map[string]int
+	spooled  map[string]int
 }
 
 func (f *flakyAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 	f.mu.Lock()
-	fail := f.failing[ev.Action]
+	fail, spool := f.failing[ev.Action] || f.failing[ev.Action+"/"+ev.Outcome], f.spooling[ev.Action]
 	if f.tried == nil {
-		f.tried = map[string]int{}
+		f.tried, f.spooled = map[string]int{}, map[string]int{}
 	}
 	f.tried[ev.Action]++
+	if spool {
+		f.spooled[ev.Action]++
+	}
 	f.mu.Unlock()
+	if spool {
+		return fmt.Errorf("%w: %w", audit.ErrSpooled, errors.New("audit store unavailable"))
+	}
 	if fail {
 		return errors.New("audit sink unavailable")
 	}
 	return f.recRecorder.Record(ctx, ev)
+}
+
+// spool makes f hold action's rows in its spool (v) or write them (!v).
+func (f *flakyAudit) spool(action string, v bool) {
+	f.mu.Lock()
+	if f.spooling == nil {
+		f.spooling = map[string]bool{}
+	}
+	f.spooling[action] = v
+	f.mu.Unlock()
+}
+
+// spooledRows is how many rows of action f held in its spool.
+func (f *flakyAudit) spooledRows(action string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.spooled[action]
 }
 
 // attempts is how many writes of action f was asked for.

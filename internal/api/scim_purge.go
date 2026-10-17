@@ -122,6 +122,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		return err
+	}
 	steps := []error{
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepWorkspaces}, func() (map[string]int, error) {
 			return s.reassignWorkspaces(ctx, forms.targets)
@@ -159,6 +162,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 
 // refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
 // ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
+// A row neither the store nor the audit spool accepted is owed (oweRefusalAudit) until a drain writes it.
 // No retry finishes it, so the refusal says what an admin does instead.
 func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
 	id := ident.ID
@@ -172,11 +176,15 @@ func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.P
 	if err != nil {
 		return err
 	}
-	if j, ok := jobByKey(jobs, key.Step, key.Target); !ok || j.LastError != refused.Error() {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
-			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": c})))
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		return err
 	}
-	return errors.Join(refused, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
+	var owed error
+	if j, ok := jobByKey(jobs, key.Step, key.Target); (!ok || j.LastError != refused.Error()) &&
+		!s.recordDeprovisionRefusal(ctx, ident, store.JobKindPurge, "denied", reasonOwnerAmbiguous, c) {
+		owed = oweRefusalAudit(ctx, st, id, store.JobKindPurge, store.JobKey{Step: store.JobStepRefusalAudit + "denied/" + reasonOwnerAmbiguous, Target: c})
+	}
+	return errors.Join(refused, owed, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
 }
 
 // purgeStep runs fn unless the ledger already holds key done, and records the outcome.

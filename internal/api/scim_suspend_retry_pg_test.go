@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,4 +221,122 @@ func TestSCIMStoppedSuspensionKeepsItsAuditRowOwedUntilWritten(t *testing.T) {
 	check("the resume once the audit write works", want)
 	tick()
 	check("a later resume", want)
+}
+
+// sweepAs runs one sweeper tick on n with every ledger row of identity id idle long enough to resume.
+func (e *scimEnv) sweepAs(n *scimNode, id string) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(context.Background(), `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
+		e.t.Fatal(err)
+	}
+	_ = n.srv.SweepSCIMPurge(context.Background())
+}
+
+// refusalReasons counts the refusal rows (person.deprovision, not success) the nodes wrote, by reason.
+func refusalReasons(t *testing.T, e *scimEnv, nodes ...*scimNode) map[string]int {
+	t.Helper()
+	got := map[string]int{}
+	for _, n := range nodes {
+		for _, ev := range e.rows(n, "person.deprovision") {
+			if ev.Outcome != "success" {
+				got[fmt.Sprint(dataOf(t, ev)["reason"])]++
+			}
+		}
+	}
+	return got
+}
+
+// ambiguousLeaver is a SCIM user whose address two principals hold, suspended while neither the store nor the
+// spool takes a person.deprovision row: step 1 stops with reasonOwnerAmbiguous and owes its row.
+func ambiguousLeaver(t *testing.T) (e *scimEnv, id string, twin uuid.UUID) {
+	const email = "twin@corp.example"
+	e = newSCIMEnv(t)
+	e.seedToken("sub-t1", email)
+	twin, _ = e.seedToken("sub-t2", email)
+	e.a.audit.fail("person.deprovision", true)
+	e.b.audit.fail("person.deprovision", true)
+	id = e.postUserID(e.a, oidGhost, email, email)
+	if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+	}
+	return e, id, twin
+}
+
+// A suspension's owed refusal row is written once the audit write works, though the refusal resolved and
+// the suspension finished in between.
+func TestSCIMSuspensionWritesAnOwedRefusalRowAfterItFinishes(t *testing.T) {
+	e, id, twin := ambiguousLeaver(t)
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE id = $1`, twin); err != nil {
+		t.Fatal(err)
+	}
+	e.sweepAs(e.b, id)
+	if j, ok := jobByKey(e.ledger(id), store.JobStepCutoff, ""); !ok || !j.Done || len(e.rows(e.b, "scim.user.deactivate")) != 1 {
+		t.Fatalf("the resume once the emails resolve did not finish the suspension: cutoff %+v", j)
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.b.audit.fail("person.deprovision", false)
+	e.sweepAs(e.b, id)
+	e.sweepAs(e.b, id)
+	if got := refusalReasons(t, e, e.a, e.b); !maps.Equal(got, map[string]int{reasonOwnerAmbiguous: 1}) {
+		t.Errorf("person.deprovision reasons = %v, want the owed %s row once", got, reasonOwnerAmbiguous)
+	}
+	if !e.allJobsDone(id) {
+		t.Error("the owed row is still pending after it was written")
+	}
+}
+
+// A suspension's owed refusal row is written once the audit write works, though step 1 stopped for another
+// reason in between.
+func TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges(t *testing.T) {
+	e, id, _ := ambiguousLeaver(t)
+	unreadable := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: "IdentityAliasValues"} })
+	unreadable.audit.fail("person.deprovision", true)
+	e.sweepAs(unreadable, id)
+	if j, _ := jobByKey(e.ledger(id), store.JobStepCutoff, ""); !strings.HasPrefix(j.LastError, reasonIdentityDirectoryUnreadable) {
+		t.Fatalf("cutoff = %+v, want it stopped for %s", j, reasonIdentityDirectoryUnreadable)
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.b.audit.fail("person.deprovision", false)
+	recovered := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: "IdentityAliasValues"} })
+	e.sweepAs(recovered, id)
+	want := map[string]int{reasonOwnerAmbiguous: 1, reasonIdentityDirectoryUnreadable: 1}
+	if got := refusalReasons(t, e, e.a, e.b, unreadable, recovered); !maps.Equal(got, want) {
+		t.Errorf("person.deprovision reasons = %v, want %v", got, want)
+	}
+}
+
+// A refusal row the store refuses and the audit spool holds is durably accepted: nothing is owed and a resume
+// still stopped for the same reason writes it again nowhere.
+func TestSCIMSuspensionCountsASpooledRefusalRowWritten(t *testing.T) {
+	const email = "twin@corp.example"
+	e := newSCIMEnv(t)
+	e.seedToken("sub-t1", email)
+	e.seedToken("sub-t2", email)
+	e.a.audit.spool("person.deprovision", true)
+	e.b.audit.spool("person.deprovision", true)
+	id := e.postUserID(e.a, oidGhost, email, email)
+	if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+	}
+	e.sweepAs(e.b, id)
+	tried := e.a.audit.attempts("person.deprovision") + e.b.audit.attempts("person.deprovision")
+	spooled := e.a.audit.spooledRows("person.deprovision") + e.b.audit.spooledRows("person.deprovision")
+	if tried != 1 || spooled != 1 {
+		t.Errorf("writes asked %d, rows spooled %d, want 1 and 1", tried, spooled)
+	}
+	for _, j := range e.ledger(id) {
+		if strings.HasPrefix(j.Step, store.JobStepRefusalAudit) {
+			t.Errorf("ledger row %+v owes a row the spool holds", j)
+		}
+	}
+}
+
+// ledger is identity id's suspension ledger.
+func (e *scimEnv) ledger(id string) []store.DeprovisionJob {
+	e.t.Helper()
+	jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindSuspend)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return jobs
 }
