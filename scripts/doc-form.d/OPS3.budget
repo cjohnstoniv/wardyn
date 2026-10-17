@@ -76,7 +76,8 @@ docs/operations/custom-components.md=1184 share=35
 # docs/operations/api-tokens.md 4053 adds 51: on Entra ID a portal-issued token exchanges only for a person who signed in here once or was set up by object id.
 # docs/operations/api-tokens.md 5527 measured after merging the batch into R1-identity-1 (52 over 5475: the same portal-token sentence).
 # docs/operations/api-tokens.md 5529 adds 2 over 5527, measured: expired rows are also left out of the token move list.
-docs/operations/api-tokens.md=5529 share=35
+# docs/operations/api-tokens.md 5531 adds 2 over 5529, measured: the toggle is now named "Also show revoked and expired tokens".
+docs/operations/api-tokens.md=5531 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.

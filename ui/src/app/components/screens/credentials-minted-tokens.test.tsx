@@ -97,7 +97,7 @@ describe("the State column", () => {
     await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
     expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
     expect(listMintedMock).toHaveBeenLastCalledWith(true);
-    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked tokens as well.");
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked or expired tokens as well.");
     expect(rowOf("dana@example.com").getByText("Replaced by the owner")).toBeInTheDocument();
     expect(rowOf("dana@example.com").getByText("Revoked 2 days ago, when they claimed their own.")).toBeInTheDocument();
     expect(rowOf("eli@example.com").getByText("Moved to a service identity")).toBeInTheDocument();
@@ -137,7 +137,7 @@ describe("the State column", () => {
     expect(await screen.findByText(MINTED.EMPTY)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
     expect(await screen.findByText(MINTED.NONE_LIVE)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked tokens as well.");
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked or expired tokens as well.");
     expect(screen.queryByText(MINTED.CHIP(0))).not.toBeInTheDocument();
   });
 

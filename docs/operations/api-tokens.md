@@ -261,7 +261,7 @@ Both replace a token an admin created for someone else, and nothing that works t
 
 Each row of `GET /api/v1/tokens?minted_for_others=true` carries a `disposition`, derived when you read it.
 Revoked and expired rows stay out unless you add `&include_revoked=true`, so a finished move stays visible.
-Admin > Credentials shows it as a State column and an "Also show revoked tokens" toggle.
+Admin > Credentials shows it as a State column and an "Also show revoked and expired tokens" toggle.
 
 | `disposition` | Condition |
 |---|---|
