@@ -207,15 +207,17 @@ test.describe("New Run, Files: the main drive", () => {
     await expect.poll(() => last(sent).resources?.disk_mib).toBe(32);
   });
 
-  test("a cap that is not a whole tenth of a GiB reads in MiB, and Continue keeps the clamped size (DR-0160)", async ({ page }) => {
+  test("a cap of 1000 MiB reads 0.9 GiB, and Continue keeps the clamped size (DR-0160)", async ({ page }) => {
     const sent = await stub(page, { capMib: 1000 });
     await toFiles(page);
-    await expect(page.getByText(NR_FILES.UP_TO("1000 MiB"))).toBeVisible();
+    await expect(page.getByText(NR_FILES.UP_TO("0.9 GiB"))).toBeVisible();
     await sizeInput(page).fill("2");
     await sizeInput(page).blur();
     await expect(sizeInput(page)).toHaveValue("0.9");
-    await expect(page.getByText(NR_FILES.CLAMP_POOL("1000 MiB", POOL.name))).toBeVisible();
+    await expect(page.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", POOL.name))).toBeVisible();
     await expect(page.getByText(NR_FILES.SIZE_EXACT(1000))).toBeVisible();
+    // The summary reads it as the field does, not rounded up past the cap.
+    await expect(page.getByText(NR_FILES.SUMMARY_MAIN("0.9 GiB"))).toBeVisible();
 
     // Continue does not read the rounded 0.9 back as 922 MiB.
     await noExtra(page).check();

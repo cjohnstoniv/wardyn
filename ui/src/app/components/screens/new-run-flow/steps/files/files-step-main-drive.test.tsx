@@ -300,30 +300,56 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(size()).toHaveValue(102);
   });
 
-  it("a cap of 1000 MiB reads in MiB, and Continue keeps the clamped 1000 MiB with its note and caption", async () => {
+  it("a cap of 1000 MiB reads 0.9 GiB, and Continue keeps the clamped 1000 MiB with its note and caption", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
     show();
-    expect(await screen.findByText(NR_FILES.UP_TO("1000 MiB"))).toBeInTheDocument();
+    expect(await screen.findByText(NR_FILES.UP_TO("0.9 GiB"))).toBeInTheDocument();
     await userEvent.clear(size());
     await userEvent.type(size(), "2");
     await userEvent.tab();
     expect(size()).toHaveValue(0.9);
-    expect(screen.getByText(NR_FILES.CLAMP_POOL("1000 MiB", "Shared pool"))).toBeInTheDocument();
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", "Shared pool"))).toBeInTheDocument();
     expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
     expect(drawn().resources).toEqual({ disk_mib: 1000 });
+    // The summary and the mount map read it as the field does, never rounded up past the cap.
+    expect(document.body).toHaveTextContent(NR_FILES.SUMMARY_MAIN("0.9 GiB"));
+    expect(document.body).not.toHaveTextContent(NR_FILES.SUMMARY_MAIN("1 GiB"));
+    expect(document.body).not.toHaveTextContent(NR_FILES.MOUNT_MAIN("1 GiB"));
 
     // The unedited second commit: re-reading "0.9" would store 922 MiB and drop the note.
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
     expect(drawn().resources).toEqual({ disk_mib: 1000 });
-    expect(screen.getByText(NR_FILES.CLAMP_POOL("1000 MiB", "Shared pool"))).toBeInTheDocument();
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", "Shared pool"))).toBeInTheDocument();
     expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
+    expect(go).toHaveBeenCalledTimes(1);
+  });
+
+  it("emptying the field and leaving it keeps the stored size and the clamp note", async () => {
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
+    show();
+    await screen.findByText(NR_FILES.UP_TO("0.9 GiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "2");
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
+    await userEvent.clear(size());
+    expect(size()).toHaveValue(null);
+    // The clamp note still describes the stored size while the field is empty.
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", "Shared pool"))).toBeInTheDocument();
+    await userEvent.tab();
+    expect(size()).toHaveValue(0.9);
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", "Shared pool"))).toBeInTheDocument();
+    expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
     expect(go).toHaveBeenCalledTimes(1);
   });
 
   it("a second blur of an unedited field keeps the stored size", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
     show();
-    await screen.findByText(NR_FILES.UP_TO("1000 MiB"));
+    await screen.findByText(NR_FILES.UP_TO("0.9 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "2");
     await userEvent.tab();

@@ -87,14 +87,15 @@ export function useMainDriveSize(view: MainDriveView) {
   const typed = draft.guided.mainDriveText;
   // The field is GiB with one decimal from 0.1 GiB up and whole MiB under it; the unit follows the text it labels.
   const unit: SizeUnit = typed !== "" ? (draft.guided.mainDriveUnit ?? "GiB") : committed !== undefined ? sizeField(committed).unit : "GiB";
-  const text = typed !== "" ? typed : committed !== undefined ? sizeField(committed).text : "";
+  // The field's text. An emptied field stays empty while it is being edited (until blur restores the stored size).
+  const [dirty, setDirty] = React.useState(false);
+  const text = typed !== "" ? typed : dirty ? "" : committed !== undefined ? sizeField(committed).text : "";
 
   // A pool's default (else its cap) fills the empty field once; clearing it afterwards is the person's.
   const filled = React.useRef(false);
   // A prefill is shown, never sent: only a size the person typed becomes the request.
   const edited = React.useRef(false);
-  // The same fact as `edited`, for rendering: true from a keystroke until the next commit stores it.
-  const [dirty, setDirty] = React.useState(false);
+  // `dirty` is the same fact as `edited`, for rendering: true from a keystroke until the next commit stores it.
   // A fill the person never changed follows the pool: another pool's default replaces it.
   const fill = draft.guided.mainDriveFill;
   // A pool with no size to offer clears it, and the next pool that has one fills it again.
@@ -113,6 +114,12 @@ export function useMainDriveSize(view: MainDriveView) {
 
   const commit = React.useCallback(() => {
     if (!edited.current) return;
+    // An emptied field is no new size: the stored one comes back, with its note, as if it had not been touched.
+    if (text === "" && committed !== undefined) {
+      edited.current = false;
+      setDirty(false);
+      return;
+    }
     const { mib, clamped } = commitSize(text, view.capMib, unit);
     if (mib === undefined) return;
     // The stored size is final: the field now shows it (rounded), and re-reading that text would change it.
@@ -129,7 +136,7 @@ export function useMainDriveSize(view: MainDriveView) {
         mainDriveClampNote: clamped ? clampText(sizeWords(mib), view.capSource, view.poolName) : undefined,
       },
     });
-  }, [text, unit, view.capMib, view.capSource, view.poolName, dispatch]);
+  }, [text, unit, committed, view.capMib, view.capSource, view.poolName, dispatch]);
 
   // What the field means: the stored size once committed, else what its text reads as.
   const mib = !dirty && committed !== undefined ? committed : parseSize(text, unit);
@@ -145,7 +152,9 @@ export function useMainDriveSize(view: MainDriveView) {
       filled.current = true;
       edited.current = true;
       setDirty(true);
-      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: undefined, mainDriveClampNote: undefined } });
+      // Emptying a stored size keeps its clamp note: blur restores the size, and the note describes it.
+      const keepNote = next === "" && committed !== undefined;
+      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: undefined, ...(keepNote ? {} : { mainDriveClampNote: undefined }) } });
     },
     commit,
   };
