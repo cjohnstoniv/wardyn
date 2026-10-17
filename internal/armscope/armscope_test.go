@@ -95,7 +95,7 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		base + ";x/resourcegroups", base + "/..;/" + other, base + "?api-version=1", base + "#x",
 		// The same marks percent-encoded: a server that decodes, drops ";…" and
 		// then collapses ".." would route these into the other subscription.
-		base + "/..%3b/" + other, base + "/..%3B/" + other, base + "/.%3b/" + other, base + "/rg%3bx=1",
+		base + "/..%3b/" + other, base + "/..%3B/" + other, base + "/.%3b/" + other,
 		"/subscriptions%3bx/" + pinned, "/subscriptions/" + pinned + "%3b/resourcegroups",
 		base + "/..%253b/" + other, base + "/rg%2541", base + "/rg%25", base + "/rg%3Fx", base + "/rg%23x",
 		base + "/%2E%2E/" + other, base + "/rg%0a", base + "/rg%7f", base + "/%20rg", base + "/rg.",
@@ -128,6 +128,44 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 	for _, path := range []string{base + "/resourceGroups/my%20rg", base + "/resourceGroups/rg%28a%29"} {
 		if err := scope(false).Admit(http.MethodGet, path, nil); err != nil {
 			t.Errorf("GET %q = %v, want admitted", path, err)
+		}
+	}
+}
+
+// A semicolon is a path parameter some servers drop before routing. Resource Manager's own names use it
+// (an API revision, a backup item), so it is admitted after the first two segments when a real name
+// precedes it, and refused wherever it could change which subscription or which path above it is reached.
+func TestARMScope_SemicolonTable(t *testing.T) {
+	base := "/subscriptions/" + pinned
+	admitted := []string{
+		base + "/resourceGroups/rg/providers/Microsoft.ApiManagement/service/s/apis/echo-api;rev=2",
+		base + "/resourceGroups/rg/providers/Microsoft.RecoveryServices/vaults/v/backupFabrics/Azure/protectionContainers/IaasVMContainer;iaasvmcontainerv2;rg;vm/protectedItems/VM;iaasvmcontainerv2;rg;vm",
+		base + "/resourceGroups/rg%3Bx=1",
+		base + "/resourceGroups/a;b/",
+	}
+	for _, path := range admitted {
+		if err := scope(false).Admit(http.MethodGet, path, nil); err != nil {
+			t.Errorf("GET %s = %v, want admitted", path, err)
+		}
+	}
+	refused := []string{
+		// The first segment, the subscription, and either spelled with the escape.
+		"/subscriptions;x/" + pinned, "/subscriptions%3Bx/" + pinned, "/subscriptions%3bx", "/subscriptions;",
+		base + ";x/resourceGroups", base + "%3Bx/resourceGroups", base + ";", base + "%3B",
+		// A dot or a lookalike for one before the semicolon, raw, escaped, and doubly escaped.
+		base + "/..;/x", base + "/.;/x", base + "/..%3B/x", base + "/.%3b/x", base + "/..;x=1/x", base + "/...;/x",
+		base + "/%2e%2e;/x", base + "/%2E;/x", base + "/%2e%2e%3b/x", base + "/..%253b/x",
+		base + "/%E2%80%A4;/x", base + "/%EF%BC%8E%EF%BC%8E;/x", base + "/..%E2%80%8B;/x",
+		// Nothing before the semicolon.
+		base + "/;x", base + "/%3Bx", base + "/%3b", base + "/resourceGroups/;rev=2", base + "/resourceGroups/rg/;",
+		// The marks that were always refused, beside a semicolon.
+		base + "/rg;x?y=1", base + "/rg;x#y", base + "/rg;x%25", base + "/rg;x\\y", base + "/rg;%2Fx", base + "/rg;x//y",
+	}
+	for _, write := range []bool{false, true} {
+		for _, path := range refused {
+			if err := scope(write).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
+				t.Errorf("write=%v GET %s = %v, want ErrUnreadable", write, path, err)
+			}
 		}
 	}
 }

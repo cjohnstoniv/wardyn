@@ -142,20 +142,35 @@ func readMethod(method string, h http.Header) (bool, error) {
 }
 
 // segmentMarks are the characters no segment may hold, written raw or
-// percent-encoded: a semicolon starts a path parameter some servers drop before
-// routing (so "..;" can route as ".."), a question mark and a hash end the
-// path, and a percent sign left after one decode is a second layer of encoding
-// a server that decodes again would read differently.
-const segmentMarks = ";?#%"
+// percent-encoded: a question mark and a hash end the path, and a percent sign
+// left after one decode is a second layer of encoding a server that decodes
+// again would read differently. A semicolon is judged apart (pathParameter).
+const segmentMarks = "?#%"
+
+// pathParameter reports whether seg, the decoded segment at index i, uses a
+// semicolon in a way that could change which path is routed. A semicolon starts
+// a path parameter some servers drop before routing, so "..;" can route as "..",
+// and one in the first two segments could change which subscription is reached.
+// Resource Manager's own names use it later in a path ("VM;iaasvmcontainerv2;rg;vm"
+// is a backup item), so there it is refused only when nothing precedes it or what
+// precedes it is a dot or a lookalike for one.
+func pathParameter(i int, seg string) bool {
+	head, _, found := strings.Cut(seg, ";")
+	if !found {
+		return false
+	}
+	return i < 2 || head == "" || dotLookalike(head)
+}
 
 // segments decodes rawPath into its lowercased segments. Resource Manager
 // compares paths without regard to case, so the comparison here does too. One
 // trailing slash is tolerated. Refused rather than resolved: an empty segment
 // anywhere else, a backslash, a segment adoscope.UnescapeName would not route
 // as it reads (a dot segment, an encoded separator, a control character), and
-// any of segmentMarks in the path as it arrived or in a segment once decoded.
+// any of segmentMarks in the path as it arrived or in a segment once decoded, and
+// a semicolon where pathParameter refuses it.
 func segments(rawPath string) ([]string, error) {
-	if !strings.HasPrefix(rawPath, "/") || strings.ContainsAny(rawPath, `\;?#`) {
+	if !strings.HasPrefix(rawPath, "/") || strings.ContainsAny(rawPath, `\?#`) {
 		return nil, fmt.Errorf("%w: its path is not a plain absolute path", ErrUnreadable)
 	}
 	rest := strings.TrimSuffix(rawPath[1:], "/")
@@ -168,7 +183,7 @@ func segments(rawPath string) ([]string, error) {
 			return nil, fmt.Errorf("%w: its path has an empty segment", ErrUnreadable)
 		}
 		seg, err := adoscope.UnescapeName(raw)
-		if err != nil || strings.ContainsAny(seg, segmentMarks) {
+		if err != nil || strings.ContainsAny(seg, segmentMarks) || pathParameter(i, seg) {
 			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
 		}
 		if dotLookalike(seg) {
