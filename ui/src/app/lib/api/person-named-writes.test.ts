@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Every PUT, POST and PATCH in lib/api that carries something a person composed names the person it
-// was composed under (`asPerson: true`), so a cookie another tab switched to someone else refuses the
-// save instead of landing it on the wrong account. wfetch strips the option before sending, so the call
-// sites are the only place to pin it: a new write without the flag fails here unless it is on
-// the list below with its reason. DELETE composes nothing and is not checked.
+// Every PUT, POST and PATCH sent through wfetch that carries something a person composed names the
+// person it was composed under (`asPerson: true`), so a cookie another tab switched to someone else
+// refuses the save instead of landing it on the wrong account. wfetch strips the option before sending,
+// so the call sites are the only place to pin it: a new write without the flag fails here unless it is
+// on the list below with its reason. That is every module of lib/api, and every other module of the
+// app that calls wfetch itself (a screen's own api file). DELETE composes nothing and is not checked.
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { expect, it } from "vitest";
 
 // A substring of the call that opens the write -> why that write composes nothing to name a person for.
@@ -22,6 +23,7 @@ const NOT_A_DRAFT: Record<string, string> = {
   '"/setup/onboarding-complete"': "one-click marker, no body",
   "/preview": "preview of a draft, writes nothing",
   '"/runs/preflight"': "preview of a launch, writes nothing",
+  '"/templates/import"': "reads one document and says what is wrong with it, stores nothing",
   '"/runs/policy-preview"': "preview of a policy, writes nothing",
   '"/policies/grade"': "read-only grading by POST",
   "/profile/synthesize": "action on a run, no composed body",
@@ -55,11 +57,27 @@ function literalAround(src: string, at: number): string {
   return src.slice(start, end + 1);
 }
 
-const files = readdirSync(__dirname).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+const appDir = join(__dirname, "..", "..");
+const isSource = (f: string) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f);
+const libFiles = readdirSync(__dirname).filter(isSource).map((f) => join(__dirname, f));
+const screenFiles = (readdirSync(appDir, { recursive: true }) as string[])
+  .map((f) => join(appDir, f))
+  .filter((f) => isSource(f) && !f.startsWith(__dirname) && readFileSync(f, "utf8").includes("wfetch("));
+const files = [...libFiles, ...screenFiles].map((f) => relative(appDir, f));
 const used = new Set<string>();
 
+it("reaches the screens' own api files", () => {
+  expect(files).toEqual(
+    expect.arrayContaining([
+      "components/screens/templates/templates-api.ts",
+      "components/screens/new-run-flow/review/save-as-dialog.api.ts",
+      "components/screens/new-run-flow/document/import-door.ts",
+    ]),
+  );
+});
+
 it.each(files)("%s names the person on every composed write", (file) => {
-  const src = readFileSync(join(__dirname, file), "utf8");
+  const src = readFileSync(join(appDir, file), "utf8");
   const bare: string[] = [];
   for (const m of src.matchAll(WRITE)) {
     if (literalAround(src, m.index!).includes("asPerson: true")) continue;
