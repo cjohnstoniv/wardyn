@@ -46,6 +46,8 @@
 
 - `via_org` does not carry an MCP server's header credential: a run whose MCP server uses one the organisation shares is refused on your runner (`placement_credential`).
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
+- A claimed laptop runner's trust class is `personal`. A security operator can mark it `managed_device` (`wardyn runner trust <runner-id> managed_device --reason "<why>"`, held for a second person under four-eyes); the runner itself never sets it.
+- The delivery policy's `by_trust` sets a class's mode for one trust class, so `runner_resident` can be limited to `managed_device` runners. `via_org` is never set per trust class.
 - The runner reports its posture when it connects and again when it changes. A root-owned posture file from your MDM wins over the runner's own probe: `/etc/wardyn/posture.json` on Linux and `/Library/Application Support/Wardyn/posture.json` on macOS.
 - A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and deletes it at run end, reporting each delete (`runner.resident.erase`). On a computer whose root user is the developer, erasure is best-effort, never promised. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - **When the keystore copy goes.** The cap is the earliest of the run's lifetime cap, the run's end and 24 hours after delivery.

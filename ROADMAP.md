@@ -260,6 +260,16 @@
 - the New Run redesign: guided setup, the YAML/JSON run document, the Tools and access step, Templates, and saving a draft as a template or policy ·
 - the `member` role alias removed (0.8 warns)
 
+What 0.9.3 adds to the runners (the release candidates are in the Shipped table):
+
+| Area | What shipped |
+|---|---|
+| Organisation runners | `wardyn-runnerd` in a Kubernetes cluster, installed by the `deploy/helm/wardyn-runnerd` chart: outbound-only, ServiceAccount and NetworkPolicy isolation, a boot NetworkPolicy canary and a kubelet floor |
+| Trust classes | Each runner is `personal`, `managed_device` or `org_cluster`, set by a security operator; the credential delivery policy can differ per class |
+| Resident credentials | `runner_resident` delivers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` to the run's runner, kept in the OS keystore and erased at run end, best effort |
+| Recordings | The organisation decides per run; a run that is not recorded says why (`org_off`, `runner_declined`), and `recording: required` refuses a non-recording runner |
+| Locked-down networks | A corporate CA on runners, provider-shaped errors, disk on VM engines, and images for both architectures |
+
 ### v0.10 scope
 
 New Run shows these as Coming soon in 0.9.
