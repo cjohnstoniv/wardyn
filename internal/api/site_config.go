@@ -193,6 +193,28 @@ func normalizeRedirectEndpoint(raw string) string {
 	return strings.ToLower(s[:authorityEnd]) + s[authorityEnd:]
 }
 
+// validateRedirectToken checks the token an egress redirect row presents, when it names one: a
+// secret ref that is a real, non-reserved secret name, or an integration ref, never both.
+func validateRedirectToken(i int, red types.EgressRedirect) error {
+	if red.TokenSecretRef != "" && !validSecretRef(red.TokenSecretRef) {
+		return fmt.Errorf("egress_redirects[%d]: invalid or reserved token_secret_ref %q", i, red.TokenSecretRef)
+	}
+	if red.TokenIntegrationRef != "" {
+		if red.TokenSecretRef != "" {
+			return fmt.Errorf("egress_redirects[%d]: set token_secret_ref OR token_integration_ref, not both — "+
+				"an integration already names the secret it presents", i)
+		}
+		// Shape only; EXISTENCE is deliberately unchecked, matching the
+		// dangling-token_secret_ref posture this row already has: a redirect
+		// naming an integration that isn't configured yet still reroutes,
+		// and simply carries no token until it is.
+		if !secretNameRE.MatchString(red.TokenIntegrationRef) {
+			return fmt.Errorf("egress_redirects[%d]: invalid token_integration_ref %q", i, red.TokenIntegrationRef)
+		}
+	}
+	return nil
+}
+
 // validateSiteConfig enforces the structural + security invariants of an
 // admin-authored SiteConfig before it is persisted: secret refs must be a real,
 // non-reserved secret name; URLs must be well-formed http(s) with a safe host;
@@ -291,21 +313,8 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if red.GoChecksumDBOff && red.Ecosystem != "go" {
 			return fmt.Errorf("egress_redirects[%d]: go_checksum_db_off applies to the go ecosystem only", i)
 		}
-		if red.TokenSecretRef != "" && !validSecretRef(red.TokenSecretRef) {
-			return fmt.Errorf("egress_redirects[%d]: invalid or reserved token_secret_ref %q", i, red.TokenSecretRef)
-		}
-		if red.TokenIntegrationRef != "" {
-			if red.TokenSecretRef != "" {
-				return fmt.Errorf("egress_redirects[%d]: set token_secret_ref OR token_integration_ref, not both — "+
-					"an integration already names the secret it presents", i)
-			}
-			// Shape only; EXISTENCE is deliberately unchecked, matching the
-			// dangling-token_secret_ref posture this row already has: a redirect
-			// naming an integration that isn't configured yet still reroutes,
-			// and simply carries no token until it is.
-			if !secretNameRE.MatchString(red.TokenIntegrationRef) {
-				return fmt.Errorf("egress_redirects[%d]: invalid token_integration_ref %q", i, red.TokenIntegrationRef)
-			}
+		if err := validateRedirectToken(i, red); err != nil {
+			return err
 		}
 	}
 	for i, h := range cfg.ScmHosts {
