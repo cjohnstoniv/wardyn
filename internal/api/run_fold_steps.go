@@ -221,10 +221,12 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, &egressBound{trusted: f.ceiling.Spec.AllowedDomains})
+		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains}
+		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, bound)
 		if refusal != nil {
 			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)
 		}
+		f.policyWarns = append(f.policyWarns, bound.dropped...)
 		f.reqEvents = append(f.reqEvents, events...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
@@ -610,10 +612,28 @@ func poolIdleStop(sec int, idle types.EffectiveLimit) int {
 	return sec
 }
 
-// addRemoteInstead appends how to run a refused run on a remote-hosted runner, to a sent 4xx only: a
-// denial decision (status 0) is written from the decision, not from this body, and a server error says nothing.
+// addRemoteInstead appends how to run a refused run on a remote-hosted runner, to a sent 4xx and to a
+// denial decision (status 0), which is written from the decision's sentence (the reason's own when it has
+// none). A decision that hides its cause or answers with another reason keeps its body, and a server error says nothing.
 func (f *runRefusal) addRemoteInstead(pool string) {
-	if f != nil && f.status >= http.StatusBadRequest && f.status < http.StatusInternalServerError {
+	if f == nil {
+		return
+	}
+	if f.status == 0 && f.decision != nil && f.err == nil && f.drive == nil {
+		d := f.decision
+		if d.Effect == authz.EffectHidden || d.WireReason != "" {
+			return
+		}
+		sentence := d.Sentence
+		if ref, ok := authz.Lookup(d.Reason); ok && sentence == "" {
+			sentence = ref.Sentence
+		}
+		if sentence != "" {
+			d.Sentence = sentence + " " + remoteInsteadMsg(pool)
+		}
+		return
+	}
+	if f.status >= http.StatusBadRequest && f.status < http.StatusInternalServerError {
 		f.body.Error += " " + remoteInsteadMsg(pool)
 	}
 }
@@ -737,6 +757,42 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 	}
 	if f.mode != foldCreate {
 		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
+	}
+	return true
+}
+
+// stepADOOverride applies an Azure DevOps narrowing that waited for the workspace seeding, so a
+// repository a selected workspace adds resolves its provider row's default profile as dispatch will,
+// before any step grades the policy. The diff on the run's policy source and the provenance rows are
+// what applying it with the other edits would have recorded.
+func (s *Server) stepADOOverride(f *runFold, rec *foldRecorder) bool {
+	e := f.source.edits
+	if e == nil || e.adoPending == nil {
+		return true
+	}
+	o := *e.adoPending
+	e.adoPending = nil
+	base, refusal := s.adoOverrideBase(f.r.Context(), f.r, f.spec, f.req)
+	if refusal == nil {
+		refusal = applyADOOverride(&f.spec, o, base, e)
+	}
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	if e.applied.AzureDevOps == nil {
+		return true // the person kept the whole set: no edit
+	}
+	e.folded.AzureDevOpsCapabilities = slices.Clone(f.spec.AzureDevOpsCapabilities)
+	if f.source.OverridesDiff == nil {
+		f.source.OverridesDiff = &client.RunOverridesDiff{}
+	}
+	f.source.OverridesDiff.AzureDevOps = e.applied.AzureDevOps
+	all := &foldRecorder{}
+	recordPolicySource(all, f.source, f.spec)
+	for _, row := range all.rows {
+		if row.Field == fieldADOCaps {
+			rec.add(row.Field, row.Value, row.Source, row.Effect)
+		}
 	}
 	return true
 }

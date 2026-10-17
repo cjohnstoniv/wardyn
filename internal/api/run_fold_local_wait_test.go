@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -26,20 +27,34 @@ func TestStepLocalEligibility_FailedSecondAskRecordsNothing(t *testing.T) {
 	}
 }
 
-// The "launch it remote" sentence follows a sent 4xx refusal only: a status-0 denial and a server error keep
-// their body, and no refusal at all is a no-op.
-func TestRunRefusal_AddRemoteInstead_OnlyASent4xx(t *testing.T) {
+// The "launch it remote" sentence follows a sent 4xx refusal and a denial decision: a server error keeps
+// its body, a denial that hides its cause or answers with another reason keeps its sentence, and no refusal
+// at all is a no-op.
+func TestRunRefusal_AddRemoteInstead_A4xxAndADenial(t *testing.T) {
+	hint := remoteInsteadMsg("Mixed")
 	for name, tc := range map[string]struct {
 		status int
 		want   bool
-	}{"status 0 (a denial decision)": {0, false}, "a 4xx": {http.StatusUnprocessableEntity, true}, "a 5xx": {http.StatusInternalServerError, false}} {
+	}{"a 4xx": {http.StatusUnprocessableEntity, true}, "a 5xx": {http.StatusInternalServerError, false}} {
 		t.Run(name, func(t *testing.T) {
 			ref := runError(tc.status, "placement_credential", "refused")
 			ref.addRemoteInstead("Mixed")
-			if got := strings.Contains(ref.body.Error, remoteInsteadMsg("Mixed")); got != tc.want {
+			if got := strings.Contains(ref.body.Error, hint); got != tc.want {
 				t.Errorf("body %q has the sentence = %v, want %v", ref.body.Error, got, tc.want)
 			}
 		})
+	}
+	denied := runDenied(authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", "Your profile keeps this run off your computer."))
+	denied.addRemoteInstead("Mixed")
+	if want := "Your profile keeps this run off your computer. " + hint; denied.decision.Sentence != want {
+		t.Errorf("the denial says %q, want %q", denied.decision.Sentence, want)
+	}
+	hidden := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", "kept")
+	hidden.WireReason = authz.ReasonGovernanceProfile
+	masked := runDenied(hidden)
+	masked.addRemoteInstead("Mixed")
+	if masked.decision.Sentence != "kept" {
+		t.Errorf("a denial answering with a wire reason says %q, want it unchanged", masked.decision.Sentence)
 	}
 	var none *runRefusal
 	none.addRemoteInstead("Mixed")

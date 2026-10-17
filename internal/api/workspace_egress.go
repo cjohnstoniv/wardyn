@@ -363,7 +363,11 @@ func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept
 }
 
 // egressBound is the ceiling allowlist a run's workspace requirement rows are held to; nil holds none.
-type egressBound struct{ trusted []string }
+// dropped collects one warning per host admits held back, for the caller to show or log.
+type egressBound struct {
+	trusted []string
+	dropped []string
+}
 
 // admits reports whether a requirement row's egress host may widen the run. An operator_set row always
 // may. Any other row (reachable only with the operator-set gate off) is repository content: a host that
@@ -374,7 +378,11 @@ func (b *egressBound) admits(req types.WorkspaceRequirement, host string, ws typ
 		return true
 	}
 	kept, _ := hostsWithinLiteralTrust([]string{host}, append(slices.Clone(b.trusted), ws.ApprovedEgress...))
-	return len(kept) == 1
+	if len(kept) == 1 {
+		return true
+	}
+	b.dropped = append(b.dropped, requirementHostDropWarning(host, ws.Name))
+	return false
 }
 
 // hostsWithinLiteralTrust splits derived clone hosts by whether authority's exact entries already
@@ -404,6 +412,16 @@ func cloneHostDropWarning(host, kind, name string) string {
 		remedy = "list it in the ceiling's allowed_domains"
 	}
 	return fmt.Sprintf("dropped clone host %q of %s %q: a private address not in operator allowlist; %s", host, kind, name, remedy)
+}
+
+// requirementHostDropWarning is the sentence for a workspace's egress requirement row a bound held
+// back, naming where an admin can allow it, as cloneHostDropWarning does for a clone host.
+func requirementHostDropWarning(host, workspace string) string {
+	remedy := "allow it in the workspace's approved egress"
+	if strings.Contains(host, ":") {
+		remedy = "list it in the ceiling's allowed_domains"
+	}
+	return fmt.Sprintf("dropped egress requirement %q of workspace %q: a private address not in operator allowlist; %s", host, workspace, remedy)
 }
 
 // scanEgressDomains returns the egress allowlist a scan/verify run needs to clone
