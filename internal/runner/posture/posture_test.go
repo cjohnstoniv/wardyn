@@ -125,4 +125,18 @@ func TestPosture_UnusableFileIsLoggedOncePerReason(t *testing.T) {
 	if got := strings.Count(buf.String(), "the MDM posture file is ignored"); got != 2 {
 		t.Fatalf("a changed reason logged %d times in all:\n%s", got, buf.String())
 	}
+	// Fixed, then broken the same way again: logged again.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if p := read(path, uid); p.Evidence != types.PostureEvidenceMDMFile {
+		t.Fatalf("the repaired file was not used: %+v", p)
+	}
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	read(path, uid)
+	if got := strings.Count(buf.String(), "the MDM posture file is ignored"); got != 3 {
+		t.Fatalf("a break after a repair logged %d times in all:\n%s", got, buf.String())
+	}
 }

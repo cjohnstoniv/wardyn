@@ -34,6 +34,7 @@ func Read() types.RunnerPosture { return read(mdmFile, 0) }
 func read(path string, owner uint32) types.RunnerPosture {
 	p := types.RunnerPosture{OS: runtime.GOOS, OSVersion: osVersion(), Evidence: types.PostureEvidenceOSProbe, DiskEncrypted: diskEncrypted()}
 	if f, err := fromMDMFile(path, owner); err == nil {
+		warnIgnored("", nil) // a usable file: the same break later is news again
 		p.MDMManaged, p.DiskEncrypted, p.Evidence = f.MDMManaged, f.DiskEncrypted, types.PostureEvidenceMDMFile
 	} else if !errors.Is(err, os.ErrNotExist) {
 		warnIgnored(path, err)
@@ -49,11 +50,15 @@ var lastIgnored struct {
 }
 
 func warnIgnored(path string, err error) {
+	reason := ""
+	if err != nil {
+		reason = path + ": " + err.Error()
+	}
 	lastIgnored.Lock()
-	repeat := lastIgnored.reason == path+": "+err.Error()
-	lastIgnored.reason = path + ": " + err.Error()
+	repeat := reason != "" && lastIgnored.reason == reason
+	lastIgnored.reason = reason
 	lastIgnored.Unlock()
-	if !repeat {
+	if err != nil && !repeat {
 		slog.Warn("runner posture: the MDM posture file is ignored", "path", path, "error", err)
 	}
 }

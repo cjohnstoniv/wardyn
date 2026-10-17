@@ -7,6 +7,8 @@ import (
 	"errors"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
@@ -105,5 +107,20 @@ func TestEraseOutputDeletesRetainedOutput(t *testing.T) {
 	}
 	if restarted.outputs[id] != nil {
 		t.Fatal("erased output came back after restart")
+	}
+}
+
+// An erase interrupted after its rename leaves only the hidden name, which the next start removes.
+func TestNewSweepsAnInterruptedErase(t *testing.T) {
+	dir := t.TempDir()
+	left := filepath.Join(dir, "output", erasingPrefix+uuid.NewString())
+	if err := os.MkdirAll(filepath.Join(left, "partial"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(runnertest.NewFake(), uuid.NewString(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatalf("interrupted erase survived a restart: %v", err)
 	}
 }

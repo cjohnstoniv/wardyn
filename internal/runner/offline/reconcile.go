@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -55,6 +56,13 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
 		}
 		if old.Result.Outcome != "" {
+			// A retirement whose receipt was saved but whose output release never ran (a crash between the
+			// two) releases it on the org's replay. Release is idempotent and refuses unsettled output.
+			if r := m.state.Runs[a.RunID]; a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" && r.Retired && m.releaseOutput != nil {
+				if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
+					slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
+				}
+			}
 			return old.Result, m.save()
 		}
 	}
