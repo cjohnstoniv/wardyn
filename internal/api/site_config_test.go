@@ -70,6 +70,16 @@ func TestValidateSiteConfig(t *testing.T) {
 			}}, false,
 		},
 		{
+			"go checksum-db opt-out on a go redirect", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://proxy.golang.org/", To: "https://go-mirror.corp/", Ecosystem: "go", GoChecksumDBOff: true},
+			}}, true,
+		},
+		{
+			"go checksum-db opt-out on an npm redirect", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm/", Ecosystem: "npm", GoChecksumDBOff: true},
+			}}, false,
+		},
+		{
 			"bad scheme (ftp) in to", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 				{From: "https://registry.npmjs.org/", To: "ftp://artifactory.corp/npm/", Ecosystem: "npm"},
 			}}, false,

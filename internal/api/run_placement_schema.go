@@ -55,7 +55,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.AzureSettings]():       strings.Fields("Endpoint Route"),
 	reflect.TypeFor[types.BedrockSettings]():     strings.Fields("Region BaseURL SSOStartURL SSOAccountID SSORoleName"),
 	reflect.TypeFor[types.ComponentSettings]():   strings.Fields("RequireVaultForCredentials DenyResidentDelivery AutonomyCap"),
-	reflect.TypeFor[types.EgressRedirect]():      strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem"),
+	reflect.TypeFor[types.EgressRedirect]():      strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem GoChecksumDBOff"),
 	reflect.TypeFor[types.EphemeralProvider]():   strings.Fields("DefaultDiskMiB MaxDiskMiB"),
 	reflect.TypeFor[types.GitProvider]():         strings.Fields("ID Kind Disabled BaseURLs Lanes GitHubAppInstallURL CredentialSource Entra"),
 	reflect.TypeFor[types.Integration]():         strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),

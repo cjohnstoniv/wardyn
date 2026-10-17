@@ -11,6 +11,7 @@ package api
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -294,8 +295,8 @@ func TestFoldCompat_ArtifactOverridesGoldenBehavior(t *testing.T) {
 		"pip": "https://artifactory.corp/api/pip/pip-remote/",
 		"go":  "https://go-mirror.corp/repo",
 	}
-	wantFiles, wantEnv := hostrules.EmitArtifactConfig(wantBases)
-	gotFiles, gotEnv := hostrules.EmitArtifactConfig(artifactBaseURLs(folded))
+	wantFiles, wantEnv := hostrules.EmitArtifactConfig(wantBases, false)
+	gotFiles, gotEnv := hostrules.EmitArtifactConfig(artifactBaseURLs(folded), artifactGoSumDBOff(folded))
 	if !reflect.DeepEqual(wantFiles, gotFiles) {
 		t.Errorf("emitted config files diverged after fold:\n want: %v\n got:  %v", wantFiles, gotFiles)
 	}
@@ -418,5 +419,34 @@ func TestRedirectEndpointPort_SpelledButUnusable(t *testing.T) {
 		if _, spelled, ok := redirectEndpointPort(raw); !ok || spelled {
 			t.Errorf("redirectEndpointPort(%q) = (spelled=%v, ok=%v), want no port spelled", raw, spelled, ok)
 		}
+	}
+}
+
+// TestGoRedirect_ChecksumDBStaysOnUnlessTheMirrorOptsOut: a go redirect reaches the checksum database
+// through its mirror; only the per-mirror opt-out writes GOSUMDB=off, and it is warned in setup status
+// and recorded for the audit row.
+func TestGoRedirect_ChecksumDBStaysOnUnlessTheMirrorOptsOut(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://proxy.golang.org/", To: "https://go-mirror.corp/repo", Ecosystem: "go"},
+	}}
+	_, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
+	if want := "sum.golang.org https://go-mirror.corp/repo/sumdb/sum.golang.org"; env["GOSUMDB"] != want {
+		t.Errorf("GOSUMDB = %q, want %q", env["GOSUMDB"], want)
+	}
+	if chk := artifactRepoCheck(sc); chk.Status != "info" || goChecksumDBOffHosts(sc.EgressRedirects) != nil {
+		t.Errorf("a mirror that keeps the checksum database warns: %+v", chk)
+	}
+
+	sc.EgressRedirects[0].GoChecksumDBOff = true
+	_, env = hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
+	if env["GOSUMDB"] != "off" {
+		t.Errorf("opted-out GOSUMDB = %q, want off", env["GOSUMDB"])
+	}
+	chk := artifactRepoCheck(sc)
+	if chk.Status != "warn" || !strings.Contains(chk.Detail, "https://go-mirror.corp/repo") {
+		t.Errorf("the opt-out is not a setup warning naming the mirror: %+v", chk)
+	}
+	if got := goChecksumDBOffHosts(sc.EgressRedirects); !slices.Equal(got, []string{"https://go-mirror.corp/repo"}) {
+		t.Errorf("audited hosts = %v", got)
 	}
 }

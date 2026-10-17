@@ -193,6 +193,18 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 	return out
 }
 
+// artifactGoSumDBOff reports whether the go mirror artifactBaseURLs picks (the last go row) opts out of
+// checksum-database verification.
+func artifactGoSumDBOff(sc types.SiteConfig) bool {
+	off := false
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "go" {
+			off = r.GoChecksumDBOff
+		}
+	}
+	return off
+}
+
 // planArtifactRedirect builds the dispatch-time egress-redirect plan for a run
 // from the operator-wide site-config: each Ecosystem-tier redirect's per-tool
 // config (URL-only) as a base64 env payload agent-run materializes under $HOME,
@@ -216,7 +228,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		return plan
 	}
 	have := artifactRunHostSet(preDomains)
-	files, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc))
+	files, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
 	if len(env) > 0 {
 		plan.env = env
 	}

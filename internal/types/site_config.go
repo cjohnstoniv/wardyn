@@ -251,6 +251,11 @@ type EgressRedirect struct {
 	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
 	// config file for. Empty means NETWORK-ONLY: no config file is emitted.
 	Ecosystem string `json:"ecosystem,omitempty"`
+	// GoChecksumDBOff, on a go row only, turns Go checksum-database verification off for runs
+	// (GOSUMDB=off). Left false, the checksum database is reached through this mirror's /sumdb/ path,
+	// so a mirror that does not proxy it breaks module fetches until this is set. Shown as a warning in
+	// setup status and recorded in site_config.write.
+	GoChecksumDBOff bool `json:"go_checksum_db_off,omitempty"`
 }
 
 // WithheldScmHost is one entry of SiteConfig.WithheldScmHosts: a host kept out
