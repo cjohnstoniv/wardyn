@@ -94,6 +94,30 @@ func renewalWithNoRun(ctx context.Context) bool {
 	return createRenewal(ctx) || renewerRenewal(ctx)
 }
 
+// awsSSOTokenSpentUnderLock is refreshAWSSSOBlob's spent check under the owner
+// lock. The renewer reads the stored mark afresh (awsSSOTokenSpentNow) and keeps
+// a mark it finds: this process may have cached "not spent" before another
+// replica, under this same lock, marked the token spent. Every other caller
+// keeps the cached read.
+func (s *Server) awsSSOTokenSpentUnderLock(ctx context.Context, fingerprint string) bool {
+	if !renewerRenewal(ctx) {
+		return s.awsSSOTokenSpent(fingerprint)
+	}
+	spent, err := s.awsSSOTokenSpentNow(ctx, fingerprint)
+	if err != nil {
+		return s.awsSSOTokenSpent(fingerprint)
+	}
+	if spent {
+		s.ssoRefreshMu.Lock()
+		if s.ssoRefreshSpent == nil {
+			s.ssoRefreshSpent = map[string]bool{}
+		}
+		s.ssoRefreshSpent[fingerprint] = true
+		s.ssoRefreshMu.Unlock()
+	}
+	return spent
+}
+
 // RenewAWSSSOCredentials renews, ahead of expiry, the stored AWS SSO session
 // behind every live run's proxy-injected AWS SSO grant, and reports how many it
 // renewed. Live is the store's (store.LiveAWSSSOGrantLister): an ended, revoked,

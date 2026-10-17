@@ -591,12 +591,13 @@ func (s *Server) beginAWSSSORenewal(ctx context.Context, scope awsSSOScope) (_ c
 // and no caller may store a blob it received from this function (an erase takes
 // the same lock, so it can never land between a redeem and its write).
 //
-// A create-time renewal (withCreateRenewal) first proves the store accepts a
-// write (probeSecretWrite), before any refresh token is spent. A Put that still
-// fails AFTER a redeem fails that create with awsSSORefreshPersistFailedSentence:
-// the proxy's bootstrap re-reads the STORED pair, so a run created on a blob
-// held only in memory would die at bootstrap. The old pair is marked spent, so
-// the next launch is refused as spent at once.
+// A renewal with no run to serve (renewalWithNoRun: create's, the background
+// renewer's) first proves the store accepts a write (probeSecretWrite), before
+// any refresh token is spent. A Put that still fails AFTER a redeem returns
+// awsSSORefreshPersistFailedSentence: the proxy's bootstrap and resolve re-read
+// the STORED pair, so a run created on a blob held only in memory would die at
+// bootstrap, and the renewer would count a renewal nobody can use. The old pair
+// is marked spent, so the next launch is refused as spent at once.
 //
 // Any other caller (dispatch) does NOT fail the run on that Put: the rotated pair
 // is already spent at AWS, so re-redeeming is impossible and refusing would
@@ -669,7 +670,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		return blob, "" // another flight already renewed it
 	}
 	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
-	if s.awsSSOTokenSpent(fingerprint) {
+	if s.awsSSOTokenSpentUnderLock(ctx, fingerprint) {
 		return blob, awsSSORefreshSpentSentence
 	}
 
@@ -794,25 +795,25 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			slog.Any("err", perr))
 	}
 	s.auditAWSSSORefresh(ctx, scope, outcome, data)
-	if createRenewal(ctx) {
+	if renewalWithNoRun(ctx) {
 		if superseded {
 			return s.storedPairAfterSupersededCreate(ctx, scope, blob)
 		}
 		if perr != nil {
-			// Create has no run to serve from memory: the proxy's bootstrap reads
-			// the stored pair, which is now marked spent. Refuse before a run row
-			// exists; the next launch gets the sign-in door at once.
+			// No run to serve from memory: the proxy reads the stored pair, which
+			// is now marked spent. Create refuses before a run row exists, and the
+			// next launch gets the sign-in door at once.
 			return blob, awsSSORefreshPersistFailedSentence
 		}
 	}
 	return next, ""
 }
 
-// storedPairAfterSupersededCreate is what a create-time renewal that lost the
-// compare-and-set serves. Nothing of that renewal was stored, and the proxy's
-// bootstrap reads the stored row, not the redeemed pair: serve what is there
-// now, or refuse when an erase (or a pair too short to carry a run) won the
-// race. Read detached: the lock's context is the one that was lost.
+// storedPairAfterSupersededCreate is what a renewal with no run (create's, the
+// renewer's) that lost the compare-and-set serves. Nothing of that renewal was
+// stored, and the proxy reads the stored row, not the redeemed pair: serve what
+// is there now, or refuse when an erase (or a pair too short to carry a run)
+// won the race. Read detached: the lock's context is the one that was lost.
 func (s *Server) storedPairAfterSupersededCreate(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()

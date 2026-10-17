@@ -6,12 +6,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -251,5 +253,97 @@ func TestAWSSSORenewer_DoesNotReReadAnUnchangedCredential(t *testing.T) {
 	}
 	if got := reads(); got != first {
 		t.Fatalf("secret.read rows = %d after three more passes, want %d: an unchanged credential was read again", got, first)
+	}
+}
+
+// A renewal the store did not keep is not counted, and the credential's next
+// read is not scheduled from the pair that was never stored: AWS redeemed the
+// token, but the run's resolve reads the stored row.
+func TestAWSSSORenewer_UnstoredRenewalIsNotCounted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		put  error
+	}{
+		{"the store refuses the write", errors.New("secret store is wedged")},
+		{"the row changed meanwhile", secretstore.ErrRevisionChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, clock, _ := renewFixture(t)
+			calls := renewOnceOIDC(t)
+			scope := reauthScope("alice@example.com")
+			f.srv.cfg.Secrets = putScript{Store: f.secrets, only: scope.ssoSecret(), n: &atomic.Int32{},
+				hook: func(int) error { return tc.put }}
+			n, err := f.srv.RenewAWSSSOCredentials(context.Background())
+			if err != nil || n != 0 || calls.Load() != 1 {
+				t.Fatalf("renewer pass = %d renewed, err %v, %d CreateToken calls; want 0, nil, 1", n, err, calls.Load())
+			}
+			unstored := clock.Now().Add(time.Hour - DefaultAWSSSORefreshTuning().Skew)
+			if at := f.srv.ssoRenew.next[scope].at; at.Equal(unstored) {
+				t.Fatalf("next read at %s: scheduled from the renewed pair, which was never stored", at)
+			}
+		})
+	}
+}
+
+// The renewer has no run to serve a redeemed pair from memory, so it proves
+// the store takes a write before it redeems: a store that refuses the probe
+// gets no AWS call, an audited failure, and its stored pair left as it was.
+func TestAWSSSORenewer_UnwritableStoreRedeemsNothing(t *testing.T) {
+	f, _, old := renewFixture(t)
+	calls := renewOnceOIDC(t)
+	f.srv.cfg.Secrets = putScript{Store: f.secrets, only: writeProbeSecretName, n: &atomic.Int32{}, hook: failEvery("secret store is read-only")}
+	n, err := f.srv.RenewAWSSSOCredentials(context.Background())
+	if err != nil || n != 0 || calls.Load() != 0 {
+		t.Fatalf("renewer pass = %d renewed, err %v, %d CreateToken calls; want 0, nil, 0", n, err, calls.Load())
+	}
+	if rows := refreshRows(f, "success"); len(rows) != 0 {
+		t.Fatalf("success rows = %v, want none", rows)
+	}
+	if rows := refreshRows(f, "failure"); len(rows) != 1 || rows[0]["probe_error"] == nil || rows[0]["spent"] != false || rows[0]["trigger"] != "renewer" {
+		t.Fatalf("failure rows = %v, want one probe_error row, not spent, with trigger renewer", rows)
+	}
+	stored, found, err := f.srv.readAWSSSOBlob(context.Background(), reauthScope("alice@example.com"))
+	if err != nil || !found || stored.AccessToken != old.AccessToken || stored.RefreshToken != old.RefreshToken || !stored.ExpiresAt.Equal(old.ExpiresAt) {
+		t.Fatalf("stored session = %q/%q expiring %s (found %v, err %v); want the pair as it was", stored.AccessToken, stored.RefreshToken, stored.ExpiresAt, found, err)
+	}
+}
+
+// spentElsewhereStore is liveGrantStore plus the persisted spent marks: marked
+// is the fingerprint another replica stored.
+type spentElsewhereStore struct {
+	liveGrantStore
+	marked string
+}
+
+func (s spentElsewhereStore) AWSSSOTokenSpent(_ context.Context, fingerprint string) (bool, error) {
+	return fingerprint == s.marked, nil
+}
+
+func (s spentElsewhereStore) MarkAWSSSOTokenSpent(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (s spentElsewhereStore) PruneAWSSSOSpentTokens(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+var _ store.AWSSSOSpentTokenStore = spentElsewhereStore{}
+
+// A refresh token another replica saw AWS retire is not redeemed again by a
+// leader that had cached it as live: the renewer reads the stored mark under
+// the lock, and keeps it.
+func TestAWSSSORenewer_TokenSpentOnAnotherReplicaIsNotRedeemed(t *testing.T) {
+	f, _, old := renewFixture(t)
+	calls := renewOnceOIDC(t)
+	fingerprint := awsSSOTokenFingerprint(old.RefreshToken)
+	f.srv.ssoRefreshSpent = map[string]bool{fingerprint: false}
+	f.srv.cfg.Store = spentElsewhereStore{liveGrantStore{f.st}, fingerprint}
+	for pass := range 2 {
+		if n, err := f.srv.RenewAWSSSOCredentials(context.Background()); n != 0 || err != nil || calls.Load() != 0 {
+			t.Fatalf("pass %d = %d renewed, err %v, %d CreateToken calls; want 0, nil, 0", pass+1, n, err, calls.Load())
+		}
+	}
+	if !f.srv.awsSSOTokenSpent(fingerprint) {
+		t.Fatal("the mark read under the lock was not kept")
 	}
 }
