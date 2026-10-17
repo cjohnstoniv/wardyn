@@ -81,6 +81,12 @@ const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
 // domains) sees every assignment written before it, including another group's.
 const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 
+// ProviderPurgeLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key 0) a
+// provider purge (secretstore/pg recordProviderChanges) takes before any other: one purge at a time.
+// The owners' counter rows a purge holds are shared, so they do not order two purges; without this
+// lock, two purges delete each other's history rows in opposite orders and deadlock.
+const ProviderPurgeLockClass int32 = 0x57505047 // ASCII "WPPG"
+
 // RevocationOrderLockClass is the classid of the two-argument advisory lock (second key 0) that orders
 // a credential's issue against a revocation cut. A cut holds it exclusively, from before its sequence
 // value is drawn until it commits; an issuer takes it shared while it reads the sequence, so the value
