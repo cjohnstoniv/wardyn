@@ -56,4 +56,6 @@
 # docs/ENV.md 37334 adds 4 (0.9.3 RV2): WARDYN_RUN_OUTPUT_RETENTION_DAYS now has an upper bound, stated in its Details.
 # docs/ENV.md 37340 adds 6 over 37334, measured (0.9.3 RV2 r2): the EC2 node instance role also raises kek_service_static_key.
 # docs/ENV.md 37620 = 37609 + 11 (RV2), measured at the wave-A merge.
-docs/ENV.md=37620 share=5
+# docs/ENV.md 37334 adds 4 (0.9.3 RV4e, FR-0161): the run-output retention day bound.
+# docs/ENV.md 37619 = 37620 + -1 (RV4e), measured at the wave-A merge.
+docs/ENV.md=37619 share=5

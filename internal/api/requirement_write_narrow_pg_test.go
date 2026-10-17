@@ -94,6 +94,10 @@ func (h narrowPG) bind(t *testing.T, body string) bool {
 	for h.fr.createCount() == before && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
+	// A run that never reached the runner leaves the previous run's spec in lastSpec, which a control could pass on.
+	if h.fr.createCount() == before {
+		t.Fatal("the run never reached CreateSandbox within 5s")
+	}
 	h.fr.mu.Lock()
 	spec := h.fr.lastSpec
 	h.fr.mu.Unlock()

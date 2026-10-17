@@ -201,6 +201,9 @@ type memberRecheckStore struct {
 	drives map[uuid.UUID]types.UserDrive
 }
 
+// SetRunImage is the image write a launch makes.
+func (*memberRecheckStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+
 func (s *memberRecheckStore) GetMemberDriveOf(_ context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
 	if d, ok := s.drives[id]; ok && d.OwnerSubject == owner {
 		return d, nil
@@ -266,6 +269,33 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 				t.Error("a refused member drive was audited as mounted")
 			}
 		})
+	}
+}
+
+// TestMemberDriveLaunchCarriesTheOwnersToDispatch: the launch both create and the pool queue's start build
+// from the fold hands dispatch each member drive's owner, so a drive deleted before the sandbox is created
+// fails the run. A launch that dropped the owners would skip the re-read and create the sandbox.
+func TestMemberDriveLaunchCarriesTheOwnersToDispatch(t *testing.T) {
+	id := uuid.New()
+	row := types.UserDrive{ID: id, Name: "Mine", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
+	fr := &fakeRunner{}
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	srv.cfg.Store = &memberRecheckStore{dispatchTestStore: st, drives: map[uuid.UUID]types.UserDrive{}} // the drive is gone
+	run.Task, run.CreatedBy, st.run.CreatedBy = "", aliceSub, aliceSub
+	mount := types.DriveMount{DriveID: id, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x", DriveName: "Mine",
+		HomeName: "d-x", Target: runner.DrivesRoot + "/mine", Enforcement: types.StorageEnforcementNone}
+	f := runFold{drives: []runDrive{{resolved: types.ResolvedDrive{Drive: row}}}, driveMounts: []types.DriveMount{mount},
+		adoGrade: adoEntraUngraded(), bedrockGrade: bedrockCredUngraded()}
+	l := f.launch(createRunRequest{Agent: "claude-code"}, types.RunPolicySpec{MinConfinementClass: types.CC1}, governanceCeiling{}, grantWiring{}, "run-token", run)
+	if got := l.memberDrives[id]; got != aliceSub {
+		t.Fatalf("launch member drives = %v, want %s's drive %s", l.memberDrives, aliceSub, id)
+	}
+	srv.finishCreateRunLaunch(context.Background(), l)
+	if fr.createCalls != 0 {
+		t.Fatalf("CreateSandbox ran %d time(s) for a member drive that was gone", fr.createCalls)
+	}
+	if st.State() != types.RunFailed || st.FailureHint() != driveNotFoundMsg(id.String()) {
+		t.Errorf("run = %s %q, want FAILED with the drive_not_found sentence", st.State(), st.FailureHint())
 	}
 }
 

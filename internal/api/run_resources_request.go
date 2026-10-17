@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -32,6 +33,13 @@ func resourceAsk(req *client.RunResources, own types.ResourceLimits) types.Resou
 // or, when the run takes the caller's profile ceiling as its policy, the profile's AUTHORED size,
 // because that spec carries the deployment's size wherever the profile sets none.
 func sourceSize(source policySourceRecord, ceiling governanceCeiling) types.ResourceLimits {
+	// A policy_overlay that names resources replaces the source's whole size, so its size is the ask.
+	if source.overlaid != nil && slices.Contains(source.Overlay, "resources") {
+		if r := source.overlaid.Resources; r != nil {
+			return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+		}
+		return types.ResourceLimits{}
+	}
 	if source.Kind == policyKindProfile {
 		return ceiling.authoredSize()
 	}

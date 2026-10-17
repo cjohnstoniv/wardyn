@@ -275,10 +275,15 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 		if err != nil {
 			return err
 		}
+		now := time.Now().UTC()
 		for _, a := range admitted {
 			e := a.entry
 			if runnerpool.AtCapacity(pool, running) != nil || (pass.DeploymentCap > 0 && deployment >= pass.DeploymentCap) {
 				break
+			}
+			// A run past its wait is the expiry sweep's to end, never to start.
+			if !e.DeadlineAt.After(now) {
+				continue
 			}
 			// The run's size on each runner is the one it would start with there (the verdict's); a runner
 			// the verdict sized none for is held to the size the run joined the queue with.
