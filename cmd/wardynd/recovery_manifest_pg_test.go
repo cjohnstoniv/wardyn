@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -74,6 +75,25 @@ func TestRecoveryManifest_VerifyRefusesAfterOneMoreAuditRow(t *testing.T) {
 	err = verifyRecoveryManifest(ctx, dsn, set)
 	if err == nil || !strings.Contains(err.Error(), "audit head") {
 		t.Fatalf("verify after one more audit row: err = %v, want a refusal naming %q", err, "audit head")
+	}
+}
+
+// The same audit seq with another row_hash is not the manifest's pair either: the head is compared whole.
+func TestRecoveryManifest_VerifyRefusesTheSameSeqWithAnotherRowHash(t *testing.T) {
+	dsn, set := recoveryFixture(t)
+	path := filepath.Join(set, recoveryManifestFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`"audit_head_hash":\s*""`)
+	if !re.Match(raw) {
+		t.Fatalf("the fixture's manifest does not carry an empty audit head hash: %s", raw)
+	}
+	writeFixtureFile(t, path, string(re.ReplaceAll(raw, []byte(`"audit_head_hash": "other"`))))
+	err = verifyRecoveryManifest(context.Background(), dsn, set)
+	if err == nil || !strings.Contains(err.Error(), "audit head") {
+		t.Fatalf("verify with the head's row_hash changed: err = %v, want a refusal naming %q", err, "audit head")
 	}
 }
 

@@ -124,6 +124,24 @@ func TestDelete_IfRevisionKeepsARowReplacedWhileItWaited(t *testing.T) {
 	}
 }
 
+// An unguarded Delete of an absent row is a no-op: it succeeds and leaves another owner's row of the
+// same name in place.
+func TestDelete_AbsentRowWithoutAGuardIsANoOp(t *testing.T) {
+	s, _, _ := newPGStore(t)
+	ctx := t.Context()
+	name := "wardyn-delete-absent"
+	other := s.For("other-" + uuid.NewString()).(*Store)
+	if err := other.Put(ctx, name, []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.For("absent-"+uuid.NewString()).(*Store).Delete(ctx, name); err != nil {
+		t.Fatalf("Delete of an absent row: %v", err)
+	}
+	if got := mustGetValue(t, other, name); got != "kept" {
+		t.Fatalf("another owner's row = %q after the no-op Delete, want kept", got)
+	}
+}
+
 // Another owner's row of the same name is a different row: its writes do not
 // move this view's revision.
 func TestRevision_IsPerOwnerRow(t *testing.T) {

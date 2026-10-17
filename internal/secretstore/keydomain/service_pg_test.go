@@ -120,6 +120,23 @@ func TestService_AmbiguousIfGroup(t *testing.T) {
 	}
 }
 
+// The API's guard reads only group assignments: a user assignment whose subject is spelled like one of
+// the person's groups is not a second group domain.
+func TestService_InTwoGroupDomains(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng", "ops")
+	set(t, s, "group", "eng", "a")
+	set(t, s, "user", "ops", "b")
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || two {
+		t.Fatalf("one group domain and a user assignment spelled like her other group = (%v, %v); want false", two, err)
+	}
+	set(t, s, "group", "ops", "b")
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || !two {
+		t.Fatalf("two group domains = (%v, %v); want true", two, err)
+	}
+}
+
 // The API's guard counts who a group assignment would lock out: people whose last login lost
 // groups and who have no user assignment.
 func TestService_TruncatedUnassigned(t *testing.T) {

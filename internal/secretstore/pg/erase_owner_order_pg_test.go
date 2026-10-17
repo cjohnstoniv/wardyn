@@ -9,6 +9,7 @@ package pg
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,5 +77,37 @@ func TestEraseOwner_WriteBetweenAdvanceAndListIsRefusedOrErased(t *testing.T) {
 	}
 	if got := listNames(t, s, owner); len(got) != 0 {
 		t.Fatalf("namespace after the erase = %v, want empty", got)
+	}
+}
+
+// A write that lands after the list and before the second advance, from a writer that began after the
+// first advance, is not in the list the deletes use: the re-list finds it, and the erase says to run it again.
+func TestEraseOwner_WriteBetweenListAndSecondAdvanceIsReported(t *testing.T) {
+	s, _, _ := newPGStore(t)
+	owner := "erase-order-" + uuid.NewString()
+	if err := s.For(owner).Put(t.Context(), "old", []byte("existing-value-00")); err != nil {
+		t.Fatal(err)
+	}
+	var lateErr error
+	hooked := listHookStore{Store: s, onList: func() {
+		late, ok, err := secretstore.BeginWrite(t.Context(), owner, s.For(owner))
+		if err != nil || !ok {
+			t.Errorf("BeginWrite after the list = ok %v, %v", ok, err)
+			return
+		}
+		lateErr = s.For(owner).Put(late, "late", []byte("late-value-00000"))
+	}}
+	_, err := secretstore.EraseOwner(t.Context(), hooked, owner)
+	if err == nil || !strings.Contains(err.Error(), "erase again") {
+		t.Fatalf("EraseOwner = %v; want it to ask for the erase to run again", err)
+	}
+	if lateErr != nil {
+		t.Fatalf("Put begun after the first advance = %v, want it to land", lateErr)
+	}
+	if got := listNames(t, s, owner); len(got) != 1 || got[0] != "late" {
+		t.Fatalf("namespace after the first erase = %v, want only the late write", got)
+	}
+	if rep, err := secretstore.EraseOwner(t.Context(), s, owner); err != nil || rep.Count != 1 {
+		t.Fatalf("second EraseOwner = %+v, %v; want the late write erased", rep, err)
 	}
 }

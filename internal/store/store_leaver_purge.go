@@ -174,15 +174,18 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 }
 
 // stripRunnerPoolUseSubjects removes the user subjects (lower-cased forms) from every pool use policy
-// and raises each changed pool's revision. The policy row is never deleted: a policy narrows a pool, so
+// and raises each changed pool's revision, locking the pools in id order so two purges cannot deadlock.
+// The policy row is never deleted: a policy narrows a pool, so
 // deleting it would open the pool to everyone, while a list emptied by the purge permits nobody until
 // an administrator replaces or clears it.
 func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) error {
 	const stmt = `
-		WITH hit AS (
-			SELECT pool_id FROM runner_pool_use_policies u WHERE EXISTS (
-				SELECT 1 FROM jsonb_array_elements(u.subjects) e
-				WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))),
+		WITH hit AS MATERIALIZED (
+			SELECT p.id AS pool_id FROM runner_pools p WHERE EXISTS (
+				SELECT 1 FROM runner_pool_use_policies u WHERE u.pool_id = p.id AND EXISTS (
+					SELECT 1 FROM jsonb_array_elements(u.subjects) e
+					WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[])))
+			ORDER BY p.id FOR UPDATE OF p),
 		bumped AS (
 			UPDATE runner_pools p SET revision = p.revision + 1, updated_at = now()
 			FROM hit WHERE p.id = hit.pool_id RETURNING p.id, p.revision)

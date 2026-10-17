@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // queueServer answers POST /runs (recording the body it was sent) and then GET /runs/{id} with the
@@ -166,5 +167,17 @@ func TestRunCmd_WaitQueueTimeoutExits1WithTheSentence(t *testing.T) {
 	want := types.RunEndQueueTimeout.Sentence()
 	if !strings.Contains(err.Error(), want) || !strings.Contains(stderr, want) {
 		t.Fatalf("the sentence %q is missing: err=%v stderr=%s", want, err, stderr)
+	}
+}
+
+// A run document's own max_wait_sec wins over --wait's derived one; an explicit --max-wait wins over both.
+func TestApplyQueueWait_DocumentBeatsWaitMaxWaitBeatsDocument(t *testing.T) {
+	doc := 120
+	body := sdk.CreateRunRequest{MaxWaitSec: &doc}
+	if err := applyQueueWait(&body, false, 0, true, 10*time.Minute); err != nil || *body.MaxWaitSec != 120 {
+		t.Fatalf("--wait over a document's max_wait_sec: %v, %v; want 120", body.MaxWaitSec, err)
+	}
+	if err := applyQueueWait(&body, true, 5*time.Minute, true, 10*time.Minute); err != nil || *body.MaxWaitSec != 300 {
+		t.Fatalf("--max-wait over a document's max_wait_sec: %v, %v; want 300", body.MaxWaitSec, err)
 	}
 }
