@@ -583,6 +583,28 @@ describe("Admin -> Runners remote-hosted runner", () => {
     }
   });
 
+  it("a stale refusal offers Reload, which re-reads the runner into the form and saves on its new revision (FUG-L453)", async () => {
+    remoteListMock.mockResolvedValue([SHARED]);
+    const stale = "shared-docker changed while this run was being set up. Review it and try again.";
+    remoteUpdateMock.mockRejectedValueOnce(new HttpError(409, stale, "runner_pool_stale")).mockResolvedValue(SHARED);
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: "shared-docker" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Edit limits" }));
+    const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
+    setField(dialog.querySelector("#lm-rn") as HTMLInputElement, "4");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText(stale, { exact: false })).toBeInTheDocument();
+    remoteListMock.mockResolvedValue([{ ...SHARED, revision: 4 }]);
+    await user.click(within(dialog).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(within(dialog).queryByText(stale, { exact: false })).toBeNull());
+    expect((dialog.querySelector("#lm-rn") as HTMLInputElement).value).toBe(String(SHARED.limits!.runs_at_once));
+    setField(dialog.querySelector("#lm-rn") as HTMLInputElement, "5");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(remoteUpdateMock).toHaveBeenCalledTimes(2));
+    expect(remoteUpdateMock.mock.calls[1][1]).toMatchObject({ revision: 4 });
+  });
+
   it("a super admin makes it available to people's pools; a held change says so; a security admin reads only", async () => {
     setPeopleMock.mockResolvedValueOnce(SHARED).mockRejectedValueOnce(new PendingChangeError({ id: "chg-1" } as never));
     const user = userEvent.setup();

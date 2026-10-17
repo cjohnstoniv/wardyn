@@ -11,9 +11,10 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import type { RunnerAmounts, RunnerLimits } from "../../../lib/types/runners";
-import { LIMITS_DIALOG, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
+import { LIMITS_DIALOG, POOL_FORM, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER } from "../../wardyn/copy/runners";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -160,12 +161,15 @@ export function LimitsDialog({
   onOpenChange,
   onSave,
   onSaved,
+  onReload,
 }: {
   /** The runner whose limits are edited; null when the dialog is closed. */
   target: LimitsTarget | null;
   onOpenChange: (open: boolean) => void;
   onSave: (limits: RunnerLimits) => Promise<unknown>;
   onSaved: () => void;
+  /** Re-reads the runner after a save refused as stale; the form is filled from what it returns. Absent: no Reload. */
+  onReload?: () => Promise<LimitsTarget | null>;
 }) {
   const last = React.useRef(target);
   if (target) last.current = target;
@@ -174,18 +178,23 @@ export function LimitsDialog({
   const [errs, setErrs] = React.useState<Errs>({});
   const [top, setTop] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  // The last save was refused because the runner changed underneath (409): the sentence offers Reload.
+  const [stale, setStale] = React.useState(false);
   // Per run follows the totals until the person types a per-run value of their own.
   const [auto, setAuto] = React.useState(false);
   const loaded = React.useRef<LoadedLimits | null>(null);
   const open = target !== null;
-  React.useEffect(() => {
-    if (!target) return;
-    const first = initial(target);
-    loaded.current = target.limits ? { vals: first, limits: target.limits } : null;
+  const seed = (from: LimitsTarget) => {
+    const first = initial(from);
+    loaded.current = from.limits ? { vals: first, limits: from.limits } : null;
     setVals(first);
     setErrs({});
     setTop("");
-    setAuto(!target.limits);
+    setStale(false);
+    setAuto(!from.limits);
+  };
+  React.useEffect(() => {
+    if (target) seed(target);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- a fresh form each time it opens, not on every re-read of the runner
   if (!t) return null;
   const setup = !t.limits;
@@ -226,6 +235,18 @@ export function LimitsDialog({
       onSaved();
     } catch (err) {
       setTop(getErrorMessage(err));
+      setStale(err instanceof HttpError && err.status === 409);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reload = async () => {
+    setBusy(true);
+    try {
+      const fresh = await onReload?.();
+      if (fresh) seed(fresh);
+    } catch (err) {
+      setTop(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -251,6 +272,14 @@ export function LimitsDialog({
           {top && (
             <p role="alert" className="rounded-lg border border-danger bg-danger-subtle p-2.5 text-body text-foreground">
               {top}
+              {stale && onReload && (
+                <>
+                  {" "}
+                  <Button variant="outline" size="sm" type="button" disabled={busy} onClick={() => void reload()}>
+                    {POOL_FORM.RELOAD}
+                  </Button>
+                </>
+              )}
             </p>
           )}
           <div className="space-y-1.5">
