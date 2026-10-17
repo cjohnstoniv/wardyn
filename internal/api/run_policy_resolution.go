@@ -151,7 +151,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		// inline_policy=true bound to the run id for correlation. Skipped for a
 		// preflight dry-run (see the doc comment).
 		if !dryRun {
-			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			source.applyAudits = append(source.applyAudits, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"policy.inline.apply", "", "success", mustJSON(map[string]any{
 					"min_confinement_class": spec.MinConfinementClass,
 					"workspace_mounts":      len(spec.WorkspaceMounts),
@@ -274,7 +274,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 	}
 	if !dryRun {
-		s.auditPolicyOverlay(ctx, r, source.Overlay)
+		source.applyAudits = append(source.applyAudits, s.auditPolicyOverlay(r, source.Overlay)...)
 	}
 	edits.finish(&source, spec)
 	return spec, policyID, storedWarns, source, nil

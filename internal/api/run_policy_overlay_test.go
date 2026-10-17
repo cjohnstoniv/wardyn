@@ -353,3 +353,22 @@ func TestRunPolicyViewOverlayCause(t *testing.T) {
 		t.Errorf("a key the overlay left alone lost its cause: %+v", resp.Changes)
 	}
 }
+
+// A create the policy step let through and a later step refused leaves no policy
+// apply row either, for an overlay and for an inline policy alike.
+func TestPolicyApplyRowsWaitForTheWholeFold(t *testing.T) {
+	srv, st := ovOverlayFixture(t)
+	for _, body := range []string{
+		`{"agent":"claude-code","task":"t","policy_overlay":{"denied_domains":["x.example"]},"workspace_id":"` + uuid.NewString() + `"}`,
+		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2"},"workspace_id":"` + uuid.NewString() + `"}`,
+	} {
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ovCookie(t), body); w.Code == http.StatusCreated {
+			t.Fatalf("create = %d, want a refusal after the policy step: %s", w.Code, w.Body.String())
+		}
+	}
+	for _, ev := range st.audit.snapshot() {
+		if ev.Action == "policy.overlay.apply" || ev.Action == "policy.inline.apply" {
+			t.Errorf("a create refused after the policy step wrote %s %s", ev.Action, ev.Data)
+		}
+	}
+}
