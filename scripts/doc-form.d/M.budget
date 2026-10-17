@@ -26,7 +26,8 @@ docs/SSH.md=5691 share=35
 # docs/UI-SANDBOXES.md 5492 adds 15 (0.9.3 DR-0236): where the policy attribution rides on each lane.
 # docs/UI-SANDBOXES.md 5523 adds 31 (0.9.3 lane B round 4, measured on top of DR-0236): the route-shape line and three more reasons.
 # docs/UI-SANDBOXES.md 5544 adds 21 (0.9.3 DR-0255): the audit-refusal message form and the shared-gateway plain answer.
-docs/UI-SANDBOXES.md=5544 share=35
+# docs/UI-SANDBOXES.md 5558 adds 14 (0.9.3 lane B round 5): a plain request straight to a shared gateway is uninspected_channel.
+docs/UI-SANDBOXES.md=5558 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
