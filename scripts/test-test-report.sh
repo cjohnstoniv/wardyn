@@ -110,6 +110,10 @@ func helper(t *testing.T) { pgOpen(t) }
 // An export_test.go alias: a var, not a func, that a test reaches the gate through.
 var Alias = helper
 
+var (
+	GroupAlias = helper
+)
+
 type fx struct{}
 
 func (fx) viaMethod(t *testing.T) { helper(t) }
@@ -121,6 +125,7 @@ func TestDirect(t *testing.T)    { pgOpen(t) }
 func TestViaHelper(t *testing.T) { helper(t) }
 func TestViaMethod(t *testing.T) { fx{}.viaMethod(t) }
 func TestViaAlias(t *testing.T)  { Alias(t) }
+func TestViaGroup(t *testing.T)  { GroupAlias(t) }
 func TestCrossPkg(t *testing.T)  { pgtestutil.Open2(t) }
 func TestProbe(t *testing.T) {
 	testfloor.Mark(t, "pg")
@@ -145,9 +150,9 @@ func Open(t *testing.T) {
 func Open2(t *testing.T) { Open(t) }
 GO
 got="$(cd "${tmp}/s" && "${REPO_ROOT}/scripts/pg-test-select.sh" ./...)" || fail "selector failed on the fixture"
-want='^(TestCrossPkg|TestDirect|TestProbe|TestViaAlias|TestViaHelper|TestViaMethod)$'
+want='^(TestCrossPkg|TestDirect|TestProbe|TestViaAlias|TestViaGroup|TestViaHelper|TestViaMethod)$'
 [ "${got}" = "${want}" ] || fail "selector picked ${got}, want ${want}"
-ok "selector: direct, helper, method, alias, cross-package and probe tests selected; plain and comment-only not"
+ok "selector: direct, helper, method, alias (single and grouped), cross-package and probe tests selected; plain and comment-only not"
 
 # The guard: a unit run (DSN unset) where TestHidden skipped naming WARDYN_TEST_PG, but the selector
 # cannot see how it reaches the gate, must fail; one the selector does see must pass.

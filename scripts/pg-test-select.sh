@@ -84,6 +84,10 @@ select_pkg() { # <dir>: prints the gated top-level Test funcs of one package dir
     }
     # An export_test.go alias (var Name = unexported) is a name a test reaches the gate through.
     /^var [A-Za-z_]/ { flush(); s = $0; sub(/^var +/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); name = s }
+    # The same inside a grouped `var ( ... )` block (gofmt indents it with one tab).
+    /^var \(/ { flush(); invar = 1; next }
+    invar && /^\)/ { flush(); invar = 0; next }
+    invar && /^\t[A-Za-z_][A-Za-z0-9_]*([ \t]+[^ \t=]+)?[ \t]*=/ { flush(); s = $0; sub(/^\t/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); name = s }
     name != "" { line = $0; if (line !~ /^[ \t]*\/\//) cur = cur " " line }
     END {
       flush()
