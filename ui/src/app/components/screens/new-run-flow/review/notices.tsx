@@ -13,7 +13,11 @@ import type { LimitSource } from "../../../../lib/types/runner-pools";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
-/** composer.WarnResourcesCapped. A CPU or memory cut is said again, with its source, by the narrowed notice; a pids or disk cut is not. */
+/**
+ * composer.WarnResourcesCapped. A CPU or memory cut is said again, with its source, by the narrowed notice; a pids or
+ * disk cut is not, and the server folds all of them into this one sentence. It is dropped only when the narrowed
+ * notices are everything it can be saying.
+ */
 const RESOURCES_CAPPED = "resources capped to operator maximum";
 
 /** What the person asked for; a zero asked for the default, which is then what they got. */
@@ -49,15 +53,17 @@ export interface NoticesProps {
   askedByYou: boolean;
   /** The preflight's `warnings`, the server's sentences, shown as they came. */
   warnings?: readonly string[];
+  /** The main drive was cut by a limit: that cut is folded into the shared "resources capped" warning too. */
+  diskCut?: boolean;
 }
 
-export function Notices({ poolName, slots, applied, askedByYou, warnings }: NoticesProps) {
+export function Notices({ poolName, slots, applied, askedByYou, warnings, diskCut }: NoticesProps) {
   const full = slots?.verdict === "waits" && slots.max !== undefined && !!poolName;
   const found = applied
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
     : [];
   const distinct = found.filter((n, i) => found.findIndex((m) => m.key === n.key) === i);
-  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || distinct.length === 0);
+  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut));
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
