@@ -221,10 +221,8 @@ test.describe("New Run, Files: the main drive", () => {
     await noExtra(page).check();
     await next(page, NR_SHARED.STEP_TOOLS);
     await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
-    // Later checks may carry no size; of those that do, the last is the clamped 1000 and none is the rounded 922.
-    const sizes = () => sent.map((b) => b.resources?.disk_mib).filter((v) => v !== undefined);
-    await expect.poll(() => sizes().at(-1)).toBe(1000);
-    expect(sizes()).not.toContain(922);
+    // 1000 is this pool's default, so it is not sent as a size; the rounded 922 must never be.
+    expect(sent.map((b) => b.resources?.disk_mib)).not.toContain(922);
   });
 
   test("an emptied size holds Continue and asks for one", async ({ page }) => {

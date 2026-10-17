@@ -141,6 +141,7 @@ beforeEach(() => {
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
   listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true, created_at: "", updated_at: "" },
     { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
   ]);
 });
