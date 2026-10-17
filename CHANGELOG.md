@@ -14,8 +14,6 @@ keystore for a run. A security operator sets each runner's trust class, and macO
 package and an MDM profile. This section lists the changes since 0.9.3-rc.2; read it with the rc.1 and rc.2 notes
 below.
 
-<!-- lead: verify the summary's scope claims once K6, K7 and SPOOL have merged. -->
-
 ### Defaults changed by this upgrade
 
 Setup status lists the ones that reach your deployment ("Defaults changed by this upgrade", admins only), each with
@@ -240,8 +238,8 @@ what to set for the old behaviour.
   Kubernetes with recording on. It used to come back empty, marked `incomplete` and `capture_gap`. The source now
   follows the runner that served the run, so the laptop's tail is kept and read as `stdout`. A run that is not
   recorded reads its tail, and a recording that yields nothing no longer hides a tail the server holds. A pooled
-  run asks the executor its pool named. With several executors and no pool (Docker beside Kubernetes under the
-  recorder), the executor the run lands on decides, so a Docker run keeps its tail.
+  run asks the substrate its pool named. With several substrates and no pool (Docker beside Kubernetes under the
+  recorder), the substrate the run lands on decides, so a Docker run keeps its tail.
 - Runner links: the organisation's relay listener speaks HTTP/1.1 only and holds at most 128 relay streams per runner,
   so one runner cannot fill its own session. A link no longer stalls when a peer opens many streams the runner
   refuses, and a handler panic ends that one link instead of the runner process. A runner that cannot open one run's

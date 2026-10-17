@@ -145,6 +145,7 @@ func h2watch(addr, sni, seconds string) {
 	fmt.Println("proto", proto)
 	var rt func(*http.Request) (*http.Response, error)
 	if proto == "h2" {
+		//lint:ignore SA1019 the probe speaks HTTP/2 on the TLS connection it already dialled; net/http's replacement dials its own.
 		cc, err := (&http2.Transport{}).NewClientConn(tc)
 		if err != nil {
 			fail("h2: " + err.Error())

@@ -16,10 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestHeldKillDefersNotFailsSession: a queued kill whose teardown is held (a pod on a NotReady node,
-// termination unknown) holds that run as containment pending with a deferred receipt; it never fails
-// Pending, so a restarted runner still reaches READY (§8 P2).
-func TestHeldKillDefersNotFailsSession(t *testing.T) {
+// TestHeldKillRefusesNotFailsSession: a queued kill whose teardown is held (a pod on a NotReady node,
+// termination unknown) holds that run as containment pending and is refused with its reason; it never
+// fails Pending, so a restarted runner still reaches READY (§8 P2).
+func TestHeldKillRefusesNotFailsSession(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
 	held := &runner.ContainmentPendingError{Kind: runner.ContainmentPendingDelete, Err: errors.New("termination unknown")}
@@ -27,7 +27,7 @@ func TestHeldKillDefersNotFailsSession(t *testing.T) {
 	m.Offline(t.Context())
 	a := pendingContainment(m, id, types.RunnerActionKill)
 	result, err := m.apply(t.Context(), a)
-	if err != nil || result.Outcome != types.RunnerActionDeferred {
+	if err != nil || result.Outcome != types.RunnerActionRefused || result.Reason == "" {
 		t.Fatalf("held kill: %+v %v", result, err)
 	}
 	r := m.state.Runs[id]

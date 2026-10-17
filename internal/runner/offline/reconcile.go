@@ -189,7 +189,7 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 		return m.refuseAction(ctx, a, err)
 	}
 	if err != nil {
-		return m.failedAction(a, err)
+		return runnerwire.ActionResult{}, err
 	}
 	r := m.state.Runs[a.RunID]
 	at := m.now().UTC()
@@ -205,31 +205,6 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 	}
 	m.state.Runs[a.RunID] = r
 	result := runnerwire.ActionResult{ID: a.ID, Outcome: outcome, ObservedAt: at}
-	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
-	if err := m.save(); err != nil {
-		return runnerwire.ActionResult{}, err
-	}
-	return result, nil
-}
-
-// failedAction answers an action whose substrate call failed. A containment held pending is held for
-// this run only (§8 P2): a plain error would fail Pending on every fresh session and keep the whole
-// runner from READY. The deferred receipt keeps the obligation; CheckLapses retries until completion
-// evidence. m.mu is held.
-func (m *Manager) failedAction(a runnerwire.PendingAction, err error) (runnerwire.ActionResult, error) {
-	if pending := (*runner.ContainmentPendingError)(nil); errors.As(err, &pending) {
-		return m.deferHeld(a, pending)
-	}
-	return runnerwire.ActionResult{}, err
-}
-
-// deferHeld answers an action whose containment is held pending with a deferred receipt and holds
-// the run. m.mu is held.
-func (m *Manager) deferHeld(a runnerwire.PendingAction, p *runner.ContainmentPendingError) (runnerwire.ActionResult, error) {
-	if err := m.holdPendingLocked(a.RunID, p); err != nil {
-		return runnerwire.ActionResult{}, err
-	}
-	result := runnerwire.ActionResult{ID: a.ID, Outcome: types.RunnerActionDeferred, ObservedAt: m.now().UTC()}
 	m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
 	if err := m.save(); err != nil {
 		return runnerwire.ActionResult{}, err
