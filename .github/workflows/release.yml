@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the eight images a Wardyn release actually ships, cosign-signed
+# Publishes the nine images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the eight images, and why each ref is what it is (verified against the
+# ── the nine images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -32,6 +32,9 @@ name: Release images
 #     default for k8s.proxyImage (environment-specific, required in practice),
 #     so this is the ref an operator points `--set k8s.proxyImage=` at once
 #     they choose ghcr as their registry, not a value baked into the chart.
+#   ghcr.io/cjohnstoniv/wardyn-runnerd
+#     deploy/helm/wardyn-runnerd/values.yaml's `image.repository` default; that
+#     chart pins wardyn-proxy to the same tag. Same base pins as wardyn-proxy.
 #   ghcr.io/cjohnstoniv/agent-base, ghcr.io/cjohnstoniv/agent-codex-cli
 #     internal/api/runs_policy.go's agentImage() fallback convention:
 #     "ghcr.io/cjohnstoniv/agent-" + ImageKey, and internal/api/harness.go's
@@ -414,6 +417,11 @@ jobs:
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
+          # The Kubernetes runner image (deploy/helm/wardyn-runnerd). RELEASE_BUILD as for wardynd.
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
+            build-args: |
+              RELEASE_BUILD=true
           # float-latest: "true" on the three agent-* rows below (W30-S1-2).
           # internal/api/runs_policy.go's agentImage() fallback — what a
           # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
@@ -786,7 +794,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The same eight rows as `images` and `images-ui-sandbox`. `dockerfile` is
+        # The same nine rows as `images` and `images-ui-sandbox`. `dockerfile` is
         # the recipe nightly built, read by check-image-pins.sh,
         # gpl-source-offer.sh and guard 16; this job never builds it. The
         # wardynd-fips digest was checked for its GOFIPS140 snapshot in nightly's
@@ -798,6 +806,8 @@ jobs:
             dockerfile: deploy/compose/Dockerfile.wardynd
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             float-latest: "true"
