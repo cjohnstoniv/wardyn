@@ -133,6 +133,7 @@ type authorityRig struct {
 	ast    *authzStore
 	rev    *attachRevocations
 	run    types.AgentRun
+	audit  *sshTestRecorder
 	offset atomic.Int64 // added to the server's clock
 }
 
@@ -143,7 +144,8 @@ func newAuthorityRig(t *testing.T, roleStampTTL time.Duration) *authorityRig {
 	rig := &authorityRig{ast: newAuthzStore(), rev: newAttachRevocations()}
 	st := &touchCountingStore{authzStore: rig.ast}
 	cfg := baseTestConfig(newHarness(t), st)
-	cfg.Audit = &sshTestRecorder{}
+	rig.audit = &sshTestRecorder{}
+	cfg.Audit = rig.audit
 	cfg.Runner = &holderTestRunner{}
 	cfg.OIDC = newAccessAuth(t, nil, "", nil, nil, func(c *oidc.Config) {
 		c.Revocations = rig.rev
@@ -271,6 +273,32 @@ func (rig *authorityRig) pair(t *testing.T, lane string, cookie *http.Cookie) [2
 	return ends
 }
 
+// wantDetachReasons waits for n session.detach rows and holds each to reason: a session the credential
+// re-check ended records that, not the pump's own reason for returning.
+func (rig *authorityRig) wantDetachReasons(t *testing.T, n int, reason string) {
+	t.Helper()
+	var rows []types.AuditEvent
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		rows = rows[:0]
+		for _, ev := range rig.audit.snapshot() {
+			if ev.Action == "session.detach" && ev.RunID != nil && *ev.RunID == rig.run.ID {
+				rows = append(rows, ev)
+			}
+		}
+		if len(rows) >= n {
+			break
+		}
+	}
+	if len(rows) != n {
+		t.Fatalf("session.detach rows = %d, want %d", len(rows), n)
+	}
+	for _, ev := range rows {
+		if !strings.Contains(string(ev.Data), `"reason":"`+reason+`"`) {
+			t.Errorf("session.detach = %s, want reason %q", ev.Data, reason)
+		}
+	}
+}
+
 func wantAuthEnded(t *testing.T, ends [2]<-chan error) {
 	t.Helper()
 	for i, end := range ends {
@@ -329,6 +357,7 @@ func TestAttachAuthority_CutsEndOpenSockets(t *testing.T) {
 				ends := rig.pair(t, lane, cookie)
 				c.apply(t, rig, cookie)
 				wantAuthEnded(t, ends)
+				rig.wantDetachReasons(t, 2, attachAuthEndedReason)
 			})
 		}
 	}
