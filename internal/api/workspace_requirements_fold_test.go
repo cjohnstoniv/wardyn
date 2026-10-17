@@ -21,6 +21,13 @@ import (
 
 // This file covers Task 2 (the fold), Task 3 (per-run selections threaded
 // through create + preflight) and the Task 4 compose_setup.go escalation —
+// applyWorkspaceRequirements folds with the operator namespace and no egress
+// bound. Tests only: every production door passes its own bound to
+// applyWorkspaceRequirementsFor, so no caller can fold unbounded egress rows.
+func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections, nil)
+}
+
 // applyWorkspaceRequirements is the load-bearing function under test
 // throughout (defined in runs_create.go, beside applyWorkspaceCreds).
 
