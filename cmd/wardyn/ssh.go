@@ -57,6 +57,10 @@ When the deployment advertises a ProxyCommand (WARDYN_SSH_PROXY_COMMAND, for
 a gateway reached through a TLS-terminating listener on 443), all three
 outputs carry it. Connecting runs that command on this computer, so it needs
 --advertised-proxy; without the flag the command is shown and nothing runs.
+
+The control plane URL must be https:// or a loopback address. A plain-http
+server elsewhere is refused before /healthz is read, because the gateway
+address, host key fingerprint and ProxyCommand all come from it.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -176,6 +180,11 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	// internal/api/sshgateway.go) — anything else could never have connected,
 	// so refusing it costs no legitimate use.
 	if _, err := parseID("run", runID); err != nil {
+		return err
+	}
+	// Before the /healthz call: the address, host key fingerprint and
+	// ProxyCommand it returns are what this command trusts and may run.
+	if err := refusePlainHTTPGateway("ssh", c.BaseURL); err != nil {
 		return err
 	}
 	gw, err := resolveSSHGateway(cmd.Context(), c)

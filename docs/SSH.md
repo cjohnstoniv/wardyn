@@ -164,6 +164,7 @@ ssh <run-id>@<advertise-host> -p <port>
 - Or let the CLI assemble it: `wardyn run ssh <run-id>` reads the gateway's
   address off `/healthz` and execs your local `ssh(1)` against it, so there is
   no connect string to copy.
+- It refuses a plain-http, non-loopback `--url` in every mode, before it reads `/healthz`; use `https://`.
 - `wardyn run ssh --print <run-id>` emits that command
   instead of running it (for a script or a demo) and `--config` emits the
   `ssh_config` block below — both byte-identical to what the card renders.

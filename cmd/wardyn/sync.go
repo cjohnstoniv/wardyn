@@ -94,7 +94,7 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if _, err := parseID("run", runID); err != nil {
 		return err
 	}
-	if err := syncRefusePlainHTTP(c.BaseURL); err != nil {
+	if err := refusePlainHTTPGateway("sync", c.BaseURL); err != nil {
 		return err
 	}
 	if f.maxPullBytes <= 0 {
@@ -173,10 +173,11 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	return runErr
 }
 
-// syncRefusePlainHTTP refuses a plain-http, non-loopback server: the gateway's
+// refusePlainHTTPGateway refuses a plain-http, non-loopback server: the gateway's
 // address, host key fingerprint and ProxyCommand all come from its /healthz, so
-// anyone on the path could supply all three.
-func syncRefusePlainHTTP(rawURL string) error {
+// anyone on the path could supply all three. Shared by `run ssh` and `sync`; verb
+// is the command name that leads the error.
+func refusePlainHTTPGateway(verb, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "http" {
 		return nil
@@ -185,7 +186,7 @@ func syncRefusePlainHTTP(rawURL string) error {
 	if host == "localhost" || net.ParseIP(host).IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("sync: %s is plain http: the gateway's address, host key fingerprint and ProxyCommand are read from its /healthz, so anyone on the path could supply all three; use https://", host)
+	return fmt.Errorf("%s: %s is plain http: the gateway's address, host key fingerprint and ProxyCommand are read from its /healthz, so anyone on the path could supply all three; use https://", verb, host)
 }
 
 func portOr22(port string) string {
