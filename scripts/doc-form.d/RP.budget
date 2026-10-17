@@ -5,4 +5,5 @@
 # docs/operations/runner-pools.md 1873 adds 6 (0.9.3 C2), measured: the defaults PUT keeps an omitted recording.
 # docs/operations/runner-pools.md 1893 adds 26 over 1867 (0.9.3 RV6G), measured: the organization default's revision and its migration.
 # docs/operations/runner-pools.md 1899 = 1873 + 26 (RV6G), measured at the wave-B merge.
-docs/operations/runner-pools.md=1899 share=35
+# docs/operations/runner-pools.md 1926 adds 27 over 1899, measured (FIN-A2b): a pool's limits are edited, never removed, and empty blocks bound nothing.
+docs/operations/runner-pools.md=1926 share=35
