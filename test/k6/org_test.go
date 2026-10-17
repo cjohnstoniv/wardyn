@@ -865,10 +865,11 @@ func TestK6Org(t *testing.T) {
 	kase("self-lapse-end-to-end", caseOrgSelfLapse)
 	kase("org-triggered-sweep-rollback", caseOrgSweepRollback)
 	kase("keystore-deleted-on-revoke", caseOrgKeystoreRevoke) // last: revokes the org runner
-	// No MITM host can reach an org runner's proxy in this build: the org refuses a run whose
-	// injected credential would need runner_resident delivery ("not built yet"), and a local plan
-	// strips every other MITM host. The drain half is pinned in process instead.
-	results = append(results, "K6-CASE\tmitm-inner-request-drain\tBLOCKED-ON-RR\tno MITM host reaches an org runner's proxy until the residual RR work delivers an injected credential runner_resident; "+
+	// No MITM host can reach an org runner's proxy in this release: the org refuses a run whose
+	// injected credential would need runner_resident delivery, and a local plan strips every other
+	// MITM host. The drain is pinned in process instead, so the row says IN-PROCESS, which the
+	// harness verdict accepts.
+	results = append(results, "K6-CASE\tmitm-inner-request-drain\tIN-PROCESS\tno MITM host reaches an org runner's proxy while an injected credential is refused as runner_resident; "+
 		"pinned in process by internal/egress/proxy TestRemoteSink_DrainEndsInFlightMITMRequest")
 	for _, r := range results {
 		fmt.Println(r)

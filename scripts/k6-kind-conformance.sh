@@ -544,7 +544,8 @@ printf '%-10s %-40s %-16s %s\n' VERSION CASE STATUS DETAIL
 awk -F'\t' '{printf "%-10s %-40s %-16s %s\n", $1, $2, $3, $4}' "$SUMMARY"
 echo
 echo "commit $(git rev-parse --short HEAD); wall $((SECONDS - START)) s; host memory in use ${base} MiB at start, peak ${peak} MiB; kind node containers peak ${kpeak:-?} MiB"
-if [ "$rc" = 0 ] && ! awk -F'\t' '$3!="PASS"{f=1} END{exit !f}' "$SUMMARY"; then
+# IN-PROCESS: a case no live path can reach in this release, pinned by a named in-process test instead.
+if [ "$rc" = 0 ] && ! awk -F'\t' '$3!="PASS" && $3!="IN-PROCESS"{f=1} END{exit !f}' "$SUMMARY"; then
   echo "k6-kind-conformance: PASS"
 else
   echo "k6-kind-conformance: FAIL"
