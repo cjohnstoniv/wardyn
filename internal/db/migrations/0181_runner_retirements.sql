@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS runner_retirements (
 );
 CREATE INDEX IF NOT EXISTS runner_retirements_open ON runner_retirements (runner_id) WHERE state IN ('kill', 'retire');
 
+-- retire_capable: the runner's last caps event said it settles retire_run
+-- (caps.retire). The producer retires runs only on such a runner, so an older
+-- runner never receives a retire_run and keeps its output.
+ALTER TABLE runners ADD COLUMN IF NOT EXISTS retire_capable BOOLEAN NOT NULL DEFAULT false;
+
 -- An exit that reaches the org after the run ended is kept as the run's exit
 -- receipt only: it never enters the exit work, acceptance or the tail.
 ALTER TABLE runner_execution_exits ADD COLUMN IF NOT EXISTS receipt_only BOOLEAN NOT NULL DEFAULT false;

@@ -104,6 +104,10 @@ type Caps struct {
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
 	// omitted when the engine could not be asked.
 	Arch string `json:"arch,omitempty"`
+	// Retire says the runner settles a retire_run receipt that carries
+	// no_output (0.9.3 on). The org queues retire_run only to a runner that
+	// says so; an older runner keeps every run's output, as before.
+	Retire bool `json:"retire,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

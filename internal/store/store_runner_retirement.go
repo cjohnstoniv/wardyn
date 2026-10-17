@@ -176,21 +176,40 @@ func readRetirementTx(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (runnerRe
 	return t, nil
 }
 
+// RunnerRetirementCandidate is one run the retirement producer may advance,
+// with the runner that holds it.
+type RunnerRetirementCandidate struct {
+	RunID, RunnerID uuid.UUID
+}
+
 // RunnerRetirementCandidates lists the terminal runner runs the retirement
-// producer looks at: a claimed, unrevoked runner, a watermark row, a spool
-// cursor, and a snapshot still open or none yet with a live ref. A closed
-// snapshot makes a run permanently ineligible.
-func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]uuid.UUID, error) {
-	return collect(ctx, s.Pool, "list", "runner retirement candidates", `SELECT r.id FROM runner_output_watermarks w
+// producer looks at: a claimed, unrevoked runner whose caps said it settles
+// retire_run (retire_capable), a watermark row, a spool cursor, and a snapshot
+// still open or none yet with a live ref. A closed snapshot makes a run
+// permanently ineligible. A run whose obligation has an action still waiting
+// for the runner is left out until the runner answers it.
+func (s PG) RunnerRetirementCandidates(ctx context.Context) ([]RunnerRetirementCandidate, error) {
+	return collect(ctx, s.Pool, "list", "runner retirement candidates", `SELECT r.id, r.runner_id FROM runner_output_watermarks w
 		JOIN agent_runs r ON r.id = w.run_id
 		JOIN runner_spool_cursors c ON c.run_id = r.id AND c.runner_id = r.runner_id
-		JOIN runners rn ON rn.id = r.runner_id AND rn.state = 'claimed' AND rn.revoked_at IS NULL
+		JOIN runners rn ON rn.id = r.runner_id AND rn.state = 'claimed' AND rn.revoked_at IS NULL AND rn.retire_capable
 		LEFT JOIN runner_retirements t ON t.run_id = r.id
 		WHERE NOT (r.state = ANY($1)) AND (t.state IN ('kill', 'retire') OR (t.run_id IS NULL AND r.sandbox_ref <> ''))
-		ORDER BY r.id`, []any{nonTerminalStates()}, func(row pgx.Row) (uuid.UUID, error) {
-		var id uuid.UUID
-		return id, row.Scan(&id)
+			AND NOT EXISTS (SELECT 1 FROM runner_pending_actions p WHERE p.run_id = r.id AND p.obligation_id = t.obligation_id AND p.applied_at IS NULL)
+		ORDER BY r.id`, []any{nonTerminalStates()}, func(row pgx.Row) (RunnerRetirementCandidate, error) {
+		var c RunnerRetirementCandidate
+		return c, row.Scan(&c.RunID, &c.RunnerID)
 	})
+}
+
+// SetRunnerRetireCapable records whether a runner's latest caps event said it
+// settles retire_run. Every caps event sets it, so a runner downgraded to an
+// older binary stops receiving retire_run once it reconnects.
+func (s PG) SetRunnerRetireCapable(ctx context.Context, id uuid.UUID, capable bool) error {
+	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET retire_capable = $2 WHERE id = $1 AND retire_capable <> $2`, id, capable); err != nil {
+		return fmt.Errorf("store: set runner retire capability: %w", err)
+	}
+	return nil
 }
 
 // AdvanceRunnerRetirement takes one step of runID's retirement, in one

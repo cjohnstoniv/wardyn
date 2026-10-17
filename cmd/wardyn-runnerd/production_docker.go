@@ -338,7 +338,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			}
 			// A host that cannot say its name reports none, and keeps the machine name it had.
 			machine, _ := os.Hostname()
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: engineArch(ctx), Capacity: capacity(ctx)})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: engineArch(ctx), Capacity: capacity(ctx), Retire: true})
 			if err != nil {
 				return err
 			}

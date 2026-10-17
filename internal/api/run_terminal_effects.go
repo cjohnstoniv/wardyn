@@ -94,14 +94,18 @@ func (s *Server) produceRunnerRetirements(ctx context.Context) error {
 	if _, err := st.AbandonRevokedRunnerRetirements(ctx, s.cfg.RunnerAuditPrepare); err != nil {
 		return err
 	}
-	ids, err := st.RunnerRetirementCandidates(ctx)
+	candidates, err := st.RunnerRetirementCandidates(ctx)
 	if err != nil {
 		return err
 	}
 	var errs []error
-	for _, id := range ids {
-		if _, err := st.AdvanceRunnerRetirement(ctx, id, s.cfg.RunnerAuditPrepare); err != nil && !errors.Is(err, store.ErrNotFound) {
-			errs = append(errs, fmt.Errorf("run %s: %w", id, err))
+	for _, c := range candidates {
+		// An offline runner answers nothing; its runs wait for it to connect.
+		if !s.runnerEndpoint(c.RunnerID).link.Online() {
+			continue
+		}
+		if _, err := st.AdvanceRunnerRetirement(ctx, c.RunID, s.cfg.RunnerAuditPrepare); err != nil && !errors.Is(err, store.ErrNotFound) {
+			errs = append(errs, fmt.Errorf("run %s: %w", c.RunID, err))
 		}
 	}
 	return errors.Join(errs...)

@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,13 @@ type runnerLeaseFixture struct {
 	leaseEnds map[uuid.UUID]time.Time
 	// dir is the runner's state directory.
 	dir string
+	// streams is the runner's output server.
+	streams *runnerio.Server
+	// oldCaps makes the runner's caps event omit retire, as a runner older
+	// than 0.9.3 sends it.
+	oldCaps atomic.Bool
+	// execOutput, when set, is the org's sink for each create's output.
+	execOutput io.Writer
 }
 
 // leaseEnd waits for the runner to hold a lease of run that ends at want, and reports the end it holds.
@@ -176,7 +184,9 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.manager.Close() })
+	f.streams = streams
 	m := f.manager
+	m.ReleaseSettledOutput(streams.ReleaseOutput)
 	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub, HoldsSandbox: m.HoldsSandbox,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
@@ -211,7 +221,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test"})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", Retire: !f.oldCaps.Load()})
 			if err != nil {
 				return err
 			}
@@ -274,7 +284,7 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 // create asks for the run's sandbox on its runner and records its ref, as dispatch does.
 func (f *runnerLeaseFixture) create(t *testing.T, run *types.AgentRun) error {
 	t.Helper()
-	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1})
+	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1, ExecOutput: f.execOutput})
 	if err != nil {
 		return err
 	}

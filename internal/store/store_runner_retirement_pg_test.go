@@ -42,6 +42,22 @@ func (f actionFixture) endedRetirementRun(t *testing.T, capture bool) (types.Age
 	return run, gen
 }
 
+// candidates checks the producer's candidate runs are exactly want.
+func (f actionFixture) candidates(t *testing.T, want ...uuid.UUID) {
+	t.Helper()
+	got, err := f.st.RunnerRetirementCandidates(t.Context())
+	ids := make([]uuid.UUID, 0, len(got))
+	for _, c := range got {
+		if c.RunnerID != f.rn.ID {
+			t.Fatalf("candidate %+v names another runner", c)
+		}
+		ids = append(ids, c.RunID)
+	}
+	if err != nil || !slices.Equal(ids, want) {
+		t.Fatalf("candidates = %v %v, want %v", ids, err, want)
+	}
+}
+
 func (f actionFixture) end(t *testing.T, run types.AgentRun) {
 	t.Helper()
 	if _, err := f.pool.Exec(t.Context(), `UPDATE agent_runs SET state = 'COMPLETED' WHERE id = $1`, run.ID); err != nil {
@@ -124,11 +140,15 @@ func TestPG_QueueRunnerRetirement_RequiresSnapshotWatermarkCursor(t *testing.T) 
 	}
 
 	run, gen := f.endedRetirementRun(t, false)
-	ids, err := f.st.RunnerRetirementCandidates(t.Context())
-	if err != nil || !slices.Equal(ids, []uuid.UUID{run.ID}) {
-		t.Fatalf("candidates = %v %v, want only %s", ids, err, run.ID)
+	// A runner whose caps never said retire (older than 0.9.3) has no
+	// candidates; once it says so, the run is one.
+	f.candidates(t)
+	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
+		t.Fatal(err)
 	}
+	f.candidates(t, run.ID)
 	f.advance(t, run.ID, store.RetirementKill)
+	f.candidates(t) // the kill waits for the runner: not selected again until answered
 	kill := f.tip(t, run.ID)
 	var obligation uuid.UUID
 	if err := f.pool.QueryRow(t.Context(), `SELECT obligation_id FROM runner_retirements WHERE run_id = $1 AND state = 'kill' AND ref = $2 AND generation = $3`,
@@ -199,9 +219,10 @@ func TestPG_Retirement_RetireQueuedOnlyAfterKillSuccess(t *testing.T) {
 	if has, err := f.st.RunHasPendingRunnerAction(t.Context(), run.ID); err != nil || has {
 		t.Fatalf("fence after settlement = %v %v", has, err)
 	}
-	if ids, err := f.st.RunnerRetirementCandidates(t.Context()); err != nil || len(ids) != 0 {
-		t.Fatalf("a settled run is still a candidate: %v %v", ids, err)
+	if err := f.st.SetRunnerRetireCapable(t.Context(), f.rn.ID, true); err != nil {
+		t.Fatal(err)
 	}
+	f.candidates(t) // a settled run is never a candidate
 }
 
 // A deferred retire_run's successor carries a recomputed receipt: the
