@@ -50,12 +50,12 @@ export const TEMPLATE_REFUSAL = {
     `This door reads a document of kind ${want}, and this one is kind ${got}. Change kind to ${want}.`,
   FIELD_UNKNOWN: (path: string) => `${path} is not a field this document can hold. Remove it, or check the spelling.`,
   FIELD_INVALID: (path: string, detail: string) => `${path} ${detail}.`,
-  FIELD_EXCLUDED: (path: string) => `${path} is never part of a template: it belongs to one launch, or it is retired.`,
+  FIELD_EXCLUDED: (path: string) => `${path} cannot be set in a document: it is entered at launch, set by the server, or retired.`,
   SECRET_REFUSED: (path: string) =>
-    `${path} holds what looks like a secret. A template keeps references to secrets, never their values.`,
+    `${path} holds what looks like a secret. A document keeps references to secrets, never their values.`,
   RUN_STATE_REFUSED: (path: string) =>
-    `${path} is state of one run. A template holds reusable choices, not a run's history or authority.`,
-  METADATA_IN_CONTENT: (path: string) => `${path} is set by the server from who saves the template. Remove it from the document.`,
+    `${path} is state of one run. A document holds choices, not a run's history or authority.`,
+  METADATA_IN_CONTENT: (path: string) => `${path} is set by the server, never by a document. Remove it from the document.`,
   FIELD_UNAVAILABLE: (path: string) => `${path} cannot be used in a document on this server yet. Remove it for now: nothing was dropped.`,
   DEPENDENCY_MISSING: (path: string, needs: string) => `${path} needs ${needs}. Include it, or list it under needs_setup.`,
   COVERAGE_INVALID: (detail: string) => `The template's coverage does not fit its content: ${detail}.`,

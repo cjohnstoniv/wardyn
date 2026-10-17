@@ -361,7 +361,8 @@ func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, s
 // a handle, which would map a sealed audit field back to its owner. Rows are
 // never deleted, so a version is never reused and the next write creates
 // max+1. It returns the generations this call destroyed (none when the subject
-// had no live key, which writes no event). The local cache is evicted only after
+// had no live key, which writes no event but a tombstone generation, so the
+// destruction's time is still recorded). The local cache is evicted only after
 // the commit; other replicas stop at their next use (Key).
 func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, error) {
 	if err := check(owner, purpose); err != nil {
@@ -384,6 +385,16 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 		return nil, unavailable("destroy", err)
 	}
 	slices.Sort(gens)
+	if len(gens) == 0 {
+		// No live key: a tombstone generation still records the destruction, so a write
+		// queued for this subject before it (GoneSince) reads as erased, never as a
+		// subject to mint a fresh key for.
+		if _, err := tx.Exec(ctx, `INSERT INTO principal_keys (owner, purpose, version, domain, kek_id, wrapped_key, destroyed_at, handle)
+			VALUES ($1, $2, (SELECT COALESCE(max(version), 0) + 1 FROM principal_keys WHERE owner=$1 AND purpose=$2), '', '', NULL, now(), NULL)`,
+			owner, purpose); err != nil {
+			return nil, unavailable("tombstone", err)
+		}
+	}
 	var destroyed *types.AuditEvent
 	if len(gens) > 0 {
 		data, _ := json.Marshal(map[string]any{"owner": owner, "purpose": purpose, "generations": gens})

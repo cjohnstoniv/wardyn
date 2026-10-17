@@ -77,7 +77,9 @@ docs/operations/custom-components.md=1184 share=35
 # docs/operations/api-tokens.md 5527 measured after merging the batch into R1-identity-1 (52 over 5475: the same portal-token sentence).
 # docs/operations/api-tokens.md 5529 adds 2 over 5527, measured: expired rows are also left out of the token move list.
 # docs/operations/api-tokens.md 5531 adds 2 over 5529, measured: the toggle is now named "Also show revoked and expired tokens".
-docs/operations/api-tokens.md=5531 share=35
+# docs/operations/api-tokens.md 5569 adds 40 over 5529, measured (FIN-A2b): an expired or retired-identity token needs a decision, and the target's own token may list invitations.
+# docs/operations/api-tokens.md 5571, measured at the FIN-A2b merge into the final train (both sides' sentences).
+docs/operations/api-tokens.md=5571 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
@@ -89,7 +91,8 @@ docs/operations/api-tokens.md=5531 share=35
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
 # docs/operations/denials.md 4948 adds 17 over 4931 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/operations/denials.md 4963 adds 15 over 4948 (0.9.1 L8), measured: the me.runners.tokens target of capability_feature.
-docs/operations/denials.md=4963 share=35
+# docs/operations/denials.md 4973 adds 10 over 4963, measured (FIN-A2b): the claim and sponsor doors' capability_feature targets.
+docs/operations/denials.md=4973 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

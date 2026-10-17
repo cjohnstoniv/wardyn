@@ -439,7 +439,7 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	sub, ok := s.mintGuards(w, r)
+	sub, ok := s.mintGuards(w, r, "me.service_identities.tokens")
 	if !ok {
 		return
 	}

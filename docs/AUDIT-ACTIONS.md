@@ -875,8 +875,9 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - **SIEM rules keyed on `actor` see subject ids from the moment `full` is turned on**; the sinks never see the name.
 - A person with no identity row (one who never signed in through SSO) keeps their name in `actor`, and `person.erasure`, `credential.erase` and `principal_key.destroyed` keep theirs.
 - A row whose subject could not be had waits in the spool with the actor sealed under the pending key and `subject:pending` in the column, and the drain stores the subject.
+- Erasing a person who has no key yet still records a destroyed generation, so a row of theirs waiting in the spool stores `[erased]`, never a fresh subject.
 - The `audit.retention.partition_dropped` row and its anchor, which the database writes, carry the dropping operator's subject too; a drop is refused (`503` `audit_retention_drop_failed`) while the subject cannot be had.
-- `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a `wdn_` token or a `/people/{principal}` path carrying it is refused with `reserved_principal`.
+- `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a `wdn_` token, a `/people/{principal}` path, the `sub` of `POST /sessions/revoke` or the `?owner=` of the secrets routes carrying it is refused with `reserved_principal`.
 
 **The sponsor and the invitation target, under `WARDYN_AUDIT_SEAL=full`.**
 
@@ -894,6 +895,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - The list is closed and only ever grows ([`internal/audit/sealkeys.go`](../internal/audit/sealkeys.go)): `person.attach`, `person.token.create`, `delegation.exchange`, `session.revoke`, `secret.list` and `auth.signin_unserialized`.
 - A reader shows the person while no key of theirs was destroyed after the row was written, and `[erased]` after.
 - `?target=<person>` on `GET /audit` and `GET /audit/export` matches both the person's name (rows written before `full` was on) and their subject. The subject form never matches a device-forwarded row, which keeps the name the device sent.
+- After a person is erased, `?target=<person>` and `?actor=<person>` still find their rows, which read `[erased]`: whoever may read the audit log can learn that a named person had rows, though not what the sealed fields said.
 - A person with no identity row keeps their name in `target`, as in `actor`; so does a `session.revoke` row for `*` (everyone).
 - So the `target` of `person.create` stays clear, because the person is made before their first sign-in; so does a `person.token.create` for a person who has not signed in yet.
 - **SIEM rules keyed on `target` for these actions see subject ids**, and the sinks receive the subject in the column; `data` can still repeat the name (below).

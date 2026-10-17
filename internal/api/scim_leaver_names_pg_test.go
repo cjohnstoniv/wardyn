@@ -177,6 +177,26 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAddressNeverReachesATokenEmailClaimant(t 
 	e.removeLeaver(t, id, http.StatusOK, http.StatusNoContent, claimant)
 }
 
+// An unbound leaver whose address is a created person's principal: the purge erases under that
+// principal, though it is spelled as an address, and still never under the claimant.
+func TestPG_SCIMLeaver_AnUnboundLeaversAddressPrincipalIsErased(t *testing.T) {
+	e := newSCIMEnv(t)
+	if _, _, err := e.st.CreatePerson(context.Background(), types.Person{Principal: earlyName, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sec.For(earlyName).Put(context.Background(), "api-key", []byte("s3cret")); err != nil {
+		t.Fatal(err)
+	}
+	claimant := e.seedBystander(claimerSub, earlyName)
+	claimant.claimsAddress = true
+	id := e.postUserID(e.a, leaverOID, earlyName, earlyName)
+
+	e.removeLeaver(t, id, http.StatusOK, http.StatusNoContent, claimant)
+	if n := e.credentialCount(earlyName); n != 0 {
+		t.Errorf("%s holds %d credentials after the purge, want none", earlyName, n)
+	}
+}
+
 // An unbound leaver whose address two people claimed at sign-in: the address names nobody alone, so
 // neither is reached. The suspension deactivates the leaver's identity row alone; it and the purge refuse
 // the rest, answer 5xx and say why in the audit trail.

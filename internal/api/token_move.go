@@ -57,11 +57,12 @@ func (s *Server) handleMoveAPIToken(w http.ResponseWriter, r *http.Request) {
 
 // tokenDisposition is where an admin-minted token stands, from the facts about it. The owner is the token's
 // Principal, never its minter: an invitation counts only when it targets the person the token acts as.
-// A move row decides a live token before a pending invitation, because it is the admin's explicit choice.
+// A move row decides a live token before a pending invitation, because it is the admin's explicit choice,
+// while its service identity is not retired: a live token moved to a retired one needs a decision again.
 func tokenDisposition(t types.APIToken, f store.TokenDispositionFacts) types.TokenDisposition {
 	_, moved := f.Moves[t.ID]
 	if t.RevokedAt == nil {
-		if moved {
+		if moved && !f.Retired[t.ID] {
 			return types.TokenLinkedToService
 		}
 		for _, r := range f.Replacements[t.ID] {
@@ -104,7 +105,9 @@ func (s *Server) addTokenDispositions(ctx context.Context, tokens []types.APITok
 			}
 		}
 		t.Disposition = tokenDisposition(*t, f)
-		t.ServiceIdentity = f.Moves[t.ID].ServiceIdentity
+		if t.Disposition == types.TokenLinkedToService || t.Disposition == types.TokenMovedToService {
+			t.ServiceIdentity = f.Moves[t.ID].ServiceIdentity
+		}
 	}
 	return nil
 }
