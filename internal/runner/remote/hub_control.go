@@ -67,7 +67,14 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		// An admission holds the slot, perhaps stalled on a durable call or a dead link: end it now rather
+		// than after its own timeouts.
+		if abort := s.abort.Load(); abort != nil {
+			(*abort)()
+		}
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.peer == nil {
 		return nil

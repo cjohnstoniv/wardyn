@@ -255,6 +255,17 @@ func (s *Stream) Reset(code uint32) error {
 	return s.p.send(s.p.ctx, Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
 }
 
+// resetQueued is Reset for the read loop: the RESET frame goes to the reply worker rather than being
+// written here, because a read loop that waits on a write can stop two peers reading each other. It
+// reports whether the reply queue refused the frame (full), in which case the peer is not told.
+func (s *Stream) resetQueued(code uint32) error {
+	if !s.abort(code) {
+		return nil
+	}
+	s.p.forget(s.id)
+	return s.p.answer(Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
+}
+
 // Close aborts the stream only, never the sandbox, the agent or any sidecar.
 func (s *Stream) Close() error { return s.Reset(ResetCancelled) }
 

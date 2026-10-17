@@ -62,6 +62,10 @@ type HubConfig struct {
 	// recheck ends a live session with GOAWAY (fresh_session_required), so a
 	// connection after reactivation is admitted again.
 	Inactive func(context.Context, types.Runner) (bool, error)
+	// Disabled, when set, says runners are switched off. The stored-row recheck ends a live session with
+	// GOAWAY, so a session admitted while the switch was being turned off cannot outlive it by more than
+	// one recheck.
+	Disabled func(context.Context) bool
 	// ProxyImage, when set, names the proxy image the organisation runs for a claimed runner (chosen
 	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's
 	// upgrades. "" says nothing.
@@ -79,6 +83,9 @@ type hubSession struct {
 	readyID   atomic.Pointer[string]
 	timer     *time.Timer
 	connected bool
+	// abort cancels an admission in progress, which holds mu: a revocation or GOAWAY that finds mu taken
+	// ends the attach with it, instead of waiting out a stalled one.
+	abort atomic.Pointer[context.CancelFunc]
 }
 
 // readyFor reports whether id is the current session and reached READY
@@ -127,9 +134,14 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	}
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
+		if err == nil {
+			// The registration is gone or replaced; a failed read says nothing the runner could act on.
+			_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: runnerwire.ReasonRegistrationLapsed})
+		}
 		return fmt.Errorf("%w: the registration changed or could not be read while the runner authenticated: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	if current.ClaimExpired(time.Now()) {
+		_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: runnerwire.ReasonRegistrationLapsed})
 		return fmt.Errorf("%w: the runner's claim has lapsed", runnerwire.ErrAuth)
 	}
 	if current.State == types.RunnerRevoked {
@@ -204,7 +216,11 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 	if err != nil {
 		return err
 	}
-	peer, err := h.start(ctx, conn, row, auth, a, s)
+	attach, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.abort.Store(&cancel)
+	peer, err := h.start(attach, conn, row, auth, a, s)
+	s.abort.Store(nil)
 	s.mu.Unlock()
 	if err != nil {
 		if peer != nil {
@@ -263,7 +279,11 @@ func (h *Hub) recheck(ctx context.Context, id uuid.UUID) {
 	if h.cfg.Inactive != nil {
 		if inactive, err := h.cfg.Inactive(ctx, current); err == nil && inactive {
 			_ = h.Goaway(ctx, id)
+			return
 		}
+	}
+	if h.cfg.Disabled != nil && h.cfg.Disabled(ctx) {
+		_ = h.Goaway(ctx, id)
 	}
 }
 

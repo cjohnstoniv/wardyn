@@ -351,3 +351,35 @@ func TestPeerAcksTrimTheReplayBuffer(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A handler that panics ends only its own call or link: the call answers an internal error and the
+// peer keeps serving, and a panic on the read loop ends the link with an error instead of the process.
+func TestPeerContainsAHandlerPanic(t *testing.T) {
+	p := newPair(t, PeerConfig{}, PeerConfig{OnCall: func(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
+		if method == "panic" {
+			panic("handler bug")
+		}
+		return echoHandler(ctx, id, method, args)
+	}})
+	var we *Error
+	if err := p.org.Call(ctxT(t), "panic", nil, nil); !errors.As(err, &we) || we.Code != CodeInternal {
+		t.Fatalf("a panicking call = %v, want an internal error", err)
+	}
+	var got map[string]string
+	if err := p.org.Call(ctxT(t), "echo", map[string]string{"a": "b"}, &got); err != nil || got["a"] != "b" {
+		t.Fatalf("the peer stopped serving after a handler panic: %v, %v", got, err)
+	}
+
+	read := newPair(t, PeerConfig{OnEvent: func(Event) { panic("event bug") }}, PeerConfig{})
+	if err := read.run.Event(ctxT(t), Event{Kind: EventSpool}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-read.org.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a panic on the read loop did not end the link")
+	}
+	if read.org.Err() == nil {
+		t.Error("the link ended without an error")
+	}
+}

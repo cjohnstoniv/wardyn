@@ -43,9 +43,6 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	if err := federation.CheckOrgURL(orgURL); err != nil {
 		return Auth{}, err
 	}
-	if row.ClaimExpired(time.Now()) {
-		return Auth{}, fmt.Errorf("%w: the runner's claim has lapsed", ErrAuth)
-	}
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	var nonce [nonceLen]byte
@@ -72,6 +69,11 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	if row.State == types.RunnerRevoked {
 		_ = WriteControl(ctx, conn, TypeRevoked, Reason{Reason: "runner_revoked"})
 		return Auth{}, ErrRevoked
+	}
+	// Said only to a peer that proved the key: a stranger learns nothing about which ids are registered.
+	if row.ClaimExpired(time.Now()) {
+		_ = WriteControl(ctx, conn, TypeGoaway, Reason{Reason: ReasonRegistrationLapsed})
+		return Auth{}, fmt.Errorf("%w: the runner's claim has lapsed", ErrAuth)
 	}
 	return auth, nil
 }
@@ -131,6 +133,10 @@ func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, ke
 	}
 }
 
+// ReasonRegistrationLapsed is the GOAWAY reason for a runner whose registration lapsed before it was
+// claimed, or changed while it connected.
+const ReasonRegistrationLapsed = "registration_lapsed"
+
 // goaway returns ErrGoaway carrying the org's stated reason, when it gave one.
 func goaway(payload []byte) error {
 	var r Reason
@@ -145,8 +151,9 @@ func goaway(payload []byte) error {
 
 // goawaySentences say what the org's GOAWAY reasons mean to the person reading the runner's log.
 var goawaySentences = map[string]string{
-	"runner_unclaimed":      "this runner is waiting for its owner to claim it (run `wardyn runner claim`)",
-	"runner_owner_inactive": "this runner's owner is deactivated, so the organisation will not admit it",
+	ReasonRegistrationLapsed: "this runner's unclaimed registration lapsed, or its registration changed (register it again with a new token)",
+	"runner_unclaimed":       "this runner is waiting for its owner to claim it (run `wardyn runner claim`)",
+	"runner_owner_inactive":  "this runner's owner is deactivated, so the organisation will not admit it",
 }
 
 func checkAuthOK(payload []byte, resume *Resume) (AuthOK, error) {

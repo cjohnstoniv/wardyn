@@ -215,6 +215,20 @@ func TestMaxStreamsRefusesTheNextOpen(t *testing.T) {
 	}
 }
 
+// A peer that opens streams it will be refused and never reads the refusals must not stop this end
+// reading: the refusals are queued for the reply worker, not written from the read loop.
+func TestRefusedOpensDoNotStallTheReadLoop(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true, OnOpen: func(*Stream, Open) error { return errors.New("refused") }})
+	open, _ := json.Marshal(Open{Kind: KindRelay})
+	const n = 300 // well past the 64-frame buffers in both directions, under maxStreamReplies
+	for i := range n {
+		r.write(t, Frame{Type: TypeOpen, Stream: uint32(2*i + 1), Payload: open})
+	}
+	for range n {
+		r.readType(t, TypeReset)
+	}
+}
+
 // F3: a replayed sequenced frame runs once; a gap ends the session.
 func TestReplayedSequencedFrameIsDroppedAndReACKed(t *testing.T) {
 	var runs atomic.Int32
