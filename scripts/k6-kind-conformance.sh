@@ -226,10 +226,8 @@ limits:
   totalDisk: 30
 relay:
   servicePort: 8443
-# The apiserver's own address, as the chart asks production installs to scope it: it joins the
-# hard deny, so no run reaches the control plane by its node address either.
-apiServer:
-  peers: [{ipBlock: {cidr: CP_IP/32}}]
+# No apiServer.peers: the chart reads the apiserver's address into every proxy's hard deny itself, and
+# hard-deny-from-agent proves it.
 $CP_PLACE
 k8s:
   sandbox:
@@ -331,7 +329,7 @@ install_runnerd() {
   kubectl label namespace "$runs" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
   kubectl -n "$own" create configmap k6-org-ca --from-file=ca.pem="$WORK/ca.pem" >/dev/null
   kubectl -n "$own" create secret generic k6-registration --from-literal=token="$token" >/dev/null
-  sed -e "s/arch: ARCH/arch: $ARCH/" -e "s#CP_IP/32#$CP_IP/32#" -e "s/^runsNamespace: .*/runsNamespace: $runs/" \
+  sed -e "s/arch: ARCH/arch: $ARCH/" -e "s/^runsNamespace: .*/runsNamespace: $runs/" \
     "$WORK/values.yaml" >"$WORK/values-$release-$VERSION.yaml"
   helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
