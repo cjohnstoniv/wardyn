@@ -78,7 +78,8 @@
 # docs/OPERATIONS.md 54608 adds 41 over 54567, measured: the go checksum database upgrade note.
 # docs/OPERATIONS.md 55194 = 54915 + 279 (RV4f), measured at the wave-C merge.
 # docs/OPERATIONS.md 55205 adds 11 over 55194, measured: the runner_pools erasure scope also erases the person's stored preferences.
-docs/OPERATIONS.md=55205 share=35
+# docs/OPERATIONS.md 55237 adds 32 over 55205, measured (FIN-A2b): 0157 and 0162 validate their checks under an exclusive lock, so a large pre-0.9.0 upgrade belongs in a quiet window.
+docs/OPERATIONS.md=55237 share=35
 # docs/OPERATIONS.md 84747 adds 1534 over 83186 for the 0.8.9 component docs: 1158 (the Custom components section, including settings, attach rules, requirements, what a launch leaves behind, one credential per host and the shared secret), 90+7+5 (the `custom_component` feature value), 18 (nine kinds need only the absence of a deny), 17 (the audit log shrinks only by the partition drop), 31 (the `components` erasure row keeps the run's policy and grants), 58+30 (A46 on the run-scoped and export reads), 9 (`capability_feature` names components), 46 (a shared-secret run's policy export is a record), 58 (Azure DevOps lane redirects lose their token), 10 (buildInjector refuses a second rule for a host). The diff tool counts 1537, the gate 1534.
 # 0.9 runner registration: +27 words for the guarded admin token route tier row.
 # Combined runner registration, baseline and identity changes: measured docs/OPERATIONS.md 85164 prose words.

@@ -327,6 +327,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 - It resolves an incomplete draft without launching it.
 - An empty task stays pending; it is never silently made interactive here.
 - An absent model-provider choice is pending; explicit or inherited unavailable choices still refuse without enumerating hidden providers.
+- It grades no autonomy: the tool-approval and managed-settings warnings come from `POST /runs/preflight`.
 
 A successful response contains `spec` (authorized, clamped, workspace-folded and redacted), `source` (`kind`: `default`, `profile`, `stored` or `inline`; authorized `name` when available; `policy_id` only for stored), `provisional: true`, `redacted`, `warnings`, `pending`, and `repository_access`, and `components` when the draft names a component or a repository on a Git provider.
 
@@ -397,6 +398,7 @@ Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one
 
 - Only a caller the launch door admits for the workspace may ask; anyone else gets the `404` a missing workspace gets.
 - `repo` must be one of the workspace's repository sources (`422` `workspace_repo_unknown`), and each person is rate-limited (`429` `branch_list_rate_limited`).
+- A repository given by an SSH address is `forge_not_supported`, since the listing goes over HTTPS: the picker takes a typed branch.
 - Azure DevOps is asked at the admitting provider row's own address, never the repository URL's host. A `minted_pat` row lists nothing.
 - On GitHub the App mints a one-repository token with `contents: read`, which private repositories need.
 - GitHub fixes that token's life at `1` hour and it cannot be shortened. Wardyn revokes it after the read, best effort.
