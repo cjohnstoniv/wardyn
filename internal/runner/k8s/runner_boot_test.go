@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -115,5 +116,31 @@ func TestRunnerRelaySourceVerdict(t *testing.T) {
 	}
 	if err := relaySourceVerdict("", netip.MustParseAddr("10.0.0.5")); !errors.Is(err, errRelayProbeInconclusive) {
 		t.Fatalf("no pod IP: %v", err)
+	}
+}
+
+// The probe connects and exits before its kubelet has posted the pod's status, so the pod's IP can be missing
+// when the relay sees the connection: the verdict waits for it instead of reading once.
+func TestRunnerRelayProbeWaitsForThePodIP(t *testing.T) {
+	h := newRunnerHarness(t)
+	var connected atomic.Bool
+	var laterGets atomic.Int32
+	h.cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		name := a.(clienttesting.GetAction).GetName()
+		if !strings.HasPrefix(name, "wardyn-relay-probe-") {
+			return false, nil, nil
+		}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace}}
+		if connected.Load() && laterGets.Add(1) > 1 {
+			pod.Status.PodIP = "10.244.1.7"
+		}
+		return true, pod, nil
+	})
+	observed := func(context.Context) (netip.Addr, error) {
+		connected.Store(true)
+		return netip.MustParseAddr("10.244.1.7"), nil
+	}
+	if err := h.d.ProbeRelaySource(context.Background(), "10.96.0.9", 8443, observed); err != nil {
+		t.Fatalf("ProbeRelaySource with the pod's IP posted after the connection: %v", err)
 	}
 }
