@@ -109,6 +109,22 @@ export const ADO_PAT = {
 
   // ---- Run page ----
   RUN_TOKEN_TITLE: "Azure DevOps",
+  // The run started without the per-person Azure DevOps credential
+  // (run.ado_lane.skip): the owner-approved sentence, with the row's reason code
+  // as a short phrase. The server writes the same characters into the row's
+  // detail (internal/api/runs_dispatch_ado_inject.go); ado-pat-copy.test.ts pins
+  // both. An unknown code falls back to the row's own detail.
+  LANE_DECLINED: (phrase: string) => `This run was not given an Azure DevOps credential: ${phrase}.`,
+  LANE_DECLINE_REASON: {
+    no_person: "no signed-in person started it",
+    row_not_admitted: "no Azure DevOps provider admits its repository",
+    lane_not_allowed: "its Azure DevOps provider does not allow the per-person lane",
+    credential_source: "its Azure DevOps provider does not use each person's own credential",
+    org_unparsed: "its repository address names no organisation",
+    server_address: "its repository is not under the provider's Azure DevOps Server address",
+    cross_repo_conflict: "its repositories span more than one Azure DevOps organisation",
+    site_config_unreadable: "the provider settings could not be read",
+  } as Record<string, string>,
   RUN_TOKEN_LINE: (created: string, expires: string) => `Azure DevOps token: created ${created} · expires ${expires}`,
   RUN_TOKEN_LINE_REVOKED: (created: string, expires: string, revoked: string, reason: string) =>
     `Azure DevOps token: created ${created} · expires ${expires} · revoked ${revoked} (${reason})`,

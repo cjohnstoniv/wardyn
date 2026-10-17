@@ -2425,7 +2425,7 @@ Delivery per install path:
 - The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
 - Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
-- On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `warn`. Runs that do not use the lane keep the redirect's token.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `denied`. Runs that do not use the lane keep the redirect's token.
 
 What you get depends on whether `ecosystem` is set:
 
@@ -3230,7 +3230,7 @@ Naming these is the point of the walk, not a caveat on it:
 - `internal_hosts` is for a private endpoint that is not a provider's configured gateway: "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" above is that case, its dials take the ordinary guard, and they do need the lift.
 - Two invariants carry over unchanged: the `egress_redirects` lane above still points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an equivalent harness setting) at a gateway independently of Wardyn's injection lane.
 - An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
-- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
+- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `denied`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
 
 ### Upgrading from `artifact_overrides`
 

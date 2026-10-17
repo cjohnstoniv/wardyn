@@ -138,6 +138,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			SSHGrants:          l.gw.sshGrants,
 			Injections:         l.gw.injections,
 			Interactive:        l.req.Interactive,
+			ADOLaneRepo:        l.req.Repo,
 			TaskMode:           l.req.TaskMode,
 			InteractiveStart:   l.req.InteractiveStart,
 			SeedAutoTools:      l.req.SeedAutoTools,

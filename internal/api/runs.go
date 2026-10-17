@@ -191,6 +191,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		policyWarns = append(policyWarns, f.adoNarrowed)
 	}
+	if f.adoDecline != "" {
+		policyWarns = append(policyWarns, f.adoDecline.sentence())
+	}
 
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
@@ -495,7 +498,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	if refusal.write(s, w, r) {
 		return workspaceSeed{}, false
 	}
-	if gate && s.gitCredentialRefusal(w, r, repoLocatorsOf(spec.WorkspaceRepos)...) {
+	if gate && !adoServiceCaller(ctx) && s.gitCredentialRefusal(w, r, repoLocatorsOf(spec.WorkspaceRepos)...) {
 		return workspaceSeed{}, false
 	}
 	return seed, true

@@ -129,6 +129,11 @@ type dispatchParams struct {
 	// Harnesses are the run's run_harnesses rows, nil without the harness set;
 	// each that names a provider gets its own model credential lane.
 	Harnesses []types.RunHarness
+	// ADOLaneRepo is the run's own repository as the per-person Azure DevOps
+	// lane may serve it. Set only by finishCreateRunLaunch (the create and
+	// pool-queue doors) from the request the fold graded; a server-authored lane
+	// leaves it empty and resolves from WorkspaceRepos alone.
+	ADOLaneRepo string
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -337,16 +342,24 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
 	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
-	// already read and the run's own repositories (resolveADOEntraRun). Decided
-	// HERE, ahead of the redirect plan, which leaves a lane host's credential to
-	// the lane (laneCarriesHost), and of the LLM phase, where the per-run CA this
-	// lane cannot run without is minted; it is AUTHORED after both.
-	// A failed site-config read decides nothing — no row, no lane.
+	// already read and the run's own repositories (resolveADOEntraLane): its
+	// workspace repositories and p.ADOLaneRepo, never run.Repo, which a
+	// server-authored lane sets too. Decided HERE, ahead of the redirect plan,
+	// which leaves a lane host's credential to the lane (laneCarriesHost), and of
+	// the LLM phase, where the per-run CA this lane cannot run without is minted;
+	// it is AUTHORED after both. A failed site-config read decides nothing — no
+	// row, no lane — and says so for a run on an Azure DevOps Services host. A
+	// decline is announced (run.ado_lane.skip and the sandbox env), never refused.
 	var adoRun adoEntraRun
-	var adoInject bool
-	if siteCfgErr == nil {
-		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	var adoDecline adoLaneDecline
+	switch {
+	case siteCfgErr == nil:
+		adoRun, adoDecline = resolveADOEntraLane(siteCfg, policy.WorkspaceRepos, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run))
+	case namesADOServicesRepo(policy.WorkspaceRepos, p.ADOLaneRepo):
+		adoDecline = adoDeclineSiteConfigUnreadable
 	}
+	adoInject := adoRun.rowID != ""
+	s.announceADODecline(ctx, run, adoDecline, sandboxEnv)
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {

@@ -191,7 +191,7 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 			p.Spec.ProxyConfig.Policy.EligibleGrants[i].OwnerOnly = true
 		}
 	}
-	intents, refusal := s.localCredentialIntents(r, req, spec, workspaces, sc)
+	intents, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
 	if refusal != nil {
 		return placement.LocalPlan{}, refusal
 	}

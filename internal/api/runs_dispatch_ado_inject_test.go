@@ -107,7 +107,7 @@ var adoContosoHosts = []string{
 }
 
 func TestResolveADOEntraRun_Golden(t *testing.T) {
-	got, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), []string{adoTestRepo}, adoTestOwner)
+	got, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), nil, adoTestRepo, adoTestOwner)
 	if !ok {
 		t.Fatal("an entra row admitting the run's repository resolved no lane")
 	}
@@ -124,37 +124,115 @@ func TestResolveADOEntraRun_Golden(t *testing.T) {
 	}
 	legacy := adoEntraTestRow()
 	legacy.BaseURLs = []string{"https://contoso.visualstudio.com"}
-	if got, ok := resolveADOEntraRun(adoSite(legacy), []string{"https://contoso.visualstudio.com/proj/_git/app"}, adoTestOwner); !ok || got.org != "contoso" {
+	if got, ok := resolveADOEntraRun(adoSite(legacy), nil, "https://contoso.visualstudio.com/proj/_git/app", adoTestOwner); !ok || got.org != "contoso" {
 		t.Fatalf("legacy host: lane=%+v ok=%v, want organisation contoso", got, ok)
 	}
 }
 
-// Every arm that must DECLINE: no owner, a shared row, a row without the
-// entra lane, a disabled row, and a run spanning two organisations.
-func TestResolveADOEntraRun_Declines(t *testing.T) {
+const adoTestSSHRepo = "git@ssh.dev.azure.com:v3/contoso/proj/app"
+
+// T1: every arm declines with its own code, and the lane is off. A run that
+// names no Azure DevOps row reports nothing.
+func TestResolveADOEntraLane_DeclineReasonPerArm(t *testing.T) {
 	shared := adoEntraTestRow()
 	shared.CredentialSource = ""
 	pat := adoEntraTestRow()
 	pat.Lanes = []types.GitLane{types.GitLanePAT}
+	noEntra := adoEntraTestRow()
+	noEntra.Entra = nil
 	disabled := adoEntraTestRow()
 	disabled.Disabled = true
 	wide := adoEntraTestRow()
 	wide.BaseURLs = []string{"https://dev.azure.com"}
+	github := types.GitProvider{ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com"}}
+	server := adoServerTestRow(adoServerOrgKey)
+	ws := func(repos ...string) []types.WorkspaceRepo {
+		out := make([]types.WorkspaceRepo, 0, len(repos))
+		for _, r := range repos {
+			out = append(out, types.WorkspaceRepo{Repo: r})
+		}
+		return out
+	}
 	for name, tc := range map[string]struct {
 		site  types.SiteConfig
-		repos []string
+		ws    []types.WorkspaceRepo
+		repo  string
 		owner string
+		want  adoLaneDecline
+		on    bool
 	}{
-		"no owner":          {adoSite(adoEntraTestRow()), []string{adoTestRepo}, ""},
-		"shared source":     {adoSite(shared), []string{adoTestRepo}, adoTestOwner},
-		"pat lane only":     {adoSite(pat), []string{adoTestRepo}, adoTestOwner},
-		"disabled":          {adoSite(disabled), []string{adoTestRepo}, adoTestOwner},
-		"two organisations": {adoSite(wide), []string{adoTestRepo, "https://dev.azure.com/fabrikam/p/_git/r"}, adoTestOwner},
-		"unconfigured":      {types.SiteConfig{}, []string{adoTestRepo}, adoTestOwner},
+		"no person: empty owner":     {adoSite(adoEntraTestRow()), nil, adoTestRepo, "", adoDeclineNoPerson, false},
+		"no person: service":         {adoSite(adoEntraTestRow()), nil, adoTestRepo, adoLaneOwner("service:ci", false), adoDeclineNoPerson, false},
+		"no person: operator-owned":  {adoSite(adoEntraTestRow()), nil, adoTestRepo, adoLaneOwner(adoTestOwner, true), adoDeclineNoPerson, false},
+		"row not admitted: disabled": {adoSite(disabled), nil, adoTestRepo, adoTestOwner, adoDeclineRowNotAdmitted, false},
+		"row not admitted: narrowed": {adoSite(adoEntraTestRow()), nil, "https://dev.azure.com/fabrikam/p/_git/r", adoTestOwner, adoDeclineRowNotAdmitted, false},
+		"lane not allowed: pat only": {adoSite(pat), nil, adoTestRepo, adoTestOwner, adoDeclineLaneNotAllowed, false},
+		"lane not allowed: no entra": {adoSite(noEntra), nil, adoTestRepo, adoTestOwner, adoDeclineLaneNotAllowed, false},
+		"credential source":          {adoSite(shared), nil, adoTestRepo, adoTestOwner, adoDeclineCredentialSource, false},
+		"org unparsed: label":        {adoSite(wide), nil, "https://dev.azure.com/bad_org/p/_git/r", adoTestOwner, adoDeclineOrgUnparsed, false},
+		"org unparsed: ssh alone":    {adoSite(adoEntraTestRow()), nil, adoTestSSHRepo, adoTestOwner, adoDeclineOrgUnparsed, false},
+		"server address: ssh":        {adoSite(server), nil, "ssh://" + adoServerHost + "/DefaultCollection/proj/_git/app", adoTestOwner, adoDeclineServerAddress, false},
+		"cross repo conflict":        {adoSite(wide), ws(adoTestRepo), "https://dev.azure.com/fabrikam/p/_git/r", adoTestOwner, adoDeclineCrossRepoConflict, false},
+		// Silent: nothing a present azure_devops row admits or claims (N3).
+		"github only":              {adoSite(github), nil, "https://github.com/acme/r", adoTestOwner, "", false},
+		"unconfigured":             {types.SiteConfig{}, nil, adoTestRepo, adoTestOwner, "", false},
+		"legacy scm_hosts, no row": {types.SiteConfig{ScmHosts: []string{"dev.azure.com"}, WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{github}}}, nil, adoTestRepo, adoTestOwner, "", false},
+		"no row, no person":        {adoSite(github), nil, "https://github.com/acme/r", "", "", false},
+		"resolves":                 {adoSite(adoEntraTestRow()), nil, adoTestRepo, adoTestOwner, "", true},
 	} {
-		if got, ok := resolveADOEntraRun(tc.site, tc.repos, tc.owner); ok {
-			t.Errorf("%s: resolved %+v, want no lane", name, got)
+		got, why := resolveADOEntraLane(tc.site, tc.ws, tc.repo, tc.owner)
+		if why != tc.want || (got.rowID != "") != tc.on {
+			t.Errorf("%s: lane=%+v decline=%q, want on=%v decline=%q", name, got, why, tc.on, tc.want)
 		}
+		if _, on := resolveADOEntraRun(tc.site, tc.ws, tc.repo, tc.owner); on != tc.on {
+			t.Errorf("%s: resolveADOEntraRun on=%v, want %v", name, on, tc.on)
+		}
+		if tc.want != "" && !strings.HasPrefix(tc.want.sentence(), adoLaneDeclinePrefix) {
+			t.Errorf("%s: sentence %q lacks the prefix", name, tc.want.sentence())
+		}
+	}
+}
+
+// T2: the run's own repository is a lane input like a workspace repository.
+func TestResolveADOEntraLane_TheRunsOwnRepo(t *testing.T) {
+	site := adoSite(adoEntraTestRow())
+	if got, why := resolveADOEntraLane(site, nil, adoTestRepo, adoTestOwner); got.org != "contoso" || why != "" {
+		t.Fatalf("repo alone: lane=%+v decline=%q, want contoso", got, why)
+	}
+	if got, why := resolveADOEntraLane(site, []types.WorkspaceRepo{{Repo: adoTestRepo}}, adoTestRepo, adoTestOwner); got.org != "contoso" || why != "" {
+		t.Fatalf("repo equal to a workspace repo: lane=%+v decline=%q, want contoso", got, why)
+	}
+	// Partial success: one https repository resolves, an SSH one beside it
+	// declines on its own; the lane stays on with no code.
+	if got, why := resolveADOEntraLane(site, []types.WorkspaceRepo{{Repo: adoTestSSHRepo}}, adoTestRepo, adoTestOwner); got.org != "contoso" || why != "" {
+		t.Fatalf("partial success: lane=%+v decline=%q, want contoso and no code", got, why)
+	}
+}
+
+// T3: only a signed-in person owns the lane, and a door and the run it creates
+// name the same owner.
+func TestADOLaneOwner(t *testing.T) {
+	for _, tc := range []struct {
+		subject  string
+		operator bool
+		want     string
+	}{
+		{adoTestOwner, true, ""},
+		{"service:x", false, ""},
+		{"Service:X", false, ""},
+		{"device:7d2c0f2e-1111-2222-3333-444444444444", false, ""},
+		{"", false, ""},
+		{adoTestOwner, false, adoTestOwner},
+	} {
+		if got := adoLaneOwner(tc.subject, tc.operator); got != tc.want {
+			t.Errorf("adoLaneOwner(%q, %v) = %q, want %q", tc.subject, tc.operator, got, tc.want)
+		}
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	r = r.WithContext(withHumanIdentity(r.Context(), adoTestOwner, "", "user", "", nil, false))
+	run := types.AgentRun{CreatedBy: principalFromRequest(r), OperatorOwned: operatorOwnedRequest(r.Context())}
+	if door, stored := adoLaneOwnerOf(r), adoLaneOwnerOfRun(r.Context(), run); door != adoTestOwner || stored != door {
+		t.Fatalf("door owner %q, run owner %q, want both %q", door, stored, adoTestOwner)
 	}
 }
 
@@ -178,7 +256,7 @@ func newADODispatchServer(st *adoTestStore) (*Server, *memAudit) {
 
 func adoTestRun(t *testing.T) adoEntraRun {
 	t.Helper()
-	run, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), []string{adoTestRepo}, adoTestOwner)
+	run, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), nil, adoTestRepo, adoTestOwner)
 	if !ok {
 		t.Fatal("fixture resolved no lane")
 	}
@@ -303,7 +381,7 @@ func TestADOEntraLane_UnconfiguredDeploymentIsUnchanged(t *testing.T) {
 	for name, site := range map[string]types.SiteConfig{
 		"no rows": {}, "github row": adoSite(github), "ado pat row": adoSite(adoPAT),
 	} {
-		ado, on := resolveADOEntraRun(site, []string{adoTestRepo, "https://github.com/acme/r"}, adoTestOwner)
+		ado, on := resolveADOEntraRun(site, []types.WorkspaceRepo{{Repo: adoTestRepo}}, "https://github.com/acme/r", adoTestOwner)
 		if on {
 			t.Fatalf("%s: the lane switched on for a deployment with no entra row", name)
 		}
@@ -485,5 +563,33 @@ func TestADOEntraHostsNeverIncludeTheOrganisationlessVSSPSHost(t *testing.T) {
 				t.Errorf("adoEntraHosts(%q) includes %q", org, h)
 			}
 		}
+	}
+}
+
+// The owner-approved decline sentence, character for character, for every
+// reason code. ui/src/app/lib/ado-pat-copy.test.ts pins the console's copy to
+// the same characters and reads this package's phrases.
+func TestADOLaneDeclineSentences(t *testing.T) {
+	const p = "This run was not given an Azure DevOps credential: "
+	want := map[adoLaneDecline]string{
+		adoDeclineNoPerson:             p + "no signed-in person started it.",
+		adoDeclineRowNotAdmitted:       p + "no Azure DevOps provider admits its repository.",
+		adoDeclineLaneNotAllowed:       p + "its Azure DevOps provider does not allow the per-person lane.",
+		adoDeclineCredentialSource:     p + "its Azure DevOps provider does not use each person's own credential.",
+		adoDeclineOrgUnparsed:          p + "its repository address names no organisation.",
+		adoDeclineServerAddress:        p + "its repository is not under the provider's Azure DevOps Server address.",
+		adoDeclineCrossRepoConflict:    p + "its repositories span more than one Azure DevOps organisation.",
+		adoDeclineSiteConfigUnreadable: p + "the provider settings could not be read.",
+	}
+	if len(adoLaneDeclineClauses) != len(want) {
+		t.Fatalf("%d clauses, want %d", len(adoLaneDeclineClauses), len(want))
+	}
+	for code, sentence := range want {
+		if got := code.sentence(); got != sentence {
+			t.Errorf("%s: %q, want %q", code, got, sentence)
+		}
+	}
+	if adoLaneDecline("").sentence() != "" {
+		t.Error("no decline must have no sentence")
 	}
 }
