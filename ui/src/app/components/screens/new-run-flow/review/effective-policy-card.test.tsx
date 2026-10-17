@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { ADO_ACCESS, adoCapName } from "../../../../lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../../../../lib/workspace-providers-copy";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { PUSH } from "../../../wardyn/copy/push";
 import { preview } from "../../../../lib/new-run-fixtures/base";
@@ -17,6 +18,7 @@ import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/p
 import { initialDraft, type NewRunDraft, type RunIntent } from "../draft/run-intent";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { AccessGroup } from "./groups/access-group";
+import { CLAUDE_UNGATED } from "../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
 import type { ReviewPreflight } from "./review-seams";
 import { changedRows } from "./policy-rows";
@@ -99,6 +101,26 @@ describe("Effective policy card", () => {
     render(<EffectivePolicyCard draft={draftOf({ ...BASE, tool_approvals: "hold" })} pre={null} preview={null} />);
     expect(screen.getByText(NR_REVIEW.POLICY_HOLD)).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
+  });
+
+  const harnessDefault = (harness: string, effective: string) =>
+    ({ ...CLAUDE_UNGATED, harness, default: { ...CLAUDE_UNGATED.default, effective } });
+  const withDefaults = (...d: [string, string][]) => ({ ...SCENARIO_ACCESS.member, harnesses: d.map(([h, e]) => harnessDefault(h, e)) });
+
+  it("reads an effective deny tool default as Block it, not Run automatically (DR-0244)", () => {
+    const access = withDefaults(["claude-code", "deny"]) as never;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access } as never} preview={null} />);
+    const tools = within(document.querySelector("[data-policy-row=tools]") as HTMLElement);
+    expect(tools.getByText(NR_TOOLS.EFFECT_DENY)).toBeInTheDocument();
+    expect(tools.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
+  });
+
+  it("shows each distinct harness default instead of the first harness's alone", () => {
+    const access = withDefaults(["claude-code", "allow"], ["codex-cli", "deny"]) as never;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access } as never} preview={null} />);
+    const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
+    expect(tools).toHaveTextContent(NR_REVIEW.POLICY_AUTOMATIC);
+    expect(tools).toHaveTextContent(NR_TOOLS.EFFECT_DENY);
   });
 
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(

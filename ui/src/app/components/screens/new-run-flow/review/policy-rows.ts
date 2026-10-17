@@ -8,6 +8,7 @@
 
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
@@ -25,6 +26,9 @@ export interface PolicyRow {
   barrier?: ConfinementClass;
   detail?: string;
 }
+
+/** The tool default's effect in the canon's words: Hold and Run automatically as Review has them, Block it as the tool rules do. */
+const EFFECT_VALUE: Record<string, string> = { allow: NR_REVIEW.POLICY_AUTOMATIC, hold: NR_REVIEW.POLICY_HOLD, deny: NR_TOOLS.EFFECT_DENY };
 
 const joined = (...parts: (string | undefined)[]): string | undefined =>
   parts.filter((p): p is string => !!p).reduce<string | undefined>((all, p) => (all ? NR_SHARED.JOIN(all, p) : p), undefined);
@@ -87,8 +91,10 @@ export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, prev
   const names = joined(...(pre?.attachments ?? []).map((a) => a.name));
   rows.push({ id: "files", label: NR_REVIEW.POLICY_FILES, value: names ?? NR_REVIEW.WORK_NONE, detail: serverSource(ctx, { fields: ["workspace_mounts", "workspace_repos"] }) ?? draftSource(draft, FILE_KEYS, NR_REVIEW.PROV_ADDED) });
 
-  const effect = access?.harnesses[0]?.default;
-  const holds = effect ? effect.effective === "hold" : intent.tool_approvals === "hold";
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value: holds ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC, detail: effect?.source.name });
+  // One value per distinct default across the included harnesses, so a mixed set is not summarised by its first.
+  const defaults = (access?.harnesses ?? []).flatMap((h) => (h.default ? [h.default] : []));
+  const effects = [...new Set(defaults.map((d) => d.effective))].map((e) => EFFECT_VALUE[e] ?? NR_REVIEW.POLICY_HOLD);
+  const value = defaults.length ? joined(...effects) : intent.tool_approvals === "hold" ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC;
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? defaults[0].source.name : undefined });
   return rows;
 }
