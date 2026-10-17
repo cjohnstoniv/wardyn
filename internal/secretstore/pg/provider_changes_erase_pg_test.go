@@ -9,6 +9,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -316,4 +317,72 @@ func TestPG_ProviderPurgesAndErasesNeverDeadlock(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// waitLockWaiters returns once n sessions of the test database are waiting on a lock.
+func waitLockWaiters(t *testing.T, pool *pgxpool.Pool, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= n {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("fewer than %d sessions waited on a lock", n)
+}
+
+// A store-mode fenced Put, an erase and a provider delete take the counter row and the row's advisory
+// lock in one order. The delete holds the counter row shared; the erase queues for it exclusively;
+// a Put that took the advisory lock before the counter row would sit between them and close the
+// cycle (40P01), so it must wait for the counter row before taking the advisory lock.
+func TestPG_StoreModeFencedPutEraseAndProviderDeleteDoNotDeadlock(t *testing.T) {
+	_, base, _ := newPGStore(t)
+	s := mixedStore(t, base, mustIdentity(t), false, newMemExt("vaultkv"), true)
+	owner := "gen-ext-dead-" + uuid.NewString()
+	uid := uuid.NewString()
+	name := types.ModelProviderSecretPrefix + uid + "-key"
+	began := beginFor(t, s, owner)
+
+	del, err := holdPool(t).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = del.Rollback(context.WithoutCancel(t.Context())) }()
+	if _, err := del.Exec(t.Context(), `INSERT INTO secret_owner_generations (owned_by) VALUES ($1) ON CONFLICT (owned_by) DO NOTHING`, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := del.Exec(t.Context(), `SELECT 1 FROM secret_owner_generations WHERE owned_by=$1 FOR SHARE`, owner); err != nil {
+		t.Fatal(err)
+	}
+	erased := make(chan error, 1)
+	go func() { _, err := secretstore.EraseOwner(context.Background(), s, owner); erased <- err }()
+	waitLockWaiters(t, base, 1) // the erase queues for the counter row behind the delete
+	put := make(chan error, 1)
+	go func() { put <- s.For(owner).Put(began, name, []byte("external-value-00")) }()
+	time.Sleep(200 * time.Millisecond) // the Put reaches whichever lock it takes first
+	deleted := make(chan error, 1)
+	go func() { _, err := s.deleteLocked(t.Context(), del, owner, name); deleted <- err }()
+
+	select {
+	case err := <-deleted:
+		if err != nil {
+			t.Fatalf("the provider delete: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the provider delete never got the row's lock")
+	}
+	if err := del.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-erased; err != nil {
+		t.Fatalf("the erase: %v", err)
+	}
+	if err := <-put; !errors.Is(err, secretstore.ErrGenerationChanged) {
+		t.Fatalf("the Put that began before the erase = %v, want ErrGenerationChanged", err)
+	}
 }

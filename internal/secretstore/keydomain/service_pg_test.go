@@ -120,6 +120,25 @@ func TestService_AmbiguousIfGroup(t *testing.T) {
 	}
 }
 
+// A user assignment whose subject spells a group name is a person, not that group: it grants the
+// group's members nothing, and it is not a second group domain for them.
+func TestService_UserAssignmentNamedLikeAGroupIsNotTheGroup(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng")
+	set(t, s, "user", "eng", "a")
+	if got := domainOf(t, s, "gina"); got != keydomain.Default {
+		t.Fatalf("a user named eng assigned to a: gina in group eng is in %q, want default", got)
+	}
+	set(t, s, "group", "eng", "b")
+	if got := domainOf(t, s, "gina"); got != "b" {
+		t.Fatalf("group eng assigned to b: gina is in %q, want b", got)
+	}
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || two {
+		t.Fatalf("InTwoGroupDomains = (%v, %v); want false: the user named eng is not a group domain", two, err)
+	}
+}
+
 // The API's guard counts who a group assignment would lock out: people whose last login lost
 // groups and who have no user assignment.
 func TestService_TruncatedUnassigned(t *testing.T) {
