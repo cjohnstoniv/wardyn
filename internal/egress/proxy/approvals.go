@@ -502,6 +502,9 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 type egressScope struct {
 	Host string `json:"host"`
 	Mode string `json:"mode,omitempty"`
+	// HoldSeconds is the hold this proxy resolved, in whole seconds, stamped for a wait_for_review run so the
+	// console reports a hold for as long as the proxy holds it, not for the default 30 s.
+	HoldSeconds int `json:"hold_seconds,omitempty"`
 }
 
 type raiseBody struct {
@@ -510,10 +513,11 @@ type raiseBody struct {
 }
 
 func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, error) {
-	body, err := json.Marshal(raiseBody{
-		Kind:           string(types.ApprovalEgressDomain),
-		RequestedScope: egressScope{Host: host, Mode: string(a.firstUseMode)},
-	})
+	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
+	if a.firstUseMode == types.FirstUseWaitForReview {
+		scope.HoldSeconds = int(a.holdTimeout / time.Second)
+	}
+	body, err := json.Marshal(raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope})
 	if err != nil {
 		return uuid.Nil, err
 	}
