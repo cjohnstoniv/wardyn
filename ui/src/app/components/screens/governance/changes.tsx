@@ -203,18 +203,6 @@ export function ChangeDrawer({
             </SheetHeader>
 
             <div className="space-y-4 p-5">
-              {/* R1-0098: the notes a direct save would have shown, for the person approving. Same amber note and
-                  heading the profile screen puts them under after a save. */}
-              {change.diff.notes && change.diff.notes.length > 0 && (
-                <Note tone="amber">
-                  <b className="font-semibold">{GOVERNANCE.OMISSION_TITLE}</b>
-                  {change.diff.notes.map((n) => (
-                    <Mono key={n} className="text-inherit">
-                      {n}
-                    </Mono>
-                  ))}
-                </Note>
-              )}
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
@@ -262,6 +250,19 @@ export function ChangeDrawer({
                 </section>
               )}
 
+              {/* R1-0098: the notes a direct save would have shown, for the person approving, between the diff and the
+                  reason (after the profile an assignment points at). Same amber note and heading the profile screen puts them
+                  under after a save. */}
+              {change.diff.notes && change.diff.notes.length > 0 && (
+                <Note tone="amber">
+                  <b className="font-semibold">{GOVERNANCE.OMISSION_TITLE}</b>
+                  {change.diff.notes.map((n) => (
+                    <Mono key={n} className="text-inherit">
+                      {n}
+                    </Mono>
+                  ))}
+                </Note>
+              )}
               <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
                 <Input
                   id="governance-change-reason"

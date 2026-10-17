@@ -138,6 +138,22 @@ describe("the change drawer", () => {
     expect(within(dialog).getByText(note)).toBeInTheDocument();
   });
 
+  // The owner-approved mock (2026-10-17, 4a): the notes sit between the diff and the reason, one per line.
+  it("puts the notes between the diff and the reason, one per line", async () => {
+    const notes = ["first note", "second note"];
+    renderTab([change({ diff: { ...change().diff, notes } })]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const diffHeader = within(dialog).getByText(CHANGES.DIFF_FIELD);
+    const heading = within(dialog).getByText(GOVERNANCE.OMISSION_TITLE);
+    const reason = within(dialog).getByText(CHANGES.REASON_LABEL);
+    expect(follows(diffHeader, heading)).toBe(true);
+    expect(follows(heading, within(dialog).getByText(notes[0]))).toBe(true);
+    expect(follows(within(dialog).getByText(notes[1]), reason)).toBe(true);
+    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(notes[1]))).toBe(true);
+  });
+
   it("shows no notes heading for a change that carries none", async () => {
     renderTab([change()]);
     await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
