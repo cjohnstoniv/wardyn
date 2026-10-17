@@ -707,7 +707,10 @@ func notMetadataIPBlock() *networkingv1.IPBlock {
 // clusterDNSPeer selects the cluster DNS pods: CoreDNS in kube-system, which
 // carries k8s-app=kube-dns on kind, EKS, GKE and AKS. The two labels are fixed
 // here because the driver config has no DNS namespace or label setting; a
-// cluster that runs DNS elsewhere is not covered by this peer.
+// cluster that runs DNS elsewhere is not covered by this peer. The
+// kubernetes.io/metadata.name label is set automatically from Kubernetes 1.21;
+// on an older cluster the peer matches nothing and the address-range peer
+// still applies.
 func clusterDNSPeer() networkingv1.NetworkPolicyPeer {
 	return networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},

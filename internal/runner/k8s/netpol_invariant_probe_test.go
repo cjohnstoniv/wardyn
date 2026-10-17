@@ -54,6 +54,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -487,18 +488,40 @@ func TestAgentEnvSecretsReachTheAgentOnlyByReference(t *testing.T) {
 	}
 }
 
-// isDNSRulePeer reports whether peer is the cluster-DNS pod peer inside a
-// port-53 rule: the only non-ipBlock peer the proxy policy may carry.
+// isDNSRulePeer reports whether peer is the cluster-DNS pod peer inside a rule
+// whose every port is 53: the only non-ipBlock peer the proxy policy may carry.
+// A rule that also opens another port to that peer does not qualify.
 func isDNSRulePeer(r networkingv1.NetworkPolicyEgressRule, peer networkingv1.NetworkPolicyPeer) bool {
-	has53 := false
+	if len(r.Ports) == 0 {
+		return false
+	}
 	for _, p := range r.Ports {
-		if p.Port != nil && p.Port.IntVal == 53 {
-			has53 = true
+		if p.Port == nil || p.Port.IntVal != 53 {
+			return false
 		}
 	}
-	return has53 && peer.IPBlock == nil &&
+	return peer.IPBlock == nil &&
 		peer.NamespaceSelector != nil && maps.Equal(peer.NamespaceSelector.MatchLabels, map[string]string{"kubernetes.io/metadata.name": "kube-system"}) &&
 		peer.PodSelector != nil && maps.Equal(peer.PodSelector.MatchLabels, map[string]string{"k8s-app": "kube-dns"})
+}
+
+// TestIsDNSRulePeerRequiresEveryPortToBe53 pins that the invariant's exemption
+// for the cluster-DNS peer does not cover a rule that also opens another port.
+func TestIsDNSRulePeerRequiresEveryPortToBe53(t *testing.T) {
+	testfloor.Mark(t, "k8s")
+	peer := clusterDNSPeer()
+	port := func(p int32) networkingv1.NetworkPolicyPort {
+		return networkingv1.NetworkPolicyPort{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(p))}
+	}
+	if !isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{port(53)}}, peer) {
+		t.Error("a port-53-only rule must exempt the cluster-DNS peer")
+	}
+	if isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{port(53), port(443)}}, peer) {
+		t.Error("a rule mixing 53 and 443 must not exempt the cluster-DNS peer: it would reach 443 on the DNS pods")
+	}
+	if isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{}, peer) {
+		t.Error("a rule with no ports must not exempt the cluster-DNS peer")
+	}
 }
 
 // TestProxyNetPolDNSRuleAddsClusterDNSPeer pins that the proxy's DNS egress

@@ -933,9 +933,9 @@ func TestGovernanceLimitsMaxConcurrentRuns(t *testing.T) {
 // carries its note only when it added a deny or withheld a lane or host, and
 // that empty action lists marshal as [], never null.
 func TestCeilingReassertNoteAndEmptyLists(t *testing.T) {
-	read := func(t *testing.T, deny []string) map[string]json.RawMessage {
+	read := func(t *testing.T, deny []string, policy types.RunPolicySpec) map[string]json.RawMessage {
 		t.Helper()
-		events, runID := r3bWalledRun(t, "p", deny)
+		events, runID := r3bWalledRunWithPolicy(t, "p", deny, policy)
 		ev := findAudit(events, runID, "run.ceiling.reassert", "success")
 		if ev == nil {
 			t.Fatalf("no run.ceiling.reassert row; events=%s", auditDump(events, runID))
@@ -948,7 +948,7 @@ func TestCeilingReassertNoteAndEmptyLists(t *testing.T) {
 	}
 
 	t.Run("nothing denied or withheld carries no note and [] lists", func(t *testing.T) {
-		raw := read(t, nil)
+		raw := read(t, nil, types.RunPolicySpec{})
 		if note, ok := raw["note"]; ok {
 			t.Errorf("note = %s, want no note when denied_added, dropped_broker_lanes and dropped_injection_hosts are all empty", note)
 		}
@@ -960,13 +960,22 @@ func TestCeilingReassertNoteAndEmptyLists(t *testing.T) {
 	})
 
 	t.Run("a denied host reads the note", func(t *testing.T) {
-		raw := read(t, []string{"*.corp.example"})
+		raw := read(t, []string{"*.corp.example"}, types.RunPolicySpec{})
 		var note string
 		if err := json.Unmarshal(raw["note"], &note); err != nil {
 			t.Fatalf("note missing or not a string: %v (%v)", err, raw)
 		}
 		if !strings.HasPrefix(note, "the acting principal's governance profile denies these hosts;") {
 			t.Errorf("note = %q, want the denies sentence", note)
+		}
+	})
+	t.Run("a denied host the run already carried adds nothing and carries no note", func(t *testing.T) {
+		raw := read(t, []string{"*.corp.example"}, types.RunPolicySpec{DeniedDomains: []string{"*.corp.example"}})
+		if note, ok := raw["note"]; ok {
+			t.Errorf("note = %s, want no note when the run already denied the profile's host", note)
+		}
+		if got := string(raw["denied_added"]); got != "[]" {
+			t.Errorf("denied_added = %s, want []", got)
 		}
 	})
 }
