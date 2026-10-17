@@ -10,4 +10,5 @@
 # docs/operations/runner-pools.md 1951, measured at the FIN-A2b merge into the final train (both sides' sentences).
 # docs/operations/runner-pools.md 1920 = 1899 + 21, measured: the BARRIERS and refused-runner notes.
 # docs/operations/runner-pools.md 1972 = 1951 + 21, measured: at the FIN-C2 merge into the final train (both sides' sentences).
-docs/operations/runner-pools.md=1972 share=35
+# docs/operations/runner-pools.md 1976 = 1972 + 4, measured: the add row names organization runners.
+docs/operations/runner-pools.md=1976 share=35

@@ -56,6 +56,22 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+describe("organization pool members", () => {
+  it("shows an organization runner as an organization runner, beside a remote-hosted one", () => {
+    const cluster = selfRunner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
+    renderDrawer(pool(), { members: [member(EU), member(cluster)] });
+    const cards = document.querySelectorAll("[data-member]");
+    expect(cards).toHaveLength(2);
+    const org = within(cards[1] as HTMLElement);
+    expect(org.getByText("cluster-a")).toBeInTheDocument();
+    expect(org.getByText("Organization")).toBeInTheDocument();
+    expect(org.queryByText("Self-hosted")).not.toBeInTheDocument();
+    expect(org.getByText("node-1.corp.example.com")).toBeInTheDocument();
+    expect(within(cards[0] as HTMLElement).getByText("Remote-hosted")).toBeInTheDocument();
+    expect(screen.getByText("Remote-hosted and organization runners")).toBeInTheDocument();
+  });
+});
+
 describe("organization default pool", () => {
   it("shows its chips, what it allows, its resources and the default with Clear default", async () => {
     const p = pool({ id: "p-gen", name: "General", limits: { barriers: ["CC1", "CC2", "CC3"] } });

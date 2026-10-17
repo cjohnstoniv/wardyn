@@ -19,11 +19,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Added
 
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
+- `wardyn runner pool add` and `remove` put an organization runner in an organization pool and take it out, by name or id (an admin; a runner serves one pool).
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
 
 ### Fixed
 
+- An organization pool's member list (`GET /runner-pools/{id}/members`, the console's pool sheet) now shows the organization runners it holds, which it left out.
 - The Kubernetes chart keeps runnerd's state in a directory below its volume, which runnerd accepts as private; the
   volume's own root was refused as not mode 0700.
 - A proxy whose `upstream_proxy_url` is an address inside `hard_deny` is refused at boot.

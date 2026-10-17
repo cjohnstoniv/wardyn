@@ -461,6 +461,19 @@ func (c *Client) RemoveMyRunnerFromPool(ctx context.Context, poolID, runnerID uu
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
 }
 
+// AddRunnerPoolRunner puts a claimed organisation runner into an organisation pool (admin). A runner
+// serves one pool only; one already in another pool is refused with the server's sentence.
+func (c *Client) AddRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID) (RunnerPoolMember, error) {
+	var out RunnerPoolMember
+	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, &out)
+	return out, err
+}
+
+// RemoveRunnerPoolRunner takes an organisation runner, in any state, out of an organisation pool (admin).
+func (c *Client) RemoveRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
+}
+
 // GetOrgRunnerPoolDefaults reads the organisation's default pool and barrier.
 func (c *Client) GetOrgRunnerPoolDefaults(ctx context.Context) (RunnerPoolDefaults, error) {
 	var out RunnerPoolDefaults

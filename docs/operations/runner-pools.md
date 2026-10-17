@@ -24,7 +24,7 @@
 |---|---|
 | List the pools you may use | `wardyn runner pool list`; BARRIERS marks the default barrier with `*` |
 | Create a pool | `wardyn runner pool create --name <name>`; an admin adds `--scope organization` |
-| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; each runner the server refuses gets its own line and the command exits non-zero |
+| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; an admin may add organization runners; each refused runner gets its own line and the command exits non-zero |
 | Rename, switch off or re-limit a pool | `wardyn runner pool update <pool>` with `--name`, `--switch on\|off` or the limit flags |
 | Delete a pool | `wardyn runner pool delete <pool> --yes`: its runners leave it and runs waiting for it end; running runs are not touched |
 

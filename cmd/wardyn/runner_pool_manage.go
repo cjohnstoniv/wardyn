@@ -22,7 +22,7 @@ import (
 // your own: `create` makes one, and `update` and `delete` reach it through your own routes. An
 // organization pool is the organization's: `create --scope organization`, and `update` or `delete` on
 // one, need an admin. <pool> is a pool id or its exact name; <runner> a runner id or name, a self-hosted
-// runner of yours or a remote-hosted runner.
+// runner of yours, an organization runner (an admin, into an organization pool) or a remote-hosted runner.
 //
 //	wardyn runner pool create --name Laptop [--scope user|organization] [--runner <runner>]... [--limits-file limits.json]
 //	wardyn runner pool show <pool>
@@ -44,7 +44,7 @@ func runnerPoolManageCmds(client clientFn) []*cobra.Command {
 // admin) or into your own user pool when it is available to people's pools. Whether each may join is the
 // server's to say; its sentence is printed.
 func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
-	use, short := "add <pool> <runner>...", "Put runners in a pool: your self-hosted runners and available remote-hosted runners in your user pool, or (an admin) remote-hosted runners in an organization pool"
+	use, short := "add <pool> <runner>...", "Put runners in a pool: your self-hosted runners and available remote-hosted runners in your user pool, or (an admin) remote-hosted runners and organization runners in an organization pool"
 	if !add {
 		use, short = "remove <pool> <runner>...", "Take runners out of a pool"
 	}
@@ -83,8 +83,8 @@ func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) err
 	return err
 }
 
-// poolMembers adds or removes each runner, through the organization's routes for a remote-hosted runner
-// in an organization pool and through your own otherwise, and says what is now true. Every runner is
+// poolMembers adds or removes each runner, through the organization's routes for a remote-hosted or
+// organization runner in an organization pool and through your own otherwise, and says what is now true. Every runner is
 // read, and an unclaimed one refused, before the first write; one already in the pool is said so and not
 // added again. With several runners, each one the server refuses is said on its own line after the ones
 // that went through, and the command fails; a lone runner's refusal is returned as it is. fresh says
@@ -98,6 +98,19 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		}
 		return c.ListRemoteRunners(ctx)
 	}
+	var orgs func() ([]sdk.RunnerView, error)
+	if !mine {
+		var cached []sdk.RunnerView
+		var read bool
+		orgs = func() ([]sdk.RunnerView, error) {
+			var err error
+			if !read {
+				cached, err = orgRunners(cmd, c)
+				read = err == nil
+			}
+			return cached, err
+		}
+	}
 	var members []sdk.RunnerPoolMemberView
 	if !fresh {
 		var err error
@@ -110,7 +123,7 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		var ref runnerRef
 		var err error
 		if add {
-			ref, err = resolveRunner(cmd, c, arg, remotes)
+			ref, err = resolveRunner(cmd, c, arg, remotes, orgs)
 		} else {
 			ref, err = resolveMember(pool, members, arg)
 		}
@@ -169,10 +182,14 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 }
 
 // writePoolMember adds ref to pool or takes it out, through your own routes for a pool of yours or
-// one of your runners, and through the organization's otherwise.
+// one of your runners, and through the organization's otherwise (always, for an organization runner).
 func writePoolMember(ctx context.Context, c *sdk.Client, poolID uuid.UUID, ref runnerRef, add, mine bool) error {
 	var err error
 	switch {
+	case ref.org != nil && add:
+		_, err = c.AddRunnerPoolRunner(ctx, poolID, *ref.org)
+	case ref.org != nil:
+		err = c.RemoveRunnerPoolRunner(ctx, poolID, *ref.org)
 	case ref.self != nil && add:
 		_, err = c.AddMyRunnerToPool(ctx, poolID, *ref.self)
 	case ref.self != nil:
@@ -250,7 +267,7 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			return poolMembers(cmd, c, p, runners, true, true)
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
-	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners only)")
+	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners and organization runners)")
 	cmd.Flags().StringArrayVar(&runners, "runner", nil, "a runner to put in the new pool, by id or name (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	lf.register(cmd, "own")
