@@ -40,6 +40,15 @@ func TestPosture_MDMFileWhenTrustedElseTheProbe(t *testing.T) {
 	for name, ignored := range map[string]func() types.RunnerPosture{
 		"another owner":  func() types.RunnerPosture { return read(path, uid+1) },
 		"group-writable": func() types.RunnerPosture { write(`{"mdm_managed":true}`, 0o664); return read(path, uid) },
+		"world-writable": func() types.RunnerPosture { write(`{"mdm_managed":true}`, 0o646); return read(path, uid) },
+		"a link to a trusted file": func() types.RunnerPosture {
+			write(`{"mdm_managed":true}`, 0o644)
+			link := filepath.Join(t.TempDir(), "link.json")
+			if err := os.Symlink(path, link); err != nil {
+				t.Fatal(err)
+			}
+			return read(link, uid)
+		},
 		"unknown field": func() types.RunnerPosture {
 			write(`{"mdm_managed":true,"attested":true}`, 0o644)
 			return read(path, uid)

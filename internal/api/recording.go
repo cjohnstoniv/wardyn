@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -255,7 +256,8 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if len(fields) > 0 {
 		data = mustJSON(fields)
 	}
-	s.recordAudit(r.Context(), s.auditEvent(
+	// Detached: a client that hung up (HTTP/1 cancels the request context) must not cost the outcome row.
+	s.recordAudit(context.WithoutCancel(r.Context()), s.auditEvent(
 		&runIDUUID,
 		types.ActorAgent,
 		claims.SPIFFEID,

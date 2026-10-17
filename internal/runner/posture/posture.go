@@ -73,7 +73,13 @@ type mdmPosture struct {
 // that nobody else can write.
 func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 	var out mdmPosture
-	fi, err := os.Lstat(path)
+	// One open file for the checks and the read, so the file judged is the file read; a link is not followed.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return out, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return out, err
 	}
@@ -88,7 +94,7 @@ func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 	case fi.Size() > maxMDMFile:
 		return out, errors.New("too large")
 	}
-	b, err := os.ReadFile(path)
+	b, err := io.ReadAll(io.LimitReader(f, maxMDMFile+1))
 	if err != nil {
 		return out, err
 	}
