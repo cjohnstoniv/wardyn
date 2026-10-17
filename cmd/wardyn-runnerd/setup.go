@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -294,6 +296,13 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	for _, v := range settings {
 		if v != "" && !safeSetting.MatchString(v) {
 			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
+		}
+	}
+	// A plist escapes its own values, but the environment file --no-service writes is read back line by
+	// line: a path with a line break would not survive it.
+	for _, v := range []string{plan.paths.installed, plan.paths.stateDir, o.trustedCAFile} {
+		if strings.ContainsFunc(v, unicode.IsControl) {
+			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %q", v)
 		}
 	}
 	if err := h.checkServiceChoice(cmd.Context(), o.noService, &plan.paths, paths); err != nil {

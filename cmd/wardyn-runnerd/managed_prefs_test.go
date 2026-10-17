@@ -159,3 +159,21 @@ func TestServeTakesTheSingleInstanceLock(t *testing.T) {
 		again()
 	}
 }
+
+// A proxy image from the managed profile is an administrator's pin, release tag or not; with no profile
+// value and no flag, a release-tagged image is only a derived default.
+func TestManagedProxyImageIsAPin(t *testing.T) {
+	image := releaseProxyRepo + ":1.2.3"
+	withManagedPrefs(t, "darwin", map[string]string{"ProxyImage": image})
+	cmd := newServeCommand(nil)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !proxyImagePinned(image, "", proxyImageGiven(cmd), func(string) string { return "" }) {
+		t.Error("a profile's release-tagged proxy image was not a pin")
+	}
+	withManagedPrefs(t, "darwin", map[string]string{})
+	if proxyImagePinned(image, "", proxyImageGiven(cmd), func(string) string { return "" }) {
+		t.Error("with no profile value and no flag, a release-tagged image was a pin")
+	}
+}
