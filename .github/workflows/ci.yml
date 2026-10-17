@@ -638,7 +638,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: ''
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -842,7 +842,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: needs.changes.outputs.backend != 'false'
         with:
@@ -1098,7 +1098,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1321,7 +1321,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|hello-world:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1425,7 +1425,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(hello-world:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1684,13 +1684,14 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardynd
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       TRIVY_BUILD_ARGS: ''
     steps: &trivy_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: ${{ env.TRIVY_PRIME }}
       - name: Build the image locally (scan target — never pushed)
         run: |
           # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
@@ -1774,6 +1775,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardynd-fips
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       TRIVY_BUILD_ARGS: --build-arg GOFIPS140=v1.0.0-c2097c7c
     steps: *trivy_steps
   trivy-wardyn-proxy:
@@ -1786,6 +1788,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardyn-proxy
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.proxy
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-base:
@@ -1798,6 +1801,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-base
       TRIVY_DOCKERFILE: deploy/images/base/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-codex-cli:
@@ -1810,6 +1814,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-codex-cli
       TRIVY_DOCKERFILE: deploy/images/codex-cli/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-aws-sso:
@@ -1822,6 +1827,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-aws-sso
       TRIVY_DOCKERFILE: deploy/images/aws-sso/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|debian:trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-vscode:
@@ -1834,6 +1840,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-vscode
       TRIVY_DOCKERFILE: deploy/images/vscode/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-novnc:
@@ -1846,6 +1853,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-novnc
       TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
 

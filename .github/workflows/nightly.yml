@@ -56,7 +56,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -103,7 +103,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -157,7 +157,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|busybox:latest|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -236,7 +236,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -278,7 +278,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - name: Docker available
         run: docker --version
       - name: Build the agent image the test-drive launches runs with
@@ -303,7 +303,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - name: Docker available
         run: docker --version
       - name: One-shot governed run (BYOA exec mode, sealed policy)
@@ -357,7 +357,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -415,7 +415,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -507,7 +507,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/busybox:'
+          prime: '/library/(busybox:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -567,7 +567,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - name: Docker available
         run: docker --version
       - name: Shared-host concurrency test (two project-scoped stacks up at once)
@@ -602,7 +602,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|ubuntu:24\.04)@'
       - name: Docker available
         run: docker --version
       - name: Build wardynd
@@ -651,7 +651,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -948,7 +948,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1107,7 +1107,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1182,7 +1182,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1251,7 +1251,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1321,7 +1321,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|alpine:3\.20)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1401,7 +1401,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1459,7 +1459,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(postgres:17)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1503,7 +1503,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@|kindest/node:)'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1640,7 +1640,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/((golang|node|alpine|debian|busybox|registry|hello-world|ubuntu):|postgres:17@)'
+          prime: ''
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24' # the agent image's base is node:24
