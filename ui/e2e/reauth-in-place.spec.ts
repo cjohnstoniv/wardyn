@@ -48,13 +48,6 @@ async function signInInDialog(page: Page): Promise<void> {
   await dialog.getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
 }
 
-// The /me splices below make a real round trip per request, and the layer keeps
-// reading /me while it waits, so a read can still be in flight when a test
-// ends; without this it fails as "apiResponse.json: Response has been disposed".
-test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: "ignoreErrors" });
-});
-
 test.describe("signed out mid-page: sign in again in place (#483)", () => {
   test("the dialog opens over the page, and after signing in the typed draft is still there", async ({ page }) => {
     const { puts } = await saveIntoAnExpiredSession(page);
