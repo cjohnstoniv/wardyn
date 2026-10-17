@@ -191,7 +191,8 @@ describe("edit", () => {
     await screen.findByText("Laptop changed while this was open.", { exact: false });
     getMock.mockRejectedValue(new HttpError(500, "boom"));
     await userEvent.click(screen.getByRole("button", { name: "Reload" }));
-    expect(await screen.findByText("Something went wrong reaching the server.", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't reload this pool. Your changes are still here. Try Reload again.")).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong reaching the server.", { exact: false })).toBeNull();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
   });
 

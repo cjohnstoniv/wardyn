@@ -734,7 +734,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     const user = userEvent.setup();
     await claimWithPool(user, "Desk", true, () => pools.setMyDefaults.mockRejectedValueOnce(new HttpError(500, "Defaults could not be saved.", "internal")));
     await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp"));
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Defaults could not be saved."));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("mbp-ben is in Desk but isn't your default pool yet. Set it from My pools. Defaults could not be saved."));
     expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("isn't in Desk"));
   });
 });

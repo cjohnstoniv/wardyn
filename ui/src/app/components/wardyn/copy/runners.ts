@@ -141,6 +141,8 @@ export const MY_RUNNER = {
   POOL_PLACEHOLDER: "Pool name",
   POOL_DEFAULT: "Make it my default pool",
   CLAIM_POOL_FAILED: (name: string, pool: string, why: string) => `${name} is claimed but isn't in ${pool}. Add it from My pools. ${why}`,
+  // Owner-approved 2026-10-17: the runner joined the pool; only making it the default failed.
+  CLAIM_DEFAULT_FAILED: (name: string, pool: string, why: string) => `${name} is in ${pool} but isn't your default pool yet. Set it from My pools. ${why}`,
   CLAIM_MISMATCH: (name: string) =>
     `That fingerprint doesn't match ${name}'s key. Check you're claiming the computer you registered. If you didn't register ${name}, revoke it.`,
   CLAIMED_TOAST: (name: string) => `${name} is claimed. It can run your runs now.`,

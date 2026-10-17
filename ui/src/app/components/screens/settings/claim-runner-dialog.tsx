@@ -91,7 +91,7 @@ export function ClaimRunnerDialog({
       if (pool.trim()) await putInPool(shown.id, pool.trim(), makeDefault, () => { joined = true; });
     } catch (err) {
       // Once the runner is in the pool, a failure is the default step's: it must not say the runner is not in the pool.
-      toast.error(joined ? getErrorMessage(err) : MY_RUNNER.CLAIM_POOL_FAILED(shown.name, pool.trim(), getErrorMessage(err)));
+      toast.error((joined ? MY_RUNNER.CLAIM_DEFAULT_FAILED : MY_RUNNER.CLAIM_POOL_FAILED)(shown.name, pool.trim(), getErrorMessage(err)));
     } finally {
       onOpenChange(false);
       onClaimed();
