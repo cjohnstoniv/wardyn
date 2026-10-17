@@ -55,7 +55,7 @@ export const runLayout = {
   // situational default (there is no DELETE route).
   async putLayout(preset: RunLayoutPreset, layout: RunLayoutWidget[]): Promise<RunLayoutResponse> {
     const res = await wfetch("/me/run-layout", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify({ preset, layout }),
     });
     return asJson<RunLayoutResponse>(res);

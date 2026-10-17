@@ -73,7 +73,7 @@ export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue>
 
 /** POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. */
 export async function createMyDrive(name: string): Promise<MeDrive> {
-  return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", body: JSON.stringify({ name }) }));
+  return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", asPerson: true, body: JSON.stringify({ name }) }));
 }
 
 /** DELETE /me/drives/{id}: deletes the caller's own drive and its files. */

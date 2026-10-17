@@ -387,7 +387,7 @@ export const governance = {
   // (200) rather than accumulating a second (201). The console reloads either
   // way, so the status is not surfaced.
   async upsertAssignment(input: GovernanceAssignmentInput): Promise<GovernanceAssignment> {
-    const res = await wfetch("/governance/assignments", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/governance/assignments", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     return asJson<GovernanceAssignment>(res);
   },
 
