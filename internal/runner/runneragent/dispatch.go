@@ -151,6 +151,11 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 			contain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			err = errors.Join(err, d.cfg.CreateFailed(contain, a.Spec))
+			// A run that was never created keeps no resident value: erase
+			// what was delivered for it (the org's erase retries any rest).
+			if d.cfg.Resident != nil {
+				err = errors.Join(err, d.cfg.Resident.erase(contain, peer, a.Spec.RunID))
+			}
 		}
 	}()
 	if a.ExecOutput {
