@@ -458,9 +458,9 @@ func preparedTestSpool(t *testing.T, id uuid.UUID) string {
 	return dir
 }
 
-// decision_spool_dir is wardyn-runnerd's spool, prepared and mounted before the proxy starts. A directory
-// without its state.json (nothing mounted, or an empty one an engine made up) stops the proxy at start,
-// naming the directory, instead of an audit wardyn-runnerd never reads.
+// decision_spool_dir is an older wardyn-runnerd's spool, prepared and mounted before the proxy starts. A
+// directory without its state.json (nothing mounted, or an empty one an engine made up) stops the proxy at
+// start, naming the directory and the upgrade, instead of an audit wardyn-runnerd never reads.
 func TestConfiguredSpoolRefusesADirectoryRunnerdDidNotPrepare(t *testing.T) {
 	id := uuid.New()
 	for name, dir := range map[string]string{"nothing mounted": filepath.Join(t.TempDir(), "spool"), "an empty directory": t.TempDir()} {
@@ -470,7 +470,7 @@ func TestConfiguredSpoolRefusesADirectoryRunnerdDidNotPrepare(t *testing.T) {
 			_ = s.close(context.Background())
 			t.Fatalf("%s: the proxy accepted a spool directory wardyn-runnerd did not prepare", name)
 		}
-		if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "--state-dir") {
+		if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "Upgrade wardyn-runnerd") {
 			t.Errorf("%s: %v; want the directory named and the fix", name, err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "state.json")); err == nil {

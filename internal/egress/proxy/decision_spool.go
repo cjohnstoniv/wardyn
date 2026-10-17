@@ -414,15 +414,17 @@ func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client
 	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
 }
 
-// preparedSpool refuses a spool directory wardyn-runnerd did not prepare. wardyn-runnerd creates the run's
-// spool, state.json included, in its own state directory and mounts it at decision_spool_dir before the
-// proxy starts. A directory without state.json is no mount, or one an engine that cannot see wardyn-runnerd's
-// state directory made up: a spool opened there would never reach the organisation.
+// preparedSpool refuses a spool directory wardyn-runnerd did not prepare. Only a wardyn-runnerd from 0.9.3-rc.2
+// or older still sets decision_spool_dir, with this image when it follows its organisation: it creates the
+// run's spool, state.json included, in its own state directory and mounts it there before the proxy starts. A
+// directory without state.json is no mount, or one an engine that cannot see wardyn-runnerd's state directory
+// made up: a spool opened there would never reach the organisation.
 func preparedSpool(dir string) error {
 	_, err := os.Lstat(filepath.Join(dir, "state.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("the run's audit spool %s holds no state.json, so wardyn-runnerd's spool for this run is not mounted there: "+
-			"the Docker engine does not see wardyn-runnerd's state directory. Share that directory with the engine, or run wardyn-runnerd serve with --state-dir set to a directory the engine shares", dir)
+			"the Docker engine does not see wardyn-runnerd's state directory. Upgrade wardyn-runnerd, whose proxies then share no directory with it, "+
+			"or share that directory with the engine", dir)
 	}
 	return err
 }

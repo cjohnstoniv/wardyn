@@ -454,9 +454,11 @@ func TestDecisionSinkConfigValidation(t *testing.T) {
 	}
 	c = base()
 	c.DecisionSink = &good
-	if c.applyDefaultsAndValidate() == nil {
-		t.Error("decision_sink without self_lapse accepted")
+	if err := c.applyDefaultsAndValidate(); err != nil {
+		t.Errorf("Docker runner config (decision_sink alone) refused: %v", err)
 	}
+	c = base()
+	c.DecisionSink = &good
 	c.SelfLapse, c.DecisionSpoolDir = true, "/spool"
 	if c.applyDefaultsAndValidate() == nil {
 		t.Error("decision_sink with decision_spool_dir accepted")
