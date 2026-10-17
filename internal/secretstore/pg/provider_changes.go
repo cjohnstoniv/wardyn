@@ -68,6 +68,10 @@ func (s *Store) DeleteProviderChanges(ctx context.Context) error {
 // erase, which takes an owner's counter row and then that owner's history,
 // meets the purge's locks in the same order.
 //
+// Both callers of a purge (PUT /site-config and the model-provider block write)
+// hold the site-config door lock, so two purges do not overlap; the name order
+// still covers a purge against an erase.
+//
 // The owners are chosen by one statement and the history is written by later
 // ones, so a credential that commits between them belongs to an owner who is
 // not locked. recordProviderChanges therefore writes only for the returned

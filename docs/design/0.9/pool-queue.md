@@ -1,8 +1,8 @@
 # 0.9 Pool queue: a full pool makes a run wait, not fail
 
-Status: **Draft r2 (review r1 FIX resolved) for owner options, then the mock round and the build.** It designs the 2026-10-10 owner ruling: a launch into a runner pool at its concurrent-run cap queues until a slot frees.
-It builds on the pool-limits contract (`AtCapacity` returns a `*Wait`) and the accepted #1319 rulings.
-Every open product call is in [Owner options](#21-owner-options) with a recommendation.
+Status: **Built in 0.9; the owner accepted every recommendation in [Owner options](#21-owner-options).** It designed the 2026-10-10 owner ruling: a launch into a runner pool at its concurrent-run cap queues until a slot frees.
+It built on the pool-limits contract (`AtCapacity` returns a `*Wait`) and the accepted #1319 rulings.
+Every product call was in [Owner options](#21-owner-options), each with a recommendation.
 
 ## 1. Problem and scope
 
@@ -53,7 +53,7 @@ A new non-terminal `RunState`, `QUEUED`, before `PENDING`; `PENDING` keeps "admi
 |---|---|---|---|
 | (create) | `QUEUED` | The create door | The resolved pool has a concurrent-run cap |
 | `QUEUED` | `PENDING` | The promoter | A slot is free and this is the oldest run that can be placed |
-| `QUEUED` | `KILLED` | Owner, admin, suspension sweep, pool removal | Cancelled |
+| `QUEUED` | `KILLED` | Owner, admin, suspension sweep, pool removal, runner revoke (the run waits for the one runner its launch named), session revoke, service identity retirement, person erasure | Cancelled |
 | `QUEUED` | `FAILED` | The queue sweep | Its deadline passed |
 | `PENDING` (promoted) | `FAILED` | The start | A start re-check refused |
 

@@ -1,8 +1,8 @@
 # 0.9 "No end" runs: choosing a run's end at launch (#1319)
 
-Status: **Draft r3 for owner options, then the mock round, then build.** It designs the create-time end for #1319 against the pool-limits contract.
+Status: **Built in 0.9; the owner accepted every recommendation in [Owner options](#14-owner-options).** It designed the create-time end for #1319 against the pool-limits contract.
 Background and Interactive behaviour follow the 2026-10-10 owner rulings on run types and pool limits; nothing here reopens them.
-Every open product call is in [Owner options](#14-owner-options), each with a recommendation; the rest of the doc holds under either answer, or says which answer it assumes.
+Every product call was in [Owner options](#14-owner-options), each with a recommendation; the rest of the doc holds under either answer, or says which answer it assumes.
 
 ## 1. Scope and dependencies
 

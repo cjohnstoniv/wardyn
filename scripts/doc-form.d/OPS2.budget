@@ -35,4 +35,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 2812 = 2787 + 25 (Fo), measured at the wave-A merge.
 # docs/operations/hybrid-laptops.md 1796 adds 35 over 1761 (0.9.3 F-R12b), measured: a gateway-routed key or custom_endpoint provider is refused on your own runner.
 # docs/operations/hybrid-laptops.md 2847 = 2812 + 35 (FR12b), measured at the wave-A merge.
-docs/operations/hybrid-laptops.md=2847 share=35
+# docs/operations/hybrid-laptops.md 1788 adds 27 over 1761 (0.9.3 RV5), measured: macOS MDM posture path and the runner_posture_unmet vs placement_credential split.
+# docs/operations/hybrid-laptops.md 2874 = 2847 + 27 (RV5), measured at the wave-A merge.
+docs/operations/hybrid-laptops.md=2874 share=35

@@ -1206,7 +1206,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
 - A run kept after a control-plane outage whose agent's stop is not recorded is covered the same way.
-- A run kept with its agent's stop recorded, or kept after its end or a reboot, is left to its files grace. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
+- The reaper does not touch a run kept with its agent's stop recorded, or kept after its end or a reboot; [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
 - The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.

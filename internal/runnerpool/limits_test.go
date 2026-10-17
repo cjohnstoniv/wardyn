@@ -48,7 +48,7 @@ func mustGov(t *testing.T, l types.GovernanceLimits, ceiling, untouched types.Re
 	return g
 }
 
-// mustEffective adds a deployment source that bounds nothing when the call names
+// withDeployment adds a deployment source that bounds nothing when the call names
 // none, because Effective refuses to compute without one.
 func withDeployment(ss []SourceLimits) []SourceLimits {
 	if slices.ContainsFunc(ss, func(s SourceLimits) bool { return s.Source == types.LimitSourceDeployment }) {

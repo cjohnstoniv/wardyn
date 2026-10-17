@@ -117,7 +117,9 @@
 # docs/sdk.md 17898 = 17760 + 138 (ADO), measured at the rc.2 merge.
 # docs/sdk.md 17686 adds 17 over 17669 (0.9.3 Fo), measured: a preflight model_credential 422 carries setup_items.
 # docs/sdk.md 17914 = 17898 + 16 (Fo), measured at the wave-A merge.
-docs/sdk.md=17914 share=21
+# docs/sdk.md 17904 adds 235 over 17669 (0.9.3 RV5), measured: the four pool refusal reasons, the import size note, the access-block harnesses fact, runner_not_found and approval-body limits.
+# docs/sdk.md 18149 = 17914 + 235 (RV5), measured at the wave-A merge.
+docs/sdk.md=18149 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

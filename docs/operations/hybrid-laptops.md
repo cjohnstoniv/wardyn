@@ -33,7 +33,8 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> `runner_resident` values are not yet delivered to runners in 0.9. An admin can set the mode and a runner reports its posture, but a run that needs such a credential is still refused (`placement_credential`).
+> `runner_resident` values are not yet delivered to runners in 0.9. An admin can set the mode and a runner reports its posture, but a run that needs such a credential is still refused.
+> The refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`.
 
 | Credential class | Modes |
 | --- | --- |
@@ -45,7 +46,7 @@
 
 - `via_org` does not carry an MCP server's header credential: a run whose MCP server uses one the organisation shares is refused on your runner (`placement_credential`).
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
-- The runner reports its posture when it connects and again when it changes. A root-owned `/etc/wardyn/posture.json` from your MDM wins over the runner's own probe.
+- The runner reports its posture when it connects and again when it changes. A root-owned posture file from your MDM wins over the runner's own probe: `/etc/wardyn/posture.json` on Linux and `/Library/Application Support/Wardyn/posture.json` on macOS.
 - A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and erases it at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
