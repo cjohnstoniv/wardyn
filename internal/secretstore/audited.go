@@ -33,6 +33,7 @@ const (
 	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
+	PurposeBranchList   Purpose = "branch-list"
 	PurposeStatus       Purpose = "status"
 
 	// PurposeUnmarked is recorded, as a failure, for a Get whose caller set no
