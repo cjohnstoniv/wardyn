@@ -134,8 +134,15 @@ async function draftUnderAnExpiringSession(page: Page): Promise<{ answer: (over:
     },
   };
 }
+// A read that lands while the reload replaces the document loses its context mid-evaluate: that is a
+// new document, the answer polled for (#2054). Only that error; any other still fails.
 const sameDocument = (page: Page) =>
-  page.evaluate(() => (window as unknown as { beforeRenew?: boolean }).beforeRenew ?? false);
+  page
+    .evaluate(() => (window as unknown as { beforeRenew?: boolean }).beforeRenew ?? false)
+    .catch((e: unknown) => {
+      if (e instanceof Error && /Execution context was destroyed/.test(e.message)) return false;
+      throw e;
+    });
 
 test.describe("the expiry banner: sign in again in place", () => {
   test("the same person signing in keeps the tab and the draft, and the expiry moved", async ({ page }) => {
