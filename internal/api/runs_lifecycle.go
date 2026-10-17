@@ -27,6 +27,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// completionWatcherReadRetryDelay is the pause before the watcher's second read of its run: a pool or
+// connection error that has just happened would otherwise repeat at once.
+const completionWatcherReadRetryDelay = 250 * time.Millisecond
+
 // startCompletionWatcher launches the detached goroutine that blocks until the
 // agent process exits and then propagates its outcome to the run's durable
 // state + audit trail. Invariants it upholds:
@@ -67,7 +71,11 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// worker owns the transition; Wait/reconcile must not race its CAS.
 		if s.cfg.Store != nil {
 			run, err := s.cfg.Store.GetRun(base, runID)
-			if err != nil { // one more read before the 90 s lease sweep has to finish the run
+			if err != nil { // one more read, after a short pause, before the 90 s lease sweep has to finish the run
+				select {
+				case <-time.After(completionWatcherReadRetryDelay):
+				case <-base.Done():
+				}
 				run, err = s.cfg.Store.GetRun(base, runID)
 			}
 			if err != nil {
@@ -674,6 +682,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 			"id":     id,
 			"state":  types.RunKilled,
 			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
+			"reason": reasonRunKillTeardownIncomplete,
 			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
 		})
 		return

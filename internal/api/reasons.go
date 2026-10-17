@@ -206,6 +206,7 @@ const (
 	reasonIntegrationIDRetired                 = "integration_id_retired"                   // integration_id no longer chooses a model credential; a run's model provider does
 	reasonRunKillAlreadyTerminal               = "run_kill_already_terminal"                // the run is already in a terminal state other than killed
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run moved to another state between the read and the write
+	reasonRunKillTeardownIncomplete            = "run_kill_teardown_incomplete"             // the run is KILLED but a teardown or revocation step failed (500); retry the kill
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
 

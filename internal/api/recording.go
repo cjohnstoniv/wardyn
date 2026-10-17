@@ -196,8 +196,10 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if s.refuseUncoveredAgent(w, r, claims, "recordings.upload") {
 		return
 	}
-	var run types.AgentRun
-	if s.cfg.Store != nil {
+	// The run internalAuth's liveness gate already read (every part would otherwise read it again); a call
+	// that did not come through that gate reads it here.
+	run, ok := liveRunFromContext(r.Context())
+	if !ok && s.cfg.Store != nil {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID); err != nil {
 			writeServerError(w, r, "load run", err)

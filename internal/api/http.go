@@ -920,10 +920,11 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 		}
 		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		if run, ok := s.refuseTerminalRun(w, r, claims); !ok || s.refuseRelayBinding(w, r, claims, run) {
+		run, ok := s.refuseTerminalRun(w, r, claims)
+		if !ok || s.refuseRelayBinding(w, r, claims, run) {
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(contextWithLiveRun(r.Context(), run)))
 	})
 }
 
