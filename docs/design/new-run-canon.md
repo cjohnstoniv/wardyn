@@ -763,6 +763,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
 | `LAUNCH_RUN` | mock | Launch run |
+| `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
+| `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
 | `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 | `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 

@@ -198,6 +198,15 @@ func cloneHostDropWarningJSON(host, ws string) string {
 	return `dropped clone host \"` + host + `\" of workspace \"` + ws + `\"`
 }
 
+// TestRunCloneEgress_ACeilingThatListsTheAddressKeepsIt: a member's workspace whose clone host is a
+// private-range address is kept when the ceiling lists that address bare, and nothing is dropped.
+func TestRunCloneEgress_ACeilingThatListsTheAddressKeepsIt(t *testing.T) {
+	kept, dropped := runCloneEgress(cloneLiteralWorkspace(govMemberSub), []string{"10.0.0.5"})
+	if !slices.Contains(kept, "10.0.0.5") || len(dropped) != 0 {
+		t.Errorf("kept = %q, dropped = %q; want 10.0.0.5 kept and nothing dropped", kept, dropped)
+	}
+}
+
 // TestCloneHostDropWarning: the warning names a place the host can actually be allowed. A
 // workspace's approved egress takes dotted hosts, so an IPv6 literal and a library source's host
 // are pointed at the ceiling.
