@@ -52,6 +52,9 @@ type queueAuthority struct {
 	// audit rows' via; the start never reads the token's ten-minute expiry.
 	Delegate *uuid.UUID `json:"delegate,omitempty"`
 	Grant    *uuid.UUID `json:"grant,omitempty"`
+	// Device is the laptop that submitted the launch, which carries no person: the start replays the fold
+	// as that device, so the rules a device keeps at the create door hold when the run is promoted.
+	Device *uuid.UUID `json:"device,omitempty"`
 }
 
 // captureQueueAuthority reads the launch's identity off the request context.
@@ -71,6 +74,9 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 	if via, ok := audit.DelegationFrom(ctx); ok {
 		a.Delegate, a.Grant = &via.Delegate, &via.Grant
 	}
+	if d, ok := deviceFromContext(ctx); ok {
+		a.Device = &d.ID
+	}
 	return a
 }
 
@@ -85,6 +91,9 @@ func (a queueAuthority) context(ctx context.Context) context.Context {
 	}
 	if a.Service != "" {
 		ctx = withServiceIdentity(ctx, a.Service, a.Sponsor)
+	}
+	if a.Device != nil {
+		ctx = context.WithValue(ctx, deviceCtxKey{}, types.Device{ID: *a.Device})
 	}
 	if v, ok := a.via(); ok {
 		ctx = audit.WithDelegation(ctx, v)
