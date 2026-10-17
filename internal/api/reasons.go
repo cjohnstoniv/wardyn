@@ -264,6 +264,9 @@ const (
 	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
 	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
 
+	// Any write carrying the console's X-Wardyn-Expected-Principal header (expected_principal.go).
+	reasonExpectedPrincipalMismatch = "expected_principal_mismatch" // the draft was composed under a different person than the one now signed in
+
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag

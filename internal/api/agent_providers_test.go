@@ -191,8 +191,8 @@ func TestAgentProvidersPut(t *testing.T) {
 		if w.Code != http.StatusPreconditionFailed {
 			t.Fatalf("expected-principal mismatch = %d, want 412; body=%s", w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), expectedPrincipalMismatch) || !strings.Contains(w.Body.String(), `"reason":"site_config_stale"`) {
-			t.Errorf("412 body = %s, want the expected-principal sentence and the existing stale reason", w.Body.String())
+		if !strings.Contains(w.Body.String(), expectedPrincipalMismatch) || !strings.Contains(w.Body.String(), `"reason":"expected_principal_mismatch"`) {
+			t.Errorf("412 body = %s, want the expected-principal sentence and its own reason", w.Body.String())
 		}
 		if fake.putSeen != before {
 			t.Error("a refused Save reached the store")
@@ -361,9 +361,9 @@ func TestRunCreateRefusesADraftFromAnotherPerson(t *testing.T) {
 	body := `{"task":"echo hi","agent":"claude-code"}`
 	w := doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
 		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
-	if w.Code != http.StatusPreconditionFailed || errorReason(w) != reasonSiteConfigStale ||
+	if w.Code != http.StatusPreconditionFailed || errorReason(w) != reasonExpectedPrincipalMismatch ||
 		!strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
-		t.Fatalf("launch under another person = %d, want 412 site_config_stale with the expected-principal sentence; body=%s", w.Code, w.Body.String())
+		t.Fatalf("launch under another person = %d, want 412 expected_principal_mismatch with the expected-principal sentence; body=%s", w.Code, w.Body.String())
 	}
 	w = doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
 		map[string]string{expectedPrincipalHeader: adminTokenPrincipal})
