@@ -110,7 +110,9 @@ func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, e
 
 // PendingLeavers is the identities with a suspend or purge ledger row still pending that no step has
 // touched for idleFor (a request still working on it is not one the sweeper may race), at most limit.
-// An identity that is neither deactivated nor purged has a stale ledger and is not listed.
+// An identity that is neither deactivated nor purged has a stale ledger and is not listed. The fewest
+// failed attempts come first, so steps a retry cannot finish (a held refusal is retried every pass) do
+// not fill the batch ahead of newer leavers.
 func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error) {
 	return collect(ctx, s.Pool, "list", "pending leavers", `
 		SELECT i.id, i.purged_at IS NOT NULL
@@ -120,7 +122,8 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 		                  AND j.kind IN ('suspend', 'purge'))
 		   AND NOT EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id
 		                  AND j.updated_at > now() - $1::bigint * interval '1 microsecond')
-		 ORDER BY i.created_at, i.id LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingLeaver, error) {
+		 ORDER BY (SELECT COALESCE(MAX(j.attempts), 0) FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.state = 'pending'),
+		          i.created_at, i.id LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingLeaver, error) {
 		var p PendingLeaver
 		return p, r.Scan(&p.ID, &p.Purged)
 	})
