@@ -47,7 +47,8 @@ export function notifyAuthChange(kind: AuthEventKind = "changed"): void {
 // and nothing here has asked yet. Until the shell's identity check answers, a write waits rather than
 // leave under a draft's old owner. The wait is bounded, and the bound fails closed: a check that has not
 // answered by then (the daemon down or slow) refuses the write unsent, as a lapsed session does, so the
-// sign-in prompt opens and the draft stays on screen. A write never leaves unchecked.
+// sign-in prompt opens and the draft stays on screen. That holds for a write that arrives after the bound
+// too: the tab stays unchecked until /me answers (identityCheckSettled), so no write leaves unchecked.
 export const IDENTITY_CHECK_WAIT_MS = 4000;
 let identityCheckUntil = 0;
 let identityCheckWaiters: Array<(settled: boolean) => void> = [];
@@ -65,10 +66,12 @@ export function identityCheckSettled(): void {
   for (const resume of waiting) resume(true);
 }
 
-/** Null when nothing is held, so an ordinary write does not wait a tick. Resolves false at the bound. */
+/** Null when nothing is held, so an ordinary write does not wait a tick. Resolves false at the bound, and
+ *  at once for a write that comes after it with the check still unanswered. */
 function writesMayLeave(): Promise<boolean> | null {
+  if (identityCheckUntil === 0) return null;
   const remaining = identityCheckUntil - Date.now();
-  if (remaining <= 0) return null;
+  if (remaining <= 0) return Promise.resolve(false);
   return new Promise<boolean>((resume) => {
     identityCheckWaiters.push(resume);
     setTimeout(() => resume(false), remaining);

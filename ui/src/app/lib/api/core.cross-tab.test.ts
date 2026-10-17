@@ -120,6 +120,24 @@ it("a check that never answers refuses the write at the bound, unsent: the draft
   expect(unauthorized).toHaveBeenCalledExactlyOnceWith({ write: true, save: "note" });
 });
 
+it("a write that arrives after the bound, with the check still unanswered, is refused unsent; one answer frees it", async () => {
+  stops.push(listenForOtherTabs());
+  fromAnotherTab();
+  vi.advanceTimersByTime(COALESCE_MS + 1);
+  // Nothing was waiting at the bound: the tab is still unchecked.
+  await vi.advanceTimersByTimeAsync(IDENTITY_CHECK_WAIT_MS + 1000);
+  await expect(wfetch("/stub-save", { method: "PUT", body: "{}", save: "note" })).rejects.toMatchObject({ status: 401 });
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(unauthorized).toHaveBeenCalledExactlyOnceWith({ write: true, save: "note" });
+  // A read is never held.
+  await wfetch("/runs");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  // /me answers (settled): writes go again.
+  identityCheckSettled();
+  await wfetch("/stub-save", { method: "PUT", body: "{}" });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 it("the logout is the one write the hold does not wait for", async () => {
   stops.push(listenForOtherTabs());
   fromAnotherTab();
