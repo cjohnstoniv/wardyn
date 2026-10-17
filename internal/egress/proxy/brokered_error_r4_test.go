@@ -85,8 +85,9 @@ func TestGatewayHostIsRedactedFromTheCause(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.writeBrokeredFault(rec, shapeAnthropic, sharedGatewayHost, brokeredFault{port: 443, ruleSource: "builtin:dial-failed"}, err)
 	v := decodeSDK(t, shapeAnthropic, rec)
-	if strings.Contains(rec.Body.String(), sharedGatewayHost) || !strings.Contains(v.message, "not "+redactedEndpoint) {
-		t.Errorf("message %q leaks the gateway host or lost the cause", v.message)
+	if strings.Contains(rec.Body.String(), sharedGatewayHost) || strings.Contains(rec.Body.String(), "other.example") ||
+		!strings.Contains(v.message, "valid for "+redactedEndpoint+", not "+redactedEndpoint) {
+		t.Errorf("message %q leaks the gateway host or its certificate's names, or lost the cause", v.message)
 	}
 	if got := p.dialFailureCause(errors.New("dial tcp " + sharedGatewayHost + ":8443: refused; xllm-gw.corp.internalx")); strings.Contains(got, sharedGatewayHost+":") ||
 		!strings.Contains(got, "xllm-gw.corp.internalx") {

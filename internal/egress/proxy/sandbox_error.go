@@ -4,7 +4,9 @@
 package proxy
 
 import (
+	"crypto/x509"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -35,7 +37,34 @@ import (
 func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
 	masked := string(maskDecisionBytes([]byte(err.Error())))
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", code, "err", masked)
-	http.Error(w, msg+": "+p.redactTopology(masked), code)
+	http.Error(w, msg+": "+p.redactErr(err), code)
+}
+
+// redactErr is err's text as the sandbox may see it: secret-masked, with no
+// topology, and with no name off a configured gateway's certificate — the
+// names a hostname mismatch lists are the gateway's own, so topology too.
+func (p *Proxy) redactErr(err error) string {
+	s := err.Error()
+	var mismatch x509.HostnameError
+	if errors.As(err, &mismatch) && mismatch.Certificate != nil {
+		if _, ok := p.gatewayVendorOf(mismatch.Host); ok {
+			s = strings.Replace(s, "valid for "+certNames(mismatch)+", not ", "valid for "+redactedEndpoint+", not ", 1)
+		}
+	}
+	return p.redactTopology(string(maskDecisionBytes([]byte(s))))
+}
+
+// certNames is the name list x509.HostnameError's text prints: the IP SANs
+// for an IP host, else the DNS SANs.
+func certNames(e x509.HostnameError) string {
+	if net.ParseIP(e.Host) != nil {
+		ips := make([]string, len(e.Certificate.IPAddresses))
+		for i, ip := range e.Certificate.IPAddresses {
+			ips[i] = ip.String()
+		}
+		return strings.Join(ips, ", ")
+	}
+	return strings.Join(e.Certificate.DNSNames, ", ")
 }
 
 // redactedEndpoint replaces an internal endpoint in a sandbox-facing error.
@@ -91,16 +120,41 @@ func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regex
 // gatewayPatterns matches each configured LLM gateway's host, with any port:
 // the sandbox reaches a gateway only through its brokered route, so its
 // address in an error (a certificate's hostname mismatch, say) is topology.
-// Word-bounded so a short host name does not match inside other text; an IP
-// literal is left to ipLiteralRe.
+// Word-bounded so a short host name does not match inside other text. An
+// IPv4 literal is left to ipLiteralRe; an IPv6 one is not, since x509 prints
+// it bare ("cannot validate certificate for fd12::7 because ...") and
+// ipLiteralRe matches IPv6 only in brackets, so both forms are listed here,
+// as configured and canonical.
 func gatewayPatterns(ups map[string]llmUpstream) []*regexp.Regexp {
 	var out []*regexp.Regexp
 	for _, u := range ups {
-		if u.host != "" && net.ParseIP(u.host) == nil {
+		switch ip := net.ParseIP(u.host); {
+		case u.host == "":
+		case ip == nil:
 			out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(u.host)+`\b(:\d{1,5})?`))
+		case strings.Contains(u.host, ":"):
+			for _, h := range slices.Compact([]string{u.host, ip.String()}) {
+				q := regexp.QuoteMeta(h)
+				out = append(out, regexp.MustCompile(`\[`+q+`\](:\d{1,5})?`), regexp.MustCompile(wordEdges(h, q)))
+			}
 		}
 	}
 	return out
+}
+
+// wordEdges word-bounds pattern q for literal h on each side where h starts
+// or ends with a word character (an IPv6 literal may start or end with ':').
+func wordEdges(h, q string) string {
+	isWord := func(c byte) bool {
+		return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+	}
+	if isWord(h[0]) {
+		q = `\b` + q
+	}
+	if isWord(h[len(h)-1]) {
+		q += `\b`
+	}
+	return q
 }
 
 // The dial-failed shape: a request policy ALLOWED, where the network then
@@ -118,8 +172,7 @@ const (
 // a dial-shaped refusal happened, since this text also lands in
 // egress.DecisionLog.Cause.
 func (p *Proxy) dialFailureCause(err error) string {
-	masked := string(maskDecisionBytes([]byte(err.Error())))
-	return p.redactTopology(masked)
+	return p.redactErr(err)
 }
 
 // viaHop classifies which hop CLASS a forward-egress dial to host attempted —
@@ -146,13 +199,20 @@ func dialStage(err error) string {
 		return "upstream proxy connect"
 	case strings.Contains(msg, "tls:"), strings.Contains(msg, "x509:"), strings.Contains(msg, "remote error:"):
 		return "tls handshake"
-	default:
-		var opErr *net.OpError
-		if errors.As(err, &opErr) && opErr.Op == "dial" {
-			return "tcp dial"
-		}
-		return "dial"
 	}
+	// A connection that opened and then failed (a reset or close while the
+	// answer was awaited) is classifyUpstreamErr's upstream_error, never a dial.
+	var opErr *net.OpError
+	var connecting *connectStageError
+	switch {
+	case errors.As(err, &opErr) && opErr.Op == "dial":
+		return "tcp dial"
+	case errors.As(err, &connecting):
+		return "dial"
+	case opErr != nil && (opErr.Op == "read" || opErr.Op == "write"), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "after connect"
+	}
+	return "dial"
 }
 
 // causeSentence builds the stage-prefixed, masked, topology-redacted sentence
