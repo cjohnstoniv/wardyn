@@ -262,6 +262,15 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     });
   });
 
+  test("Interactive: Your own tools starts no CLI, so it offers no starting prompt", async ({ page }) => {
+    await stubFlow(page);
+    await openGuided(page);
+    await toHarnesses(page, "agent", "interactive");
+    await expect(page.getByLabel(NR_HARNESSES.STARTING_PROMPT)).toHaveCount(1);
+    await page.locator("#nr-harness-0").selectOption({ label: "Your own tools" });
+    await expect(page.getByLabel(NR_HARNESSES.STARTING_PROMPT)).toHaveCount(0);
+  });
+
   test("a second harness no image carries shows its truthful disabled reason", async ({ page }) => {
     await stubFlow(page, { sets: [] });
     await openGuided(page);

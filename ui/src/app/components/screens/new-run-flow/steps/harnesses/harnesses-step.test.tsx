@@ -147,6 +147,12 @@ describe("Harnesses step: Interactive", () => {
     expect(intentNow().startup).toBeUndefined();
   });
 
+  it("gives Your own tools no starting prompt box, since it starts no CLI", async () => {
+    show({ ...INTERACTIVE, tools: [harness("none")], startup: { kind: "harness", tool: "none" } });
+    expect(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByLabelText(new RegExp(NR_HARNESSES.STARTING_PROMPT))).not.toBeInTheDocument();
+  });
+
   it("removes the started harness with its start, announcing nothing it did not do", async () => {
     const user = userEvent.setup();
     show({ ...INTERACTIVE, tools: [harness("claude-code"), harness("codex-cli")], startup: { kind: "harness", tool: "claude-code", prompt: "p" } });
