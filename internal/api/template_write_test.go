@@ -101,6 +101,10 @@ func TestTemplateRevisionConflictChangesNothing(t *testing.T) {
 	if status, body := e.call(alice, http.MethodPut, path, `{"name":"x","document":`+templateDocBody(templateIntentEgress)+`}`); status != http.StatusBadRequest || !strings.Contains(body, `"path":"expected_revision"`) {
 		t.Errorf("update without expected_revision = %d %s", status, body)
 	}
+	// A group_id with no scope is a move attempt, refused like a scope change.
+	if status, body := e.call(alice, http.MethodPut, path, `{"name":"x","group_id":"eng","expected_revision":2,"document":`+templateDocBody(templateIntentEgress)+`}`); status != http.StatusBadRequest || !strings.Contains(body, `"path":"scope"`) {
+		t.Errorf("update with only a group_id = %d %s", status, body)
+	}
 	// The old revision stays readable and unchanged.
 	if status, body := e.call(alice, http.MethodGet, path+"/revisions/1", ""); status != http.StatusOK || decodeTemplate(t, body).Name != "mine" {
 		t.Errorf("revision 1 = %d %s", status, body)

@@ -114,7 +114,7 @@ func (s *Server) handleListWorkspaceBranches(w http.ResponseWriter, r *http.Requ
 	repo := r.URL.Query().Get("repo")
 	if !slices.Contains(repoSourceLocators(ws.Sources), repo) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceRepoUnknown,
-			fmt.Sprintf("%s is not a repository of workspace %s.", repo, ws.Name))
+			fmt.Sprintf("%s is not a repository of workspace %s.", repoRecordURL(repo), ws.Name))
 		return
 	}
 	out, err := s.listRepoBranches(r.Context(), sc, repo, runIdentitySubject(r.Context(), principalFromRequest(r)))
@@ -364,7 +364,7 @@ func (s *Server) auditBranchList(r *http.Request, workspaceID, repo string, out 
 		outcome = "failure"
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "workspace.branches.list", workspaceID, outcome, mustJSON(map[string]any{
-		"repo": repo, "credential": out.Credential, "listing": out.Listing, "reason": out.Reason,
+		"repo": repoRecordURL(repo), "credential": out.Credential, "listing": out.Listing, "reason": out.Reason,
 		"count": len(out.Branches), "truncated": out.Truncated,
 	})))
 }

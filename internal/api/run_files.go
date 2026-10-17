@@ -493,6 +493,12 @@ func parsePorcelainLine(line string) (runFileStat, bool) {
 			path = strings.TrimSpace(path[i+len(" -> "):])
 		}
 	}
+	// Porcelain quotes a path that holds a space; numstat does not, and the join is on the plain path.
+	if strings.HasPrefix(path, `"`) {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			path = unquoted
+		}
+	}
 	if code == "" || path == "" {
 		return runFileStat{}, false
 	}

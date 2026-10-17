@@ -70,18 +70,20 @@ func TestRepoCloneURL(t *testing.T) {
 		{"git@ssh.dev.azure.com:v3/org/proj/repo", "git@ssh.dev.azure.com:v3/org/proj/repo"},
 		{"ssh://git@ssh.github.com/o/r.git", "ssh://git@ssh.github.com/o/r.git"}, // ssh.<host> form ok
 		// SSH fail-closed boundary:
-		{"ssh://git@github.com:22/o/r.git", ""}, // explicit non-443 port defeats the 443 lane: fail closed
-		{"ssh://git@gitlab.com/o/r.git", ""},    // unsupported provider: fail closed
-		{"git@evil.com:o/r", ""},                // scp-form to an unsupported host: fail closed
-		{"ssh://git@host/x/y", ""},              // ssh to an unsupported host: fail closed
-		{"git+ssh://host/x/y", ""},              // non-http(s)/ssh scheme: fail closed
-		{"file:///etc/passwd", ""},              // file: fail closed
-		{"ext::sh -c whoami", ""},               // git helper transport: no "://", not scp/bare
-		{"justname", ""},                        // no separator
-		{"a/b/c", ""},                           // three segments, not a bare slug
-		{"/leading", ""},                        // empty first segment
-		{"trailing/", ""},                       // empty second segment
-		{"", ""},                                // empty
+		{"ssh://git@github.com:22/o/r.git", ""},        // explicit non-443 port defeats the 443 lane: fail closed
+		{"ssh://git@gitlab.com/o/r.git", ""},           // unsupported provider: fail closed
+		{"git@evil.com:o/r", ""},                       // scp-form to an unsupported host: fail closed
+		{"github.com:acme/app", "github.com:acme/app"}, // a userless scp-form passes verbatim, never a rewritten https path
+		{"gitlab.com:acme/app", ""},                    // a userless scp-form to an unsupported host: fail closed
+		{"ssh://git@host/x/y", ""},                     // ssh to an unsupported host: fail closed
+		{"git+ssh://host/x/y", ""},                     // non-http(s)/ssh scheme: fail closed
+		{"file:///etc/passwd", ""},                     // file: fail closed
+		{"ext::sh -c whoami", ""},                      // git helper transport: no "://", not scp/bare
+		{"justname", ""},                               // no separator
+		{"a/b/c", ""},                                  // three segments, not a bare slug
+		{"/leading", ""},                               // empty first segment
+		{"trailing/", ""},                              // empty second segment
+		{"", ""},                                       // empty
 	}
 	for _, c := range cases {
 		if got := repoCloneURL(c.in); got != c.want {

@@ -507,3 +507,17 @@ func TestRunInspect_KeptAgentStopped(t *testing.T) {
 		})
 	}
 }
+
+// Porcelain quotes a path that holds a space; the join with numstat's plain path needs it unquoted.
+func TestParsePorcelainLine_UnquotesAPathWithASpace(t *testing.T) {
+	for line, want := range map[string]string{
+		`?? "my notes.txt"`:          "my notes.txt",
+		`R  old.go -> "new name.go"`: "new name.go",
+		` M plain.go`:                "plain.go",
+		`?? "tab\there.txt"`:         "tab\there.txt",
+	} {
+		if got, ok := parsePorcelainLine(line); !ok || got.Path != want {
+			t.Errorf("%q = %q, %v; want %q", line, got.Path, ok, want)
+		}
+	}
+}

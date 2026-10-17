@@ -218,8 +218,9 @@ func repoCloneURL(slug string) string {
 		}
 		return ""
 	}
-	// scp-form user@host:path — has '@' and ':' but no scheme.
-	if strings.ContainsRune(slug, '@') && strings.ContainsRune(slug, ':') {
+	// scp-form [user@]host:path — no scheme; as git reads it, a ':' before any '/'.
+	if colon, slash := strings.IndexByte(slug, ':'), strings.IndexByte(slug, '/'); (strings.ContainsRune(slug, '@') && colon >= 0) ||
+		(colon > 0 && (slash < 0 || colon < slash)) {
 		if host, ok := sshCloneHost(slug); ok {
 			if _, ok := sshOver443Endpoint(host); ok {
 				return slug
