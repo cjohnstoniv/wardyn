@@ -49,7 +49,8 @@ import { SIGNIN } from "../../lib/sign-in-copy";
 import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useOperator, useRequestIdentity, useRole, useSecurityOperator } from "./operator-context";
-import { getAuthGeneration, isSignedOutHold, onAuthChange } from "../../lib/api/core";
+import { getAuthGeneration, isSignedOutHold, onAuthChange, setSignedOutHold } from "../../lib/api/core";
+import { announceAuthChange, onRemoteAuthChange } from "../../lib/api/auth-sync";
 import { appURL } from "../../lib/base-path";
 import { useSessionPoll } from "./use-session-poll";
 import { isSwitching } from "./console-view";
@@ -126,6 +127,9 @@ function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other
   return until > from.expiresAt ? "renewed" : "waiting";
 }
 
+/** A lapse this soon after another tab's sign-out is that sign-out. */
+const ELSEWHERE_WINDOW_MS = 30_000;
+
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
   const { principal, operatorResolved: principalResolved, authGeneration } = useRequestIdentity();
@@ -192,7 +196,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
   const succeed = React.useRef((_me: Me) => {});
   const quiet = !active;
-  const { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken: checkToken } = useSessionPoll((me) => {
+  const { status, setStatus, busy, startPoll, stopPoll, checkOnce, recheck, submitToken: checkToken } = useSessionPoll((me) => {
     if (reauth.endingSession?.()) return true;
     if (isSwitching() || (quiet && isSignedOutHold())) return false;
     if (verdict.current(me) === "waiting") {
@@ -223,6 +227,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (!principalResolved || me.principal !== principal) {
       // New Run's query names the previous person's template or run: never replay it.
       const page = location.pathname === "/runs/new" ? location.pathname : location.pathname + location.search;
+      // The page is about to be replaced: nothing of it is sent as, or to, the account that just signed in.
+      setSignedOutHold(true);
       reauth.reloadAs(roleCanReach(location.pathname, me.role) ? page : "/runs");
       return;
     }
@@ -233,6 +239,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       return;
     }
     if (quiet && (me.role !== role || me.operator !== operator || me.security_operator !== securityOperator)) {
+      setSignedOutHold(true);
       reauth.reloadAs(location.pathname + location.search);
       return;
     }
@@ -250,8 +257,40 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       document.getElementById("main-content")?.focus();
     }
     carryOn(me);
+    // DR-0020: the other tabs of this browser that are still signed out can carry on too.
+    if (reauth.phase !== "none") announceAuthChange("changed");
     reauth.setPhase("none");
   };
+
+  // DR-0020: another tab of this browser signed out, signed in or switched mode. This tab's session
+  // reads were invalidated by it (core.ts listenForOtherTabs) and, signed in, the check below asks
+  // /me who is there. Signed out, nothing asks until the person does, so ask once now: the same
+  // person back carries on, anyone else reloads, and no one is signed in on the other tab's word.
+  // `elsewhere` is whether the lapse that follows is the person's own sign-out in another tab.
+  const phaseRef = React.useRef(reauth.phase);
+  phaseRef.current = reauth.phase;
+  const heardSignOut = React.useRef(0);
+  React.useEffect(
+    () =>
+      onRemoteAuthChange((kind) => {
+        if (kind === "signed_out") heardSignOut.current = Date.now();
+        // After the whole burst of listeners, so core's invalidation does not cancel the read.
+        queueMicrotask(() => {
+          if (phaseRef.current === "dialog" || phaseRef.current === "bar") recheck();
+        });
+      }),
+    [recheck],
+  );
+  // Decided in the render that opens the lapse, so the dialog never shows the other sentence first.
+  const lapse = React.useRef({ phase: reauth.phase, elsewhere: false });
+  if (lapse.current.phase !== reauth.phase) {
+    const opening = lapse.current.phase === "none";
+    lapse.current = {
+      phase: reauth.phase,
+      elsewhere: reauth.phase !== "none" && (opening ? Date.now() - heardSignOut.current < ELSEWHERE_WINDOW_MS : lapse.current.elsewhere),
+    };
+  }
+  const elsewhere = lapse.current.elsewhere;
 
   React.useEffect(() => {
     if (!quiet) return;
@@ -471,7 +510,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{REAUTH_DIALOG.TITLE}</DialogTitle>
-            <DialogDescription>{narrowed ? REAUTH_DIALOG.ROLE_CHANGED_BODY : REAUTH_DIALOG.BODY}</DialogDescription>
+            <DialogDescription>{narrowed ? REAUTH_DIALOG.ROLE_CHANGED_BODY : elsewhere ? REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE : REAUTH_DIALOG.BODY}</DialogDescription>
           </DialogHeader>
           {narrowed ? (
             <DialogFooter>

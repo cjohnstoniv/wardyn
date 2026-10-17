@@ -12,6 +12,7 @@ import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 import { CC_ORDER, type ConfinementClass, type GovernanceChange } from "../types";
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
+import { announceAuthChange, noteIdentityRead, onRemoteAuthChange, type AuthEventKind } from "./auth-sync";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -30,10 +31,55 @@ let _unauthorized: ((refused: Refused) => void) | null = null;
 let authGeneration = 0;
 const authListeners = new Set<() => void>();
 
-/** Invalidate session reads after an auth event this tab can observe. */
-export function notifyAuthChange(): void {
+function bumpAuthGeneration(): void {
   authGeneration++;
   for (const listener of authListeners) listener();
+}
+
+/** Invalidate session reads after an auth event this tab can observe, and tell the other tabs of this
+ *  browser (auth-sync.ts): `signed_out` for a deliberate sign-out, `changed` for anything else. */
+export function notifyAuthChange(kind: AuthEventKind = "changed"): void {
+  bumpAuthGeneration();
+  announceAuthChange(kind);
+}
+
+// DR-0007: after another tab's auth event the account behind this tab's cookie may be someone else's,
+// and nothing here has asked yet. Until the shell's identity check answers, a write waits rather than
+// leave under a draft's old owner. The wait is bounded, so a check that never answers (the daemon
+// down) cannot freeze the page: past it a write goes, as it would have before this existed.
+export const IDENTITY_CHECK_WAIT_MS = 4000;
+let identityCheckUntil = 0;
+let identityCheckWaiters: Array<() => void> = [];
+
+/** Hold this tab's writes until the next identity check settles (or the bound passes). */
+export function holdWritesForIdentityCheck(): void {
+  identityCheckUntil = Date.now() + IDENTITY_CHECK_WAIT_MS;
+}
+
+/** The identity check has been answered, and acted on: held writes go on (or are refused by the signed-out hold). */
+export function identityCheckSettled(): void {
+  identityCheckUntil = 0;
+  const waiting = identityCheckWaiters;
+  identityCheckWaiters = [];
+  for (const resume of waiting) resume();
+}
+
+async function writesMayLeave(): Promise<void> {
+  const remaining = identityCheckUntil - Date.now();
+  if (remaining <= 0) return;
+  await new Promise<void>((resume) => {
+    identityCheckWaiters.push(resume);
+    setTimeout(resume, remaining);
+  });
+}
+
+/** Listen for the other tabs' auth events: invalidate this tab's session reads (the shell then asks
+ *  /me who is signed in) and hold its writes until that answers. Returns the stop function. */
+export function listenForOtherTabs(): () => void {
+  return onRemoteAuthChange(() => {
+    holdWritesForIdentityCheck();
+    bumpAuthGeneration();
+  });
 }
 
 /** Subscribe to observable auth changes without replacing another consumer. */
@@ -283,6 +329,7 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
+  if (refused.write && !endsSession) await writesMayLeave();
   if (refused.write && _signedOutHold && !endsSession) {
     _unauthorized?.(refused);
     throw new HttpError(401, "Unauthorized");
@@ -297,6 +344,8 @@ export async function wfetch(
 
   let res: Response;
   const generation = authGeneration;
+  const startedAt = Date.now();
+  let answered = false;
   try {
     res = await fetch(apiURL(path), {
       ...init,
@@ -304,6 +353,7 @@ export async function wfetch(
       credentials: "include",
       signal: deadlineSignal(init.signal, timeoutMs),
     });
+    answered = true;
   } catch (e) {
     // A caller's OWN abort stays an abort (it is their control flow, not a
     // failure); only the deadline is reported as the unreachable-daemon case.
@@ -317,8 +367,15 @@ export async function wfetch(
     }
     throw e;
   } finally {
-    if (method === "POST" && (endsSession || path === "/me/view")) notifyAuthChange();
+    if (method === "POST" && (endsSession || path === "/me/view")) {
+      bumpAuthGeneration();
+      // The other tabs hear of it only once the server has answered: a request that never got there changed nothing.
+      if (answered) announceAuthChange(endsSession ? "signed_out" : "changed");
+    }
   }
+
+  // A read of who is signed in has seen every auth event that finished before it began.
+  if (path === "/me" && method === "GET" && (res.status === 200 || res.status === 401)) noteIdentityRead(startedAt);
 
   if (res.status === 401) {
     await drainBody(res);
