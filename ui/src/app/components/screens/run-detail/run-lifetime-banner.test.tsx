@@ -456,6 +456,29 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
   });
 
+  // FR-0114 (WARDYN_HA): the replica asked may not hold the runner's connection, so it reports nothing. That is not
+  // "offline for over an hour": the banner says it cannot tell, and Revive and Extend stay, as the only way to act.
+  it("lost to an outage with the computer's connection unreported says it cannot tell, and keeps Revive, Extend and End run", async () => {
+    renderBanner(lost({ runner_online: undefined }));
+    const banner = await screen.findByTestId("run-lifetime-local-unknown");
+    expect(banner).toHaveTextContent("Wardyn can't tell from here whether laptop-7 is connected");
+    expect(banner).toHaveTextContent("this server can't say whether it is online now.");
+    expect(banner).toHaveTextContent("If you revive it while laptop-7 is out of reach, Wardyn says so.");
+    expect(banner).not.toHaveTextContent("has been offline for over an hour");
+    expect(banner).not.toHaveTextContent("You can revive it once");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Extend 1 day" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.queryByTestId("run-lifetime-local-lapse")).toBeNull();
+  });
+
+  it("an unreported connection still gives way to the late-stop row, which is evidence the stop happened", async () => {
+    listAuditMock.mockResolvedValue([lateRow(LOST_AT)]);
+    renderBanner(lost({ runner_online: undefined }));
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByTestId("run-lifetime-local-unknown")).toBeNull();
+  });
+
   it("RS4c: lost to an outage with the computer back and no late stop reports the stop, with Revive, Extend and End run", async () => {
     renderBanner(lost());
     const banner = await screen.findByTestId("run-lifetime-local-stopped");
