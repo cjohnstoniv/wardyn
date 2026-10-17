@@ -87,7 +87,7 @@
    ```
 
 7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
-8. An admin adds the runner to an organisation pool with `PUT /api/v1/runner-pools/{pool}/runners/{runner}` (`DELETE` on the same path removes it). `wardyn runner pool add` puts only remote-hosted runners in an organisation pool, not an organisation runner, and a runner serves one pool only.
+8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool, and a runner serves one pool only.
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
@@ -206,6 +206,7 @@
 | Runner offline past a proxy's deadline | That proxy exits; the run is lost `outage` | Restore runnerd; the run does not revive |
 | Proxy crashes, runs out of memory or lapses | Terminal: the pod stays `Failed`, runnerd contains the run and settles its decisions | Start a new run |
 | Relay lost | First-use approvals are denied; decisions buffer | Restore the relay Service |
+| New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed |
 | Revoked while online | The org ends the runner's runs `runner_revoked`; runnerd stops every proxy, tears down every sandbox and deletes the per-run and keystore Secrets | Reinstall with a fresh token if wanted |
 | Revoked while offline and never returning | Nothing releases the stop-proof finalizer or the policies | Follow [Revoked and gone](#revoked-and-gone) |
 | runnerd's node lost | The old pod stays Terminating and the volume stays attached | Force-delete the pod, or taint the node `node.kubernetes.io/out-of-service`; proxy deadlines bound egress meanwhile |
@@ -226,28 +227,27 @@
 - Below the floor a stop has no terminal status, so the run waits in termination unknown instead of ending.
 - A node that joins below the floor after boot is shown on the runner card.
 
-
 ## Sandbox node lost or partitioned
 
 A run on a lost node is fenced at the relay before its first delete. Both pods stay Terminating; runnerd keeps the NetworkPolicies, the per-run Secrets and the liability, and reports the run to the organisation as `ContainmentPending`. Other runs on the runner stay READY.
 
-> [!WARNING]
-> The organisation side of this runbook is not in 0.9.3. Nothing in the console or the API shows "containment pending" or "termination unknown", and there is no form or route for the "node powered off" and "no prior holder" records. Runnerd accepts them on a `stop_proxy` action's `node_record`, but nothing sends one yet.
-
 | Node state | Do |
 |---|---|
-| Powered off, confirmed out of band (provider console or management controller) | Taint it `node.kubernetes.io/out-of-service`. This releases a run whose Node object still shows the machine recorded when the run bound |
+| Powered off, confirmed out of band (provider console or management controller) | Taint it `node.kubernetes.io/out-of-service`. This releases a run whose Node object still shows the machine recorded when the run bound. If the Node object is already gone, record "Node powered off" (last bullets) |
 | Partitioned, or state unknown | Nothing destructive: no taint, no force delete. The run waits until the node returns or is confirmed off |
-| The Node object is gone, no causal association, or the node name was reused | The run waits for the record, which 0.9.3 cannot send. Runnerd keeps the fence and the policies; the pods end at their deadline |
+| Healthy node, no causal association, no status bound | Two security operators record "No prior holder", while the holder still reports the pod's terminal status. If another machine held the name, the record is "Node powered off" |
+| Node name reused | Only the two-person "Node powered off" record, covering every machine that used the name since the run bound |
 
 - The taint is read only for a run whose Node has a causal association, still shows the machine recorded at binding, and has no recorded name reuse. It is never a release for a reused name.
 - A deleted Node object is not confirmation. The record binds to the run, its pods, the node name and the machine.
 - A force delete is never evidence. Runnerd's finalizer keeps the object, and runnerd keeps the fence. Never strip `wardyn.dev/stop-proof` by hand.
-- Where another machine held the name, drain and power off the replacement, and delete its Node object, before the original machine's run can be released.
+- Where another machine held the name, drain and power off the replacement, and delete its Node object, before recording the original machine's release.
 - An anchored container whose closing list differs only in InternalIP is refused tier 1 and takes the record path. That is the safe side of a rebooted node that returns on a new address.
 - The pending run keeps its concurrency slot, and a reinstall refuses until the namespace is clean.
-
-<!-- K7-VERIFY: the org-side ContainmentPending handling, the record form and route, and the run-detail labels were not in prep/093-final 841dbea50 (grep of internal/api, internal/store, pkg, ui/src). Restore the two-person record rows once they land. -->
+- Make the record on the run's detail page (*Record the node's state*, shown to security operators while the run is held), or with `wardyn runner node-record <run-id> --attestation node_powered_off|no_prior_holder --source provider_console|management_controller|other --source-id <id>` (`POST /api/v1/runs/{id}/node-record`). Both show the machines the runner recorded and send them with the record. The admin token cannot make one.
+- The run detail's label decides the path. "Node name reused" and "No causal association" allow only the record. A run held with a causal node can also be released by the taint.
+- A record needs two security operators for either of those labels, and whenever the organisation's four-eyes rule is on; the second approves it in *Governance → Changes*. Local mode cannot show who the people are, so it refuses a two-person record. The audit row is `run.node.record`.
+- "No prior holder" is accepted only for a run with no causal association, and never after a recorded name reuse.
 
 ### Revoked and gone
 
@@ -263,7 +263,8 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 
 ## In-cluster services are unreachable
 
-- Runnerd writes a hard deny into every proxy: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver and `apiServer.peers`, and `egress.hardDenyCIDRs`.
+- Runnerd writes a hard deny into every proxy: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, `apiServer.peers` and `egress.hardDenyCIDRs`.
+- The chart adds the apiserver's own addresses, read from the `kubernetes` Service at install and upgrade.
 - The deny is checked on the name and every resolved address before the `internal_hosts` lift, so declaring a host does not help.
 - A run therefore cannot reach any in-cluster service, such as an artifact registry or a model gateway. Reach such a service by an external name or address outside the deny set, or host it outside the cluster.
 - Set `egress.hardDenyCIDRs` to the cluster's pod and service CIDRs.
@@ -274,7 +275,7 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 | An operator-authored gateway or trusted URL | Dialled by the runner path, not by agent egress, so the deny does not apply to it. An in-cluster model gateway you configure still works |
 | An upstream proxy inside the cluster | It voids this protection. A name the proxy cannot resolve locally gets only the name and suffix check, and the upstream proxy can resolve it to an in-cluster address |
 
-- Do not point `upstream_proxy` at an address inside the cluster. Runnerd does not refuse it at boot.
+- Do not point the runner's upstream proxy (`--upstream-proxy` or `WARDYN_UPSTREAM_PROXY`) at an address inside the cluster. Runnerd refuses it at boot when the address is a literal IP inside the hard deny, and names the address. A host name is not checked at boot.
 
 ## What the kind conformance run proves
 

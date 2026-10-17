@@ -2,8 +2,6 @@
 
 Status: **Draft.** Trimmed from the design's rev 15 to the decisions 0.9.3 ships, with the questions the build settled. Operators read [Organisation runners in a Kubernetes cluster](../../operations/k8s-runners.md); this note is why it is shaped that way.
 
-<!-- K7-VERIFY: checked against prep/093-final 841dbea50 and the K6 kind run (both kubelets green); the one open item is the org-side containment handling, marked below. -->
-
 ## Decisions
 
 | # | Decision | Rejected alternative |
@@ -59,7 +57,7 @@ Status: **Draft.** Trimmed from the design's rev 15 to the decisions 0.9.3 ships
 - The relay listens on the pod IP at `relay.targetPort`; the Service exposes `relay.servicePort`. A run whose control-plane URL port differs from `relay.servicePort` is refused by name.
 - Corporate CA: the bundle reaches the proxy configuration, the sandbox and the org session's HTTP client (`SystemCertPool` plus the bundle), on both substrates.
 - Recording: the per-run `record` choice is stamped on the agent pod as `wardyn.record`; `--recording-store` is the runner's ceiling. Uploads ride the relay and are stored `runner_asserted`.
-- `hard_deny` goes into every proxy configuration: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver and `apiServer.peers`, and `egress.hardDenyCIDRs`. It is checked before the `internal_hosts` lift, for agent egress only, and a refusal is audited under rule source `builtin:private-ip` (there is no `hard_deny` source). Operator-authored dial paths (the brokered model gateway, trusted URLs) do not pass through it, and an upstream proxy inside the cluster voids the protection for names it resolves itself.
+- `hard_deny` goes into every proxy configuration: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver's addresses (the chart reads them from the `kubernetes` Service at install and upgrade) and `apiServer.peers`, and `egress.hardDenyCIDRs`. It is checked before the `internal_hosts` lift, for agent egress only, and a refusal is audited under rule source `builtin:private-ip` (there is no `hard_deny` source). Operator-authored dial paths (the brokered model gateway, trusted URLs) do not pass through it, and an upstream proxy inside the cluster would void the protection for names it resolves itself, so runnerd refuses one at boot when its address is a literal IP inside the hard deny (a host name is not checked).
 
 ## Startup checks
 
@@ -107,14 +105,12 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | Tier 1 | A terminated container ID equals its anchored baseline, with a closing anchor and a post-status list. Refused on runs with unknown association |
 | Tier 2 | A causal node UID whose Node still exists with matching `machineID`, `systemUUID` and host IP |
 | Taint | `node.kubernetes.io/out-of-service`, honoured on the causal UID when the Node still shows the recorded machine and no name reuse is recorded |
-| Record | A two-person "node powered off" or "no prior holder" record, bound to the run, its pods, the node name and the machine |
+| Record | A "node powered off" or "no prior holder" record, bound to the run, its pods, the node name and the machine. It needs two people after a name reuse, without a causal association, and when four-eyes is on |
 | Pending states | `contained_agent_only` and `contained_pending_delete`; reported as `ContainmentPending`, never plain containment; NetworkPolicies held until evidence |
 
 - Name reuse is detected from the before, after, anchor and closing lists. A reuse latches a generation; only the two-person record releases such a run.
 - The unbound-pod arm (a pod deleted before it was bound) ships enabled. The kind conformance run's bind and delete race, serial and overlapping with both winning orders, passed on the 1.31 floor and on 1.35.
 - Operational threat model: this guards against honest failure, not against a holder of a node's kubelet credentials. Two kubelets under one Node name are unsupported.
-
-<!-- K7-VERIFY: in prep/093-final 841dbea50 the org side of this table is absent: no `ContainmentPending` handling, no "node powered off" form or route, no `relay_ip_fenced` run-lost reason. runnerd's side is shipped. -->
 
 ## Failure behaviour
 
@@ -127,6 +123,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | Revoked, online | `runner_revoked`; durable latch; every proxy stopped, every sandbox torn down, Secrets deleted |
 | Revoked, offline, never returns | A label-scoped cleanup runbook in a fixed order, with the finalizer in the loop |
 | Lost relay | First-use approvals denied; decisions buffer |
+| New proxy pod's IP still fenced for an earlier run | The runner refuses the create; the run fails at start with `relay_ip_fenced` |
 | Cluster API errors | Create rolls back; `Status` errors are transient; a failed caps replay blocks READY |
 
 ## Settled during the build
