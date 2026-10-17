@@ -442,7 +442,7 @@ done | sort -u |
 ```
 
 - The deeper outside reads catch an include of `refs/heads/*`, which binds no name with a `/` in it, and an exclude of `refs/heads/*/*`, which opens every two-component name.
-- The inside read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the first, because nothing two segments deep was ever excluded.
+- The inside read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the outside reads, because nothing two segments deep was ever excluded.
 - GitHub's App-permissions reference lists **both** reads under **Metadata: read** — `GET /repos/{owner}/{repo}/rules/branches/{branch}` and `GET /repos/{owner}/{repo}/rulesets/{ruleset_id}` are both rows in "Repository permissions for Metadata"; the "Administration" rows for that second path are the `PUT`, `DELETE` and `/history` variants, not the plain `GET`.
 - Metadata: read is the one permission every GitHub App holds mandatorily, so reading a ruleset back should cost no new permission grant.
 - **Unverified against a live installation**: that is the docs' claim, not a measurement, which is why every read failure grades *unknown* instead of *unconfined*.
@@ -462,7 +462,7 @@ What the check does and does not settle:
   - The field comes back (`"never"`) even though `bypass_actors` is withheld, which GitHub returns only to a caller with write access to the ruleset (and documents that).
   - **Two things remain unknown** and are not asserted: whether GitHub computes that field meaningfully for a GitHub App *installation* token, and what App permission the ruleset read needs.
   - An *unauthenticated* read omits the field entirely (measured) — so an absent field is treated as unknown, never as a pass.
-- **Branches only.** The verified ruleset targets branches, so `refs/tags/*` is not bounded by it and the check does not claim otherwise.
+- **Branches only.** The verified ruleset targets branches, so `refs/tags/*` is not bounded by it, this check does not read tag rulesets, and it does not claim otherwise.
 - **Any error grades unknown** — timeout, rate limit, permission refused, a bypass mode that could not be read — never "unconfined".
 - **`api.github.com` only**, so this does not cover GitHub Enterprise Server (neither does minting — the broker has no GHES base-URL setting).
 

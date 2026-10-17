@@ -135,7 +135,9 @@ func AdmissionGroup(ctx context.Context, key string) string {
 // castSaveAdmitWait bounds a save's wait for admission. It is longer than one
 // full hold (the upload route's 60 s read window plus the write), so a waiter
 // behind one holder is admitted; and 65 + 60 = 125 s stays under the proxy's
-// 130 s upload timeout.
+// 130 s upload timeout. One clock covers the group wait and the slot wait together, so a person's
+// second slow upload, which waits out their first and then the slot, can be refused rather than only
+// delayed.
 var castSaveAdmitWait = 65 * time.Second
 
 // castSaveWait runs each time a save finds what it needs held and is about to
