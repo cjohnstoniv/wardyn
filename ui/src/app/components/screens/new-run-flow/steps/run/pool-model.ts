@@ -81,12 +81,13 @@ export function limitsNote(allowance: PersonAllowance | undefined): string {
   return allowance.profile_name ? NR_RUN.LIMITS_NOTE(allowance.profile_name) : NR_RUN.LIMITS_NOTE_ORG;
 }
 
-/** "Set by ..." for one cell. A deployment bound has no canon sentence yet, so it says nothing. */
+/** "Set by ..." for one cell. */
 export function sourceText(source: LimitSource | undefined, allowance: PersonAllowance | undefined): string | undefined {
   switch (source) {
     case "pool": return NR_RUN.SET_BY_POOL;
     case "runner": return NR_RUN.SET_BY_RUNNERS;
     case "governance": return allowance?.profile_name ? NR_RUN.SET_BY(allowance.profile_name) : NR_RUN.SET_BY_ORG;
+    case "deployment": return NR_RUN.SET_BY_SERVER;
     default: return undefined;
   }
 }

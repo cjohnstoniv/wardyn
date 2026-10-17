@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
+import { test, expect, gotoConsole, layoutSettled, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR, REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
@@ -212,6 +212,7 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(button).toHaveText(c.label);
       await statusRefreshed;
       const dialog = page.getByRole("dialog", { name: c.dialog });
+      await layoutSettled(button);
       await button.click();
       await expect(dialog).toBeVisible({ timeout: 20_000 });
       if (c.p.kind === "bedrock_sso" || c.p.kind === "anthropic_subscription") {

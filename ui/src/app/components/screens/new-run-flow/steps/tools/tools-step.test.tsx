@@ -20,6 +20,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { checkFailureText } from "../../draft/use-intent-checks";
+import { HttpError } from "../../../../../lib/api/core";
 import { ToolsStep } from "./tools-step";
 
 const h = vi.hoisted(() => ({
@@ -200,6 +201,17 @@ describe("Tools and access step", () => {
     expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
   });
 
+  it("a first preview answered 429 says it was not checked yet, as a status and not an alert", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new HttpError(429, "slow down"), busy: false, retry } as never;
+    show();
+    expect(screen.getByText(NR_TOOLS.NOT_CHECKED)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("a refused or failed preview shows the server's sentence and a way to ask again, never an all-clear", async () => {
     const retry = vi.fn().mockResolvedValue(undefined);
     const sentence = "No sandbox image on this server includes Claude Code and Codex CLI together, so the run was not created.";
@@ -250,7 +262,7 @@ describe("Tools and access step", () => {
     // The prototype's sticky bar: Back, the count, then Review run.
     const bar = screen.getByRole("contentinfo");
     expect(bar).toHaveClass("sticky");
-    expect(bar.textContent).toMatch(new RegExp(`^${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_TOOLS.REVIEW_RUN}`));
+    expect(bar.textContent?.startsWith(`${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_TOOLS.STICKY_SPOKEN(NR_TOOLS.STICKY_ONE)}${NR_TOOLS.REVIEW_RUN}`)).toBe(true);
     expect(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }));
     expect(go).toHaveBeenCalledWith({ screen: "review", view: "pretty" });
@@ -359,6 +371,39 @@ describe("Tools and access step", () => {
     again(view);
     expect(await screen.findByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
     expect(screen.getByText(NR_TOOLS.SETUP_DONE)).toBeInTheDocument();
+  });
+
+  const SPOKEN = NR_TOOLS.STICKY_SPOKEN;
+  // The live region empties about a second after it speaks.
+  const spokenGone = (words: string) => waitFor(() => expect(screen.queryByText(SPOKEN(words))).not.toBeInTheDocument(), { timeout: 3000 });
+
+  it("announces the settled words once, then empties, and says nothing again when a recheck settles on the same words", async () => {
+    answer(SCENARIO_ACCESS.app, true);
+    const view = show();
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_ONE))).toBeInTheDocument();
+    await spokenGone(NR_TOOLS.STICKY_ONE);
+    await saveToken();
+    await waitFor(() => expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(NR_TOOLS.STICKY_ONE)).not.toBeInTheDocument();
+    answer({ ...SCENARIO_ACCESS.app, setup: [...SCENARIO_ACCESS.app.setup] }, true);
+    again(view);
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    expect(screen.queryByText(SPOKEN(NR_TOOLS.STICKY_ONE))).not.toBeInTheDocument();
+  });
+
+  it("leaves no all-clear to browse while the answer for a changed draft is out, and announces the new words when it arrives", async () => {
+    answer(SCENARIO_ACCESS.member, true);
+    const view = show();
+    expect(await screen.findByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
+    answer(SCENARIO_ACCESS.member, false);
+    again(view);
+    await waitFor(() => expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).not.toBeInTheDocument());
+    await spokenGone(NR_TOOLS.STICKY_DONE);
+    answer(SCENARIO_ACCESS.app, true);
+    again(view);
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_ONE))).toBeInTheDocument();
   });
 
   it("brings an item back with its door when the next answer still lists it as missing", async () => {

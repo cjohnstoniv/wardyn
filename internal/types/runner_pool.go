@@ -26,7 +26,7 @@ import (
 type RunnerPoolScope string
 
 const (
-	// RunnerPoolOrganization pools hold remote-hosted runners only, and have no owner.
+	// RunnerPoolOrganization pools hold remote-hosted runners and the organization's own runners, and have no owner.
 	RunnerPoolOrganization RunnerPoolScope = "organization"
 	// RunnerPoolUser pools belong to one person.
 	RunnerPoolUser RunnerPoolScope = "user"
@@ -139,7 +139,7 @@ func ValidRemoteRunnerID(id string) bool {
 }
 
 // OrgPoolSelfHostedMsg refuses a person's self-hosted runner in an organization pool.
-const OrgPoolSelfHostedMsg = "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools."
+const OrgPoolSelfHostedMsg = "Organization pools take remote-hosted runners and the organization's own runners. A person's self-hosted runner can join its owner's user pools."
 
 // UserPoolOrgRunnerMsg refuses an organization's own runner in a user pool.
 const UserPoolOrgRunnerMsg = "An organization's runner joins organization pools only."

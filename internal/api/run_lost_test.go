@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,16 +24,24 @@ type lostStore struct {
 	lapsed  bool
 	claimed bool
 	gotLife time.Duration // the life ListLapsedTokenRuns was actually called with
+	jtis    []string      // the token ids the last renewal recorded
 }
 
-func (s *lostStore) StampRunTokenRenewed(context.Context, uuid.UUID) (bool, error) {
+func (s *lostStore) StampRunTokenRenewed(_ context.Context, _ uuid.UUID, jti, prevJTI string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.run.LostAt != nil {
 		return false, nil
 	}
 	s.lapsed = false
+	s.jtis = []string{jti, prevJTI}
 	return true, nil
+}
+
+func (s *lostStore) RunTokenJTIs(context.Context, uuid.UUID) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.jtis), nil
 }
 
 func (s *lostStore) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error) {
@@ -368,7 +377,9 @@ type renewStampStore struct {
 	stampErr error
 }
 
-func (s *renewStampStore) StampRunTokenRenewed(context.Context, uuid.UUID) (bool, error) {
+func (s *renewStampStore) RunTokenJTIs(context.Context, uuid.UUID) ([]string, error) { return nil, nil }
+
+func (s *renewStampStore) StampRunTokenRenewed(context.Context, uuid.UUID, string, string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stampErr != nil {

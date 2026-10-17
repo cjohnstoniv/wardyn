@@ -34,12 +34,15 @@ function selectText(el: HTMLElement | null): void {
 export function SavedElsewhereBanner({
   documentText,
   onDiscard,
+  reloaded = false,
 }: {
   /** The WHOLE document as the editor currently holds it — what's shown here
    *  IS what Copy my changes puts on the clipboard (Q460-3), never a
    *  changed-fields-only summary. */
   documentText: string;
   onDiscard: () => void;
+  /** The screen has already reloaded the saved version, so the words say what it shows instead of asking for a reload. */
+  reloaded?: boolean;
 }) {
   const { copied, copyAsync } = useCopyToClipboard();
   const textRef = React.useRef<HTMLPreElement>(null);
@@ -55,7 +58,7 @@ export function SavedElsewhereBanner({
   return (
     <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
       <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
-      <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
+      <p className="text-body text-muted-foreground">{reloaded ? PROVIDERS_EXTRA.SAVED_ELSEWHERE_RELOADED_BODY : PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
       <pre
         ref={textRef}
         className="scroll-thin max-h-36 overflow-auto rounded-md border border-border bg-surface-2 p-2.5 font-mono text-xs text-foreground"
@@ -71,7 +74,7 @@ export function SavedElsewhereBanner({
             "save over theirs" arm — a security document is never
             last-writer-wins from this banner. */}
         <Button variant="ghost" size="sm" onClick={onDiscard}>
-          {PROVIDERS_EXTRA.DISCARD_AND_RELOAD}
+          {reloaded ? PROVIDERS_EXTRA.DISCARD_RELOADED : PROVIDERS_EXTRA.DISCARD_AND_RELOAD}
         </Button>
       </div>
     </div>

@@ -26,11 +26,13 @@ export function lifetimeText(sec: number): string {
 
 /**
  * The end a launch will give, as the server resolves it: no end when asked for and allowed, else the asked
- * lifetime (or the default when none was asked) held to the cap. Seconds, "none", or undefined when unknown.
+ * lifetime (or the default when none was asked, which may itself be no end) held to the cap. Seconds, "none", or undefined when unknown.
  */
 export function resolvedLifetime(intent: Pick<RunIntent, "ends_after_sec" | "no_end">, limits: EffectiveRunLimits | undefined): number | "none" | undefined {
   if (intent.no_end && limits?.no_end_allowed) return "none";
   const life = limits?.lifetime_sec;
+  // A default of no end, with no end asked for or refused, is what the server gives (run_end_create.go).
+  if (!intent.no_end && intent.ends_after_sec === undefined && life?.default.unlimited) return "none";
   const wanted = intent.ends_after_sec ?? (life?.default.unlimited ? undefined : life?.default.value);
   return wanted === undefined || !life || life.cap.unlimited ? wanted : Math.min(wanted, life.cap.value);
 }

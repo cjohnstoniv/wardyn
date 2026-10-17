@@ -18,6 +18,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { waitEnded } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -114,7 +115,8 @@ export function RunLifetimeBanner({
       if (res.denied_added.length > 0) toast.info(RL.revivePolicy(res.denied_added.length));
       onChanged();
     } catch (err) {
-      toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+      if (waitEnded(err)) toast.info(RL.REVIVE_STILL_STARTING);
+      else toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
     } finally {
       setAction(null);
     }

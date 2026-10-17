@@ -58,8 +58,14 @@ func (p *Proxy) redactErr(err error) string {
 		(invalid.Reason == x509.CANotAuthorizedForThisName || invalid.Reason == x509.UnconstrainedName) {
 		s = strings.ReplaceAll(s, invalid.Detail, redactedEndpoint)
 	}
+	// An error flattened to text (no %w chain) carries the same detail; blank it by its prefix.
+	s = constraintDetailRe.ReplaceAllString(s, `${1}`+redactedEndpoint)
 	return p.redactTopology(string(maskDecisionBytes([]byte(s))))
 }
+
+// constraintDetailRe matches x509.CertificateInvalidError's text for a name-constraint refusal up to the end
+// of its line, for an error whose chain redactErr cannot walk.
+var constraintDetailRe = regexp.MustCompile(`(x509: (?:a root or intermediate certificate is not authorized to sign for this name|issuer has name constraints but leaf contains unknown or unconstrained name): )[^\n]*`)
 
 // candidateAuthorityRe matches the quoted CA subject x509.UnknownAuthorityError
 // appends as its hint (its fields are unexported, so the text is all there is).

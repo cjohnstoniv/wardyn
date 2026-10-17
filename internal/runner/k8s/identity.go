@@ -49,6 +49,11 @@ func (d *Driver) runLock(id uuid.UUID) func() {
 func (d *Driver) mutate(runID uuid.UUID, f func(ev *runEvidence) (bool, error)) (*runEvidence, error) {
 	unlock := d.runLock(runID)
 	defer unlock()
+	return d.mutateLocked(runID, f)
+}
+
+// mutateLocked is mutate for a caller already holding the run's lock, who needs it held past the save.
+func (d *Driver) mutateLocked(runID uuid.UUID, f func(ev *runEvidence) (bool, error)) (*runEvidence, error) {
 	b, err := d.cfg.Evidence.LoadEvidence(runID)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: load run evidence: %w", err)

@@ -33,7 +33,8 @@ const hoursText = (sec: number): string => {
 };
 
 /** The one place a clamp's source becomes a sentence. Governance names no profile on the wire, so it reads as the organisation's. */
-function clampText(size: string, source: LimitSource | undefined, pool: string | undefined): string {
+function clampText(size: string, source: LimitSource | "policy" | undefined, pool: string | undefined): string {
+  if (source === "policy") return NR_FILES.CLAMP_POLICY(size);
   if (source === "deployment") return NR_FILES.CLAMP_SERVER(size);
   if (source === "governance") return NR_FILES.CLAMP_ORG(size);
   return pool ? NR_FILES.CLAMP_POOL(size, pool) : NR_FILES.CLAMP_SERVER(size);

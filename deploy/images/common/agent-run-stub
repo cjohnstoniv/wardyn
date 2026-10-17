@@ -16,9 +16,10 @@
 # far worse to debug than a sentence.
 set -euo pipefail
 source /usr/local/bin/agent-run-lib.sh
-# ponytail: exec task mode does no clone/credential prep beyond the git
-# rewrites below, since the probe policy never grants those; --idle (below)
-# does the full workspace prep, as the harness images do. install_mitm_ca
+# ponytail: an exec task does no workspace prep unless it was given a starting
+# folder (WARDYN_START_FOLDER, handled below); the setup connectivity probe has none
+# and its policy grants no clone or credential. --idle (below) does the full workspace
+# prep, as the harness images do. install_mitm_ca
 # IS called: it is a no-op unless dispatch delivered a WARDYN_MITM_CA_PEM bundle, and when it did (a corporate
 # CA via WARDYN_TRUSTED_CA_FILE, or intercept_tls) dispatch also pointed
 # CURL_CA_BUNDLE/SSL_CERT_FILE/REQUESTS_CA_BUNDLE at the bundle it writes —
@@ -53,6 +54,21 @@ if [[ "${1:-}" == "--idle" ]]; then
     trap 'exit 143' TERM
     trap 'exit 130' INT
     while :; do sleep 3600 & wait $! || :; done
+fi
+# An exec task with an accepted starting folder (WARDYN_START_FOLDER) runs there, after the same workspace
+# prep --idle does (artifact config and the git helper secret before the clones). Without one (the
+# connectivity probe) it runs where the launcher put it, untouched. ssh_key grants are provisioned by
+# a harness image's own agent-run, which this stub is replaced by; this image has no such function.
+if [[ "${WARDYN_TASK_MODE:-}" == "exec" && -n "${WARDYN_START_FOLDER:-}" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    install_artifact_config
+    provision_git_helper_secret
+    workdir="${HOME}/work"
+    mkdir -p "$workdir"
+    make_ephemeral_dirs; make_toolchain_dirs; trust_mounted_repos
+    dispatch_repo_clones
+    resolve_workdir
+    cd "$workdir"
 fi
 maybe_exec_task_mode "${1:-}"
 cat >&2 <<'MSG'

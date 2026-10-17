@@ -25,9 +25,10 @@ const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), 
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../checks/custom-component-dialog", () => ({
-  CustomComponentDialog: (p: { context: string; initialDraft?: { name: string; hosts: string; secrets: { secret_name: string }[] }; initialKeep?: string }) => (
+  CustomComponentDialog: (p: { context: string; onClose: () => void; initialDraft?: { name: string; hosts: string; secrets: { secret_name: string }[] }; initialKeep?: string }) => (
     <div role="dialog" aria-label="full editor">
       {p.context}
+      <button type="button" onClick={p.onClose}>close full editor</button>
       <output data-testid="carried">{JSON.stringify({ name: p.initialDraft?.name, hosts: p.initialDraft?.hosts, secrets: p.initialDraft?.secrets.map((x) => x.secret_name), keep: p.initialKeep })}</output>
     </div>
   ),
@@ -408,6 +409,13 @@ describe("Custom component", () => {
     const dialog = await open();
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.CC_MORE_OPTIONS }));
     expect(await screen.findByRole("dialog", { name: "full editor" })).toBeTruthy();
+  });
+
+  it("returns focus to the Custom component button once the full editor is closed", async () => {
+    const dialog = await open();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.CC_MORE_OPTIONS }));
+    await userEvent.click(await screen.findByRole("button", { name: "close full editor" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toHaveFocus());
   });
 
   it("carries the typed form and the save choice into the full editor (DR-0251)", async () => {

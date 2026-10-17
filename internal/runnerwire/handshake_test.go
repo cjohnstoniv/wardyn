@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,15 +64,29 @@ func TestHandshakeStoredOrgBinding(t *testing.T) {
 
 func TestHandshakeRefusesExpiredUnclaimed(t *testing.T) {
 	now := time.Now()
-	row := types.Runner{State: types.RunnerUnclaimed, CreatedAt: now.Add(-types.RunnerUnclaimedTTL)}
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"),
+		State: types.RunnerUnclaimed, CreatedAt: now.Add(-types.RunnerUnclaimedTTL)}
 	if !row.ClaimExpired(now) || row.ClaimExpired(now.Add(-time.Nanosecond)) {
 		t.Fatal("claim expiry boundary changed")
 	}
-	a, b := Loopback()
-	defer a.Close()
-	defer b.Close()
-	if _, err := AuthenticateRunner(context.Background(), a, row, "https://org.example"); !errors.Is(err, ErrAuth) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	org, run := Loopback()
+	defer run.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		defer org.Close()
+		_, err := AuthenticateRunner(ctx, org, row, "https://org.example")
+		serverErr <- err
+	}()
+	// A runner that proves its key is told why it is sent away; one that does not learns nothing.
+	_, clientErr := AuthenticateOrg(ctx, run, row.ID.String(), "https://org.example", key, nil)
+	if err := <-serverErr; !errors.Is(err, ErrAuth) {
 		t.Fatal(err)
+	}
+	if !errors.Is(clientErr, ErrGoaway) || !strings.Contains(clientErr.Error(), ReasonRegistrationLapsed) {
+		t.Fatalf("the runner was told %v, want a GOAWAY naming %s", clientErr, ReasonRegistrationLapsed)
 	}
 	row.CreatedAt = time.Time{}
 	if !row.ClaimExpired(now) {

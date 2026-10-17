@@ -58,7 +58,7 @@ func residentMintCall(t *testing.T, p *Proxy, grant uuid.UUID) *httptest.Respons
 // answer carries ExpiresAt, so a helper's cache lapses with it.
 func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 	var now atomic.Int64
-	start := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	start := time.Now().UTC()
 	now.Store(start.UnixNano())
 	ssh, pat, zero := uuid.New(), uuid.New(), uuid.New()
 	expires := start.Add(2 * time.Hour)
@@ -127,7 +127,7 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 // brokered even when a resident answer for it is configured.
 func TestBrokerMint_BrokeredRefusalPrecedesResidentAnswer(t *testing.T) {
 	var now atomic.Int64
-	now.Store(time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC).UnixNano())
+	now.Store(time.Now().UnixNano())
 	g := uuid.New()
 	p, buf, cpCalls := residentMintProxy(t, &now, []ResidentMint{
 		{GrantID: g, Kind: types.GrantGitPAT, Token: "pat-value", ExpiresAt: time.Unix(0, now.Load()).Add(time.Hour)},

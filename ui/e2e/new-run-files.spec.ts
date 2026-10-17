@@ -18,6 +18,7 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
@@ -61,7 +62,7 @@ const limitsFor = (run_type: string, capSource: string, capMib = CAP_MIB) => ({
 });
 
 /** What the server would answer for `body`: the pool's limits, the main drive's facts and the mounts it chose. */
-function preflightFor(body: Body, capSource: string, capMib = CAP_MIB) {
+function preflightFor(body: Body, capSource: string, capMib = CAP_MIB, policyMib?: number) {
   const attachments: object[] = [];
   for (const w of body.workspaces ?? []) {
     for (const r of w.repos ?? REPOS.map(({ repo }) => ({ repo }))) {
@@ -82,7 +83,7 @@ function preflightFor(body: Body, capSource: string, capMib = CAP_MIB) {
     // As the dry door draws it: the run's limits at the top level, the pool choices without limits.
     runner_pools: [{ ...POOL, availability: "available", main_drive: { enforcement: "filesystem", basis: "substrate", keep: { supported: false }, drive_mounts: true } }],
     limits: limitsFor(body.experience ?? "interactive", capSource, capMib),
-    main_drive: body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: false } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: false },
+    main_drive: policyMib ? { applied_mib: policyMib, basis: "policy", soft: false } : body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: true } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: true },
     attachments,
   };
 }
@@ -91,6 +92,8 @@ interface Opts {
   capSource?: string;
   /** The pool's disk cap in MiB; 20 GiB unless given. */
   capMib?: number;
+  /** A main-drive size the run's policy wrote, in MiB; none unless given. */
+  policyMib?: number;
   /** A branch listing; absent makes the list unavailable, so the text field shows. */
   branches?: string[];
   /** The person's drive catalogue; none unless given. */
@@ -120,7 +123,7 @@ async function stub(page: Page, opts: Opts = {}): Promise<Body[]> {
   await page.route("**/api/v1/runs/preflight", (route) => {
     const body = route.request().postDataJSON() as Body;
     sent.push(body);
-    return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool", opts.capMib) });
+    return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool", opts.capMib, opts.policyMib) });
   });
   await page.route("**/api/v1/me/drives*", (route) =>
     route.fulfill({ json: { drives: opts.drives ?? [], pool_checked: true, ...(opts.deniedBy ? { denied_by_profile: opts.deniedBy } : {}) } }),
@@ -196,6 +199,20 @@ test.describe("New Run, Files: the main drive", () => {
       await expect.poll(() => last(sent).resources?.disk_mib).toBe(CAP_MIB);
     });
   }
+
+  test("a size the run's policy wrote fills the field, caps it, and a clamp says it was the policy", async ({ page }) => {
+    const sent = await stub(page, { policyMib: 2048 });
+    await toFiles(page);
+
+    // The policy's 2 GiB, not the pool's 10 GiB default or 20 GiB cap.
+    await expect(sizeInput(page)).toHaveValue("2");
+    await expect(page.getByText(NR_FILES.UP_TO("2 GiB"))).toBeVisible();
+    await sizeInput(page).fill("9");
+    await sizeInput(page).blur();
+    await expect(sizeInput(page)).toHaveValue("2");
+    await expect(page.getByText(NR_FILES.CLAMP_POLICY("2 GiB"))).toBeVisible();
+    await expect.poll(() => last(sent).resources?.disk_mib).toBe(2048);
+  });
 
   test("a size under 0.1 GiB is shown in whole MiB and sent as typed (DR-0160)", async ({ page }) => {
     const sent = await stub(page);
@@ -433,5 +450,15 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
     await expect(dialog(page).getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("Contractors"));
     await expect(dialog(page).getByRole("radio")).toHaveCount(0);
+  });
+
+  test("a drive whose person may not run on remote-hosted runners says the profile, not the pool", async ({ page }) => {
+    await stub(page, { drives: [{ ...DRIVE, unavailable_reason: "placement_denied" }] });
+    await toFiles(page, "application");
+    await press(page, NR_FILES.ADD_ARIA);
+    await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
+    await expect(dialog(page).getByRole("radio", { name: new RegExp(`^${DRIVE.name}`) })).toBeDisabled();
+    await expect(dialog(page).getByText(NR_RUN.REASON_NOT_ALLOWED_PROFILE)).toBeVisible();
+    await expect(dialog(page).getByText(NR_FILES.NOT_IN_POOL)).toHaveCount(0);
   });
 });

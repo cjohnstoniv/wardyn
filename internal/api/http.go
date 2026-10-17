@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -753,7 +754,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// refusals into their first row plus one summary row carrying the count.
 	// Before the limiter, so the count is the true number of refusals rather than
 	// the number that happened to survive rate-limiting.
-	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr)
+	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr, audit.ProxyPeer(r.Context()))
 	// The closing streak's summary goes out FIRST, so the row order in the trail
 	// matches the order the refusals happened in (and so a test reading "the last
 	// row" still reads this request's row, not the previous streak's summary) —

@@ -64,6 +64,7 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 	list.Flags().BoolVar(&setUpHere, "set-up-here", false, "only the ones set up on this server (SET UP HERE: yes)")
 	list.Flags().BoolVar(&idsOnly, "ids", false, "print only the ids, one per line, for a script (a name can hold spaces; an id cannot)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	list.MarkFlagsMutuallyExclusive("ids", "json")
 	var showJSON bool
 	show := &cobra.Command{Use: "show <id>", Short: "Show one remote-hosted runner (admin)", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

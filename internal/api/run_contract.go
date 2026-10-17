@@ -60,12 +60,29 @@ const (
 // first. A method on Server for the reason validateRunTextFields is: the parity
 // guard reads gates as `s.<Gate>(…)` calls.
 func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
+	if refusal := runContractShapeRefusal(req); refusal != nil {
+		return refusal
+	}
+	return unappliedFieldsRefusal(req)
+}
+
+func runContractShapeRefusal(req createRunRequest) *runRefusal {
 	for _, check := range runContractShapeChecks {
 		if refusal := check(req); refusal != nil {
 			return refusal
 		}
 	}
-	return unappliedFieldsRefusal(req)
+	return nil
+}
+
+// presetContractRefusal is runContractRefusal for the preset door: the same
+// shape checks, then the unapplied fields told as "cannot be stored in a
+// preset", since no run is being created there.
+func (s *Server) presetContractRefusal(req createRunRequest) *runRefusal {
+	if refusal := runContractShapeRefusal(req); refusal != nil {
+		return refusal
+	}
+	return presetUnappliedFieldsRefusal(req)
 }
 
 // runContractShapeChecks are the contract's shape checks, in answer order. A
@@ -472,17 +489,28 @@ func builtinComponentsRefusal(req createRunRequest) *runRefusal {
 // unappliedFieldsRefusal is the stub half: every field above that changes the
 // run's posture and that no lane applies yet. Each is refused by name.
 func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
+	return unappliedFields(req, "", "so the run was not created.")
+}
+
+// presetUnappliedFieldsRefusal is unappliedFieldsRefusal told for a preset save.
+func presetUnappliedFieldsRefusal(req createRunRequest) *runRefusal {
+	return unappliedFields(req, "request.", "so it cannot be stored in a preset.")
+}
+
+// unappliedFields refuses the first unapplied field. prefix leads each path and
+// tail ends each sentence, so the create and preset doors say what each did not do.
+func unappliedFields(req createRunRequest, prefix, tail string) *runRefusal {
 	if refusal := runModeUnavailableRefusal(req); refusal != nil {
 		return refusal
 	}
 	switch {
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
+			prefix+"allowed_image: this server does not apply an image choice yet, "+tail)
 	}
 	for i, ref := range req.Components {
 		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
-			return builtinUnavailable(i, ref.Builtin)
+			return builtinUnavailable(prefix, i, ref.Builtin, tail)
 		}
 	}
 	return nil

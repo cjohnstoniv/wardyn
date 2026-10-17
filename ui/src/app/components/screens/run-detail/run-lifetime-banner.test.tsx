@@ -12,6 +12,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
+import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
@@ -35,8 +36,9 @@ vi.mock("../../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
 }));
 const toastInfoMock = vi.fn();
+const toastErrorMock = vi.fn();
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: (...a: unknown[]) => toastInfoMock(...a) },
+  toast: { error: (...a: unknown[]) => toastErrorMock(...a), success: vi.fn(), warning: vi.fn(), info: (...a: unknown[]) => toastInfoMock(...a) },
 }));
 
 const NOW = Date.now();
@@ -108,6 +110,15 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     await waitFor(() => expect(reviveRunMock).toHaveBeenCalledWith("run-1"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
+  });
+
+  it("a wait that ended before the runner answered says the runner is still starting the run, not an error", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
+    renderBanner(detail({ lost_reason: "reboot" }));
+    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("The runner is still starting this run. Check back in a minute."));
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   // F8 (PR #1317 review): one shared `busy` boolean used to relabel EVERY

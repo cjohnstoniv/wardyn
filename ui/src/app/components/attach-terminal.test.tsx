@@ -71,7 +71,7 @@ vi.mock("../lib/api/core", async (importOriginal) => ({
 // Ticket mint (owner-or-admin lane): unused by the operator/cookie-lane tests
 // below (tokenOnlyMode=false, operator=true never takes this path), stubbed
 // for the owner test that does.
-vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(async () => "ticket"), takeoverAttach: vi.fn() } }));
 
 // Fake WebSocket
 class FakeWebSocket {

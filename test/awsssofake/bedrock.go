@@ -4,6 +4,10 @@
 package awsssofake
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"hash/crc32"
 	"net/http"
 	"slices"
 	"strconv"
@@ -99,9 +103,71 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	switch rest[i+1:] {
+	case "converse-stream", "invoke-with-response-stream":
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bedrockStreamBody(rest[i+1:], model))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(bedrockStubBody))
+}
+
+// eventStreamFrame is one message of application/vnd.amazon.eventstream: a 12-byte prelude (total
+// length, headers length, CRC-32 of those eight bytes), the headers, the payload and a CRC-32 of
+// everything before it. The three headers are the ones bedrock-runtime sends on every event; each is
+// a one-byte name length, the name, type 7 (string), a two-byte value length and the value.
+func eventStreamFrame(eventType string, payload []byte) []byte {
+	var hdr bytes.Buffer
+	for _, h := range [][2]string{{":event-type", eventType}, {":content-type", "application/json"}, {":message-type", "event"}} {
+		hdr.WriteByte(byte(len(h[0])))
+		hdr.WriteString(h[0])
+		hdr.WriteByte(7)
+		_ = binary.Write(&hdr, binary.BigEndian, uint16(len(h[1])))
+		hdr.WriteString(h[1])
+	}
+	var msg bytes.Buffer
+	_ = binary.Write(&msg, binary.BigEndian, uint32(12+hdr.Len()+len(payload)+4))
+	_ = binary.Write(&msg, binary.BigEndian, uint32(hdr.Len()))
+	_ = binary.Write(&msg, binary.BigEndian, crc32.ChecksumIEEE(msg.Bytes()))
+	msg.Write(hdr.Bytes())
+	msg.Write(payload)
+	_ = binary.Write(&msg, binary.BigEndian, crc32.ChecksumIEEE(msg.Bytes()))
+	return msg.Bytes()
+}
+
+// bedrockStreamBody is the stub's answer to the two streaming operations, framed the way the real
+// service frames it, so a client's event-stream decoder has something real to read. ConverseStream
+// sends one event per step; InvokeModelWithResponseStream wraps the model's own streaming events
+// (here Anthropic's message events) as base64 in "chunk" events. Both carry bedrockStubMarker as the
+// answer text.
+func bedrockStreamBody(op, model string) []byte {
+	var out bytes.Buffer
+	if op == "converse-stream" {
+		for _, e := range [][2]string{
+			{"messageStart", `{"role":"assistant"}`},
+			{"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"` + bedrockStubMarker + `"}}`},
+			{"contentBlockStop", `{"contentBlockIndex":0}`},
+			{"messageStop", `{"stopReason":"end_turn"}`},
+			{"metadata", `{"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2},"metrics":{"latencyMs":1}}`},
+		} {
+			out.Write(eventStreamFrame(e[0], []byte(e[1])))
+		}
+		return out.Bytes()
+	}
+	for _, e := range []string{
+		`{"type":"message_start","message":{"id":"msg_stub","type":"message","role":"assistant","model":"` + model + `","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + bedrockStubMarker + `"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	} {
+		out.Write(eventStreamFrame("chunk", []byte(`{"bytes":"`+base64.StdEncoding.EncodeToString([]byte(e))+`"}`)))
+	}
+	return out.Bytes()
 }
 
 // There is deliberately NO exported BedrockCalls() accessor beside

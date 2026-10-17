@@ -162,7 +162,7 @@ describe("edit", () => {
     expect(await screen.findByRole("heading", { name: "Edit CI jobs", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Its runners allow 4 runs at once in total. A run launched past this waits for a free slot.")).toBeInTheDocument();
     expect(screen.getAllByText("Its runners allow up to 4 CPUs per run. Leave empty to use that.")).toHaveLength(1);
-    expect(screen.getByText("Organization pools take remote-hosted runners only.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("Organization pools take remote-hosted runners and the organization's own runners.", { exact: false })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p-ci", expect.objectContaining({ revision: 9, name: "CI jobs" })));
     expect(await screen.findByText("runners page")).toBeInTheDocument();
@@ -203,5 +203,16 @@ describe("edit", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("a pool with that name already exists")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+});
+
+describe("a pool that fails to load", () => {
+  it("offers Reload and Back, and Reload shows the form once the read succeeds", async () => {
+    getMock.mockRejectedValueOnce(new HttpError(500, "boom"));
+    renderAt("/account/pools/p-lap/edit", "mine");
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "← Back to My runner" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByLabelText("Name")).toHaveValue("Laptop");
   });
 });

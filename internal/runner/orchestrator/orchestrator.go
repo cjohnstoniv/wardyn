@@ -237,6 +237,8 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+var _ runner.ImageDescriber = (*Orchestrator)(nil)
+
 // DescribeImage implements runner.ImageDescriber by delegating to the first wired substrate that
 // implements it, as ImagePresent does.
 func (o *Orchestrator) DescribeImage(ctx context.Context, ref string) (string, error) {

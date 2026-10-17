@@ -43,6 +43,10 @@ func TestRunnerOrgCommands(t *testing.T) {
 		trust.TrustClass != types.RunnerTrustManagedDevice || trust.Reason != "enrolled in device management" || !strings.Contains(out, "trust class is managed_device") {
 		t.Fatalf("trust: %v %+v %+v\n%s", err, req, trust, out)
 	}
+	if err := execCmd(t, "runner", "trust", id.String(), "trusted", "--reason", "r", "--url", tsrv.URL, "--token", "t"); err == nil ||
+		!strings.Contains(err.Error(), "personal or managed_device") || strings.Contains(err.Error(), "or org_cluster") {
+		t.Errorf("an unknown trust class was refused with %v, want personal or managed_device only", err)
+	}
 	n := len(tsrv.reqs)
 	for _, bad := range [][]string{
 		{"claim-org", id.String()},

@@ -234,6 +234,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		if cfg.Inactive == nil {
 			cfg.Inactive = s.runnerOwnerInactive
 		}
+		if cfg.Disabled == nil {
+			cfg.Disabled = func(ctx context.Context) bool { return errors.Is(s.runnersEnabled(ctx), errRunnersDisabled) }
+		}
 		if cfg.ProxyImage == nil {
 			cfg.ProxyImage = s.runnerProxyImage
 		}

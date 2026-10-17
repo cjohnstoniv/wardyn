@@ -321,7 +321,7 @@ func TestUploadRecording_FailureRowSurvivesAHungUpClient(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/internal/recordings/"+runID.String(), strings.NewReader("x")).WithContext(ctx)
 	req.Host, req.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
 	req.Header.Set("Authorization", "Bearer "+h.mintRunToken(t, runID))
-	h.srv.Handler().ServeHTTP(deadlineRecorder{httptest.NewRecorder()}, req)
+	panicFails(t, h.srv.Handler()).ServeHTTP(deadlineRecorder{httptest.NewRecorder()}, req)
 	if event := lastAuditEvent(t, h.audit.snapshot(), "recording.upload"); event.Outcome != "failure" {
 		t.Fatalf("upload outcome = %q, want failure", event.Outcome)
 	}

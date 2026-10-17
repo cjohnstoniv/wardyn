@@ -133,9 +133,11 @@ wardyn workspace build <workspace-id> --refresh
 | Registry or BYOI base | Pulls the base again (`FinalizeBase` with `forcePull`) and wraps it by digest. A pull failure fails the refresh and the kept image stays. The previous base stays on the host |
 | Repo's own devcontainer | Rebuilds the repository at its ref |
 
+- **Local-only base.** A base that exists only on this host has no registry copy to pull, so its refresh always fails; build without a refresh to wrap the local image.
 - **Build, then swap.** The new image builds under its own tag. The workspace row moves to it only if it still names the image the requester saw (a compare-and-swap in `commitBuiltImage`).
 - **Swap applied.** The old image is removed (`removeStaleImage`).
 - **Swap lost.** Another build replaced the image first. The refresh removes its own tag and reports `failed`, with Detail `superseded: another build replaced this workspace's image while the refresh ran` (`supersededDetail`). A plain build from the build button that loses the swap does the same.
+- **Swap lost at a run's launch.** The run uses the image its launch built, so that image keeps its tag; remove it by hand once the run has ended.
 - **Build failure.** The kept image and its record stay, and `GET …/build` reports `failed`.
 - Each finished refresh writes one `workspace.image.refresh` audit row naming the requester, the lane, both image IDs and record hashes, and `changed`, the inputs whose digest or version moved. A failed one carries `reason` `superseded` or `build_failed` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 

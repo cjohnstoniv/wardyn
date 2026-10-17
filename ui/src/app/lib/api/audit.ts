@@ -387,6 +387,7 @@ export const audit = {
   async dropPartition(partition: string, digest: string): Promise<AuditRetentionDrop> {
     const res = await wfetch("/audit/retention/drop", {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({ partition, digest }),
     });
     return asJson<AuditRetentionDrop>(res);

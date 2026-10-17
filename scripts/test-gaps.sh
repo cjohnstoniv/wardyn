@@ -45,12 +45,15 @@
 #   scripts/test-gaps.sh --self-test
 # Defaults:
 #   union: test/reports/go/union/coverage-func.txt   (written by cover-union.sh)
-#   pg:    test/reports/go/pg/coverage-func.txt       (written by `make test-report-pg`)
+#   pg:    test/reports/go/pg/coverage-func.txt       (written by `make test-report-pg`), or, when only
+#          the shards ran, the per-function best of every test/reports/go/pg*/coverage-func.txt (`make
+#          test-report-pg-api` / `-store`, local only: ci.yml's shards run with coverage off)
 #   out:   docs/TEST-GAPS.md
 #
 # Refresh:
 #   make cover-check        # regenerate the union profile (both shipped builds)
 #   make test-report-pg     # optional (needs WARDYN_TEST_PG): refresh the PG cross-check
+#                           # (or the shard targets test-report-pg-api / test-report-pg-store)
 #   ./scripts/test-gaps.sh  # regenerate docs/TEST-GAPS.md
 set -euo pipefail
 
@@ -197,6 +200,17 @@ classify() {
   ' "$pg" "$union"
 }
 
+# merge_func_profiles: several `go tool cover -func` outputs (one per PG shard, each listing every func of
+# the packages it instrumented) as one, keeping each func's highest percentage: a func is PG-covered when
+# any shard covered it. First-seen order, so the per-key ordinals classify() matches on stay aligned.
+merge_func_profiles() {
+  awk '$1 == "total:" { next }
+       { k = $1 " " $2; pct = $NF; sub(/%/, "", pct)
+         if (!(k in best)) { order[++n] = k; best[k] = pct; line[k] = $0 }
+         else if (pct + 0 > best[k] + 0) { best[k] = pct; line[k] = $0 } }
+       END { for (i = 1; i <= n; i++) print line[order[i]] }' "$@"
+}
+
 self_test() {
   local d; d="$(mktemp -d)"; trap 'rm -rf "$d"' RETURN
   # Union: three exported 0.0% funcs across a PG pkg, a docker pkg, and a plain pkg,
@@ -265,6 +279,17 @@ self_test() {
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
     exit 1
   fi
+  # Two PG shards: each lists the same func, covered by one and not the other. The merge keeps the covered
+  # one and the order, so the func still classifies as PG-gated.
+  printf '%sinternal/store/store.go:41:\tCreateRun\t0.0%%\n%sinternal/store/store.go:80:\tUpdateRunState\t55.0%%\ntotal:\t(statements)\t10.0%%\n' "$MODULE" "$MODULE" > "$d/shard1"
+  printf '%sinternal/store/store.go:41:\tCreateRun\t100.0%%\n%sinternal/store/store.go:80:\tUpdateRunState\t0.0%%\n' "$MODULE" "$MODULE" > "$d/shard2"
+  got="$(merge_func_profiles "$d/shard1" "$d/shard2")"
+  want="$(printf '%sinternal/store/store.go:41:\tCreateRun\t100.0%%\n%sinternal/store/store.go:80:\tUpdateRunState\t55.0%%' "$MODULE" "$MODULE")"
+  if [ "$got" != "$want" ]; then
+    echo "test-gaps: self-test FAIL (shard merge)" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    exit 1
+  fi
   echo "test-gaps: self-test PASS"
 }
 
@@ -272,6 +297,7 @@ if [ "${1:-}" = "--self-test" ]; then self_test; exit 0; fi
 
 UNION="${1:-test/reports/go/union/coverage-func.txt}"
 PG="${2:-test/reports/go/pg/coverage-func.txt}"
+PG_LABEL="$PG"
 OUT="${3:-docs/TEST-GAPS.md}"
 
 if [ ! -f "$UNION" ]; then
@@ -279,7 +305,16 @@ if [ ! -f "$UNION" ]; then
   echo "  run: make cover-check   (writes test/reports/go/union/coverage-func.txt)" >&2
   exit 2
 fi
-PG_ARG="$PG"; PG_NOTE="cross-checked against the Postgres lane (\`$PG\`)"
+# No pg file given or written, but the shards' (make test-report-pg-api / -store): use the best of them.
+if [ -z "${2:-}" ] && [ ! -f "$PG" ]; then
+  shards=(test/reports/go/pg*/coverage-func.txt)
+  if [ -f "${shards[0]}" ]; then
+    PG="$(mktemp)"; trap 'rm -f "$PG"' EXIT
+    merge_func_profiles "${shards[@]}" > "$PG"
+    PG_LABEL="test/reports/go/pg*/coverage-func.txt"
+  fi
+fi
+PG_ARG="$PG"; PG_NOTE="cross-checked against the Postgres lane (\`$PG_LABEL\`)"
 if [ ! -f "$PG" ]; then
   PG_ARG=""; PG_NOTE="**PG lane profile absent** — PG-gated funcs could not be proven and fall into \"Untested\" (run \`make test-report-pg\` to separate them)"
 fi

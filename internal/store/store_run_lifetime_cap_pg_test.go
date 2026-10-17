@@ -112,3 +112,32 @@ func TestPG_ListRunsFiltered_NoEndKeepsLiveRunsWithNoEnd(t *testing.T) {
 		t.Errorf("unfiltered = %d rows, %v; want 4", len(all), err)
 	}
 }
+
+// TestPG_ListRunsFiltered_NoEndLeavesOutLeaseEndedRuns: a RUNNING run whose lease ended (lost_reason
+// 'ended') is not live, so "No end" does not list it, as the live-runs count does not.
+func TestPG_ListRunsFiltered_NoEndLeavesOutLeaseEndedRuns(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "no-end-ended-" + uuid.NewString()
+
+	live := newFilterRun(owner, types.RunRunning)
+	ended := newFilterRun(owner, types.RunRunning)
+	for _, r := range []types.AgentRun{live, ended} {
+		if _, err := pg.CreateRun(ctx, r); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		id := r.ID
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_reason = 'ended' WHERE id = $1`, ended.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, NoEnd: true}, store.Page{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != live.ID {
+		t.Errorf("no_end filter returned %d rows %v; want only the run whose lease has not ended", len(got), got)
+	}
+}

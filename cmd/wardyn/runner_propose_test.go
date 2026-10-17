@@ -116,6 +116,14 @@ func TestRunnerRemoteListIDsAndSetUpHere(t *testing.T) {
 	}
 }
 
+// --ids prints ids and --json prints JSON: asking for both is refused, not answered with one of them.
+func TestRunnerRemoteListIDsWithJSONIsRefused(t *testing.T) {
+	srv := newCmdServer(t, http.StatusOK, []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "docker"}}})
+	if err := execCmd(t, "runner", "remote", "list", "--ids", "--json", "--url", srv.URL, "--token", "t"); err == nil {
+		t.Error("--ids with --json was accepted")
+	}
+}
+
 // `wardyn runner list --no-limits` keeps only the self-hosted runners that take no run until limits are
 // set, and skips the remote-hosted section (`wardyn runner remote list --no-limits` is that list).
 func TestRunnerListNoLimits(t *testing.T) {

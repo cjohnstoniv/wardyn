@@ -10,7 +10,7 @@
 
 - The policy a run *started from* and the one it *got* differ.
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
-- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
+- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
@@ -67,6 +67,7 @@
 - L2 egress allowlist: exact hosts or `*.` wildcards.
 - An exact host covers only itself, so a deny names every host a vendor answers on.
 - To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
+- A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
 - To wall off Azure DevOps, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; a deny on `dev.azure.com` alone leaves `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` service hosts reachable with the person's credential.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
@@ -552,7 +553,7 @@ What the check does and does not settle:
 > **Every scope in that table is HOST-wide — on every port.**
 >
 > - The approval a human is shown carries a bare host and nothing else:
->   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host` and a `mode`, no port;
+>   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host`, a `mode` and `hold_seconds` (the wait the proxy resolved), no port;
 >   - the proxy's first-use cache is keyed on that same bare host;
 >   - and the durable `always` write goes through `hostrules.ValidApprovedHost`, which refuses a port by construction.
 > - So an approval raised by a CONNECT to `example.org:443` also releases `example.org:22`, `:5432` and every other port for whatever reach the scope names.

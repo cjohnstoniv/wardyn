@@ -320,4 +320,25 @@ if (cd "$r7" && make -f "$ROOT/Makefile" dco DCO_RANGE="$pr7_base..$pr7_head" >/
 	fail "case 7 (same range without ^origin/main) expected non-zero exit, got 0"
 fi
 
+# ── case 8: a created or force-pushed release branch is checked in full ───
+# release-branch-checks.yml falls back to a range of its own when the push has no usable "before"
+# sha. It must cover every commit the branch holds that main does not, not the tip alone: an
+# unsigned commit under a signed tip is caught.
+RB_YML="$ROOT/.github/workflows/release-branch-checks.yml"
+rb_cmd="$(grep -E 'make dco DCO_RANGE="[^$"]*"' "$RB_YML" | head -1 || true)"
+[ -n "$rb_cmd" ] || fail "case 8: no fixed-range 'make dco' fallback in release-branch-checks.yml"
+range8="$(printf '%s\n' "$rb_cmd" | sed -n 's/.*DCO_RANGE="\([^"]*\)".*/\1/p')"
+r8="$TMP/case8"
+mkrepo "$r8"
+git -C "$r8" checkout -q -b release/x
+echo r1 >"$r8/r.txt"; git -C "$r8" add r.txt
+git -C "$r8" commit -q -m "release: unsigned change"
+echo r2 >>"$r8/r.txt"
+git -C "$r8" commit -q -am "release: signed tip" -s
+main8="$(git -C "$r8" rev-parse main)"
+range8="${range8//origin\/main/$main8}"
+if (cd "$r8" && make -f "$ROOT/Makefile" dco DCO_RANGE="$range8" >/dev/null 2>&1); then
+	fail "case 8 (unsigned commit under a signed release-branch tip, range '$range8') expected non-zero exit, got 0"
+fi
+
 echo "All DCO cases behaved as expected."

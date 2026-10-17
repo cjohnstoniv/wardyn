@@ -137,6 +137,7 @@ export const workspaces = {
   async setApprovedEgress(id: string, domains: string[]): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/approved-egress`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify({ domains }),
     });
     return asJson<Workspace>(res);
@@ -153,6 +154,7 @@ export const workspaces = {
   async setDeniedEgress(id: string, domains: string[]): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/denied-egress`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify({ domains }),
     });
     return asJson<Workspace>(res);
@@ -168,6 +170,7 @@ export const workspaces = {
   async setRequirements(id: string, requirements: WorkspaceRequirementsMap): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/requirements`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify({ requirements }),
     });
     return asJson<Workspace>(res);
@@ -192,6 +195,7 @@ export const workspaces = {
   async setWorkspaceLLMCred(id: string, cred: WorkspaceLLMCred): Promise<Workspace> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/llm-cred`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify(cred),
     });
     return asJson<Workspace>(res);
@@ -237,7 +241,7 @@ export const workspaces = {
     const launchMs = await launchDeadline();
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/record`,
-      { method: "POST", body: JSON.stringify({ name, confined }) },
+      { method: "POST", asPerson: true, body: JSON.stringify({ name, confined }) },
       launchMs,
     );
     if (res.status === 202) {
@@ -272,7 +276,7 @@ export const workspaces = {
   async promoteRecordEgress(id: string, task: string, hosts: string[]): Promise<Workspace> {
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/record/${encodeURIComponent(task)}/promote-egress`,
-      { method: "POST", body: JSON.stringify({ hosts }) },
+      { method: "POST", asPerson: true, body: JSON.stringify({ hosts }) },
     );
     return asJson<Workspace>(res);
   },

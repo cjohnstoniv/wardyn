@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -78,5 +79,30 @@ func TestHardDenyAbsentLeavesGuardUnchanged(t *testing.T) {
 	}
 	if _, err := compileHardDeny(&HardDenyConfig{Suffixes: []string{" "}}); err == nil {
 		t.Fatal("empty suffix accepted")
+	}
+}
+
+// TestHardDenyRefusesAnUpstreamProxyInsideIt: an upstream proxy named by an address in the deny set is
+// refused at boot; one outside it, a name, or no deny set is accepted.
+func TestHardDenyRefusesAnUpstreamProxyInsideIt(t *testing.T) {
+	deny := &HardDenyConfig{CIDRs: []string{"10.96.0.0/12"}, Hosts: []string{"10.40.1.9"}}
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		bad  bool
+	}{
+		{"in a CIDR", Config{HardDeny: deny, UpstreamProxyURL: "http://10.96.4.2:3128"}, true},
+		{"a listed host", Config{HardDeny: deny, UpstreamProxyURL: "http://user:pw@10.40.1.9:3128"}, true},
+		{"outside the set", Config{HardDeny: deny, UpstreamProxyURL: "http://192.0.2.7:3128"}, false},
+		{"a name", Config{HardDeny: deny, UpstreamProxyURL: "http://proxy.corp.example:3128"}, false},
+		{"no deny set", Config{UpstreamProxyURL: "http://10.96.4.2:3128"}, false},
+	} {
+		err := tc.cfg.validateHardDeny()
+		if (err != nil) != tc.bad {
+			t.Errorf("%s: %v, want refusal %v", tc.name, err, tc.bad)
+		}
+		if err != nil && strings.Contains(err.Error(), "pw") {
+			t.Errorf("%s: the refusal echoed the credential: %v", tc.name, err)
+		}
 	}
 }

@@ -311,6 +311,10 @@ export function launchDeadlineMs(
 export const TIMEOUT_STATUS = 0;
 const TIMEOUT_MESSAGE = "Could not reach the control plane.";
 
+// waitEnded: the wait ended with no answer, so the call may still be running on the server. A revive's
+// wait is the 60s default, shorter than the server's bound on one (reviveRunnerTimeout, 3 minutes, run_placement_lease.go).
+export const waitEnded = (e: unknown): boolean => e instanceof HttpError && e.status === TIMEOUT_STATUS;
+
 // deadlineSignal composes the caller's signal (if any) with our timeout, so a
 // caller-driven abort still works and the deadline still applies.
 function deadlineSignal(caller: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {

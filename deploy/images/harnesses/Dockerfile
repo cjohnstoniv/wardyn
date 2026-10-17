@@ -79,6 +79,8 @@ RUN set -eu; \
     gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc; \
     rm -rf /tmp/microsoft.asc "$GNUPGHOME"; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" > /etc/apt/sources.list.d/azure-cli.list; \
+    # Microsoft's repository is trusted for azure-cli only, never for any other package name.
+    printf 'Package: *\nPin: origin packages.microsoft.com\nPin-Priority: -1\n\nPackage: azure-cli\nPin: origin packages.microsoft.com\nPin-Priority: 500\n' > /etc/apt/preferences.d/azure-cli; \
     apt-get update; apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~bookworm"; \
     [ "$had_gpg" = 1 ] || apt-get purge -y --auto-remove gnupg; \
     [ "$had_wget" = 1 ] || apt-get purge -y --auto-remove wget; \

@@ -77,6 +77,16 @@ describe("Templates screen: rows", () => {
     expect(screen.getByRole("region", { name: T.LIST_ARIA })).toBeInTheDocument();
   });
 
+  it("says so when the sign-in cannot confirm the person's groups, even over an empty list, and says nothing otherwise", async () => {
+    const view = mount({ templates: [], publish: { ...MEMBER, groups_unverified: true } });
+    expect(await screen.findByText(T.GROUPS_UNVERIFIED)).toBeInTheDocument();
+    expect(screen.getByText(T.EMPTY_TITLE)).toBeInTheDocument();
+    view.unmount();
+    mount({ templates: [MINE], publish: MEMBER });
+    await screen.findByText(MINE.name);
+    expect(screen.queryByText(T.GROUPS_UNVERIFIED)).toBeNull();
+  });
+
   // DR-0057: teal is for the one primary action, so a row's Use is an outline
   // button and the "Only me" chip is as neutral as the other scopes.
   it("keeps a single teal action: Use is outline and the Only me chip is neutral", async () => {

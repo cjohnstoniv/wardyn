@@ -152,6 +152,7 @@ export const credentials = {
   async erasePerson(principal: string, scopes: ErasureScope[]): Promise<PersonErasureResult> {
     const res = await wfetch(`/people/${encodeURIComponent(principal)}/erasure`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({ scopes }),
     });
     if (res.status === 500) {

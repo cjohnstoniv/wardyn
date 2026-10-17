@@ -108,6 +108,8 @@ func (d *Driver) archRunnable(ctx context.Context, ref string, info image.Inspec
 		eng, ref, img, eng)}
 }
 
+var _ runner.ImageDescriber = (*Driver)(nil)
+
 // DescribeImage implements runner.ImageDescriber over the engine's local image store.
 func (d *Driver) DescribeImage(ctx context.Context, ref string) (string, error) {
 	res, err := d.cli.ImageInspect(ctx, ref)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -127,11 +128,15 @@ func (d placementDemand) withFit(t poolTarget) poolTarget {
 // size that runner takes whole. A runner whose per-run limit holds everything the run asks for (ask; a
 // 0 is not asked) is preferred, so an ask one runner can take is never cut for another's sake; among
 // those, or among all when none does, the fold takes the largest by CPU, memory, then disk. Placement
-// then keeps only candidates whose per-run limit holds the applied size.
+// then keeps only candidates whose per-run limit holds the applied size. A runner with room now beats
+// a full one, so a run that names no size is not cut to a busy large runner while a smaller one idles.
 func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runnerpool.RunnerCapacity {
+	roomy := slices.ContainsFunc(fit, func(t poolTarget) bool {
+		return t.limits != nil && !t.full && (pin == "" || t.id == pin)
+	})
 	var all, whole []runnerpool.RunnerCapacity
 	for _, t := range fit {
-		if t.limits == nil || (pin != "" && t.id != pin) {
+		if t.limits == nil || (pin != "" && t.id != pin) || (roomy && t.full) {
 			continue
 		}
 		p := t.limits.PerRun

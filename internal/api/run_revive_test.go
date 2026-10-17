@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -678,6 +679,56 @@ func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
 	if _, verr := f.srv.cfg.Identity.Verify(ctx, old.Token, internalAudience); verr != nil {
 		t.Errorf("the retiring token no longer verifies (%v); want it left alone — the old proxy it belongs to is still running", verr)
 	}
+}
+
+// TestRevive_RevokesTheTokensTheReplacedProxyRenewed: a token the replaced proxy renewed since it started stays
+// valid until its own expiry unless the revive revokes it. The ids the last renewal recorded (the minted token and
+// the one it presented) are revoked once the old proxy is replaced, never on the kept-proxy arm, and the fresh
+// token is never among them.
+func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
+	mint := func(t *testing.T, f *reviveFixture) (identity.RunIdentity, identity.RunIdentity) {
+		t.Helper()
+		a, err := f.srv.cfg.Identity.MintRunIdentity(context.Background(), f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := f.srv.cfg.Identity.MintRunIdentity(context.Background(), f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.ls.jtis = []string{a.JTI, b.JTI}
+		return a, b
+	}
+	verifies := func(f *reviveFixture, id identity.RunIdentity) bool {
+		_, err := f.srv.cfg.Identity.Verify(context.Background(), id.Token, internalAudience)
+		return err == nil
+	}
+
+	t.Run("replaced proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		renewed, presented := mint(t, f)
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive: code %d, want 200", code)
+		}
+		if verifies(f, renewed) || verifies(f, presented) {
+			t.Errorf("a token the replaced proxy renewed still verifies (minted %v, presented %v)", verifies(f, renewed), verifies(f, presented))
+		}
+		if _, verr := f.srv.cfg.Identity.Verify(context.Background(), f.newConfig(t).RunToken, internalAudience); verr != nil {
+			t.Errorf("the fresh token does not verify: %v", verr)
+		}
+	})
+	t.Run("kept proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.st.run.LostAt, f.st.run.LostReason = nil, ""
+		renewed, presented := mint(t, f)
+		f.rr.replaceErr = errors.New("docker: inspect agent for its proxy address: boom") // old proxy untouched
+		if code := f.revive(t); code != http.StatusBadGateway {
+			t.Fatalf("revive: code %d, want 502", code)
+		}
+		if !verifies(f, renewed) || !verifies(f, presented) {
+			t.Error("a token the kept proxy renewed was revoked; the proxy still runs on it")
+		}
+	})
 }
 
 // TestReviveRun_AgentStatusProbeErrorRefuses is the Minor fix (Fable

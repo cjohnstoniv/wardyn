@@ -157,7 +157,8 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const baseline = React.useMemo(() => JSON.stringify(policyFrom(draftFrom(stored), stored)), [stored]);
   const dirty = JSON.stringify(policy) !== baseline && JSON.stringify(policy) !== submittedJson;
   const invalid = editable.some((c) => draft[c].mode === "runner_resident" && POSTURE_OSES.some((os) => versionInvalid(draft[c].os[os])));
-  useUnsavedGuard("runner-credentials", dirty, () => JSON.stringify(policy, null, 2));
+  // The refused draft lives on in the saved-elsewhere banner after the reload made the editor clean: leaving drops it too.
+  useUnsavedGuard("runner-credentials", dirty || savedElsewhere !== null, () => savedElsewhere ?? JSON.stringify(policy, null, 2));
 
   React.useEffect(() => {
     if (outcome?.kind === "refused") refusedRef.current?.focus();
@@ -241,7 +242,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
           </div>
 
           <div className="flex flex-col gap-2 px-6 py-4">
-            {savedElsewhere !== null && <SavedElsewhereBanner documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
+            {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
             {outcome?.kind === "submitted" && <SubmittedNote />}
             {outcome?.kind === "refused" && (
