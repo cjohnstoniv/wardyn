@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pkg postinstall (runs as root): link the CLI onto PATH and load the managed agent into the logged-in
+# person's session now, rather than at their next login. Nobody logged in is fine: launchd loads
+# /Library/LaunchAgents at login. The agent stays idle until the person is registered.
+set -u
+mkdir -p /usr/local/bin
+ln -sf /usr/local/wardyn/bin/wardyn-runnerd /usr/local/bin/wardyn-runnerd
+uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
+if [ "$uid" != 0 ]; then
+  launchctl bootstrap "gui/$uid" /Library/LaunchAgents/com.wardyn.runnerd.managed.plist >/dev/null 2>&1 || true
+fi
+exit 0

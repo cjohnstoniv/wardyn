@@ -47,6 +47,12 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
+		// The Docker client reads DOCKER_HOST itself; a profile's DockerHost outranks the environment.
+		if h := managedPref("DockerHost"); h != "" {
+			if err := os.Setenv("DOCKER_HOST", h); err != nil {
+				return err
+			}
+		}
 		if stateDir == "" {
 			var err error
 			stateDir, err = runneridentity.DefaultDir()
@@ -90,14 +96,17 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		}
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)
 	}
-	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration")
+	// A profile may supply the organisation (the OrgURL managed preference); the flag is required only without one.
+	cmd.Flags().StringVar(&org, "org", managedPref("OrgURL"), "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
-	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", os.Getenv("WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
-	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", os.Getenv("WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
-	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
-	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
-	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
-	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
-	_ = cmd.MarkFlagRequired("org")
+	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", setting("ProxyImage", "WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
+	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", setting("RelayListen", "WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
+	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", setting("RelayHostTarget", "WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
+	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(setting("InternalNetwork", "WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
+	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", setting("TrustedCAFile", "WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
+	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(setting("RecordingStore", "WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
+	if org == "" {
+		_ = cmd.MarkFlagRequired("org")
+	}
 	return cmd
 }

@@ -112,6 +112,44 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - Without the `self_host_runner` permission, `POST /api/v1/me/runners/tokens` answers `403` `capability_feature` (target `me.runners.tokens`). Existing runners and claims keep working.
 - Commands, MDM flow and the claim refusal causes: [Set up a runner](../runner-registration.md#set-up-a-runner).
 
+## Installing with a macOS package and MDM
+
+- Every release carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd`, and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
+- The package installs the binary and a LaunchAgent. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
+- **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click: right-click the file, choose **Open**, then **Open** again. MDM-pushed installs are not blocked. Signing and notarization turn on in the release workflow when the maintainers add the Apple Developer ID secrets; nothing here changes then.
+
+| Installed path | What it is |
+|---|---|
+| `/usr/local/wardyn/bin/wardyn-runnerd` | the runner (linked to `/usr/local/bin/wardyn-runnerd`) |
+| `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
+| `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
+| `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
+
+1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
+2. Push `wardyn-runnerd.pkg` with the same MDM.
+3. Deliver each person's registration token to a file only they can read ([Claiming a runner](#claiming-a-runner), step 2).
+4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
+5. The person claims the runner as usual.
+
+- **Without MDM** install the package, then run `wardyn-runnerd setup --org <url> --token-file <file>`. `setup` writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent then stays idle, so one runner never runs twice.
+- Logs go to `~/Library/Logs/wardyn/runnerd.log` either way.
+
+### Managed preferences
+
+- The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`.
+- `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes. An empty key is unset.
+
+| Key | Same as | Notes |
+|---|---|---|
+| `OrgURL` | `--org` | required; the organisation's public HTTPS URL |
+| `ProxyImage` | `--proxy-image` | an image pin; left out, the release image matching the binary |
+| `RelayListen` | `--relay-listen` | left out, found by a probe container |
+| `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
+| `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
+| `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
+| `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
+| `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
+
 ## Offline and revocation
 
 | Situation | Behaviour |

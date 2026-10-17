@@ -10,7 +10,7 @@
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
 # expected assets are one sbom-<image>.cdx.json per image, every name on the release-assets job's `for want in`
-# list, and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
+# list (that list includes the macOS runner package, wardyn-runnerd.pkg, which the release's runner-pkg job builds on every release), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
 # Every image index must also contain linux/amd64 and linux/arm64; a missing platform fails with the image name.
 # WSL law: an empty DOCKER_CONFIG so the desktop credential helper cannot break anonymous pulls of public packages.
 # Exit status = the number of failures (capped at 255).

@@ -31,6 +31,7 @@ bin="${dir}/bin"; mkdir -p "${bin}"
 WANT="$(sed -n '/for want in/,/; do/p' "${RELEASE_YML}" | sed -e 's/.*for want in//' -e 's/; do.*//' -e 's/\\$//' | tr -s ' \n' '\n\n' | grep .)"
 IMAGES="$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "${RELEASE_YML}" | awk '{print $3}' | sort -u)"
 [ -n "${WANT}" ] && [ -n "${IMAGES}" ] || fail "could not derive the image/asset lists from release.yml"
+grep -qx 'wardyn-runnerd.pkg' <<<"${WANT}" || fail "the macOS runner package is not on release.yml's required-asset list, so verify-release would not check it"
 printf '%s\n' "${WANT}" > "${dir}/want.txt"; printf '%s\n' "${IMAGES}" > "${dir}/images.txt"
 
 cat > "${bin}/cosign" <<'STUB'
