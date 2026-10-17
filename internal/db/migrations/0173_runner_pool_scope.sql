@@ -24,7 +24,8 @@
 -- It runs once: a schema whose members already name remote_runner_id has nothing left to convert.
 DO $$
 BEGIN
-IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = (SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                                      WHERE c.oid = 'runner_pool_members'::regclass)
                AND table_name = 'runner_pool_members' AND column_name = 'executor_id') THEN
     RETURN;
 END IF;
