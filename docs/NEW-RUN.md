@@ -137,6 +137,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Custom component** | Hosts and a secret bundled for reuse. Disabled when your organisation does not let you define components |
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.
+- A repository whose token or key lane the run drops reads **Needs setup**, with "No credential is set up for this repository, so the run starts without one." (`repo_no_credential`) under it.
 
 ## Review
 

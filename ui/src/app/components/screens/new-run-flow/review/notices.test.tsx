@@ -9,6 +9,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { AppliedResources } from "../../../../lib/types/new-run-contract";
+import { DROPPED_HOSTS } from "./drop-warnings";
 import { Notices } from "./notices";
 
 afterEach(cleanup);
@@ -120,5 +121,11 @@ describe("Review notices", () => {
   it("shows no warnings notice when there are none", () => {
     const { container } = render(<Notices askedByYou={false} warnings={[]} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("says a host the ceiling dropped in the ceiling's words (FUG-L749 N3)", () => {
+    render(<Notices askedByYou={false} warnings={["dropped 1 egress domain(s) not in operator allowlist: pastebin.com", 'confinement raised from "CC1" to operator minimum "CC2"']} />);
+    expect(screen.getByText(DROPPED_HOSTS.ONE("pastebin.com"))).toBeInTheDocument();
+    expect(screen.getByText('confinement raised from "CC1" to operator minimum "CC2"')).toBeInTheDocument();
   });
 });

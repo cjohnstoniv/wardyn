@@ -31,7 +31,7 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { MyComponentsCard } from "./my-components-card";
-import { MyRunnerCard } from "./my-runner-card";
+import { MyRunnerAndPoolsCards } from "./my-pools-card";
 import { InvitationsCard } from "./invitations-card";
 import { ServiceIdentitiesCard } from "./service-identities-card";
 import { SshKeysPane } from "../ssh-keys";
@@ -75,7 +75,7 @@ export function YourAccountScreen() {
           <MyComponentsCard secretsPath={adminView ? "/admin/secrets" : "/secrets"} />
           {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
               nothing while runners are off. */}
-          {!adminView && <MyRunnerCard />}
+          {!adminView && <MyRunnerAndPoolsCards />}
           <SshKeysPane heading="h3" />
           {/* #1508: the service identities this person sponsors, and their tokens. Renders nothing for a
               person who sponsors none. */}

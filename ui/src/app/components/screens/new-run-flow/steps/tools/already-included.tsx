@@ -17,6 +17,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { rowLabel, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
 import { includedMark } from "./catalogue-pending";
 import { IconTile } from "./icon-tile";
+import { reasonText } from "./tool-facts";
 import { credentialLabel, deliveryLabel } from "./totals";
 
 const FROM: Record<string, string> = {
@@ -26,7 +27,12 @@ const FROM: Record<string, string> = {
   command: NR_TOOLS.FROM_COMMAND,
 };
 
-function subLine(row: AccessRow, access: AccessFacts, intent: RunIntent): string | undefined {
+function subLine(row: AccessRow, access: AccessFacts, intent: RunIntent, answered: boolean): string | undefined {
+  // FUG-L369: a repository whose token or key lane create drops says so, in the server's sentence, not a bare "Needs setup".
+  if (answered && row.from === "repository" && row.status === "needs_setup") {
+    const why = reasonText(row.reason);
+    if (why) return why;
+  }
   if (row.from === "harness") return startsWithRun(intent, row.name) ? NR_TOOLS.SUB_STARTS : NR_TOOLS.SUB_AVAILABLE;
   if (row.from === "command") return NR_TOOLS.SUB_COMMAND;
   if (row.from === "repository" && access.credentials.some((c) => c.row === row.id && c.delivery === "git_broker")) return NR_TOOLS.REPO_SUB;
@@ -75,7 +81,7 @@ function Detail({ row, access, providers }: { row: AccessRow; access: AccessFact
 function IncludedRow({ row, access, answered, intent, names, providers }: { row: AccessRow; access: AccessFacts; answered: boolean; intent: RunIntent; names?: HarnessNames; providers?: ReadonlyMap<string, string> }) {
   const [open, setOpen] = React.useState(false);
   const detail = React.useId();
-  const sub = subLine(row, access, intent);
+  const sub = subLine(row, access, intent, answered);
   const name = rowLabel(row, names);
   return (
     <li className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2 p-3">

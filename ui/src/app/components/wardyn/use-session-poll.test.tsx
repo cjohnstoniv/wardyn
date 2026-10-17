@@ -5,7 +5,7 @@
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onUnauthorized, setSignedOutHold, setToken, wfetch } from "../../lib/api/core";
+import { holdWritesForIdentityCheck, identityCheckSettled, onUnauthorized, setSignedOutHold, setToken, wfetch } from "../../lib/api/core";
 import type { Me } from "../../lib/api/health";
 import { useSessionPoll } from "./use-session-poll";
 
@@ -31,6 +31,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => {
+  identityCheckSettled();
   cleanup();
   onUnauthorized(() => {});
   vi.unstubAllGlobals();
@@ -171,5 +172,31 @@ describe("session reconciliation through the real transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(accept).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// DR-0007: a write held for the identity check leaves only after /me has answered.
+describe("a write held for the identity check", () => {
+  const put = () => wfetch("/stub-save", { method: "PUT", body: "{}", save: "note" }).catch(() => {});
+  const puts = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT").length;
+
+  it("stays held while /me is erroring: an unreachable answer is not an answer", async () => {
+    holdWritesForIdentityCheck();
+    fetchMock.mockImplementation((url) => Promise.resolve(String(url).endsWith("/me") ? new Response("", { status: 500 }) : response()));
+    const hook = renderHook(() => useSessionPoll(() => true));
+    act(() => hook.result.current.checkOnce());
+    void put();
+    await advance(2000);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/me"))).toBe(true);
+    expect(puts()).toBe(0);
+  });
+
+  it("goes once /me answers with a person", async () => {
+    holdWritesForIdentityCheck();
+    const hook = renderHook(() => useSessionPoll(() => true));
+    act(() => hook.result.current.checkOnce());
+    void put();
+    await advance(100);
+    expect(puts()).toBe(1);
   });
 });

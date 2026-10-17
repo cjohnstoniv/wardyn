@@ -372,6 +372,11 @@ func TestAccessRepo_UnwiredSSHLaneBringsNoHostOrCredential(t *testing.T) {
 			if hasHost != tc.wired || hasKey != tc.wired {
 				t.Errorf("%s %s: lane host %v, ssh key %v, want %v: %+v", tc.agent, door, hasHost, hasKey, tc.wired, access)
 			}
+			// FUG-L369: a lane create drops is not a ready row. The row says no credential is set up for it.
+			row, ok := accessRow(access, "git_provider:github:ssh:acme")
+			if !ok || (row.Reason == reasonRepoNoCredential) == tc.wired || (!tc.wired && row.Status != accessNeedsSetup) {
+				t.Errorf("%s %s: repository row = %+v (%v), want status %s and reason %q only when the lane is dropped", tc.agent, door, row, ok, accessNeedsSetup, reasonRepoNoCredential)
+			}
 		}
 	}
 }

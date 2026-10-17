@@ -14,7 +14,8 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, listenForOtherTabs, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 import { deriveReadiness } from "./lib/readiness";
@@ -462,6 +463,34 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
+  // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
+  // console when someone is signed in now. The same question on focus covers a sign-in that happened
+  // in a way no tab announced (a full-page SSO login).
+  React.useEffect(() => listenForOtherTabs(), []);
+  React.useEffect(() => {
+    if (auth !== "unauthed") return;
+    let alive = true;
+    const reprobe = () => {
+      if (signingOutRef.current) return;
+      void probeAuth().then((probe) => {
+        if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
+        setSignedOut(false);
+        setAuth("authed");
+      });
+    };
+    const onVisible = () => document.visibilityState === "visible" && reprobe();
+    const stop = onRemoteAuthChange(reprobe);
+    window.addEventListener("focus", reprobe);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      stop();
+      window.removeEventListener("focus", reprobe);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [auth]);
 
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.

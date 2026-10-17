@@ -10,6 +10,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-run-contract";
 import type { LimitSource } from "../../../../lib/types/runner-pools";
+import { reviewWarningText } from "./drop-warnings";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
@@ -85,7 +86,7 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, diskCu
       ))}
       {server.map((w, i) => (
         <Notice key={`${i}:${w}`} tone="warning">
-          {w}
+          {reviewWarningText(w)}
         </Notice>
       ))}
     </div>
