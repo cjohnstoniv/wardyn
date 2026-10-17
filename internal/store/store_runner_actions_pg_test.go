@@ -389,6 +389,63 @@ func TestPG_RunnerActions_DeferredReceiptKeepsTheFence(t *testing.T) {
 	}
 }
 
+// A run's deferred kill continues in one successor per completed inventory with
+// the identical binding and obligation; the successor's success settles the
+// chain and lifts the fence. A run whose ref was cleared since gets none.
+func TestPG_RunnerActions_DeferredKillContinuesOncePerCompletedInventory(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	kill := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, kill.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.st.ReissueDeferredRunKills(ctx, f.rn.ID, uuid.NewString()); err != nil || n != 0 {
+		t.Fatalf("reissue before any completed inventory = %d, %v", n, err)
+	}
+	finalInventory(t, f.st, f.rn, uuid.NewString())
+	next := uuid.NewString()
+	if n, err := f.st.ReissueDeferredRunKills(ctx, f.rn.ID, next); err != nil || n != 1 {
+		t.Fatalf("reissue after a completed inventory = %d, %v", n, err)
+	}
+	if n, err := f.st.ReissueDeferredRunKills(ctx, f.rn.ID, next); err != nil || n != 0 {
+		t.Fatalf("second reissue for the same inventory = %d, %v", n, err)
+	}
+	page, _, err := f.st.ListPendingRunnerActions(ctx, f.rn.ID)
+	if err != nil || len(page) != 1 {
+		t.Fatalf("pending = %+v, %v", page, err)
+	}
+	successor := page[0]
+	if successor.ID == kill.ID || successor.Kind != types.RunnerActionKill || successor.RunID != run.ID || successor.Ref != kill.Ref ||
+		successor.Owner != kill.Owner || successor.Generation != gen || successor.ObligationID != kill.ID {
+		t.Fatalf("successor = %+v, deferred kill = %+v", successor, kill)
+	}
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, successor.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE id=$1 AND settlement='chain' AND settled_by=$2`, kill.ID, successor.ID); n != 1 {
+		t.Fatalf("the successor's success settled %d deferred kills, want 1", n)
+	}
+	if has, err := f.st.RunHasPendingRunnerAction(ctx, run.ID); err != nil || has {
+		t.Fatalf("the settled chain still fences the run: %v %v", has, err)
+	}
+
+	moved := f.run(t)
+	movedGen := f.issue(t, moved)
+	movedKill := f.mustQueue(t, f.action(moved, types.RunnerActionKill, movedGen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, moved.ID, movedKill.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetSandboxRef(ctx, moved.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	finalInventory(t, f.st, f.rn, uuid.NewString())
+	if n, err := f.st.ReissueDeferredRunKills(ctx, f.rn.ID, uuid.NewString()); err != nil || n != 0 {
+		t.Fatalf("reissue for a run whose ref was cleared = %d, %v", n, err)
+	}
+}
+
 func TestPG_RunnerActions_StopProxySuccessAuditsInTheSameTransaction(t *testing.T) {
 	for name, issued := range map[string]bool{"issued-execution": true, "before-first-execution": false} {
 		t.Run(name, func(t *testing.T) {
