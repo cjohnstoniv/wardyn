@@ -1377,10 +1377,11 @@ erases one person's retained records by explicit scope, in one audited act
 | Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
-| Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
+| Runners | Revoked with their unused registration tokens (`DELETE /runners/...`). Their name is cleared as the revoker of any runner and as the minter of a token made for someone else |
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed, and the drives the person created are listed too. Reclaim storage with the steps in "Reclaiming a departed person's storage", and delete the drives they created as in "Member drives" |
 
+- Migration `0180_purge_attribution_backfill` reopens the Runners and service-identities steps of purges that finished before it, so the sweeper runs the attribution clears for people purged earlier, once. The purge's `person.deprovision` row is not written again.
 - The identity row stays as a tombstone with `purged_at` set.
 - `PATCH active=true` on it is a 400 `invalidValue` (a denied `scim.user.write` row with reason `purged`), and the
   sign-in gate refuses it.
@@ -2406,6 +2407,17 @@ Delivery per install path:
 - See [docs/adoption/corp-image-authoring.md](adoption/corp-image-authoring.md) and [docs/ENVBUILD.md](ENVBUILD.md#base-image-trust-byoi).
 - Not a `SiteConfig` field: boot-time operator posture, never a live API write, never agent-reachable — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #28.
 
+- On a laptop runner the runner's bundle sets `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE` only where nothing is set.
+- So a component's value for one of them wins there, and that toolchain never sees the runner's CA.
+- On the organisation's path the platform sets them first and a component's value is dropped (`run.component_config.drop`).
+- Either way the run only narrows its own sandbox's trust.
+
+### A name the proxy cannot resolve
+
+- The same DNS failure is answered by lane: `403` with `X-Wardyn-Reason: egress_denied` on the forward lane, and `502` `upstream_unreachable` on the brokered lanes (`500` on AWS).
+- The forward lane's `X-Wardyn-Egress-Reason` still says `builtin:resolve-failed`, so that header is the one to read.
+- Neither answer is policy: check the sandbox's DNS, not the allowlist.
+
 ### Egress redirects: two tiers
 
 - `egress_redirects` is a list of `{from, to, token_secret_ref, token_integration_ref, ecosystem}` entries.
@@ -2435,7 +2447,9 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
-- A `go` redirect sets `GOSUMDB=off`: Go module redirects disable checksum-database verification, and the existing `go.sum` checks still apply. Keep each repository's `go.sum` committed.
+- A `go` redirect keeps Go's checksum database on, reached through the mirror: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so the mirror must proxy that path.
+- A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed.
+- Setting `go_checksum_db_off` shows a warning on the `artifact_repo` setup check and is recorded in `site_config.write`; it is accepted only on a `go` row.
 - A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
 - But **no config file is written**.
 - There is no `.npmrc` equivalent for an arbitrary host.

@@ -526,6 +526,7 @@ What the check does and does not settle:
 - But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces.go`](../internal/api/workspaces.go)) directly and appends the new host.
 - That is a live write path this migration left untouched.
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
+- An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
 
 ## Approval decision scopes
 
