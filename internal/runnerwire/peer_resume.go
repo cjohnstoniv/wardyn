@@ -87,9 +87,9 @@ func (p *Peer) keepalive(every time.Duration) {
 			}
 			go func() {
 				defer pinging.Store(false)
-				ctx, cancel := context.WithTimeout(p.ctx, every)
-				defer cancel()
-				if err := p.Send(ctx, Frame{Type: TypePing, Payload: EncodePing(now)}); err != nil {
+				// A PING reserves no replay room and its write runs under the link's own ctx, so no
+				// caller deadline would bound it: the stall check above fails a stuck write.
+				if err := p.Send(p.ctx, Frame{Type: TypePing, Payload: EncodePing(now)}); err != nil {
 					p.fail(err)
 				}
 			}()

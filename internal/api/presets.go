@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -272,6 +273,12 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 		return false
 	}
 	recordAskedRequest(r, *req)
+	// A runner id in braces, urn:uuid: or 32-hex form parses but is not the form the revoke pass and the
+	// sweep match on a queued run, so it is queued in the canonical one. An id that does not parse is left
+	// for the placement gate to refuse.
+	if id, err := uuid.Parse(req.RunnerID); err == nil {
+		req.RunnerID = id.String()
+	}
 	// After the preset, which can bring its own request: a new client's carriers
 	// are refused or projected onto the legacy fields here, before any gate reads them.
 	return !applyRunMode(req).write(s, w, r)

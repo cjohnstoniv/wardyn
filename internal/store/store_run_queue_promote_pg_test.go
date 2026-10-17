@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -618,5 +619,35 @@ func TestPG_PromoteAndKillDoNotDeadlock(t *testing.T) {
 	}
 	if st := runState(t, pg, r.ID).State; st != types.RunKilled || queueRows(t, pool, r.ID) != 0 {
 		t.Errorf("the killed run is %s with %d queue rows", st, queueRows(t, pool, r.ID))
+	}
+}
+
+// The sweep of waiting runs pinned to a revoked runner lists only runs still QUEUED: a queue row left
+// behind by a run that already ended is not listed, so such rows cannot fill the scan window.
+func TestPG_QueueEntriesOfRevokedRunnersAreQueuedOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := cappedPool(t, pg, 1)
+	rid := claimedRunnerOf(t, pg, "alice")
+	if _, err := pg.RevokeRunner(ctx, rid, time.Now(), "security-admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	launch := json.RawMessage(`{"request":{"runner_id":"` + rid.String() + `"}}`)
+	waiting, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"), store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Launch: launch}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"), store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Launch: launch}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'KILLED' WHERE id = $1`, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pg.QueueEntriesOfRevokedRunners(ctx, 10)
+	if err != nil || len(got) != 1 || got[0].RunID != waiting.ID {
+		t.Fatalf("entries = %+v, %v; want only the still-QUEUED run %s", got, err, waiting.ID)
 	}
 }

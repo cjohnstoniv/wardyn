@@ -92,6 +92,7 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 			var body struct {
 				Reason string `json:"reason"`
 			}
+			// coder/websocket has already cut the body to 1 KiB (dial.go), so it needs no bound here.
 			_ = json.NewDecoder(resp.Body).Decode(&body)
 			_ = resp.Body.Close()
 			if body.Reason != "" {

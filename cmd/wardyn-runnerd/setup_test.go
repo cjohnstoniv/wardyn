@@ -239,6 +239,36 @@ func (f *setupFixture) read(path string) string {
 	return string(b)
 }
 
+// An unreachable systemd user manager is reported as unreachable, not as one that searches another directory.
+func TestCheckServiceManagerNamesAnUnreachableManager(t *testing.T) {
+	p := setupPaths{unitFile: "/h/.config/systemd/user/wardyn-runnerd.service"}
+	answer := func(out string, err error) setupHost {
+		return setupHost{goos: "linux", run: func(context.Context, string, ...string) ([]byte, error) { return []byte(out), err }}
+	}
+	if err := answer("Failed to connect to bus\n", errors.New("exit status 1")).checkServiceManager(context.Background(), p); err == nil || !strings.Contains(err.Error(), "did not answer") || strings.Contains(err.Error(), "does not search") {
+		t.Errorf("unreachable manager: %v", err)
+	}
+	if err := answer("/etc/systemd/user\n", nil).checkServiceManager(context.Background(), p); err == nil || !strings.Contains(err.Error(), "does not search /h/.config/systemd/user") {
+		t.Errorf("manager that does not search the unit directory: %v", err)
+	}
+	if err := answer("/h/.config/systemd/user /etc/systemd/user\n", nil).checkServiceManager(context.Background(), p); err != nil {
+		t.Errorf("manager that searches it: %v", err)
+	}
+}
+
+// A binary path with a space, a quote or a systemd specifier stays one ExecStart argument.
+func TestSystemdQuoteKeepsOnePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"/home/a/.local/share/wardyn/bin/wardyn-runnerd": `"/home/a/.local/share/wardyn/bin/wardyn-runnerd"`,
+		"/home/a b/share/wardyn-runnerd":                 `"/home/a b/share/wardyn-runnerd"`,
+		`/h/100%/we"ird\$x/wardyn-runnerd`:               `"/h/100%%/we\"ird\\$$x/wardyn-runnerd"`,
+	} {
+		if got := systemdQuote(in); got != want {
+			t.Errorf("systemdQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
 func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	f := newSetupFixture(t, "linux")
 	p, err := f.host.paths()
@@ -263,7 +293,7 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	if st, err := os.Stat(p.envFile); err != nil || st.Mode().Perm() != 0o600 {
 		t.Errorf("env file mode: %v %v", st, err)
 	}
-	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart="+p.installed+" serve --org ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
+	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart=\""+p.installed+"\" serve --org ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
 		t.Errorf("unit not rendered:\n%s", unit)
 	}
 	if f.read(p.installed) != "binary" {

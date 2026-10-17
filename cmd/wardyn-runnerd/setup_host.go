@@ -110,7 +110,13 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 	if h.goos != "linux" {
 		return nil
 	}
-	out, _ := h.run(ctx, "systemctl", "--user", "show", "-p", "UnitPath", "--value")
+	out, err := h.run(ctx, "systemctl", "--user", "show", "-p", "UnitPath", "--value")
+	if err != nil {
+		if detail := strings.TrimSpace(string(out)); detail != "" {
+			err = fmt.Errorf("%w: %s", err, detail)
+		}
+		return fmt.Errorf("the systemd user manager did not answer (%w), so setup cannot start the service: no token was spent", err)
+	}
 	dir := filepath.Dir(p.unitFile)
 	if !strings.Contains(" "+strings.TrimSpace(string(out))+" ", " "+dir+" ") {
 		return fmt.Errorf("the systemd user manager does not search %s for units, so it could not find the service: no token was spent", dir)
@@ -219,7 +225,7 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	}
 	p := plan.paths
 	env := plan.serviceEnv()
-	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", p.installed)
+	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", systemdQuote(p.installed))
 	for _, f := range []struct {
 		path, text string
 		mode       os.FileMode
@@ -276,6 +282,12 @@ func (h setupHost) writeRunConfig(plan setupPlan, out io.Writer) error {
 	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  set -a; . %s; set +a; %s serve --org %s --state-dir %s\n",
 		path, shellQuote(path), shellQuote(plan.paths.installed), shellQuote(plan.org), shellQuote(plan.paths.stateDir))
 	return nil
+}
+
+// systemdQuote renders s as one double-quoted systemd command-line word: a backslash or quote is
+// escaped, and % (specifier) and $ (variable) are doubled, so a path with a space or % stays one argument.
+func systemdQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
 }
 
 // pinnedImage is the proxy image the service definition names, or "" when setup only derived this

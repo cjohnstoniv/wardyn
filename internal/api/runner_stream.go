@@ -138,7 +138,11 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Serve owns the connection, always closes it, and cannot Attach a Link
 	// until nonce, stored key, route id and the admitted Substrate all agree.
-	_ = hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, runnerAdmission{peer: peer, release: release}), runnerwire.NewWebSocket(conn), id)
+	// A refused authentication (a lapsed, swept or rebound registration reads as one) is logged with its
+	// cause: the runner is told nothing but a close, so this line is the only place an operator sees why.
+	if err := hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, runnerAdmission{peer: peer, release: release}), runnerwire.NewWebSocket(conn), id); errors.Is(err, runnerwire.ErrAuth) {
+		slog.WarnContext(r.Context(), "wardynd: runner authentication refused", slog.String("runner", id.String()), slog.Any("cause", err))
+	}
 }
 
 // RevokeRunnerSession notifies an already connected runner after the caller

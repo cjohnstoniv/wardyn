@@ -238,7 +238,7 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // kindTargets splits the pool's candidates by kind and keeps the kinds this run may use: the one its
 // request asks for (a pin asks for local), then none its owner's profile denies, since deny_placements
 // holds each kind, not the pool. A run with drives keeps only the remote-hosted kind when the pool has
-// it, as no drive mounts on a person's own runner; with none it stays on the person's own runners for
+// it, as no drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
 // (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
 // mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
@@ -264,6 +264,15 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
 	}
 	if _, remote := kinds[types.PlacementRemote]; remote && (f.drives || f.noLocal) {
+		// A pin names the person's own runner, which this run cannot use: say so, never route it elsewhere.
+		if pin := f.req.RunnerID; pin != "" && slices.ContainsFunc(kinds[types.PlacementLocal], func(t poolTarget) bool { return t.id == pin }) {
+			why := "it carries a drive, and no drive mounts on your own runner"
+			if !f.drives {
+				why = "your own runners cannot take it"
+			}
+			return nil, runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability),
+				"Your own runner is pinned for this run, but "+why+". Remove the pin to run it on a remote-hosted runner in "+pool.Name+".")
+		}
 		delete(kinds, types.PlacementLocal)
 	}
 	return kinds, nil
