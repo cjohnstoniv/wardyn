@@ -6,7 +6,6 @@ package runnerio
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -65,5 +64,5 @@ func (s *Server) EraseOutput(id uuid.UUID) error {
 		b.notify()
 		b.mu.Unlock()
 	}
-	return os.RemoveAll(filepath.Join(s.dir, id.String()))
+	return s.discardOutputDir(filepath.Join(s.dir, id.String()))
 }

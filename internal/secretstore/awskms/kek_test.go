@@ -17,6 +17,7 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -371,6 +372,36 @@ func TestKEK_StaticKeyIsReported(t *testing.T) {
 		if k.StaticKey() != tc.static {
 			t.Errorf("%s: StaticKey() = %v, want %v", name, k.StaticKey(), tc.static)
 		}
+	}
+}
+
+// The EC2 node's instance role is reported apart from a pod's own role: the default chain's
+// credentials from the instance metadata service are shared by every pod on the node.
+func TestKEK_NodeRoleIsReported(t *testing.T) {
+	f := newFakeKMS(t)
+	imds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut:
+			_, _ = w.Write([]byte("token"))
+		case strings.HasSuffix(r.URL.Path, "/security-credentials/"):
+			_, _ = w.Write([]byte("node-role"))
+		default:
+			_, _ = w.Write([]byte(`{"Code":"Success","AccessKeyId":"` + sessionKeyID + `","SecretAccessKey":"` + strings.Repeat("s", 40) +
+				`","Token":"token","Expiration":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `"}`))
+		}
+	}))
+	t.Cleanup(imds.Close)
+
+	useCreds(t, "", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "false")
+	t.Setenv("AWS_EC2_METADATA_SERVICE_ENDPOINT", imds.URL)
+	k, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL})
+	if err != nil || !k.NodeRole() || k.StaticKey() {
+		t.Fatalf("NewKEK under the instance role = (%v, %v); want NodeRole true and StaticKey false", k, err)
+	}
+	useCreds(t, sessionKeyID, "token")
+	if k, err = NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL}); err != nil || k.NodeRole() {
+		t.Fatalf("NewKEK under a role session from the shared file = (%v, %v); want NodeRole false", k, err)
 	}
 }
 

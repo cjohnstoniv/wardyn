@@ -1101,20 +1101,26 @@ func TestKeyCustodyRows(t *testing.T) {
 // long-lived access key; a role's credentials, no key service and store mode
 // never raise it.
 func TestStaticKeyServiceCheck(t *testing.T) {
-	chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true)
+	chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true, false)
 	if !ok || chk.ID != "kek_service_static_key" || chk.Label != "Credential key access" || chk.Status != "warn" ||
 		!strings.Contains(chk.Detail, "long-lived AWS access key") || !strings.Contains(chk.Fix, "IRSA or EKS Pod Identity") {
 		t.Fatalf("static key row = %+v, %v", chk, ok)
 	}
+	node, ok := staticKeyServiceCheck("AWS KMS in us-east-1", false, true)
+	if !ok || node.ID != "kek_service_static_key" || node.Status != "warn" ||
+		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity") {
+		t.Fatalf("node role row = %+v, %v", node, ok)
+	}
 	for name, c := range map[string]struct {
-		keyService string
-		static     bool
+		keyService       string
+		static, nodeRole bool
 	}{
-		"role credentials":   {"AWS KMS in us-east-1", false},
-		"no key service":     {"", true},
-		"neither of the two": {"", false},
+		"role credentials":          {"AWS KMS in us-east-1", false, false},
+		"no key service":            {"", true, false},
+		"no key service, node role": {"", false, true},
+		"neither of the two":        {"", false, false},
 	} {
-		if chk, ok := staticKeyServiceCheck(c.keyService, c.static); ok {
+		if chk, ok := staticKeyServiceCheck(c.keyService, c.static, c.nodeRole); ok {
 			t.Errorf("%s: static key row %+v, want none", name, chk)
 		}
 	}
