@@ -180,7 +180,7 @@ func caseKeystore(t *testing.T, e *env) {
 			t.Fatalf("Get = %q, %v; want %q", got, err, v)
 		}
 	}
-	name := keystore.SecretName(acct)
+	name := ks.SecretName(acct)
 	sec, err := e.admin.CoreV1().Secrets(e.ownNS).Get(bg, name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("keystore Secret %s not in runnerd's namespace: %v", name, err)
