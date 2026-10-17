@@ -75,7 +75,8 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 }
 
 // appendRunnerMembers adds the self-hosted members to out: a user pool's runners its owner holds, or an
-// organization pool's organization runners, shown to every reader of the pool without the administrators' fields.
+// organization pool's organization runners. Every reader of an organization pool sees the runner; only a security
+// operator also sees who owns, minted, trusted and revoked it, as the administrators' inventory shows them.
 // It reports false after answering the request itself.
 func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, pool types.RunnerPool, owner bool, out *[]client.RunnerPoolMemberView) bool {
 	if _, ok := s.cfg.Store.(store.OrgRunnerPoolStore); !ok && pool.Scope != types.RunnerPoolUser {
@@ -90,9 +91,11 @@ func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, poo
 		writeErrorReason(w, http.StatusNotImplemented, reasonRunnerRegistrationUnavailable, "runner inventory requires the Postgres store backend")
 		return false
 	}
+	// A user pool is read by its owner (the person's own view) or by a security operator, who sees what the
+	// inventory shows. An organization runner has no person's own view: the inventory's, or less.
 	list, admin := lister.ListRunnerPoolRunners, !owner
 	if pool.Scope != types.RunnerPoolUser {
-		list, admin = lister.ListOrgRunnerPoolRunners, false
+		list, admin = lister.ListOrgRunnerPoolRunners, true
 	}
 	rows, err := list(r.Context(), pool.ID)
 	if err != nil {
@@ -108,8 +111,19 @@ func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, poo
 	}
 	for i := range views {
 		v := views[i]
+		if pool.Scope != types.RunnerPoolUser && !s.isSecurityOperator(r.Context()) {
+			withoutPeople(&v)
+		}
 		*out = append(*out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v,
 			Limits: v.Limits, Usage: v.Usage})
 	}
 	return true
+}
+
+// withoutPeople clears the fields of a runner view that name the people behind it (its owner, who minted,
+// trusted and revoked it, and why), which only a security operator or the runner's own owner reads.
+func withoutPeople(v *types.RunnerView) {
+	v.Owner, v.MintedBy, v.MintedByEmail = "", "", ""
+	v.TrustSetBy, v.TrustSetAt = "", nil
+	v.RevokedBy, v.RevokedByEmail, v.RevokeReason = "", "", ""
 }
