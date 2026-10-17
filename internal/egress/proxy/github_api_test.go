@@ -7,7 +7,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -266,4 +268,27 @@ func TestGitHubAPI_OtherPortTunnelRefused(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.handleConnect(rec, req)
 	ghRefused(t, rec)
+}
+
+// stuckResolver never answers until released.
+type stuckResolver struct{ release chan struct{} }
+
+func (r stuckResolver) LookupIP(string) ([]net.IP, error) {
+	<-r.release
+	return nil, errors.New("released")
+}
+
+// The shutdown revoke keeps to its budget when the name lookup hangs: the lookup takes no context.
+func TestGitHubAPI_ShutdownRevokeKeepsItsBudgetOnAStuckLookup(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	stuck := stuckResolver{release: make(chan struct{})}
+	t.Cleanup(func() { close(stuck.release) })
+	p.res = stuck
+	start := time.Now()
+	p.revokeGitHubAPITokens(t.Context())
+	if took := time.Since(start); took > gitHubAPIRevokeBudget+time.Second {
+		t.Fatalf("the revoke took %s with a stuck lookup, want at most its %s budget", took, gitHubAPIRevokeBudget)
+	}
 }

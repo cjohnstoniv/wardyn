@@ -213,6 +213,7 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitHubAPIRevokeBudget)
 	defer cancel()
+	var target string
 	for _, id := range p.ghAPI.Grants {
 		p.gitTokMu.Lock()
 		e := p.gitTokens[id]
@@ -225,17 +226,43 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 		if tok == "" {
 			continue
 		}
-		if err := p.revokeGitHubToken(ctx, tok); err != nil {
+		var err error
+		if target == "" {
+			target, err = p.boundedEgressTarget(ctx, ghscope.APIHost, gitHubAPIPort)
+		}
+		if err == nil {
+			err = p.revokeGitHubToken(ctx, target, tok)
+		}
+		if err != nil {
 			slog.Warn("wardyn-proxy: could not hand a GitHub CLI token back; it expires within the hour", "grant_id", id, "err", err)
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
 
-func (p *Proxy) revokeGitHubToken(ctx context.Context, tok string) error {
-	target, _, err := p.egressTarget(ghscope.APIHost, gitHubAPIPort)
-	if err != nil {
-		return err
+// boundedEgressTarget is egressTarget given up at ctx's end: its name lookup takes no context, so a stuck
+// resolver would otherwise hold the shutdown past the revoke budget. The lookup finishes on its own.
+func (p *Proxy) boundedEgressTarget(ctx context.Context, host string, port int) (string, error) {
+	type answer struct {
+		target string
+		err    error
 	}
+	ch := make(chan answer, 1)
+	go func() {
+		target, _, err := p.egressTarget(host, port)
+		ch <- answer{target, err}
+	}()
+	select {
+	case a := <-ch:
+		return a.target, a.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (p *Proxy) revokeGitHubToken(ctx context.Context, target, tok string) error {
 	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
 	if err != nil {
 		return err
