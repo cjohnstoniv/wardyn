@@ -281,7 +281,7 @@ func TestRunnerListResourceColumns(t *testing.T) {
 	}
 	seen := time.Date(2026, 10, 17, 9, 30, 0, 0, time.UTC)
 	own := []sdk.RunnerView{
-		{ID: uuid.MustParse("11111111-1111-4111-8111-111111111111"), KeyFingerprint: "SHA256:aaa", LastSeenAt: &seen, Name: "laptop-7", State: types.RunnerClaimed, Online: true, Limits: limits(3, 6, 12, 200, 2, 4, 50), Usage: usage(2, 4, 8, 100)},
+		{ID: uuid.MustParse("11111111-1111-4111-8111-111111111111"), KeyFingerprint: "SHA256:aaa", LastSeenAt: &seen, Name: "laptop-7", MachineName: "alice-mbp.corp", Arch: "arm64", State: types.RunnerClaimed, Online: true, Limits: limits(3, 6, 12, 200, 2, 4, 50), Usage: usage(2, 4, 8, 100)},
 		{ID: uuid.MustParse("22222222-2222-4222-8222-222222222222"), KeyFingerprint: "SHA256:bbb", Name: "desk-2", State: types.RunnerClaimed, Limits: limits(4, 12, 48, 800, 4, 16, 100), Usage: usage(0, 0, 0, 0)},
 		{ID: uuid.MustParse("33333333-3333-4333-8333-333333333333"), KeyFingerprint: "SHA256:ccc", Name: "fresh", State: types.RunnerUnclaimed},
 	}
@@ -292,11 +292,11 @@ func TestRunnerListResourceColumns(t *testing.T) {
 	url, paths := listRunnersServer(t, own, remote, http.StatusOK)
 	out, err := execCmdCapture(t, "runner", "list", "--url", url, "--token", "t")
 	want := strings.Join([]string{
-		"ID|NAME|KIND|STATE|LAST SEEN|FINGERPRINT|RUNS|CPU (use/total, per run)|MEMORY GB|DISK GB",
-		"11111111-1111-4111-8111-111111111111|laptop-7|self-hosted|online|2026-10-17T09:30:00Z|SHA256:aaa|2/3|4/6, 2|8/12, 4|100/200, 50",
-		"22222222-2222-4222-8222-222222222222|desk-2|self-hosted|offline|never|SHA256:bbb|0/4|0/12, 4|0/48, 16|0/800, 100",
-		"33333333-3333-4333-8333-333333333333|fresh|self-hosted|unclaimed|never|SHA256:ccc|-|-|-|-",
-		"docker|shared-docker|remote-hosted|online|-|-|1/6|4/24, 4|16/96, 16|100/1000, 100",
+		"ID|NAME|MACHINE|ARCH|KIND|STATE|LAST SEEN|FINGERPRINT|RUNS|CPU (use/total, per run)|MEMORY GB|DISK GB",
+		"11111111-1111-4111-8111-111111111111|laptop-7|alice-mbp.corp|arm64|self-hosted|online|2026-10-17T09:30:00Z|SHA256:aaa|2/3|4/6, 2|8/12, 4|100/200, 50",
+		"22222222-2222-4222-8222-222222222222|desk-2|-|-|self-hosted|offline|never|SHA256:bbb|0/4|0/12, 4|0/48, 16|0/800, 100",
+		"33333333-3333-4333-8333-333333333333|fresh|-|-|self-hosted|unclaimed|never|SHA256:ccc|-|-|-|-",
+		"docker|shared-docker|-|-|remote-hosted|online|-|-|1/6|4/24, 4|16/96, 16|100/1000, 100",
 	}, "\n")
 	if err != nil || normal(out) != want {
 		t.Fatalf("list = %v\n%s\nwant\n%s", err, normal(out), want)
