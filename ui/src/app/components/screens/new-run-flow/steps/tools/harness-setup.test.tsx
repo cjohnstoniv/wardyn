@@ -296,6 +296,13 @@ describe("HarnessSetup", () => {
       expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: ["codex-cli"] }]);
     });
 
+    it("writes an empty list, not an absent one, when the last harness is turned off", async () => {
+      const intent: RunIntent = { tools: [{ id: "claude-code", kind: "harness" }], components: [{ id: "mcp-docs", mcp_harnesses: ["claude-code"] }] };
+      show([CLAUDE_UNGATED], intent);
+      await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+      expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: [] }]);
+    });
+
     it("disables the toggle for a harness Wardyn cannot configure, with the reason", () => {
       show([CUSTOM], { tools: [{ id: "custom", kind: "harness" }] });
       const box = card("Your own tools").getByRole("checkbox", { name: "Docs" });
