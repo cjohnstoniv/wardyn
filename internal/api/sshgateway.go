@@ -88,10 +88,10 @@ func sshProbeConn(ctx context.Context, conn ssh.Conn) {
 		case <-tick.C:
 		}
 		answered := make(chan error, 1)
-		go func() {
+		sshGo(func() {
 			_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
 			answered <- err
-		}()
+		})
 		select {
 		case <-ctx.Done():
 			return

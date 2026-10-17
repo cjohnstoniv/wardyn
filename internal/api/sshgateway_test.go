@@ -1761,3 +1761,26 @@ func TestSSHGateway_ClosesAConnectionThatStopsAnswering(t *testing.T) {
 		t.Errorf("the gateway closed a client that answers its probes: %v", err)
 	}
 }
+
+// panicConn is an ssh.Conn whose keepalive request panics and which records its Close.
+type panicConn struct {
+	ssh.Conn
+	closed chan struct{}
+}
+
+func (panicConn) SendRequest(string, bool, []byte) (bool, []byte, error) { panic("probe panic") }
+func (c panicConn) Close() error                                         { close(c.closed); return nil }
+
+// A panic in the keepalive request is contained like any other gateway goroutine: the probe goes on
+// and closes the connection when no answer comes.
+func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
+	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	c := panicConn{closed: make(chan struct{})}
+	go sshProbeConn(context.Background(), c)
+	select {
+	case <-c.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection was not closed after its keepalive request panicked")
+	}
+}
