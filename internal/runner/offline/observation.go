@@ -70,7 +70,7 @@ func (m *Manager) observeRun(ctx context.Context, id uuid.UUID) (*runnerwire.Run
 	}
 	key := mutationKey{"local_observer", r.Ref, r.Generation}
 	m.beginMutation(key.method, key.ref, key.generation)
-	row := &runnerwire.RunState{RunID: id, Generation: r.Generation, Retirement: r.Retirement, Containment: r.Containment, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
+	row := &runnerwire.RunState{RunID: id, Generation: r.Generation, Retirement: r.Retirement, Containment: r.Containment, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r), ContainmentPending: r.ContainmentPending}
 	if r.Ref != "" {
 		row.Ref = placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref
 	}

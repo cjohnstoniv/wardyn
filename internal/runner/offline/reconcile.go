@@ -99,6 +99,22 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	case types.RunnerActionKill:
 		err = m.sub.KillSandbox(ctx, local)
 	case types.RunnerActionStopProxy:
+		if a.NodeRecord != nil {
+			// A security operator's node record: an infrastructure fence the substrate checks
+			// against its own record before it can complete containment (design K1 §3.1 (b)).
+			acc, ok := m.sub.(runner.NodeRecordAcceptor)
+			if !ok {
+				m.mu.Lock()
+				return m.refuseAction(ctx, a, errors.New("this runner's substrate takes no node record"))
+			}
+			if err = acc.AcceptNodeRecord(ctx, local, *a.NodeRecord); err != nil {
+				m.mu.Lock()
+				if errors.Is(err, runner.ErrNodeRecordRefused) {
+					return m.refuseAction(ctx, a, err)
+				}
+				return runnerwire.ActionResult{}, err
+			}
+		}
 		err = m.stopper.StopProxy(ctx, local)
 	case types.RunnerActionEnd:
 		end, ok := m.sub.(runner.SandboxEnder)
