@@ -38,8 +38,7 @@ func TestReconcileOnBoot_QueuedRunSurvivesAndPromotedRunAgesFromAdmission(t *tes
 			cfg := baseTestConfig(h, fake)
 			cfg.Runner = &fakeRunner{}
 			cfg.Broker = h.broker
-			cfg.BaseCtx = testBaseCtx(t)
-			srv := New(cfg)
+			srv := testServer(t, cfg)
 
 			if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 				t.Fatalf("reconcile on boot: %v", err)

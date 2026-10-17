@@ -46,8 +46,7 @@ func TestSweepRunWatchers_DeadlineExceededRunIsFinalizedAndTornDown(t *testing.T
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rn
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
 		t.Fatalf("sweepRunWatchers: %v", err)
@@ -108,11 +107,9 @@ func TestReconcileWatch_ProbeErrorsDoNotFinalizeBeforeTheCeiling(t *testing.T) {
 	cfg.Runner = rn
 	cfg.Broker = h.broker
 	cfg.Now = rn.now
-	ctx := testBaseCtx(t)
-	cfg.BaseCtx = ctx
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
-	go srv.reconcileWatch(ctx, run.ID, run.SandboxRef, run.AgentExecID)
+	srv.goBackground(func() { srv.reconcileWatch(srv.cfg.BaseCtx, run.ID, run.SandboxRef, run.AgentExecID) })
 
 	select {
 	case to := <-fake.finals:

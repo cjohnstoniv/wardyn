@@ -125,7 +125,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | Situation | Behaviour |
 | --- | --- |
 | Link down at run creation | Refused `runner_offline`; no run row exists |
-| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions |
+| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 5 s, then answers a retryable `503` naming the runner's link |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |

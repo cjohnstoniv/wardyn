@@ -210,15 +210,19 @@ func (s *Spool) writeManifest(m manifest) error { return s.writeJSON("state.json
 // Append commits before returning. An unreserved producer must refuse on any
 // error; the proxy separately reserves capacity before forwarding requests.
 func (s *Spool) Append(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision, false)
+	return s.append(ctx, decision)
 }
 
 // AppendAdmitted finishes a request whose proxy already reserved capacity.
 // Overflow refuses new requests, never discards this previously admitted tail.
 func (s *Spool) AppendAdmitted(ctx context.Context, decision egress.DecisionLog) error {
-	return s.append(ctx, decision, true)
+	return s.append(ctx, decision)
 }
-func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, admitted bool) error {
+
+// append refuses only a record that does not fit. A refusal counted earlier
+// waits in Drops for replay to report it; it does not close a spool with room,
+// which a dropped runner link would otherwise keep closed until reconnect.
+func (s *Spool) append(ctx context.Context, decision egress.DecisionLog) error {
 	return s.locked(ctx, func() error {
 		m, err := s.readManifest()
 		if err != nil {
@@ -236,7 +240,7 @@ func (s *Spool) append(ctx context.Context, decision egress.DecisionLog, admitte
 		if err != nil {
 			return err
 		}
-		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes || (!admitted && m.Drops > m.Reported) {
+		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes+int64(len(b)) > MaxBytes || len(b) > MaxRecordBytes {
 			if m.Drops == ^uint64(0) {
 				return errors.New("spool overflow counter exhausted")
 			}
@@ -272,8 +276,9 @@ func (s *Spool) Stats(ctx context.Context) (depth int, bytes int64, drops uint64
 	return
 }
 
-// CanRecord checks durable overflow state. Concurrent producers must also
-// reserve capacity; checking alone cannot guarantee space for a later append.
+// CanRecord checks durable capacity. Concurrent producers must also reserve
+// capacity; checking alone cannot guarantee space for a later append. Refusals
+// not yet reported do not refuse a spool with room (see append).
 func (s *Spool) CanRecord(ctx context.Context) error {
 	return s.locked(ctx, func() error {
 		m, err := s.readManifest()
@@ -283,7 +288,7 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 		if m.Sealed {
 			return ErrSealed
 		}
-		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes >= MaxBytes || m.Drops > m.Reported {
+		if m.Last-m.Ack.Seq >= MaxRecords || m.Bytes >= MaxBytes {
 			return ErrFull
 		}
 		return nil

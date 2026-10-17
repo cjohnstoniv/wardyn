@@ -24,4 +24,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1697 adds 162 (0.9.3 C): the "Session recordings" section, measured.
 # docs/operations/hybrid-laptops.md 1923 = 1761 (rc.1 batch) + 162 (C), measured at the rc.2 merge.
 # docs/operations/hybrid-laptops.md 1923 adds 162 (0.9.3 lane C): how laptop recordings work and reach the org.
-docs/operations/hybrid-laptops.md=1923 share=35
+# docs/operations/hybrid-laptops.md 1780 adds 19 (0.9.3 SPOOL), measured: behaviour of a full spool during a link drop.
+# docs/operations/hybrid-laptops.md 1940 = C + SPOOL, measured at the rc.2 merge.
+docs/operations/hybrid-laptops.md=1940 share=35

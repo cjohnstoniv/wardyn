@@ -115,8 +115,10 @@ func TestHALivePG_ATakenOverAttachCannotSendInputOrResize(t *testing.T) {
 	}
 	haWait(t, 3*time.Second, "A's holder to lose its write authority", func() bool { return !writer.h.canWrite() })
 	haWait(t, 3*time.Second, "A's client to be displaced", func() bool { return writer.displacedWith() != "" })
-	if got := writer.displacedWith(); !strings.HasPrefix(got, attachTakeoverReasonPrefix) {
-		t.Errorf("the displaced client was told %q, want a take-over reason", got)
+	// A's lease check can find the row replaced before the take-over's evict notice arrives, and the
+	// client is then told its lease was lost (attach_lease_recovery_test.go pins that); both end it.
+	if got := writer.displacedWith(); !strings.HasPrefix(got, attachTakeoverReasonPrefix) && got != attachLeaseLostReason {
+		t.Errorf("the displaced client was told %q, want a take-over reason or %q", got, attachLeaseLostReason)
 	}
 	if err := writer.h.writeGated(sess, []byte("more")); err != nil || sess.writtenBytes() != 5 {
 		t.Fatalf("a taken-over holder's input reached the terminal: err=%v bytes=%d, want still 5", err, sess.writtenBytes())

@@ -93,14 +93,11 @@ func (r *finalizeTailRunner) stopCount() int {
 func newFinalizeTailServer(t *testing.T, st *dispatchTestStore, brk *raceBroker, rn runner.Runner, audit *syncAudit) *Server {
 	t.Helper()
 	h := newHarness(t)
-	baseCtx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
 	cfg.Broker = brk
 	cfg.Audit = audit
-	cfg.BaseCtx = baseCtx
-	return New(cfg)
+	return testServer(t, cfg)
 }
 
 func newFinalizeRun() types.AgentRun {
