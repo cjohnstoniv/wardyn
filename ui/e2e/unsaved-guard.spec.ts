@@ -6,6 +6,7 @@
 import { test, expect, expandCard, gotoConsole, sidebarLink } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { UNSAVED } from "../src/app/lib/unsaved-copy";
+import { BRANDING } from "../src/app/lib/branding-copy";
 import type { Page } from "@playwright/test";
 
 // #460 review round 2 — a real Chromium walk (not the vitest suite, which
@@ -144,5 +145,30 @@ test.describe("unsaved guard — Back/Forward against the real app (#460 review 
     await expect(page.getByRole("alertdialog")).toBeVisible();
     await expect(page.getByRole("alertdialog").getByText(UNSAVED.TITLE)).toBeVisible();
     await expect(page).toHaveURL(/\/providers$/);
+  });
+});
+
+test.describe("unsaved guard — the Branding card (DR-0021)", () => {
+  test("an edited, unsaved brand asks before a sidebar link leaves it, and a saved-nothing card does not", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await sidebarLink(page, "Settings").click();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expandCard(page, BRANDING.TITLE);
+
+    // Nothing edited: the sidebar leaves at once.
+    await sidebarLink(page, "Runs").click();
+    await expect(page).toHaveURL(/\/runs/);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    await sidebarLink(page, "Settings").click();
+    await expandCard(page, BRANDING.TITLE);
+    await page.locator("#brand-org").fill("Unsaved Corp");
+    await sidebarLink(page, "Runs").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(UNSAVED.TITLE)).toBeVisible();
+    await expect(page).toHaveURL(/\/settings$/);
+
+    await page.getByRole("button", { name: UNSAVED.STAY }).click();
+    await expect(page.locator("#brand-org")).toHaveValue("Unsaved Corp");
   });
 });

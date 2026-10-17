@@ -38,7 +38,7 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
 import { useOperatorResolved, usePrincipal } from "./operator-context";
-import { currentView, screenPath, useViewAccess, viewOfPath } from "./console-view";
+import { currentView, screenPath, useViewAccess, viewOfPath, viewVerdict } from "./console-view";
 import { DoorDialog } from "./door-dialog";
 import { BANNER, CONNECTIONS } from "./copy/door";
 
@@ -168,7 +168,10 @@ export function ModelAccessBanner() {
   const path = screenPath(pathname);
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
   // The session decides when it holds the view (an SSO admin tier); the path decides on a one-operator install.
-  const userView = currentView(useViewAccess(), viewOfPath(pathname)) === "user";
+  // FUG-L772: only on a page that renders. A "switch to Admin / User" page (any non-pass verdict) is not a
+  // model-access screen, and the strip must not draw above it.
+  const access = useViewAccess();
+  const userView = currentView(access, viewOfPath(pathname)) === "user" && viewVerdict(pathname, access).kind === "pass";
   // `model_providers` is `omitzero` on the wire, so an admin who set up
   // providers but granted THIS caller none reads `[]` — a real block — never
   // the same wire shape as no block at all (absent). `!= null` (not `!!`) is

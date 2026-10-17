@@ -20,6 +20,7 @@ import {
 } from "../ui/dialog";
 import { cn } from "../ui/utils";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
+import { useUnsavedGuard } from "../../lib/use-unsaved-guard";
 import { useSecurityOperator } from "./operator-context";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -82,6 +83,9 @@ export function ReasonDialog({
     setScope("run");
     setUntil(null);
   }, [prompt]);
+
+  // DR-0021: a typed reason is work the page would lose on a reload or a navigation, so it is guarded like the other editors.
+  useUnsavedGuard("reason-dialog", !!prompt && reason.trim().length > 0, () => reason);
 
   const approve = prompt?.action === "approve";
   const showScope = prompt?.kind === "egress_domain";

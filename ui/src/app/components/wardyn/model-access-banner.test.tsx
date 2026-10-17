@@ -217,4 +217,19 @@ describe("the strip follows the session's view (FUG-L772)", () => {
     renderStrip({ path: "/account" });
     expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
   });
+
+  it("is not drawn above a switch page: an SSO admin in member mode on /admin/runs (F5)", () => {
+    renderStrip({ path: "/admin/runs", access: "session-user" });
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+  });
+
+  it("is drawn for that same member-mode session on a User page that renders", () => {
+    renderStrip({ path: "/runs", access: "session-user" });
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("is not drawn for a one-view admin token on a User page", () => {
+    renderStrip({ path: "/runs", access: "admin-only" });
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+  });
 });

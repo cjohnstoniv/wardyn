@@ -8,6 +8,7 @@ import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 import { BANNER, CONNECTIONS } from "../src/app/components/wardyn/copy/door";
+import { VIEW_TO_ADMIN, VIEW_TO_USER } from "../src/app/components/wardyn/copy/console-view";
 
 // The model-access strip (0.7.6, field-report finding 2) — the CLIENT half,
 // over a Bedrock SSO provider that is claude-code's default.
@@ -58,6 +59,39 @@ async function mockModelAccess(
     route.fulfill({ status: 503, json: { error: "e2e: no sign-in here" } }),
   );
 }
+
+/** An SSO admin's session: /me answers as the server does, in the Admin view or (clamped) in the User view. */
+async function ssoAdminSession(page: import("@playwright/test").Page, view: "admin" | "user"): Promise<void> {
+  let base: Record<string, unknown> | null = null;
+  await page.route("**/api/v1/me", async (route) => {
+    base ??= (await (await route.fetch()).json()) as Record<string, unknown>;
+    await route.fulfill({
+      json: { ...base, method: "sso", user_view: view === "user", ...(view === "user" && { role: "user", operator: false, security_operator: false, user_view_super_admin: true }) },
+    });
+  });
+}
+
+test.describe("the model-access strip on a page that is a switch (FUG-L772)", () => {
+  test("an SSO admin in the Admin view has no strip above the 'open in User view' page, and a User page draws it", async ({ page }) => {
+    await ssoAdminSession(page, "admin");
+    await mockModelAccess(page, { state: "not_configured", action: AGENTS.SIGN_IN_AWS });
+    await page.goto("/account");
+    await expect(page.getByText(VIEW_TO_USER.TITLE)).toBeVisible();
+    await expect(page.getByText(NOT_SIGNED_IN)).toHaveCount(0);
+  });
+
+  test("an SSO admin in the User view has no strip above the 'switch to Admin' page, and a User page draws it", async ({ page }) => {
+    await ssoAdminSession(page, "user");
+    await mockModelAccess(page, { state: "not_configured", action: AGENTS.SIGN_IN_AWS });
+    await page.goto("/admin/runs");
+    await expect(page.getByText(VIEW_TO_ADMIN.TITLE)).toBeVisible();
+    await expect(page.getByText(NOT_SIGNED_IN)).toHaveCount(0);
+
+    await page.getByRole("button", { name: VIEW_TO_ADMIN.STAY }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+    await expect(page.getByText(NOT_SIGNED_IN)).toBeVisible();
+  });
+});
 
 test.describe("the model-access strip", () => {
   test("a member who has never signed in is told on the board AND on New Run, and can sign in from the strip", async ({
