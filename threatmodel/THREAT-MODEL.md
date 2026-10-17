@@ -2551,6 +2551,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - `PUT /site-config` carries stored marks forward and refuses a change to either set (`inlineBaselineRefusal`).
     - The boot seed also writes its `internal_hosts`, marks included, whenever the stored list is empty, at any boot. That write is audited `site_config.seed` and takes no second-human hold. An upgrade marks no stored entry.
     - The guard refuses only a public suffix itself. A non-PSL parent such as `amazonaws.com` can still span tenants; the approving humans must assess its reach.
+    - **The cloud-SSO model credential is deliberately outside the same floor.**
+      - A stored cloud-SSO session is delivered at dispatch, after the class is resolved, so `RequiredConfinementFloor` never sees it. The run carries a warning, not a refusal (`credentialConfinementAdvisory` in [`internal/api/runs_create_confinement.go`](../internal/api/runs_create_confinement.go)).
+      - A CC1-only estate with a cloud model lane depends on that. Narrowing the exemption makes every run on such an estate unlaunchable until a CC3 substrate exists, so a future change to credential confinement floors is estate-wide, not a tightening.
+      - `components.require_vault_for_credentials: true` (`confinementFloorSpec` in [`internal/api/components_run.go`](../internal/api/components_run.go)) and an `api_key` grant to a model endpoint outside the baseline (`apiKeyToNonBaselineHost` in [`internal/composer/risk.go`](../internal/composer/risk.go)) behave the same way on a CC1-only estate: each raises the floor to CC3, which the runner cannot advertise.
 
 67. **A run attached to several workspaces holds the union of their reach in one sandbox [0.9].**
     - Since 0.9 a run attaches up to `32` workspaces (`maxRunWorkspaces`, [`internal/api/run_contract.go`](../internal/api/run_contract.go)), and each one's requirements, secrets, grants and egress fold into the run. Equal or nested targets across workspaces are refused (`workspace_target_overlap`).

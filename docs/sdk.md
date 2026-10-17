@@ -152,7 +152,7 @@ _ = created
 `GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
 it started, and what launch changed. It is readable by whoever may read the run
 (anyone else gets the same `404` as `GET /runs/{id}`); a portal's delegated token
-is refused `403` `delegation_scope`.
+is refused `403` `delegation_scope`. The policy itself is under `spec`, not at the top level of the response.
 
 ```go
 v, err := c.GetRunPolicy(ctx, created.ID)

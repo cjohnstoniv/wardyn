@@ -56,7 +56,8 @@ docs/operations/admin-only-writes.md=3645 share=35
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
 # docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
-docs/operations/three-roles.md=4218 share=35
+# docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
+docs/operations/three-roles.md=4238 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
@@ -72,7 +73,8 @@ docs/operations/user-drives.md=4823 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 docs/operations/capabilities.md=4205 share=35
-docs/operations/custom-components.md=1184 share=35
+# docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
+docs/operations/custom-components.md=1365 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.

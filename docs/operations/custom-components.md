@@ -39,6 +39,13 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - With no cap set, a run with a self-defined component is only marked: `run.create` carries `self_added_reach`.
 - The refusal is `component_autonomy` ([Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404)).
 
+**The credential confinement floor on a CC1-only estate.**
+
+- A run holding a write-capable grant, or an `api_key` grant to a host outside the baseline, is raised to `CC3` (`RequiredConfinementFloor` in [`internal/composer/risk.go`](../../internal/composer/risk.go)). A runner that does not advertise `CC3` refuses it with `confinement_class_unsupported`.
+- A captured cloud-SSO model credential is deliberately outside that floor. It is delivered at dispatch, after the class is resolved, so the run launches with a warning and not a refusal (`credentialConfinementAdvisory` in [`internal/api/runs_create_confinement.go`](../../internal/api/runs_create_confinement.go)).
+- A CC1-only estate (no gVisor or Kata RuntimeClass) with a cloud model lane depends on that exemption. Narrowing it would leave every run on such an estate unlaunchable until a `CC3` substrate exists, which is a procurement and not a config change. A future change to credential confinement floors is therefore estate-wide, not a tightening.
+- On a CC1-only estate, `require_vault_for_credentials: true` and an `api_key` grant to a private model endpoint outside the baseline behave the same way: each raises the floor to `CC3`, so each makes the run unlaunchable. Add the endpoint to the egress baseline (`PUT /governance/egress-baseline`) to lift the floor for the second.
+
 **Who may attach one.**
 
 - The `component` capability narrows which organisation component a person may attach (`value` is its uuid).
