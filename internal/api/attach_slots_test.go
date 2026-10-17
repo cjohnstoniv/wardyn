@@ -331,6 +331,33 @@ func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
 	}
 }
 
+// TestAttachSlots_TicketMintNamesThePrincipalCap: on an operator-owned run the mint refuses a principal
+// at its own cap, the cap its upgrade would hit, while the run still has room and another principal
+// mints as before.
+func TestAttachSlots_TicketMintNamesThePrincipalCap(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Lock()
+	ast.runs[run.ID] = run
+	ast.mu.Unlock()
+	for range maxAttachSessionsPerPrincipal {
+		if _, ok := srv.reserveAttachSlot(run, adminTokenPrincipal); !ok {
+			t.Fatal("a slot below the principal cap was refused")
+		}
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach-ticket", adminToken, "")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonAttachSessionCapReached) {
+		t.Fatalf("mint at the principal cap = %d %s, want 503 %s", w.Code, w.Body, reasonAttachSessionCapReached)
+	}
+	if srv.attachSlotsFull(run, "bob@example.com") {
+		t.Error("another principal reads as full while the run has room")
+	}
+}
+
 // TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter: on an operator-owned run one
 // principal stops at seven of the eight sessions and is refused the eighth like a full run, so another
 // principal still gets in; the run cap holds for everyone. A personal run admits only its owner's own
