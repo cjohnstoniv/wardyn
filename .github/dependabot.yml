@@ -53,6 +53,11 @@ updates:
       # test/e2e/fixtures holds a base image too; a fixture that never moves
       # is a CVE that never surfaces (R5 F181 follow-up).
       - /test/e2e/fixtures
+      # The three test images below pin golang/alpine/distroless digests that
+      # nothing bumped (CS1): the fakes the kind walks build and the hybrid-walk relay.
+      - /test/adofake/cmd
+      - /test/awsssofake/cmd
+      - /test/hybrid-walk
     schedule:
       interval: weekly
     groups:
