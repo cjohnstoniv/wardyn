@@ -46,23 +46,36 @@ type Action = "revive" | "extend" | "endRun" | "resume" | null;
 
 // Whether a local run lost to an outage or a reboot was stopped LATE: its runner came back with the network still on and
 // the org had it stopped then (a run.containment.reassert row with containment "late"). Only that row tells the
-// two stopped sentences apart, so it is read for a local outage-lost run alone; null until it has been read.
+// two stopped sentences apart, so it is read for a local outage-lost run alone.
+//
+// null means "not known": not read yet, read for a different loss than this one, or the read failed. Only a read that
+// succeeded may answer false, because false is what lets the banner say the stop was on time. A late row counts only
+// when it names this loss (its lost_at is the run's current one), so a row left by an earlier loss of a revived run
+// proves nothing about this one.
 function useStoppedLate(run: RunDetail): boolean | null {
   const applies = run.placement === "local" && (run.lost_reason === "outage" || run.lost_reason === "reboot");
-  const [late, setLate] = React.useState<boolean | null>(null);
+  const loss = `${run.id}@${run.lost_at ?? ""}`;
+  const [read, setRead] = React.useState<{ loss: string; late: boolean | null } | null>(null);
   React.useEffect(() => {
     if (!applies) return;
     let live = true;
+    const lostAt = Date.parse(run.lost_at ?? "");
     auditApi
       .listAudit(run.id, { action: "run.containment.reassert" })
-      // A failed read must not assert the confirmed sentence on a run that may have been stopped late.
-      .then((rows) => live && setLate(rows.some((r) => r.data?.containment === "late")))
-      .catch(() => live && setLate(false));
+      .then(
+        (rows) =>
+          live &&
+          setRead({
+            loss,
+            late: rows.some((r) => r.data?.containment === "late" && Date.parse(String(r.data?.lost_at)) === lostAt),
+          }),
+      )
+      .catch(() => live && setRead({ loss, late: null }));
     return () => {
       live = false;
     };
-  }, [applies, run.id, run.lost_at, run.runner_online]);
-  return applies ? late : null;
+  }, [applies, run.id, run.lost_at, run.runner_online, loss]);
+  return applies && read?.loss === loss ? read.late : null;
 }
 
 export function RunLifetimeBanner({

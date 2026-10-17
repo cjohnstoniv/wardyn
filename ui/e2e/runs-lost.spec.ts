@@ -7,7 +7,7 @@
 // lost run is in Needs you, Revive moves it to Running; a lease-ended run is
 // grey under Ended". Same GET /runs splice technique runs-landing.spec.ts
 // uses (a precise attention/lost_reason combination no seed script produces).
-import { test, expect, gotoConsole } from "./fixtures";
+import { test, expect, gotoConsole, navTo } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
@@ -96,5 +96,52 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     await expect(row).toBeVisible();
     await expect(row.getByText("Ended at its end time")).toBeVisible();
     await expect(row.getByRole("button", { name: "Revive" })).toHaveCount(0);
+  });
+});
+
+// DR-0261: a local run its runner lost contact with says its network was stopped on time only on evidence. The
+// evidence is the audit read; a read that fails is no evidence, so the banner makes no stopped claim then.
+test.describe("Run detail — the local lost-run banner", () => {
+  async function openLostLocalRun(page: Page, audit: "fail" | "empty") {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      await route.fulfill({ response, json });
+    });
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 2") {
+        Object.assign(json, {
+          placement: "local",
+          lost_reason: "outage",
+          lost_at: new Date(Date.now() - 3_600_000).toISOString(),
+          runner_online: true,
+          runner_name: "laptop-7",
+        });
+      }
+      await route.fulfill({ response, json });
+    });
+    await page.route("**/api/v1/audit?*run.containment.reassert*", async (route) => {
+      if (audit === "fail") return route.fulfill({ status: 500, json: { error: "boom" } });
+      return route.fulfill({ json: [] });
+    });
+    await gotoConsole(page);
+    await navTo(page, "Runs");
+    await page.getByText("e2e fixture 2").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+  }
+
+  test("with the late-stop read confirming nothing late, it says the network was stopped", async ({ page }) => {
+    await openLostLocalRun(page, "empty");
+    await expect(page.getByTestId("run-lifetime-local-stopped")).toContainText("This run's network was stopped");
+  });
+
+  test("with the late-stop read failing, it makes no claim that the network was stopped", async ({ page }) => {
+    await openLostLocalRun(page, "fail");
+    await expect(page.getByTestId("run-lifetime-local-stopped")).toHaveCount(0);
+    await expect(page.getByText("This run's network was stopped")).toHaveCount(0);
   });
 });
