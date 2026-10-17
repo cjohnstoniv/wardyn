@@ -832,3 +832,51 @@ func TestSCIMGroupRemovalWaitsForOneOwner(t *testing.T) {
 		t.Errorf("pending after the retry = %+v, want none", got)
 	}
 }
+
+// A group removal refused while neither the store nor the spool takes its person.deprovision row keeps the row
+// owed: every retry writes it again, nothing is cut and the epoch is unchanged, and once the audit write works
+// exactly one row lands and later retries write none.
+func TestSCIMGroupRemovalKeepsItsAuditRowOwedUntilWritten(t *testing.T) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	for _, principal := range []string{"sub-t1", "sub-t2"} {
+		f := false
+		if _, err := e.st.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: principal, Email: twin, Role: "user", UserType: types.UserTypeStandard,
+			Groups: []string{groupClaim}, GroupsTruncated: &f, Name: "t", CreatedAt: time.Now().UTC(),
+		}, apiTokenPrefix+uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	g, code := e.postGroup(e.a, groupExternalID, "Engineering")
+	if code != http.StatusCreated {
+		t.Fatalf("POST /Groups = %d", code)
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add member = %d %s", r.Code, r.Body.String())
+	}
+	patch := groupRemovePatch(t, "entra-doc-patch-group-remove-members-value-array.json", id)
+	epoch := e.identity(id).AuthorityEpoch
+	attempt := func(when string, wantRows, wantTried int) {
+		t.Helper()
+		if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+			t.Fatalf("%s = %d %s, want 5xx while the owner is ambiguous", when, r.Code, r.Body.String())
+		}
+		rows := len(e.rows(e.a, "person.deprovision")) + len(e.rows(e.b, "person.deprovision"))
+		tried := e.a.audit.attempts("person.deprovision") + e.b.audit.attempts("person.deprovision")
+		if rows != wantRows || tried != wantTried || e.identity(id).AuthorityEpoch != epoch {
+			t.Errorf("%s: rows %d tried %d epoch %d, want %d %d %d", when, rows, tried, e.identity(id).AuthorityEpoch, wantRows, wantTried, epoch)
+		}
+	}
+
+	e.a.audit.fail("person.deprovision", true)
+	attempt("the removal while the audit write fails", 0, 1)
+	attempt("its retry while the audit write fails", 0, 2)
+	e.a.audit.fail("person.deprovision", false)
+	attempt("the retry once the audit write works", 1, 3)
+	attempt("a later retry", 1, 3)
+	if e.groupJobsDone(id, g.ID) {
+		t.Error("a refused removal is recorded as done")
+	}
+}

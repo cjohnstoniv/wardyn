@@ -15,6 +15,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"net"
 	"net/http/httputil"
 	"sync"
@@ -974,8 +975,14 @@ const (
 // Audit failures must never block the primary operation (the Recorder owns
 // durability/retry); we swallow the error after the event is constructed.
 func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
+	_ = s.recordAuditDurably(ctx, ev)
+}
+
+// recordAuditDurably is recordAudit that says whether the row was durably accepted: written, or held by the
+// audit spool for its drain.
+func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bool {
 	if s.cfg.Audit == nil {
-		return
+		return true
 	}
 	if ev.ID == uuid.Nil {
 		ev.ID = uuid.New()
@@ -991,5 +998,6 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
 	// event to the durable local fallback so it is never silently lost — for every
 	// audit writer, not just this one. So there is no API-layer-only spool here.
-	_ = s.cfg.Audit.Record(ctx, ev)
+	err := s.cfg.Audit.Record(ctx, ev)
+	return err == nil || errors.Is(err, audit.ErrSpooled)
 }

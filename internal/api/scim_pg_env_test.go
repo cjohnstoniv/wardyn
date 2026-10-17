@@ -158,21 +158,34 @@ func (r *pgTestRevocations) setLateCheck(f func()) {
 	r.mu.Unlock()
 }
 
-// flakyAudit fails the audit write of the actions it is told to fail.
+// flakyAudit fails the audit write of the actions it is told to fail, as a store and spool that both refuse
+// it, and counts every write it is asked for.
 type flakyAudit struct {
 	*recRecorder
 	mu      sync.Mutex
 	failing map[string]bool
+	tried   map[string]int
 }
 
 func (f *flakyAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 	f.mu.Lock()
 	fail := f.failing[ev.Action]
+	if f.tried == nil {
+		f.tried = map[string]int{}
+	}
+	f.tried[ev.Action]++
 	f.mu.Unlock()
 	if fail {
 		return errors.New("audit sink unavailable")
 	}
 	return f.recRecorder.Record(ctx, ev)
+}
+
+// attempts is how many writes of action f was asked for.
+func (f *flakyAudit) attempts(action string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tried[action]
 }
 
 func (f *flakyAudit) fail(action string, v bool) {

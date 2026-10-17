@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -154,4 +155,68 @@ func TestSCIMSweeperResumeOfAStoppedSuspensionWritesNothingNew(t *testing.T) {
 	if !e.allJobsDone(id) || !e.tokenRevoked(tok1) {
 		t.Error("the resume once the emails resolve did not finish the suspension")
 	}
+}
+
+// A suspension that stops while neither the store nor the spool takes its person.deprovision row keeps the row
+// owed: every resume writes it again, with no new cut and the epoch unchanged, and once the audit write works
+// exactly one row lands and later resumes write none.
+func TestSCIMStoppedSuspensionKeepsItsAuditRowOwedUntilWritten(t *testing.T) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	e.seedToken("sub-t1", twin)
+	e.seedToken("sub-t2", twin)
+	form := entraPrincipalPrefix + e.tenant + ":" + oidGhost
+	setFailing := func(v bool) {
+		e.a.audit.fail("person.deprovision", v)
+		e.b.audit.fail("person.deprovision", v)
+	}
+	setFailing(true)
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+	}
+	type state struct {
+		rows, tried int
+		epoch       int64
+		cut         time.Time
+	}
+	read := func() state {
+		var s state
+		if err := e.pool.QueryRow(context.Background(), `SELECT revoked_at FROM oidc_session_revocations WHERE sub = $1`, form).Scan(&s.cut); err != nil {
+			t.Fatal(err)
+		}
+		s.rows = len(e.rows(e.a, "person.deprovision")) + len(e.rows(e.b, "person.deprovision"))
+		s.tried = e.a.audit.attempts("person.deprovision") + e.b.audit.attempts("person.deprovision")
+		s.epoch = e.identity(id).AuthorityEpoch
+		return s
+	}
+	tick := func() {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		_ = e.b.srv.SweepSCIMPurge(context.Background())
+	}
+	check := func(when string, want state) {
+		t.Helper()
+		if got := read(); got.rows != want.rows || got.tried != want.tried || got.epoch != want.epoch || !got.cut.Equal(want.cut) {
+			t.Errorf("%s: rows %d tried %d epoch %d cut %v, want %d %d %d %v", when, got.rows, got.tried, got.epoch, got.cut, want.rows, want.tried, want.epoch, want.cut)
+		}
+	}
+
+	first := read()
+	if first.rows != 0 || first.tried != 1 {
+		t.Fatalf("after the request: rows %d tried %d, want 0 1", first.rows, first.tried)
+	}
+	want := first
+	for i := 1; i <= 2; i++ {
+		tick()
+		want.tried++
+		check(fmt.Sprintf("resume %d while the audit write fails", i), want)
+	}
+	setFailing(false)
+	tick()
+	want.rows, want.tried = 1, want.tried+1
+	check("the resume once the audit write works", want)
+	tick()
+	check("a later resume", want)
 }

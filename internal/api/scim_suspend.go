@@ -204,24 +204,39 @@ func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store
 	if forms.refusal == "" {
 		return forms, err
 	}
-	return forms, s.refuseDeprovision(ctx, ident, kind, forms.refusal, err, false)
+	_, err = s.refuseDeprovision(ctx, ident, kind, forms.refusal, err, false)
+	return forms, err
 }
 
 // refuseDeprovision leaves the person.deprovision row saying why a step of kind stops, and returns the error
 // the request answers 5xx with: err when the forms could not be read, errDeprovisionIncomplete otherwise.
-// recorded is a step the ledger already holds pending with this reason: its row was written when it first
-// stopped, so a retry answers the same without another.
-func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error, recorded bool) error {
+// recorded is a step the ledger already holds pending with this bare reason: its row was durably accepted
+// when it first stopped, so a retry answers the same without another. The bool says the row is durably
+// accepted, by the store or the audit spool; until it is, the ledger keeps the row owed (ledgerReason).
+func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error, recorded bool) (bool, error) {
 	outcome := "failure"
 	if err == nil {
 		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
 	}
-	if !recorded {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
-			mustJSON(map[string]any{"kind": kind, "reason": reason})))
+	if recorded {
+		return true, err
 	}
-	return err
+	return s.recordAuditDurably(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
+		mustJSON(map[string]any{"kind": kind, "reason": reason}))), err
 }
+
+// ledgerReason is what a stopped step's ledger row says: the reason once its person.deprovision row is durably
+// accepted, and the reason marked owed until then, so the next occurrence writes the row again rather than
+// counting it written.
+func ledgerReason(reason string, accepted bool) string {
+	if accepted {
+		return reason
+	}
+	return reason + auditOwed
+}
+
+// auditOwed marks a stopped step's ledger reason whose person.deprovision row is not yet durably accepted.
+const auditOwed = " (its audit row is not yet written)"
 
 func nonEmptyForms(in ...string) []string {
 	out := make([]string, 0, len(in))
@@ -288,7 +303,7 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	jobs, jobsErr := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if jobsErr != nil {
 		if forms.refusal != "" {
-			err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, false)
+			_, err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, false)
 		}
 		return ident, forms, nil, errors.Join(err, jobsErr)
 	}
@@ -304,18 +319,20 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 			bound = 1
 		}
 		// A step 1 already stopped for this reason, under the same binding and with as many forms cut, has
-		// nothing new to cut or record: the retry only touches its ledger row, so the sweeper still waits
-		// before it looks again.
-		again := ident.DeactivatedAt != nil && ok && !cutoff.Done && cutoff.LastError == forms.refusal &&
+		// nothing new to cut: the retry only touches its ledger row, so the sweeper still waits before it
+		// looks again. Its audit row is written again only while the ledger says it is still owed.
+		again := ident.DeactivatedAt != nil && ok && !cutoff.Done &&
+			(cutoff.LastError == forms.refusal || cutoff.LastError == ledgerReason(forms.refusal, false)) &&
 			cutoff.Detail[store.CutoffDetailBound] == bound && cutoff.Detail["sessions_cut"] == len(proven)
-		err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, again)
+		var accepted bool
+		accepted, err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, again && cutoff.LastError == forms.refusal)
 		if again {
 			key := store.JobKey{Step: store.JobStepCutoff}
-			return ident, forms, nil, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, errors.New(forms.refusal)))
+			return ident, forms, nil, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, errors.New(ledgerReason(forms.refusal, accepted))))
 		}
 		if stepOne {
 			_, partialErr := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principal: ident.Principal,
-				Principals: proven, CutoffSubs: proven, Partial: forms.refusal})
+				Principals: proven, CutoffSubs: proven, Partial: ledgerReason(forms.refusal, accepted)})
 			err = errors.Join(err, partialErr)
 		}
 		return ident, forms, nil, err
