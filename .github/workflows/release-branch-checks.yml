@@ -21,7 +21,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # The range is what the push introduced, as in ci.yml's dco job: a new ref
-      # or a force-pushed one whose old tip is gone falls back to the tip commit.
+      # or a force-pushed one whose old tip is gone falls back to everything the
+      # branch holds that main does not.
       # ^origin/main: commits already on main passed main's own gate.
       - name: Check DCO sign-off (Signed-off-by on every pushed commit)
         env:
@@ -31,7 +32,7 @@ jobs:
              && git cat-file -e "$BEFORE" 2>/dev/null; then
             make dco DCO_RANGE="$BEFORE..HEAD ^origin/main" DCO_ALLOW_GITHUB_MERGES=1
           else
-            make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
+            make dco DCO_RANGE="HEAD ^origin/main" DCO_ALLOW_GITHUB_MERGES=1
           fi
 
   gitleaks:

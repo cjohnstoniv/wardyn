@@ -1481,8 +1481,8 @@ jobs:
   # lists are the old `make test-report-pg` list split in two; with
   # `make test-race-pg` they run exactly what the single job ran.
   #   api-1, api-2 — the Postgres-gated tests of internal/api and test/apie2e, two
-  #           slices by test-name hash (make test-report-pg-api; scripts/pg-test-select.sh
-  #           picks them, the go unit run proves the pick misses none). Each slice
+  #           slices balanced by the recorded seconds in test/pg-test-weights.tsv (make
+  #           test-report-pg-api; scripts/pg-test-select.sh picks them, the go unit run proves the pick misses none). Each slice
   #           also runs every skip-floor probe. The ~4400 other tests run in `go`.
   #   store — the Postgres-gated tests of store, db, secretstore, broker, recording,
   #           cmd/wardynd, notify, livebus (make test-report-pg-store; same selector and guard)

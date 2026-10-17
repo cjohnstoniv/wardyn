@@ -498,6 +498,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		*injections = kept
 
 		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
+		droppedLane = append(droppedLane, dropGitHubDoor(c.deny, policy, p, sandboxEnv)...)
 		droppedLane = append(droppedLane, narrowCeilingBedrockLane(c, llm, mitmHosts, sandboxEnv)...)
 		slices.Sort(droppedLane)
 		// A component's header host the ceiling denies loses its interception

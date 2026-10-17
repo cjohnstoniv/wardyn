@@ -48,6 +48,11 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 		return re, rerr
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
+	if cfg.GitHubAPI != nil && githubDoorWithheld(c.deny) { // the sandbox holds only the inert token, so the door can go
+		cfg.GitHubAPI = nil
+		closeGitHubDoor(&cfg.Policy)
+		re.droppedLane = append(re.droppedLane, githubDoorLane)
+	}
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
 		if ceilingDenies(c.deny, in.Host) {
 			re.droppedInjection = append(re.droppedInjection, in.Host)

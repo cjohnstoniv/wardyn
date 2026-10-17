@@ -20,6 +20,7 @@
 # docs/POLICIES.md 18237 adds 47 over 18190, measured: requirement-row egress safety rests on write-side authorization and provenance, not a fold-time clamp.
 # docs/POLICIES.md 18311 = 18258 + 53 (RV4f), measured at the wave-C merge.
 # docs/POLICIES.md 18332 = 18311 + 21, measured: a component definition's description.
-docs/POLICIES.md=18332 share=12
+# docs/POLICIES.md 18362 = 18332 + 30, measured: a deny of any GitHub-family host also withholds the GitHub CLI door.
+docs/POLICIES.md=18362 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

@@ -110,6 +110,15 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
 const EXPIRING_SOON = "Your session is expiring soon.";
 const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
 const isMe = (url: string) => new URL(url).pathname === "/api/v1/me";
+// Counts /me answers from now on. A read is awaited by counting, not by waitForResponse called afterwards: an
+// answer that lands before that call is never seen again, and the wait runs out.
+function meReads(page: Page): { count: number } {
+  const seen = { count: 0 };
+  page.on("response", (r) => {
+    if (isMe(r.url())) seen.count += 1;
+  });
+  return seen;
+}
 
 /** On /admin/providers with a git row typed but not saved, under a session
  *  two minutes from its end. `answer` changes what /me says from then on. */
@@ -148,6 +157,7 @@ test.describe("the expiry banner: sign in again in place", () => {
   test("the same person signing in keeps the tab and the draft, and the expiry moved", async ({ page }) => {
     const { answer } = await draftUnderAnExpiringSession(page);
     const opened = page.waitForEvent("popup");
+    const reads = meReads(page);
     await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
     const popup = await opened;
 
@@ -156,7 +166,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeFocused();
     // The old session answering /me is not a renewal: the strip keeps waiting.
-    await page.waitForResponse((r) => isMe(r.url()));
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(1);
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible();
 
     const later = inMinutes(60);
@@ -198,6 +208,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
 
     // Cancel: the window closes and the banner is back, on the same page.
+    const reads = meReads(page);
     await page.getByRole("button", { name: REAUTH_RENEW.CANCEL }).click();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
@@ -205,8 +216,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
     await expect.poll(() => popup.isClosed()).toBe(true);
     // /me is still read, and the same person answering it changes nothing.
-    await page.waitForResponse((r) => isMe(r.url()));
-    await page.waitForResponse((r) => isMe(r.url()));
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(2);
     expect(await sameDocument(page)).toBe(true);
     await expect(page.getByTestId("provider-row-github").locator("textarea")).toHaveValue(BASE_URL);
 

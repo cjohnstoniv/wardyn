@@ -9,7 +9,8 @@
 #   scripts/pg-test-select.sh [--part i/n] [<go package pattern>...]
 #       Prints a `go test -run` regexp: ^(TestA|TestB|...)$. A package pattern
 #       is anything `go list` accepts; none means the api shard (API_PKGS). --part i/n keeps the
-#       i-th of n slices (by a hash of the test name) plus every probe.
+#       i-th of n slices plus every probe: the slow tests listed in test/pg-test-weights.tsv are
+#       packed across the slices by their recorded seconds, the rest go by a hash of the name.
 #   scripts/pg-test-select.sh --packages [api|store]
 #       Prints API_PKGS (the default) or STORE_PKGS: the one place each shard's
 #       package list lives (the store shard is store, db, broker, cmd/wardynd, ...).
@@ -158,14 +159,22 @@ if [ "${1:-}" = "--guard" ]; then
   exit 0
 fi
 
-# --part i/n: the i-th of n slices by a hash of the test name, so a new test never reshuffles the
-# others. Every probe rides in every slice: each shard's skip floor must see all of them pass.
+# --part i/n: the i-th of n slices. The tests in $weights ("<seconds><TAB><test>", the slow ones from
+# a green hosted run) are dealt out heaviest first, each to the lightest slice so far, so the slices
+# finish together; the file alone decides that, so a new test never moves them. Every other test goes
+# by a hash of its name, so it reshuffles nothing either. Every probe rides in every slice: each
+# shard's skip floor must see all of them pass.
+weights="${PG_TEST_WEIGHTS:-$(dirname "$0")/../test/pg-test-weights.tsv}"
 part=1 parts=1
 if [ "${1:-}" = "--part" ]; then part="${2%/*}" parts="${2#*/}"; shift 2; fi
 [ $# -gt 0 ] || set -- $API_PKGS
-names="$(selection "$@" | awk -v part="$part" -v parts="$parts" '
-  BEGIN { chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz" }
+names="$({ LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 "$weights" 2>/dev/null || true; echo "-"; selection "$@"; } | awk -v part="$part" -v parts="$parts" '
+  BEGIN { chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"; FS = "[ \t]" }
+  $0 == "-" { sel = 1; next }
+  !sel { w = 0; for (b = 1; b <= parts; b++) if (b == 1 || load[b] < load[w]) w = b
+         load[w] += $1; slice[$2] = w; next }
   { h = 7; for (i = 1; i <= length($2); i++) h = (h * 31 + index(chars, substr($2, i, 1))) % 1000003
-    if ($3 == "probe" || h % parts == part - 1) print $2 }' | sort -u | paste -sd'|')"
+    mine = ($2 in slice) ? slice[$2] == part : h % parts == part - 1
+    if ($3 == "probe" || mine) print $2 }' | sort -u | paste -sd'|')"
 [ -n "$names" ] || { echo "pg-test-select: no PG tests found in: $*" >&2; exit 1; }
 echo "^(${names})\$"
