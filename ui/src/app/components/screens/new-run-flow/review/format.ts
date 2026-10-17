@@ -6,6 +6,9 @@
 // Number words for Review's limits: composed only from canon pieces.
 
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
+import type { EffectiveRunLimits } from "../../../../lib/types/runner-pools";
+import type { RunIntent } from "../draft/run-intent";
 
 const trimmed = (n: number) => String(Number(n.toFixed(2)));
 const grouped = (n: number) => n.toLocaleString("en-US");
@@ -20,3 +23,17 @@ export function lifetimeText(sec: number): string {
   const hours = sec / 3600;
   return hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(trimmed(hours));
 }
+
+/**
+ * The end a launch will give, as the server resolves it: no end when asked for and allowed, else the asked
+ * lifetime (or the default when none was asked) held to the cap. Seconds, "none", or undefined when unknown.
+ */
+export function resolvedLifetime(intent: Pick<RunIntent, "ends_after_sec" | "no_end">, limits: EffectiveRunLimits | undefined): number | "none" | undefined {
+  if (intent.no_end && limits?.no_end_allowed) return "none";
+  const life = limits?.lifetime_sec;
+  const wanted = intent.ends_after_sec ?? (life?.default.unlimited ? undefined : life?.default.value);
+  return wanted === undefined || !life || life.cap.unlimited ? wanted : Math.min(wanted, life.cap.value);
+}
+
+export const resolvedLifetimeText = (end: number | "none" | undefined): string | undefined =>
+  end === "none" ? ENDS_NONE : end === undefined ? undefined : lifetimeText(end);

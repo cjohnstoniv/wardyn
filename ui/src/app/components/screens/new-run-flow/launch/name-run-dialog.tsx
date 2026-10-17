@@ -33,7 +33,7 @@ import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
 import { BarrierChip } from "../review/barrier-chip";
-import { cpuNumber, lifetimeText } from "../review/format";
+import { cpuNumber, resolvedLifetime, resolvedLifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
 import { useLaunchRun } from "./use-launch-run";
@@ -43,16 +43,15 @@ const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
 
 /**
  * pool · CPU · lifetime, from what the server just answered; a part it did not give is left out.
- * The lifetime is the ask held to the answer's cap, or the answer's default when nothing was asked.
+ * The lifetime is the resolved end: no end when asked for and allowed, else the ask held to the answer's cap,
+ * or the answer's default when nothing was asked.
  */
 export function summaryLine(pre: ReviewPreflight, intent: RunIntent): string {
   const pool = pre.runner_pool?.name;
   const cpuMillis = pre.resources_applied?.cpu_millis.applied;
   const lifetimeLimit = pre.limits?.lifetime_sec;
-  const wanted = intent.ends_after_sec ?? (lifetimeLimit?.default.unlimited ? undefined : lifetimeLimit?.default.value);
-  const seconds = wanted === undefined || !lifetimeLimit || lifetimeLimit.cap.unlimited ? wanted : Math.min(wanted, lifetimeLimit.cap.value);
   const cpu = cpuMillis === undefined ? undefined : cpuNumber(cpuMillis);
-  const lifetime = !lifetimeLimit || seconds === undefined ? undefined : lifetimeText(seconds);
+  const lifetime = lifetimeLimit ? resolvedLifetimeText(resolvedLifetime(intent, pre.limits)) : undefined;
   if (pool && cpu !== undefined && lifetime !== undefined) return NR_LAUNCH.SUMMARY(pool, cpu, lifetime);
   const parts = [pool, cpu === undefined ? undefined : NR_SHARED.CPU(cpu), lifetime].filter((p): p is string => !!p);
   return parts.length ? parts.reduce((all, part) => NR_SHARED.JOIN(all, part)) : "";
