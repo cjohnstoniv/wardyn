@@ -12,4 +12,5 @@ deploy/images/README.md=4704 share=35
 # docs/operations/build-images.md 1820 adds 28 (0.9.3 M-2/DR-0235): the digest-and-platform clause and the staged claude-bin refusal.
 docs/operations/build-images.md=1820 share=35
 # docs/ENVBUILD.md 3190 adds 1122 over 2068 (0.9 F-1516 B7): the build record, rebuild and refresh sections.
-docs/ENVBUILD.md=3190 share=35
+# docs/ENVBUILD.md 3220 adds 30 over 3190 (0.9.3 FIN-B), measured: one bullet saying a base that exists only on this host cannot be refreshed.
+docs/ENVBUILD.md=3220 share=35

@@ -2242,6 +2242,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 - Every sandbox image bakes `corp-ca.pem` at build (`install_mitm_ca`, "[Corporate TLS-inspection root](#corporate-tls-inspection-root)" below), but the `wardyn-proxy` image carries a corporate CA only if one was staged at its own build.
 - Otherwise it trusts one only through `WARDYN_TRUSTED_CA_FILE` ([ENV.md](ENV.md)).
 - Unset, the re-origination's re-dial fails `x509: certificate signed by unknown authority`, filed as the same bare `builtin:dial-failed` as every other dial failure in this section.
+- The sandbox's error text and the decision row's cause drop the issuing CA's name, and a name-constraint refusal's names, for every host, so an unknown-authority failure does not say which CA is missing; the proxy's own log keeps the masked text.
 
 **Reading the audit rows for this lane.**
 Three things in a run's audit trail say which hop its connections took and why one died, and the proxy's log adds a fourth.

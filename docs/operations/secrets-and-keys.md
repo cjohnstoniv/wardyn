@@ -525,7 +525,7 @@ Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<a
 
 **Identity.** The AWS SDK's default credential chain. On EKS use IRSA (an IAM role on wardynd's service account) or EKS Pod Identity.
 
-- A long-lived access key (`AKIA…`) boots, and raises the amber `kek_service_static_key` setup row; so does the EC2 node's instance role, which every pod on the node shares.
+- A long-lived access key (`AKIA…`) boots, and raises the amber `kek_service_static_key` setup row; so does the EC2 node's instance role, which every pod or process on that machine shares.
 - Anyone who copies that key unlocks every credential from anywhere until it is revoked.
 - On Helm set `kek.provider=awskms` and `kek.awskms.key`, and give wardynd's service account its IAM role (`serviceAccount.annotations`, `eks.amazonaws.com/role-arn`) or an EKS Pod Identity association; no age key is needed.
 
