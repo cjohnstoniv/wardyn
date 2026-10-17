@@ -100,7 +100,7 @@ The database snapshot is identified by its audit head at quiesce: `max(seq)` of 
 |---|---|---|---|
 | `WARDYN_AGE_KEY` (`local` KEK) | The `age1…` recipient | The identity | Whoever holds the identity and the dump: residual 48(b), unchanged |
 | `WARDYN_PLATFORM_KEY_FILE` | Its recipient | The file | Holder of the file, for boot-key rows only |
-| `WARDYN_KEK=transit` or `azurekv` | Mode, mount and key names, from configuration only; no key-service call | Vault token, Entra secret, any wrapped key | Whoever the key service lets unwrap |
+| `WARDYN_KEK=transit`, `azurekv` or `awskms` | Mode, and each mount and key name that is set (`kek_keys`, by environment name), from configuration only; no key-service call | Vault token, Entra secret, any wrapped key | Whoever the key service lets unwrap |
 | Principal keys (`principal_keys`) | Row count per purpose and state, from the dump | Unwrapped keys | As the key-domain KEK above them |
 | Store mode (`vaultkv`, `azurekv`) | Count of pointer rows | Values (in the external store) | The external store's own access |
 | Desktop `age.key` | Recipient, when present on the device | The file ([DESKTOP.md](../../DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)) | The device only |

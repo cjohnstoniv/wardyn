@@ -52,9 +52,13 @@ type recoveryManifest struct {
 // (recovery-set.md §4.1): the age recipient (public), the KEK mode as set, and the row count per key
 // class in the dump. All of it comes from configuration and the database; no key service is called.
 type recoveryKeys struct {
-	AgeRecipient string         `json:"age_recipient"`
-	KEKMode      string         `json:"kek_mode"`
-	Classes      map[string]int `json:"classes"`
+	AgeRecipient string `json:"age_recipient"`
+	// PlatformRecipient is the recipient of WARDYN_PLATFORM_KEY_FILE's identity, when it is set.
+	PlatformRecipient string `json:"platform_recipient,omitempty"`
+	KEKMode           string `json:"kek_mode"`
+	// KEKKeys is each key-service mount and key name that is set, by its environment name.
+	KEKKeys map[string]string `json:"kek_keys,omitempty"`
+	Classes map[string]int    `json:"classes"`
 }
 
 // manifestSources is what -recovery-manifest reads from the resolved flags.
@@ -62,10 +66,42 @@ type manifestSources struct {
 	DSN, Set, SpoolBase string
 	AgeKey, KEKMode     string
 	RecordingStore      string
+	PlatformKeyFile     string
+	KEKKeys             map[string]string
 }
 
 func manifestSourcesOf(f *bootFlags, set string) manifestSources {
-	return manifestSources{DSN: *f.dsn, Set: set, SpoolBase: filepath.Base(*f.auditSpool), AgeKey: *f.ageKey, KEKMode: kekModeOf(f), RecordingStore: *f.recordingSel}
+	return manifestSources{DSN: *f.dsn, Set: set, SpoolBase: filepath.Base(*f.auditSpool), AgeKey: *f.ageKey, KEKMode: kekModeOf(f),
+		RecordingStore: *f.recordingSel, PlatformKeyFile: *f.platformKeyFile, KEKKeys: kekKeyNames(f)}
+}
+
+// kekKeyNames is the key-service mount and key names that are set, by environment name: names only,
+// read from configuration, so a rehearsal can say which keys the set needs. The Transit mount has a
+// default, so it is named only beside a Transit key.
+func kekKeyNames(f *bootFlags) map[string]string {
+	names := map[string]string{}
+	for env, v := range map[string]*string{
+		"WARDYN_VAULT_TRANSIT_KEY":              f.vault.transitKey,
+		"WARDYN_VAULT_TRANSIT_KEY_PLATFORM":     f.vault.transitKeyPlatform,
+		"WARDYN_AWS_KMS_KEY":                    f.vault.awsKMSKey,
+		"WARDYN_AZURE_KEK_KEY":                  f.azure.kekKey,
+		"WARDYN_AZURE_KEK_SIGNING_KEY":          f.azure.kekSigningKey,
+		"WARDYN_AZURE_KEK_KEY_PLATFORM":         f.azure.kekKeyPlatform,
+		"WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM": f.azure.kekSigningKeyPlatform,
+	} {
+		if v != nil && strings.TrimSpace(*v) != "" {
+			names[env] = strings.TrimSpace(*v)
+		}
+	}
+	if names["WARDYN_VAULT_TRANSIT_KEY"] != "" || names["WARDYN_VAULT_TRANSIT_KEY_PLATFORM"] != "" {
+		if m := f.vault.transitMount; m != nil && strings.TrimSpace(*m) != "" {
+			names["WARDYN_VAULT_TRANSIT_MOUNT"] = strings.TrimSpace(*m)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 type recoverySource struct {
@@ -281,7 +317,17 @@ func readRecoverySnapshot(ctx context.Context, conn *pgxpool.Conn) (recoverySnap
 // recoveryKeysOf reads the key fingerprints: the age recipient from the configured identity, the KEK mode as
 // set, and the dump's row count per key class. A key that does not parse is refused without echoing it.
 func recoveryKeysOf(ctx context.Context, conn *pgxpool.Conn, in manifestSources) (recoveryKeys, error) {
-	k := recoveryKeys{KEKMode: in.KEKMode, Classes: map[string]int{}}
+	k, err := recoveryKeyFingerprints(in)
+	if err != nil {
+		return k, err
+	}
+	err = secretstorepg.ListRows(ctx, conn, func(c secretstorepg.CheckedRow) { k.Classes[keyClassOf(c)]++ })
+	return k, err
+}
+
+// recoveryKeyFingerprints is recoveryKeysOf's configuration half: the recipients and the key names.
+func recoveryKeyFingerprints(in manifestSources) (recoveryKeys, error) {
+	k := recoveryKeys{KEKMode: in.KEKMode, KEKKeys: in.KEKKeys, Classes: map[string]int{}}
 	if key := strings.TrimSpace(in.AgeKey); key != "" {
 		id, err := age.ParseX25519Identity(key)
 		if err != nil {
@@ -289,8 +335,15 @@ func recoveryKeysOf(ctx context.Context, conn *pgxpool.Conn, in manifestSources)
 		}
 		k.AgeRecipient = id.Recipient().String()
 	}
-	err := secretstorepg.ListRows(ctx, conn, func(c secretstorepg.CheckedRow) { k.Classes[keyClassOf(c)]++ })
-	return k, err
+	if strings.TrimSpace(in.PlatformKeyFile) != "" {
+		// readPlatformKey's own refusals are boot sentences; the manifest names the variable only.
+		id, err := readPlatformKey(in.PlatformKeyFile, in.AgeKey)
+		if err != nil {
+			return k, errors.New("WARDYN_PLATFORM_KEY_FILE does not hold a usable age identity")
+		}
+		k.PlatformRecipient = id.Recipient().String()
+	}
+	return k, nil
 }
 
 // recoverySourceOf is the DSN's host, port and database, which is all the manifest may name. A DSN that does
