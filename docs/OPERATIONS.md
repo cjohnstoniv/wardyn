@@ -102,6 +102,16 @@ copy is permanent.
 - A sign-in whose browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   `wardyn run sign-in <run-id>` (below).
 
+- **Which source a run's output comes from.**
+  - The runner that served the run decides, never this deployment's own runner.
+  - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
+  - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
+    `source: "recording"`.
+  - A run that is not recorded (`not_recorded` set) reads its tail, whatever its runner.
+  - A self-hosted runner that cannot be asked when the run is read (offline, or connected to another replica) is
+    taken to keep a tail.
+  - So turning on a recording store (`WARDYN_RECORDING_STORE`) moves the output of runs on this deployment's
+    Kubernetes runner from `stdout` to `recording`; a laptop run on Docker keeps `stdout`.
 - **Recording-on Kubernetes output.**
   - The session recorder writes no task stdout to the container log.
   - With output persistence and recording enabled, terminal noninteractive runs recover the available asciicast output

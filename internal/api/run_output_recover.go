@@ -167,7 +167,7 @@ func recoveryDrainErr(err error) error {
 // keeps no log, gets nothing here and a capture gap when it ends.
 func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref string) {
 	st := s.runOutputStore()
-	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || ref == "" || s.tailFor(runID) != nil || s.execOutputUncaptured(ctx) {
+	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || ref == "" || s.tailFor(runID) != nil {
 		return
 	}
 	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
@@ -175,7 +175,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
 		return
 	}
 	tw := s.openRecoveryTail(run)

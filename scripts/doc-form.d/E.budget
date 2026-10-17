@@ -67,4 +67,5 @@
 # docs/ENV.md 37693 adds 38 over 37655 (0.9.3 LIFE review): the idle-timeout turn-on and rollout-stamp sentences; measured.
 # docs/ENV.md 38442 = 37868 + 574 (LIFE), measured at the wave-B merge.
 # docs/ENV.md 38569 = 38442 + 127, measured: WARDYN_K8S_READ_NODES also shortens a start wait for a placement no healthy node allows.
-docs/ENV.md=38569 share=5
+# docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
+docs/ENV.md=38607 share=5

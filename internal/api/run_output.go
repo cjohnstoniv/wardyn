@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -188,7 +189,7 @@ func (s *Server) runOutputStore() store.RunOutputStore {
 // openExecOutput starts runID's tail and returns the writer dispatch hands the
 // runner (runner.SandboxSpec.ExecOutput), or nil when this run keeps none.
 func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer {
-	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(context.Background()) {
+	if s.cfg.ExecOutputTailOff || interactive || runIsUnrecordable(run) || s.execOutputUncaptured(context.Background(), run) {
 		return nil
 	}
 	runID := run.ID
@@ -408,7 +409,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	// A final row was masked before it was stored, so it needs no manifest here:
 	// it is what makes a terminal run's output readable after every replica
 	// restarted.
-	if found && row.CapturedAt != nil {
+	if s.servesFinalRow(id, row, found) {
 		out, truncated := row.Output, row.Truncated
 		if len(out) > limit {
 			out, truncated = out[len(out)-limit:], true
@@ -450,12 +451,22 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	s.refuseNoRunOutput(w, r, run, row, found, reader)
 }
 
+// servesFinalRow reports whether a read serves runID's stored final row. A
+// recording that yielded nothing does not hide a tail this process holds: the
+// tail is read instead.
+func (s *Server) servesFinalRow(runID uuid.UUID, row store.RunOutput, found bool) bool {
+	if !found || row.CapturedAt == nil {
+		return false
+	}
+	return row.Source != recordingOutputSource || !row.CaptureGap || s.tailFor(runID) == nil
+}
+
 // refuseNoRunOutput is handleRunOutput's last answer: nothing was served, and
 // the cases say why, in the order its doc comment lists. reader is
 // recordingReader's verdict for a caller that is not a portal's delegated token,
 // the only caller told of a recording erasure.
 func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
-	uncaptured, captureKnown := s.execOutputCapture(r.Context())
+	uncaptured, captureKnown := s.execOutputCapture(r.Context(), run)
 	switch {
 	case found:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
@@ -501,14 +512,28 @@ func (s *Server) interactiveNothingKept(run types.AgentRun, reader bool) string 
 	return "Nothing is kept from this interactive session, and recording is off on this deployment"
 }
 
-// execOutputCapture asks the runner whether it can capture an exec's output
-// (runner.Capabilities.ExecOutputUncaptured): uncaptured is true for the
-// Kubernetes runner under the session recorder, whose runs keep no tail, so a
-// read says the output was not captured instead of serving an empty, complete
-// one. known is false when the lookup failed: the answer is then neither
-// "captured" nor "uncaptured". A run that printed nothing on a runner that
-// captures still reads as complete.
-func (s *Server) execOutputCapture(ctx context.Context) (uncaptured, known bool) {
+// execOutputCapture asks the runner that serves run whether it can capture an
+// exec's output (runner.Capabilities.ExecOutputUncaptured): uncaptured is true
+// for a Kubernetes runner under the session recorder, whose runs keep no tail,
+// so a read says the output was not captured instead of serving an empty,
+// complete one. The runner is the run's own: the self-hosted runner it was
+// bound to (a person's laptop or an organisation's runner), else this
+// deployment's executor. A run that is not recorded is captured whatever its
+// runner says, since the recorder wraps only a recorded run's exec, unless its
+// runner records whatever it is asked (runnerRecordsUnasked). A self-hosted
+// runner that cannot be asked now (offline, or not connected to this replica)
+// is taken to capture: the run's tail is read rather than a recording it may
+// never have made. known is false only when this deployment's executor cannot
+// be asked: the answer is then neither "captured" nor "uncaptured". A run that
+// printed nothing on a runner that captures still reads as complete.
+func (s *Server) execOutputCapture(ctx context.Context, run types.AgentRun) (uncaptured, known bool) {
+	if run.RunnerID != nil {
+		pc, err := s.runnerStreamCapabilities(ctx, *run.RunnerID)
+		if err != nil {
+			return false, true
+		}
+		return pc.ExecOutputUncaptured && (run.NotRecorded == "" || runnerRecordsUnasked(pc)), true
+	}
 	if s.cfg.Runner == nil {
 		return false, true
 	}
@@ -516,14 +541,27 @@ func (s *Server) execOutputCapture(ctx context.Context) (uncaptured, known bool)
 	if err != nil {
 		return false, false
 	}
-	return caps.ExecOutputUncaptured, true
+	return caps.ExecOutputUncaptured && run.NotRecorded == "", true
 }
 
-// execOutputUncaptured is true when the runner does not say it captures: it
+// runnerRecordsUnasked is a self-hosted runner older than per-run recording,
+// which records by its own setting whatever its organisation asks
+// (runner.TargetFacts.RecordsUnasked): a run marked not recorded is recorded
+// there anyway.
+func runnerRecordsUnasked(pc placementCaps) bool {
+	sub, ok := pc.impl.(*remote.Substrate)
+	if !ok {
+		return false
+	}
+	c, ok := sub.Caps()
+	return ok && c.Support.SessionRecording && !c.Support.RecordPerRun
+}
+
+// execOutputUncaptured is true when run's runner does not say it captures: it
 // keeps no tail and writes no row for a runner that cannot capture or that
 // cannot be asked.
-func (s *Server) execOutputUncaptured(ctx context.Context) bool {
-	uncaptured, known := s.execOutputCapture(ctx)
+func (s *Server) execOutputUncaptured(ctx context.Context, run types.AgentRun) bool {
+	uncaptured, known := s.execOutputCapture(ctx, run)
 	return uncaptured || !known
 }
 
