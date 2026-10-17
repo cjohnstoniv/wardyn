@@ -250,7 +250,7 @@ describe("Tools and access step", () => {
     // The prototype's sticky bar: Back, the count, then Review run.
     const bar = screen.getByRole("contentinfo");
     expect(bar).toHaveClass("sticky");
-    expect(bar.textContent?.startsWith(`${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_SHARED.JOIN(NR_TOOLS.TITLE, NR_TOOLS.STICKY_ONE)}${NR_TOOLS.REVIEW_RUN}`)).toBe(true);
+    expect(bar.textContent?.startsWith(`${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_TOOLS.STICKY_SPOKEN(NR_TOOLS.STICKY_ONE)}${NR_TOOLS.REVIEW_RUN}`)).toBe(true);
     expect(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }));
     expect(go).toHaveBeenCalledWith({ screen: "review", view: "pretty" });
@@ -361,32 +361,37 @@ describe("Tools and access step", () => {
     expect(screen.getByText(NR_TOOLS.SETUP_DONE)).toBeInTheDocument();
   });
 
-  const SPOKEN = (words: string) => NR_SHARED.JOIN(NR_TOOLS.TITLE, words);
+  const SPOKEN = NR_TOOLS.STICKY_SPOKEN;
+  // The live region empties about a second after it speaks.
+  const spokenGone = (words: string) => waitFor(() => expect(screen.queryByText(SPOKEN(words))).not.toBeInTheDocument(), { timeout: 3000 });
 
-  it("keeps what is announced through a recheck, so the same words are not read out twice, and shows no stale count", async () => {
+  it("announces the settled words once, then empties, and says nothing again when a recheck settles on the same words", async () => {
     answer(SCENARIO_ACCESS.app, true);
-    show();
+    const view = show();
     expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
     expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_ONE))).toBeInTheDocument();
+    await spokenGone(NR_TOOLS.STICKY_ONE);
     await saveToken();
     await waitFor(() => expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1));
-    expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_ONE))).toBeInTheDocument();
     expect(screen.queryByText(NR_TOOLS.STICKY_ONE)).not.toBeInTheDocument();
+    answer({ ...SCENARIO_ACCESS.app, setup: [...SCENARIO_ACCESS.app.setup] }, true);
+    again(view);
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    expect(screen.queryByText(SPOKEN(NR_TOOLS.STICKY_ONE))).not.toBeInTheDocument();
   });
 
-  it("shows no all-clear in the footer while the answer for a changed draft is out, and announces the new words when it arrives", async () => {
+  it("leaves no all-clear to browse while the answer for a changed draft is out, and announces the new words when it arrives", async () => {
     answer(SCENARIO_ACCESS.member, true);
     const view = show();
     expect(await screen.findByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
     answer(SCENARIO_ACCESS.member, false);
     again(view);
     await waitFor(() => expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).not.toBeInTheDocument());
-    expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_DONE))).toBeInTheDocument();
+    await spokenGone(NR_TOOLS.STICKY_DONE);
     answer(SCENARIO_ACCESS.app, true);
     again(view);
     expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
     expect(screen.getByText(SPOKEN(NR_TOOLS.STICKY_ONE))).toBeInTheDocument();
-    expect(screen.queryByText(SPOKEN(NR_TOOLS.STICKY_DONE))).not.toBeInTheDocument();
   });
 
   it("brings an item back with its door when the next answer still lists it as missing", async () => {

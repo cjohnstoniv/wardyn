@@ -617,6 +617,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `STICKY_ONE` | mock | 1 item still needs setup |
 | `STICKY_MANY(n)` | mock | {n} items still need setup |
 | `STICKY_DONE` | mock | Everything is set up |
+| `STICKY_SPOKEN(words)` | deviation (0.9.3 screen-reader footer) | What else does it need? {words} |
 | `REVIEW_RUN` | mock | Review run |
 
 ### 7.7 Document

@@ -66,6 +66,9 @@ function useAccess() {
   };
 }
 
+/** How long the footer's announcement stays in its live region before it empties. */
+const FOOTER_ANNOUNCE_MS = 1000;
+
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
   const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, asking, retry } = useAccess();
@@ -101,14 +104,26 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const items = [...missing, ...setup.filter((i) => settled.has(i.id))];
   const pending = waiting ? finished.ids : new Set<string>();
   // The visible footer line is shown only for the answer in hand, so a stale all-clear never stands beside the Setup
-  // card's own held-back one. What a screen reader hears is kept apart: it keeps the last settled words through a
-  // recheck, so the same words are not read out again, and clears only when the check fails.
+  // card's own held-back one. What a screen reader hears is kept apart: new settled words are announced once, then
+  // the region empties, so nothing stale can be browsed during a recheck. The last words announced are remembered,
+  // so a recheck that settles on the same words says nothing; a failed check forgets them.
   const footerNow = access && answered && failure === null && !waiting ? (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length)) : undefined;
   const [footerText, setFooterText] = React.useState("");
+  const announced = React.useRef("");
   React.useEffect(() => {
-    if (footerNow !== undefined) setFooterText(footerNow);
-    else if (failure !== null) setFooterText("");
+    if (failure !== null) {
+      announced.current = "";
+      setFooterText("");
+    } else if (footerNow !== undefined && footerNow !== announced.current) {
+      announced.current = footerNow;
+      setFooterText(footerNow);
+    }
   }, [footerNow, failure]);
+  React.useEffect(() => {
+    if (!footerText) return;
+    const t = setTimeout(() => setFooterText(""), FOOTER_ANNOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [footerText]);
   const finish = (id: string) => {
     setFinished((old) => ({ ids: new Set(old?.ids).add(id), base: access }));
     recheck();
@@ -129,7 +144,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
         end: (
           <>
             <span aria-hidden="true" className="self-center text-sm text-muted-foreground">{footerNow}</span>
-            <span aria-live="polite" className="sr-only">{footerText && NR_SHARED.JOIN(NR_TOOLS.TITLE, footerText)}</span>
+            <span aria-live="polite" className="sr-only">{footerText && NR_TOOLS.STICKY_SPOKEN(footerText)}</span>
           </>
         ),
       }}

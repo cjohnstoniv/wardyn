@@ -266,5 +266,7 @@ export const NR_TOOLS = {
   STICKY_ONE: "1 item still needs setup",
   STICKY_MANY: (n: string | number) => `${n} items still need setup`,
   STICKY_DONE: "Everything is set up",
+  // What a screen reader hears for the footer count: the step's question, then the count.
+  STICKY_SPOKEN: (words: string) => `What else does it need? ${words}`,
   REVIEW_RUN: "Review run",
 } as const;
