@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -98,6 +99,21 @@ func TestResourcesStoredPolicyBaselineIsTheResolvedSize(t *testing.T) {
 	checkCPU(t, f, 6000, 3000, true, types.LimitSourceGovernance)
 	if f.place.applied.CPUMillis.SourceName != "three" {
 		t.Errorf("source_name = %q, want the profile's name", f.place.applied.CPUMillis.SourceName)
+	}
+}
+
+// DR-0112: a policy_overlay that names resources is the ask, as an inline policy's size is: a member
+// overlaying 16 CPU on the default asks 16, gets the deployment's 2 and hears about it. An overlay that names
+// other keys leaves the ask where it was.
+func TestResourcesOverlayAskIsTheAsk(t *testing.T) {
+	srv := resourceServer(t, &memberBoundStore{})
+	f := resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code",
+		PolicyOverlay: json.RawMessage(`{"resources":{"cpu_millis":16000}}`)})
+	checkCPU(t, f, 16000, 2000, true, types.LimitSourceGovernance)
+	f = resourceFold(t, srv, sizeMemberCtx(), createRunRequest{Agent: "claude-code",
+		PolicyOverlay: json.RawMessage(`{"allowed_domains":["api.anthropic.com"]}`)})
+	if got := f.place.applied.CPUMillis.Requested; got != 0 {
+		t.Errorf("cpu requested = %d, want 0 for an overlay that names no resources", got)
 	}
 }
 
