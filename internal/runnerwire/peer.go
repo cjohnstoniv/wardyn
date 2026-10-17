@@ -105,6 +105,9 @@ type Peer struct {
 	owed      int64
 	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
 	replyWake chan struct{}
+	// retire is the carried calls to drop at the first PONG (retireUnanswerable):
+	// Start sets it before the read loop starts, which alone uses it after.
+	retire []uint32
 }
 
 // NewPeer builds a peer; Run drives it.
@@ -354,6 +357,7 @@ func (p *Peer) handleFrame(f Frame) error {
 		}
 		now := time.Now()
 		p.lastPong.Store(&now)
+		p.retireUnanswerable()
 	default:
 		if p.cfg.OnControlChecked != nil {
 			return p.cfg.OnControlChecked(f)
