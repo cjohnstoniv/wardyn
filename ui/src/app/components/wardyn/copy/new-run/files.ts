@@ -14,16 +14,19 @@ export const NR_FILES = {
   MAIN_TITLE: "Main drive",
   MAIN_BODY: "The sandbox's own disk: system, tools and /home/agent. Every run has one.",
   SIZE_LABEL: "Size",
-  UP_TO: (cap: string | number) => `Up to ${cap} GiB in this pool`,
-  CLAMP_POOL: (cap: string | number, pool: string | number) => `Clamped to ${cap} GiB by the ${pool} pool.`,
+  /** `size` carries its unit: "4 GiB" or "1000 MiB". */
+  UP_TO: (size: string | number) => `Up to ${size} in this pool`,
+  CLAMP_POOL: (size: string | number, pool: string | number) => `Clamped to ${size} by the ${pool} pool.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_PROFILE: (cap: string | number, profile: string | number) => `Clamped to ${cap} GiB by ${profile}.`,
+  CLAMP_PROFILE: (size: string | number, profile: string | number) => `Clamped to ${size} by ${profile}.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_SERVER: (cap: string | number) => `Clamped to ${cap} GiB by this server.`,
+  CLAMP_SERVER: (size: string | number) => `Clamped to ${size} by this server.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_POLICY: (cap: string | number) => `Clamped to ${cap} GiB by this run's policy.`,
+  CLAMP_POLICY: (size: string | number) => `Clamped to ${size} by this run's policy.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_ORG: (cap: string | number) => `Clamped to ${cap} GiB by your organisation's limits.`,
+  CLAMP_ORG: (size: string | number) => `Clamped to ${size} by your organisation's limits.`,
+  /** Shown whenever the field's text is not the exact stored size. */
+  SIZE_EXACT: (mib: string | number) => `Exactly ${mib} MiB`,
   SIZE_ERROR: "Set a size for the main drive.",
   ENFORCED: "Enforced",
   ENFORCED_TIP: "Writes past this size fail.",

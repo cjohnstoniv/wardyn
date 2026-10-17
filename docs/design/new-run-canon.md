@@ -271,12 +271,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MAIN_TITLE` | mock | Main drive |
 | `MAIN_BODY` | deviation (DS-3 W3) | The sandbox's own disk: system, tools and /home/agent. Every run has one. |
 | `SIZE_LABEL` | mock | Size |
-| `UP_TO(cap)` | mock | Up to {cap} GiB in this pool |
-| `CLAMP_POOL(cap, pool)` | mock | Clamped to {cap} GiB by the {pool} pool. |
-| `CLAMP_PROFILE(cap, profile)` | pending (W-11) | Clamped to {cap} GiB by {profile}. |
-| `CLAMP_SERVER(cap)` | pending (W-11) | Clamped to {cap} GiB by this server. |
-| `CLAMP_POLICY(cap)` | pending (W-11) | Clamped to {cap} GiB by this run's policy. |
-| `CLAMP_ORG(cap)` | pending (W-11) | Clamped to {cap} GiB by your organisation's limits. |
+| `UP_TO(size)` | mock | Up to {size} in this pool |
+| `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
+| `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
+| `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
+| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
+| `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
 | `ENFORCED` | mock | Enforced |
 | `ENFORCED_TIP` | deviation (DS-3 W1) | Writes past this size fail. |

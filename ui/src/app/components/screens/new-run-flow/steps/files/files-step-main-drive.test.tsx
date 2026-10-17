@@ -116,7 +116,7 @@ describe("main drive", () => {
     expect(screen.getByRole("heading", { level: 2, name: NR_FILES.MAIN_TITLE })).toBeInTheDocument();
     expect(screen.getByText(NR_FILES.MAIN_BODY)).toBeInTheDocument();
     expect(screen.getByText(NR_SHARED.REQUIRED)).toBeInTheDocument();
-    expect(await screen.findByText(NR_FILES.UP_TO(8))).toBeInTheDocument();
+    expect(await screen.findByText(NR_FILES.UP_TO("8 GiB"))).toBeInTheDocument();
     expect(size()).toHaveValue(4);
     expect(size()).toHaveAttribute("step", "0.1");
     expect(screen.getByText(NR_FILES.ENFORCED)).toBeInTheDocument();
@@ -127,23 +127,23 @@ describe("main drive", () => {
 
   it("clamps a size over the cap to the cap on blur and names the pool", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "16");
     await userEvent.tab();
     expect(size()).toHaveValue(8);
-    expect(screen.getByText(NR_FILES.CLAMP_POOL(8, "Shared pool"))).toBeInTheDocument();
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("8 GiB", "Shared pool"))).toBeInTheDocument();
     expect(drawn().resources).toEqual({ disk_mib: 8192 });
   });
 
   it("names the server or the organisation when they, not the pool, set the cap", async () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive", 4096, "deployment") };
     show();
-    await screen.findByText(NR_FILES.UP_TO(4));
+    await screen.findByText(NR_FILES.UP_TO("4 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "9");
     await userEvent.tab();
-    expect(screen.getByText(NR_FILES.CLAMP_SERVER(4))).toBeInTheDocument();
+    expect(screen.getByText(NR_FILES.CLAMP_SERVER("4 GiB"))).toBeInTheDocument();
   });
 
   it("reads the cap and default from the run's own limits, never from a pool choice's", async () => {
@@ -151,19 +151,19 @@ describe("main drive", () => {
     // A choice that also carries the pool's catalogue limits: the run's limits above it are what applies.
     checks.result = { ...pre, runner_pools: [{ ...pre.runner_pools![0], limits: [limitsFor("interactive", 2048)] }] };
     show();
-    expect(await screen.findByText(NR_FILES.UP_TO(8))).toBeInTheDocument();
+    expect(await screen.findByText(NR_FILES.UP_TO("8 GiB"))).toBeInTheDocument();
     expect(size()).toHaveValue(4);
   });
 
   it("names the organisation when its governance sets the cap, and Continue sends the clamped size", async () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive", 6144, "governance") };
     show();
-    await screen.findByText(NR_FILES.UP_TO(6));
+    await screen.findByText(NR_FILES.UP_TO("6 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "9");
     await userEvent.tab();
     expect(size()).toHaveValue(6);
-    expect(screen.getByText(NR_FILES.CLAMP_ORG(6))).toBeInTheDocument();
+    expect(screen.getByText(NR_FILES.CLAMP_ORG("6 GiB"))).toBeInTheDocument();
     expect(drawn().resources).toEqual({ disk_mib: 6144 });
     // Typed over the cap again and sent straight on: Continue commits the clamped size.
     await userEvent.clear(size());
@@ -174,7 +174,7 @@ describe("main drive", () => {
 
   it("sends nothing for a default the person left untouched", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     expect(size()).toHaveValue(4);
     expect(drawn().resources).toBeUndefined();
   });
@@ -196,7 +196,7 @@ describe("main drive", () => {
 
   it("keeps a size under the cap in whole MiB and sends it as resources.disk_mib", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "2.5");
     await userEvent.tab();
@@ -207,7 +207,7 @@ describe("main drive", () => {
   it("reads a cap under 1 GiB with one decimal (A8)", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 512);
     show();
-    expect(await screen.findByText(NR_FILES.UP_TO("0.5"))).toBeInTheDocument();
+    expect(await screen.findByText(NR_FILES.UP_TO("0.5 GiB"))).toBeInTheDocument();
     expect(size()).toHaveValue(0.5);
   });
 
@@ -239,6 +239,92 @@ describe("main drive", () => {
     await userEvent.type(size(), "4");
     await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
     expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
+  });
+});
+
+describe("a size under 0.1 GiB (DR-0160)", () => {
+  const exact = () => screen.queryByTestId("nr-main-drive-exact");
+
+  it("shows a valid 32 MiB size in whole MiB, never as zero, and stores it", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "0.03125");
+    await userEvent.tab();
+    expect(size()).toHaveValue(32);
+    expect(size()).toHaveAttribute("step", "1");
+    expect(screen.getByText(NR_SHARED.MIB("").trim())).toBeInTheDocument();
+    expect(drawn().resources).toEqual({ disk_mib: 32 });
+    // The field says the exact size, so nothing more needs saying.
+    expect(exact()).toBeNull();
+  });
+
+  it("reads the field's number in the unit beside it", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "0.03125");
+    await userEvent.tab();
+    await userEvent.clear(size());
+    await userEvent.type(size(), "50");
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 50 });
+    // A size back over 0.1 GiB returns to GiB.
+    await userEvent.clear(size());
+    await userEvent.type(size(), "2048");
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 2048 });
+    expect(size()).toHaveValue(2);
+    expect(size()).toHaveAttribute("step", "0.1");
+  });
+
+  it("states the exact MiB when the field's GiB text is rounded", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "0.1");
+    await userEvent.tab();
+    // 0.1 GiB is 102.4 MiB, stored as 102: below 0.1 GiB, so shown in MiB.
+    expect(drawn().resources).toEqual({ disk_mib: 102 });
+    expect(size()).toHaveValue(102);
+    await userEvent.clear(size());
+    await userEvent.type(size(), "0.15");
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 154 });
+    expect(size()).toHaveValue(0.2);
+    expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(154));
+  });
+
+  it("a cap of 1000 MiB reads in MiB, and Continue keeps the clamped 1000 MiB with its note and caption", async () => {
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
+    show();
+    expect(await screen.findByText(NR_FILES.UP_TO("1000 MiB"))).toBeInTheDocument();
+    await userEvent.clear(size());
+    await userEvent.type(size(), "2");
+    await userEvent.tab();
+    expect(size()).toHaveValue(0.9);
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("1000 MiB", "Shared pool"))).toBeInTheDocument();
+    expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
+
+    // The unedited second commit: re-reading "0.9" would store 922 MiB and drop the note.
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
+    expect(screen.getByText(NR_FILES.CLAMP_POOL("1000 MiB", "Shared pool"))).toBeInTheDocument();
+    expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
+    expect(go).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second blur of an unedited field keeps the stored size", async () => {
+    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 1000);
+    show();
+    await screen.findByText(NR_FILES.UP_TO("1000 MiB"));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "2");
+    await userEvent.tab();
+    await userEvent.click(size());
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 1000 });
   });
 });
 
@@ -300,7 +386,7 @@ describe("enforcement chip (W1)", () => {
   it("an unknown word shows no chip", async () => {
     checks.result = filesPreflight(MAIN_DRIVE_FACTS.unknown);
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     expect(screen.queryByText(NR_FILES.ENFORCED)).toBeNull();
     expect(screen.queryByText(NR_FILES.NOT_ENFORCED)).toBeNull();
   });

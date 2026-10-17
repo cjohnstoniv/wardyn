@@ -656,7 +656,7 @@ describe("choices and Continue", () => {
 
   it("holds Continue on Add until something is added or No extra files is chosen, with the empty error, then opens Tools and access", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.click(continueButton());
     expect(screen.getByRole("button", { name: NR_FILES.ADD_ARIA })).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
@@ -681,7 +681,7 @@ describe("choices and Continue", () => {
 
   it("asks for the pool's facts before anything is chosen, but never sends the prefilled size as a request", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     expect(size()).toHaveValue(4);
     await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(continueButton());

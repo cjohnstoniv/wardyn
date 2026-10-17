@@ -105,9 +105,23 @@ export function setMainDrive(intent: RunIntent, mib: number | undefined): RunInt
 
 const MIB_PER_GIB = 1024;
 
-/** One decimal, the way an admin's sub-GiB cap reads; a cap rounds down so "up to" is never overstated. */
+/** Under 0.1 GiB one decimal would read a valid size as zero, so the field shows whole MiB there instead. */
+export const underTenthGiB = (mib: number): boolean => mib * 10 < MIB_PER_GIB;
+
+/**
+ * One decimal, the way an admin's sub-GiB cap reads; a cap rounds down so "up to" is never overstated.
+ * Under 0.1 GiB, where one decimal would show zero, it keeps four so a valid size never reads as none.
+ */
 export const mibToGibText = (mib: number, rounding: "round" | "floor" = "round"): string =>
-  String(Math[rounding]((mib / MIB_PER_GIB) * 10) / 10);
+  underTenthGiB(mib)
+    ? String(Math.max(0.0001, Math[rounding]((mib / MIB_PER_GIB) * 1e4) / 1e4))
+    : String(Math[rounding]((mib / MIB_PER_GIB) * 10) / 10);
+
+export type SizeUnit = "GiB" | "MiB";
+
+/** The main drive field's text and unit for a stored size: GiB with one decimal from 0.1 GiB up, whole MiB under it. */
+export const sizeField = (mib: number, rounding: "round" | "floor" = "round"): { text: string; unit: SizeUnit } =>
+  underTenthGiB(mib) ? { text: String(mib), unit: "MiB" } : { text: mibToGibText(mib, rounding), unit: "GiB" };
 
 /** A typed GiB size (0.1 steps) as whole MiB, or undefined when it is not a positive number. */
 export function parseGiB(text: string): number | undefined {
@@ -115,9 +129,16 @@ export function parseGiB(text: string): number | undefined {
   return text.trim() !== "" && Number.isFinite(gib) && gib > 0 ? Math.max(1, Math.round(gib * MIB_PER_GIB)) : undefined;
 }
 
+/** The field's text in its unit as whole MiB, or undefined when it is not a positive number. */
+export function parseSize(text: string, unit: SizeUnit): number | undefined {
+  if (unit === "GiB") return parseGiB(text);
+  const mib = Number(text.trim());
+  return text.trim() !== "" && Number.isFinite(mib) && mib > 0 ? Math.max(1, Math.round(mib)) : undefined;
+}
+
 /** What a typed size becomes. A size over the cap is the cap, and says so. */
-export function commitSize(text: string, capMib: number | undefined): { mib?: number; clamped: boolean } {
-  const mib = parseGiB(text);
+export function commitSize(text: string, capMib: number | undefined, unit: SizeUnit = "GiB"): { mib?: number; clamped: boolean } {
+  const mib = parseSize(text, unit);
   if (mib === undefined) return { clamped: false };
   return capMib !== undefined && mib > capMib ? { mib: capMib, clamped: true } : { mib, clamped: false };
 }

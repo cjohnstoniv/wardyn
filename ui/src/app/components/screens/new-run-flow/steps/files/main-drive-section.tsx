@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Main drive: the sandbox's own disk, sized in GiB (0.1 steps). The cap, what
+// Main drive: the sandbox's own disk, sized in GiB (0.1 steps) and in whole MiB under 0.1 GiB. The cap, what
 // enforces it and what happens to the drive at the run's end are the server's
 // facts for the pool the run lands in.
 
@@ -16,14 +16,17 @@ import { InfoTip } from "../../../../wardyn/info-tip";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { LimitSource } from "../../../../../lib/types/runner-pools";
-import { commitSize, mainDriveMiB, mibToGibText, parseGiB, setMainDrive } from "../../lenses/files-lens";
+import { commitSize, mainDriveMiB, parseSize, setMainDrive, sizeField, type SizeUnit } from "../../lenses/files-lens";
 import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
 import { FilesGroup } from "./kind-visuals";
 
 export const SIZE_INPUT_ID = "nr-main-drive-size";
-const UNIT = NR_SHARED.GIB("").trim();
+const UNIT_WORD: Record<SizeUnit, string> = { GiB: NR_SHARED.GIB("").trim(), MiB: NR_SHARED.MIB("").trim() };
+
+/** A size with its unit: "{n} GiB" when it is a whole tenth of a GiB, else "{n} MiB". Only halves of a GiB are whole MiB tenths. */
+export const sizeWords = (mib: number): string => (mib % 512 === 0 ? NR_SHARED.GIB(mib / 1024) : NR_SHARED.MIB(mib));
 
 const hoursText = (sec: number): string => {
   const hours = Number((sec / 3600).toFixed(2));
@@ -31,10 +34,10 @@ const hoursText = (sec: number): string => {
 };
 
 /** The one place a clamp's source becomes a sentence. Governance names no profile on the wire, so it reads as the organisation's. */
-function clampText(cap: string, source: LimitSource | undefined, pool: string | undefined): string {
-  if (source === "deployment") return NR_FILES.CLAMP_SERVER(cap);
-  if (source === "governance") return NR_FILES.CLAMP_ORG(cap);
-  return pool ? NR_FILES.CLAMP_POOL(cap, pool) : NR_FILES.CLAMP_SERVER(cap);
+function clampText(size: string, source: LimitSource | undefined, pool: string | undefined): string {
+  if (source === "deployment") return NR_FILES.CLAMP_SERVER(size);
+  if (source === "governance") return NR_FILES.CLAMP_ORG(size);
+  return pool ? NR_FILES.CLAMP_POOL(size, pool) : NR_FILES.CLAMP_SERVER(size);
 }
 
 export type Lifecycle = { kind: "deleted" } | { kind: "noEnd" } | { kind: "kept"; grace: string; max?: string } | { kind: "unknown" };
@@ -83,49 +86,66 @@ export function useMainDriveSize(view: MainDriveView) {
   const dispatch = useNewRunDispatch();
   const committed = mainDriveMiB(draft.intent);
   const typed = draft.guided.mainDriveText;
-  const text = typed !== "" ? typed : committed !== undefined ? mibToGibText(committed) : "";
+  // The field is GiB with one decimal from 0.1 GiB up and whole MiB under it; the unit follows the text it labels.
+  const unit: SizeUnit = typed !== "" ? (draft.guided.mainDriveUnit ?? "GiB") : committed !== undefined ? sizeField(committed).unit : "GiB";
+  const text = typed !== "" ? typed : committed !== undefined ? sizeField(committed).text : "";
 
   // A pool's default (else its cap) fills the empty field once; clearing it afterwards is the person's.
   const filled = React.useRef(false);
   // A prefill is shown, never sent: only a size the person typed becomes the request.
   const edited = React.useRef(false);
+  // The same fact as `edited`, for rendering: true from a keystroke until the next commit stores it.
+  const [dirty, setDirty] = React.useState(false);
   // A fill the person never changed follows the pool: another pool's default replaces it.
   const fill = draft.guided.mainDriveFill;
   // A pool with no size to offer clears it, and the next pool that has one fills it again.
   React.useEffect(() => {
     if (committed !== undefined) return;
-    const next = view.defaultMib === undefined ? "" : mibToGibText(view.defaultMib, "floor");
-    if (!filled.current && typed === "" && next !== "") {
+    const next = view.defaultMib === undefined ? undefined : sizeField(view.defaultMib, "floor");
+    const nextText = next?.text ?? "";
+    if (!filled.current && typed === "" && nextText !== "") {
       filled.current = true;
-      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next } });
-    } else if (typed !== "" && typed === fill && next !== typed) {
-      if (next === "") filled.current = false;
-      dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: next === "" ? undefined : next } });
+      dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText, mainDriveUnit: next?.unit } });
+    } else if (typed !== "" && typed === fill && nextText !== typed) {
+      if (nextText === "") filled.current = false;
+      dispatch({ type: "guided", patch: { mainDriveText: nextText, mainDriveFill: nextText === "" ? undefined : nextText, mainDriveUnit: next?.unit } });
     }
   }, [typed, fill, committed, view.defaultMib, dispatch]);
 
   const commit = React.useCallback(() => {
     if (!edited.current) return;
-    const { mib, clamped } = commitSize(text, view.capMib);
+    const { mib, clamped } = commitSize(text, view.capMib, unit);
     if (mib === undefined) return;
+    // The stored size is final: the field now shows it (rounded), and re-reading that text would change it.
+    edited.current = false;
+    setDirty(false);
+    const shown = sizeField(mib, clamped ? "floor" : "round");
     dispatch({ type: "edit", apply: (i) => setMainDrive(i, mib) });
     dispatch({
       type: "guided",
       patch: {
-        mainDriveText: mibToGibText(mib, clamped ? "floor" : "round"),
+        mainDriveText: shown.text,
+        mainDriveUnit: shown.unit,
         mainDriveFill: undefined,
-        mainDriveClampNote: clamped ? clampText(mibToGibText(mib, "floor"), view.capSource, view.poolName) : undefined,
+        mainDriveClampNote: clamped ? clampText(sizeWords(mib), view.capSource, view.poolName) : undefined,
       },
     });
-  }, [text, view.capMib, view.capSource, view.poolName, dispatch]);
+  }, [text, unit, view.capMib, view.capSource, view.poolName, dispatch]);
 
+  // What the field means: the stored size once committed, else what its text reads as.
+  const mib = !dirty && committed !== undefined ? committed : parseSize(text, unit);
   return {
     text,
-    missing: parseGiB(text) === undefined,
+    unit,
+    mib,
+    missing: mib === undefined,
     note: draft.guided.mainDriveClampNote,
+    // The exact stored size, whenever the field's text does not say it.
+    exact: !dirty && committed !== undefined && parseSize(text, unit) !== committed ? committed : undefined,
     setText: (next: string) => {
       filled.current = true;
       edited.current = true;
+      setDirty(true);
       dispatch({ type: "guided", patch: { mainDriveText: next, mainDriveFill: undefined, mainDriveClampNote: undefined } });
     },
     commit,
@@ -151,7 +171,7 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
               type="number"
               inputMode="decimal"
               min={0}
-              step={0.1}
+              step={size.unit === "GiB" ? 0.1 : 1}
               className="h-[42px] pr-10"
               value={size.text}
               aria-invalid={showError || undefined}
@@ -159,12 +179,18 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
               onChange={(e) => size.setText(e.target.value)}
               onBlur={() => { setTouched(true); size.commit(); }}
             />
-            <span aria-hidden="true" className="pointer-events-none absolute right-3 text-sm text-muted-foreground">{UNIT}</span>
+            <span aria-hidden="true" className="pointer-events-none absolute right-3 text-sm text-muted-foreground">{UNIT_WORD[size.unit]}</span>
           </span>
-          <span className="text-muted-foreground max-[520px]:col-span-full">{view.capMib !== undefined && NR_FILES.UP_TO(mibToGibText(view.capMib, "floor"))}</span>
+          <span className="text-muted-foreground max-[520px]:col-span-full">{view.capMib !== undefined && NR_FILES.UP_TO(sizeWords(view.capMib))}</span>
           <span className="max-[520px]:col-span-full">{view.facts && <Enforcement facts={view.facts} />}</span>
         </div>
-        {size.note && <p className="text-sm text-muted-foreground">{size.note}</p>}
+        {(size.note || size.exact !== undefined) && (
+          <p className="text-sm text-muted-foreground">
+            {size.note}
+            {size.note && size.exact !== undefined ? " " : ""}
+            {size.exact !== undefined && <span data-testid="nr-main-drive-exact">{NR_FILES.SIZE_EXACT(size.exact)}</span>}
+          </p>
+        )}
         {showError && <p id={errorId} className="text-sm text-danger">{NR_FILES.SIZE_ERROR}</p>}
         {life && (
           <div className="grid grid-cols-[150px_1fr] items-start gap-3 border-t border-border pt-[11px] max-[520px]:grid-cols-1">

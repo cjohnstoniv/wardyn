@@ -20,6 +20,7 @@ import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 
@@ -47,11 +48,11 @@ const DEFAULT_MIB = 10240;
 type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean; experience?: string };
 
 const unlimited = { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } };
-const limitsFor = (run_type: string, capSource: string) => ({
+const limitsFor = (run_type: string, capSource: string, capMib = CAP_MIB) => ({
   run_type,
   cpu_millis: unlimited,
   memory_mib: unlimited,
-  disk_mib: { default: { value: DEFAULT_MIB }, cap: { value: CAP_MIB }, default_source: "pool", cap_source: capSource },
+  disk_mib: { default: { value: Math.min(DEFAULT_MIB, capMib) }, cap: { value: capMib }, default_source: "pool", cap_source: capSource },
   lifetime_sec: unlimited,
   lifetime_span_sec: unlimited,
   lifetime_lease_sec: unlimited,
@@ -60,7 +61,7 @@ const limitsFor = (run_type: string, capSource: string) => ({
 });
 
 /** What the server would answer for `body`: the pool's limits, the main drive's facts and the mounts it chose. */
-function preflightFor(body: Body, capSource: string) {
+function preflightFor(body: Body, capSource: string, capMib = CAP_MIB) {
   const attachments: object[] = [];
   for (const w of body.workspaces ?? []) {
     for (const r of w.repos ?? REPOS.map(({ repo }) => ({ repo }))) {
@@ -80,7 +81,7 @@ function preflightFor(body: Body, capSource: string) {
     runner_pool: { ...POOL, revision: 1, selection: "organisation_default" },
     // As the dry door draws it: the run's limits at the top level, the pool choices without limits.
     runner_pools: [{ ...POOL, availability: "available", main_drive: { enforcement: "filesystem", basis: "substrate", keep: { supported: false }, drive_mounts: true } }],
-    limits: limitsFor(body.experience ?? "interactive", capSource),
+    limits: limitsFor(body.experience ?? "interactive", capSource, capMib),
     main_drive: body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: false } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: false },
     attachments,
   };
@@ -88,6 +89,8 @@ function preflightFor(body: Body, capSource: string) {
 
 interface Opts {
   capSource?: string;
+  /** The pool's disk cap in MiB; 20 GiB unless given. */
+  capMib?: number;
   /** A branch listing; absent makes the list unavailable, so the text field shows. */
   branches?: string[];
   /** The person's drive catalogue; none unless given. */
@@ -117,7 +120,7 @@ async function stub(page: Page, opts: Opts = {}): Promise<Body[]> {
   await page.route("**/api/v1/runs/preflight", (route) => {
     const body = route.request().postDataJSON() as Body;
     sent.push(body);
-    return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool") });
+    return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool", opts.capMib) });
   });
   await page.route("**/api/v1/me/drives*", (route) =>
     route.fulfill({ json: { drives: opts.drives ?? [], pool_checked: true, ...(opts.deniedBy ? { denied_by_profile: opts.deniedBy } : {}) } }),
@@ -181,7 +184,7 @@ test.describe("New Run, Files: the main drive", () => {
 
       // The pool's default fills the field and its cap is stated; an untouched size is not a request.
       await expect(sizeInput(page)).toHaveValue("10");
-      await expect(page.getByText(NR_FILES.UP_TO("20"))).toBeVisible();
+      await expect(page.getByText(NR_FILES.UP_TO("20 GiB"))).toBeVisible();
       await expect(page.getByText(NR_FILES.ENFORCED, { exact: true })).toBeVisible();
       await expect.poll(() => sent.length).toBeGreaterThan(0);
       expect(last(sent)).not.toHaveProperty("resources");
@@ -189,10 +192,36 @@ test.describe("New Run, Files: the main drive", () => {
       await sizeInput(page).fill("50");
       await sizeInput(page).blur();
       await expect(sizeInput(page)).toHaveValue("20");
-      await expect(page.getByText(sentence("20"))).toBeVisible();
+      await expect(page.getByText(sentence("20 GiB"))).toBeVisible();
       await expect.poll(() => last(sent).resources?.disk_mib).toBe(CAP_MIB);
     });
   }
+
+  test("a size under 0.1 GiB is shown in whole MiB and sent as typed (DR-0160)", async ({ page }) => {
+    const sent = await stub(page);
+    await toFiles(page);
+    await sizeInput(page).fill("0.03125");
+    await sizeInput(page).blur();
+    await expect(sizeInput(page)).toHaveValue("32");
+    await expect(page.getByText("MiB", { exact: true })).toBeVisible();
+    await expect.poll(() => last(sent).resources?.disk_mib).toBe(32);
+  });
+
+  test("a cap that is not a whole tenth of a GiB reads in MiB, and Continue keeps the clamped size (DR-0160)", async ({ page }) => {
+    const sent = await stub(page, { capMib: 1000 });
+    await toFiles(page);
+    await expect(page.getByText(NR_FILES.UP_TO("1000 MiB"))).toBeVisible();
+    await sizeInput(page).fill("2");
+    await sizeInput(page).blur();
+    await expect(sizeInput(page)).toHaveValue("0.9");
+    await expect(page.getByText(NR_FILES.CLAMP_POOL("1000 MiB", POOL.name))).toBeVisible();
+    await expect(page.getByText(NR_FILES.SIZE_EXACT(1000))).toBeVisible();
+
+    // Continue does not read the rounded 0.9 back as 922 MiB.
+    await next(page, NR_SHARED.STEP_TOOLS);
+    await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
+    await expect.poll(() => last(sent).resources?.disk_mib).toBe(1000);
+  });
 
   test("an emptied size holds Continue and asks for one", async ({ page }) => {
     await stub(page);
