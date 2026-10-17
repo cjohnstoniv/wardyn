@@ -21,6 +21,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
+- Governance has a Baseline hosts tab, the console for `PUT /governance/egress-baseline`: the hosts the autonomy
+  rubric and the risk grade treat as baseline beside the built-in public set. A run whose allowlist holds only such
+  hosts does not grade egress `open`, and an `api_key` to one, a Bedrock provider's credential included, grades
+  secrets `baseline`, not `powerful`. Nothing is declared by default, so grading changes only when someone adds a host.
+- A governance profile write whose rubric sets any row now says what the rubric can see on this deployment: the
+  egress, secrets and confinement grades a run under it can get, and which rows can cap a run and which cap nothing.
 
 ### Fixed
 
