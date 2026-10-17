@@ -284,3 +284,98 @@ func TestSpoolRefusalShapeIsRetryable(t *testing.T) {
 		}
 	}
 }
+
+// A served request may emit more than one record (a namespace-off allow, a credential heal and its
+// replayed request). With the spool full by other requests' reservations, its follow-up record lands in
+// what its own reservation kept: it is neither lost nor counted as a refused admission.
+func TestLocalSpoolServedFollowUpRecordLands(t *testing.T) {
+	s, p, _, id := linkTestSink(t)
+	w := httptest.NewRecorder()
+	admitted, release := p.admitSpoolHTTP(w, httptest.NewRequest("POST", "http://allowed.test/push", nil), "")
+	if admitted == nil {
+		t.Fatalf("status %d", w.Code)
+	}
+	ticket := spoolTicket(admitted.Context())
+	allow := func(rule string) {
+		s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "allowed.test", Method: "POST", Time: time.Now(), AuditReservation: ticket}, Decision: egress.Allow, RuleSource: rule})
+	}
+	allow("policy:allowed")
+	s.mu.Lock()
+	s.heldBytes = runnerspool.MaxBytes
+	s.mu.Unlock()
+	allow("credential:reresolved")
+	allow("policy:allowed")
+	release()
+	if depth, drops := spoolStats(t, s); depth != 3 || drops != 0 {
+		t.Fatalf("depth %d drops %d, want all three records of the served request and no refusal", depth, drops)
+	}
+	s.mu.Lock()
+	lost := s.localErr
+	s.mu.Unlock()
+	if lost != nil {
+		t.Fatalf("follow-up record latched the sink: %v", lost)
+	}
+}
+
+// A served record with no room and no reservation (the push rules' own forge read) is lost: it is not
+// counted as a refused admission, and admission closes for good, without a retry hint.
+func TestLocalSpoolLostUnreservedServedRecordLatches(t *testing.T) {
+	s, p, _, id := linkTestSink(t)
+	setHeld(s, runnerspool.MaxBytes)
+	s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: githubAPIHost, Port: 443, Method: "GET", Time: time.Now()}, Decision: egress.Allow, RuleSource: ruleSourceGitForgeRead})
+	if depth, drops := spoolStats(t, s); depth != 0 || drops != 0 {
+		t.Fatalf("depth %d drops %d, want the lost record neither written nor counted", depth, drops)
+	}
+	setHeld(s, 0)
+	w := serveOne(p, id, shortReq(t, "http://allowed.test/after", 200*time.Millisecond))
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "" || w.Header().Get("X-Should-Retry") != "" {
+		t.Fatalf("after a lost served record: status %d headers %v, want a 503 with no retry hint", w.Code, w.Header())
+	}
+}
+
+// A corrupt spool refuses for good: no Retry-After or X-Should-Retry.
+func TestLocalSpoolPermanentRefusalHasNoRetryHint(t *testing.T) {
+	_, p, dir, id := linkTestSink(t)
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := serveOne(p, id, httptest.NewRequest("GET", "http://allowed.test/", nil))
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "" || w.Header().Get("X-Should-Retry") != "" {
+		t.Fatalf("corrupt spool: status %d headers %v, want a 503 with no retry hint", w.Code, w.Header())
+	}
+}
+
+// While a decision waits on a spool lock wardyn-runnerd holds, a new request is still answered within
+// its admission deadline: a retryable 503, not a wait behind the decision.
+func TestLocalSpoolAdmissionBoundedBehindASlowDecision(t *testing.T) {
+	s, p, dir, id := linkTestSink(t)
+	w := httptest.NewRecorder()
+	admitted, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/a", nil), "")
+	if admitted == nil {
+		t.Fatalf("status %d", w.Code)
+	}
+	defer release()
+	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := int(lock.Fd())
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	emitted := make(chan struct{})
+	go func() {
+		defer close(emitted)
+		s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "allowed.test", Method: "GET", Time: time.Now(), AuditReservation: spoolTicket(admitted.Context())}, Decision: egress.Allow, RuleSource: "policy:allowed"})
+	}()
+	defer func() { _ = unix.Flock(fd, unix.LOCK_UN); <-emitted; lock.Close() }()
+	time.Sleep(200 * time.Millisecond) // the decision now holds the sink and waits on the spool lock
+	start := time.Now()
+	w = httptest.NewRecorder()
+	if r, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/b", nil), ""); r != nil {
+		t.Fatal("admitted while the spool lock is held")
+	}
+	if took := time.Since(start); took > spoolAdmitTimeout+time.Second || w.Code != http.StatusServiceUnavailable || w.Header().Get("X-Should-Retry") != "true" {
+		t.Fatalf("took %v status %d headers %v, want a retryable 503 within the %v admission deadline", took, w.Code, w.Header(), spoolAdmitTimeout)
+	}
+}
