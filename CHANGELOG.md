@@ -8,6 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- A forward-lane request the egress audit cannot record (a full decision spool, or a record too large) now carries
+  `X-Wardyn-Reason` on its plain-text refusal, as the other refusal shapes do.
+- A runner's reconnect reads only the runs its leftover objects name, not every run in the organisation. Its decision
+  sink refuses a session whose spool lock does not free within 10 s instead of stalling every other run's session.
+- A clone failure that points at a declined Azure DevOps credential names the repository whose clone failed.
+
 ## [0.9.3-rc.3] — 2026-10-17
 
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
