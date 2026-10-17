@@ -380,10 +380,19 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	}
 	// Otherwise the client speaks plaintext and `served` stays raw; the same strip-inject-forward
 	// path runs below either way, via a real http.Server for correct framing/keep-alive/timeouts.
+	// Serve returns as soon as the one-conn listener's second Accept fails, while the conn is still
+	// being served; wait for the conn itself to end so the tunnel stays tracked for a drain to close.
+	connDone := make(chan struct{})
+	var connOnce sync.Once
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
 			p.serveMITMRequest(rw, rr, host, port)
 		}),
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			if st == http.StateClosed || st == http.StateHijacked {
+				connOnce.Do(func() { close(connDone) })
+			}
+		},
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout bounds the whole request incl. body (anti slow-loris); WriteTimeout stays 0
 		// since model responses legitimately stream for a long time.
@@ -391,6 +400,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		IdleTimeout: 90 * time.Second,
 	}
 	_ = srv.Serve(&oneConnListener{conn: served})
+	<-connDone
 }
 
 // mitmReadTimeout is the inner server's per-request read bound. A var only so
