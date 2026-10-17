@@ -18,7 +18,7 @@
 //
 // Each case prints one line, `K6-CASE <name> <status> <detail>`, which the script tabulates.
 // Statuses: PASS, FAIL, INCONCLUSIVE (the cluster did not produce the condition the case needs;
-// never a pass), and BLOCKED for an item the product cannot yet put in front of a cluster.
+// never a pass), and BLOCKED-ON-<work> for an item the product cannot yet put in front of a cluster.
 package k6_test
 
 import (

@@ -805,7 +805,7 @@ func TestK6Org(t *testing.T) {
 	// No MITM host can reach an org runner's proxy in this build: the org refuses a run whose
 	// injected credential would need runner_resident delivery ("not built yet"), and a local plan
 	// strips every other MITM host. The drain half is pinned in process instead.
-	results = append(results, "K6-CASE\tmitm-inner-request-drain\tBLOCKED\tno MITM host reaches an org runner's proxy (runner_resident delivery of an injected credential is not built); "+
+	results = append(results, "K6-CASE\tmitm-inner-request-drain\tBLOCKED-ON-RR\tno MITM host reaches an org runner's proxy until the residual RR work delivers an injected credential runner_resident; "+
 		"pinned in process by internal/egress/proxy TestRemoteSink_DrainEndsInFlightMITMRequest")
 	for _, r := range results {
 		fmt.Println(r)
