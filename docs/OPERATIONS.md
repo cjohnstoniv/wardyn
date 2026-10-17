@@ -1399,7 +1399,7 @@ erases one person's retained records by explicit scope, in one audited act
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed, and the drives the person created are listed too. Reclaim storage with the steps in "Reclaiming a departed person's storage", and delete the drives they created as in "Member drives" |
 
-- Migration `0180_purge_attribution_backfill` reopens the Runners and service-identities steps of purges that finished before it, so the sweeper runs the attribution clears for people purged earlier, once. The purge's `person.deprovision` row is not written again.
+- Migration `0186_purge_attribution_backfill` reopens the Runners and service-identities steps of purges that finished before it, so the sweeper runs the attribution clears for people purged earlier, once. The purge's `person.deprovision` row is not written again.
 - The identity row stays as a tombstone with `purged_at` set.
 - `PATCH active=true` on it is a 400 `invalidValue` (a denied `scim.user.write` row with reason `purged`), and the
   sign-in gate refuses it.

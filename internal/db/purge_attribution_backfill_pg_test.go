@@ -34,7 +34,7 @@ func TestMigrate_PurgeAttributionBackfillReopensOnlyTheTwoDoneSteps(t *testing.T
 			t.Fatalf("seed %s/%s: %v", j.kind, j.step, err)
 		}
 	}
-	sql, err := migrationFS.ReadFile("migrations/0180_purge_attribution_backfill.sql")
+	sql, err := migrationFS.ReadFile("migrations/0186_purge_attribution_backfill.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestMigrate_PurgeAttributionBackfillGivesAnEarlierPurgeTheNewSteps(t *testi
 	notPurged := seed(false, finished...)
 	has090 := seed(true, append([][2]string{{"runners", "done"}, {"invitations", "done"}}, finished...)...)
 
-	sql, err := migrationFS.ReadFile("migrations/0180_purge_attribution_backfill.sql")
+	sql, err := migrationFS.ReadFile("migrations/0186_purge_attribution_backfill.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
