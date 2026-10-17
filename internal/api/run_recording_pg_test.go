@@ -215,7 +215,10 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		wired := e.srv.cfg.Runner
 		e.srv.cfg.Runner = nil // pools place no run: every run is unpooled
-		t.Cleanup(func() { e.srv.cfg.Runner, e.srv.cfg.RecordingStore = wired, nil; e.requireRecording(types.RecordingPreferred) })
+		t.Cleanup(func() {
+			e.srv.cfg.Runner, e.srv.cfg.RecordingStore = wired, nil
+			e.requireRecording(types.RecordingPreferred)
+		})
 		local := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerID: id.String()}
 		resolve := func(req createRunRequest) *runRefusal {
 			_, r := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
