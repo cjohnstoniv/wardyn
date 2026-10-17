@@ -337,12 +337,14 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 }
 
 // unknownConfigField finds the setting a proxy's strict config decode refused, as its log prints it
-// (`unknown field "x"`, or with the quotes escaped inside a log attribute).
-var unknownConfigField = regexp.MustCompile(`unknown field \\?"([^"\\]*)\\?"`)
+// (`unknown field "x"`, or with the quotes escaped inside a log attribute), on one line and bounded.
+var unknownConfigField = regexp.MustCompile(`unknown field \\?"([^"\\\n]{1,80})\\?"`)
 
 // proxyConfigLoadError names the cause of a proxy that exited at config load. A proxy image older
 // than this runner refuses the settings it does not know, so that refusal names its fix first; the
 // proxy's own output always follows.
+// Reading an unknown setting as "older proxy" assumes a release only ever adds proxy config fields,
+// never removes one; a removal would make a newer proxy refuse an older runner's setting the same way.
 func proxyConfigLoadError(exitCode int, tail string) error {
 	if m := unknownConfigField.FindStringSubmatch(tail); m != nil {
 		return fmt.Errorf("docker: the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+

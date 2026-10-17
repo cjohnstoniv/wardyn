@@ -507,6 +507,7 @@ func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
 				"or pin a proxy image at least as new as this runner; proxy exited at config load (exit 1): "},
 		{"plain", `unknown field "x"`, "(it refused setting x): upgrade the organisation before its runners"},
 		{"another refusal", `parse config: unexpected end of JSON input`, "docker: proxy exited at config load (exit 1): parse config"},
+		{"a quote that spans lines", "unknown field \"\nnext line\"", "docker: proxy exited at config load (exit 1): unknown field"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeDocker()
@@ -523,8 +524,11 @@ func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) || !strings.HasSuffix(err.Error(), tc.log) {
 				t.Errorf("error = %v; want %q and the proxy's output last", err, tc.want)
 			}
-			if tc.name == "another refusal" && strings.Contains(err.Error(), "older than this runner") {
-				t.Errorf("error = %v; only an unknown setting means an older proxy image", err)
+			if !strings.HasPrefix(tc.want, "docker: proxy exited") {
+				return
+			}
+			if strings.Contains(err.Error(), "older than this runner") {
+				t.Errorf("error = %v; only a named unknown setting on one line means an older proxy image", err)
 			}
 		})
 	}
