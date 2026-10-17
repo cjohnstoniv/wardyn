@@ -103,7 +103,8 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 4973 adds 10 over 4963, measured (FIN-A2b): the claim and sponsor doors' capability_feature targets.
 # docs/operations/denials.md 5001 adds 38: the sponsor_not_entitled denial row (0.9.3 FIN-B2).
 # docs/operations/denials.md 5179 adds 168, measured: the node-loss containment reasons.
-docs/operations/denials.md=5179 share=35
+# docs/operations/denials.md 5186 adds 7 over 5179, measured: the node-loss containment wording after merging the runner sweep.
+docs/operations/denials.md=5186 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

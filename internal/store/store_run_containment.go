@@ -3,7 +3,7 @@
 
 package store
 
-// The organisation's side of a Kubernetes runner's node-loss containment (design K1 §3.1 Q2 and (b)):
+// The organisation's side of a Kubernetes runner's node-loss containment:
 // the runner's containment-pending report, kept until the runner reports the proxy stopped, and the node
 // records a security operator sends to release a run the runner cannot prove stopped.
 

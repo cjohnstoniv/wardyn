@@ -537,7 +537,7 @@ const (
 	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
 )
 
-// Kubernetes runner node-loss containment (run_containment.go; design K1 §3.1): a run its runner deleted
+// Kubernetes runner node-loss containment (run_containment.go): a run its runner deleted
 // but cannot prove stopped, and the security operator's node record that releases it.
 const (
 	reasonRunContainmentPending = "run_containment_pending" // identity.renew: the run's runner holds it as containment pending

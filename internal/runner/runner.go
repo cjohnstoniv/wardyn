@@ -276,6 +276,11 @@ var ErrSandboxGone = errors.New("runner: the sandbox is gone")
 // image_arch code, so the org can tell it from a daemon fault.
 var ErrImageArch = errors.New("runner: the image's architecture cannot run on this runner")
 
+// ErrRelayIPFenced is a Kubernetes runner's refusal of a new run whose proxy pod reported an IP the
+// runner still fences for a run whose termination is unknown. It crosses the wire as the
+// relay_ip_fenced code, so the org ends the run with that reason rather than a daemon fault.
+var ErrRelayIPFenced = errors.New("runner: relay_ip_fenced")
+
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
 type ExecSpec struct {

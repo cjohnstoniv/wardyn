@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// A run its Kubernetes runner deleted but cannot prove stopped (design K1 §3.1 Q2 and (b)): run detail
+// A run its Kubernetes runner deleted but cannot prove stopped: run detail
 // shows the egress bound, then "termination unknown", names a reused node name, and gives a security
 // operator the node record form with the machines it must name. The run and its containment are spliced
 // in, since no seed script can put a runner in that state.

@@ -5,18 +5,19 @@
 
 package k8s
 
-// The node record acceptance rules the organisation relies on runnerd to decide (design K1 §3.1 (b),
-// owner #7 and #8): "node powered off" only under (i), an acceptance list showing no holder; "no prior
-// holder" only under (ii), on the no-association path and never on an empty acceptance list; and after a
+// The node record acceptance rules the organisation relies on runnerd to decide: "node powered off" only
+// under (i), an acceptance list showing no holder; "no prior holder" only under (ii), on the no-association path and never on an empty acceptance list; and after a
 // recorded name reuse only "node powered off", always by two people.
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // recordRulesHarness is a bound proxy whose pod has a terminal status, so only the rule under test can
@@ -96,5 +97,14 @@ func TestRecordRule_ReuseNeedsTwoPeople(t *testing.T) {
 	wantRefused(t, acceptRecord(t, h, nodeRecordFixture(h, t, runner.AttestNodePoweredOff, "alice")), "needs 2 distinct human approvers")
 	if err := acceptRecord(t, h, nodeRecordFixture(h, t, runner.AttestNodePoweredOff, "alice", "bob")); err != nil {
 		t.Fatalf("a two-person record after a reuse: %v", err)
+	}
+}
+
+// TestRelayIPFencedCrossesTheWireAsItsCode: the fenced-IP refusal a create returns is sent as the
+// relay_ip_fenced code, not as an internal error the org would read as a daemon fault.
+func TestRelayIPFencedCrossesTheWireAsItsCode(t *testing.T) {
+	wire := runnerwire.ErrorFor(fmt.Errorf("k8s: proxy pod %s: %w", testProxyIP, errRelayIPFenced))
+	if wire.Code != runnerwire.CodeRelayIPFenced || !errors.Is(wire.Err(), runner.ErrRelayIPFenced) {
+		t.Fatalf("fenced refusal crossed as %+v", wire)
 	}
 }

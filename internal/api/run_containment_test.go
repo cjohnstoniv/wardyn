@@ -4,18 +4,24 @@
 package api
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestNodeRecordAttestationRules pins the organisation's half of the node record rules (design K1 §3.1
-// (b), owner #8): after a recorded name reuse only "node powered off" is taken, and "no prior holder" is
-// for the no-association path only.
+// TestNodeRecordAttestationRules pins the organisation's half of the node record rules: after a recorded
+// name reuse only "node powered off" is taken, and "no prior holder" is for the no-association path only.
 func TestNodeRecordAttestationRules(t *testing.T) {
 	for _, c := range []struct {
 		name        string
@@ -61,27 +67,63 @@ func TestNodeRecordNeedsTwoPeople(t *testing.T) {
 }
 
 // TestNodeRecordApproverIsPseudonymous: the runner tells people apart by case-folded principal and email,
-// and the action row that carries the record holds neither in the clear.
+// carried as keyed pseudonyms: one person is one value under one key, two people are two, the value is not
+// the plain SHA-256 anyone could recompute from an email, and a server with no key refuses.
 func TestNodeRecordApproverIsPseudonymous(t *testing.T) {
-	a, b := nodeRecordApprover("Sub-Alice", "Alice@Corp.Example"), nodeRecordApprover(" sub-alice", "alice@corp.example ")
-	if a != b || !a.Human || !strings.HasPrefix(a.Principal, "sha256:") || strings.Contains(a.Principal+a.Email, "alice") {
-		t.Fatalf("approvers %+v and %+v", a, b)
+	key := bytes.Repeat([]byte{7}, kek.DEKSize)
+	s := &Server{cfg: Config{RunConfigKey: key}}
+	approver := func(srv *Server, principal, email string) runner.NodeRecordApprover {
+		t.Helper()
+		got, err := srv.nodeRecordApprover(principal, email)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
 	}
-	if nodeRecordApprover("sub-alice", "").Email != "" {
+	a, b := approver(s, "Sub-Alice", "Alice@Corp.Example"), approver(s, " sub-alice", "alice@corp.example ")
+	if a != b || !a.Human || a.Principal == "" || strings.Contains(a.Principal+a.Email, "alice") {
+		t.Fatalf("one person gave %+v and %+v", a, b)
+	}
+	plain := sha256.Sum256([]byte("alice@corp.example"))
+	if strings.Contains(a.Email, hex.EncodeToString(plain[:])) {
+		t.Fatalf("email pseudonym %q is the unkeyed SHA-256", a.Email)
+	}
+	if bob := approver(s, "sub-bob", "bob@corp.example"); bob.Principal == a.Principal || bob.Email == a.Email {
+		t.Fatalf("two people share a pseudonym: %+v %+v", a, bob)
+	}
+	if other := approver(&Server{cfg: Config{RunConfigKey: bytes.Repeat([]byte{8}, kek.DEKSize)}}, "sub-alice", "alice@corp.example"); other.Email == a.Email {
+		t.Fatal("the pseudonym does not depend on the server's key")
+	}
+	if approver(s, "sub-alice", "").Email != "" {
 		t.Fatal("an absent email was filled in")
+	}
+	if _, err := (&Server{}).nodeRecordApprover("sub-alice", "alice@corp.example"); err == nil {
+		t.Fatal("a server with no key made a pseudonym")
 	}
 }
 
-// TestRelayIPFencedIsItsOwnFailure: a runner's relay_ip_fenced refusal ends the run with its own reason,
-// and nothing else carries it.
+// TestRelayIPFencedIsItsOwnFailure: a runner's relay_ip_fenced refusal, encoded on the runner and decoded
+// from a REPLY on the org, ends the run with its own reason, and a message that only names it does not.
 func TestRelayIPFencedIsItsOwnFailure(t *testing.T) {
-	fenced := &runnerwire.Error{Code: runnerwire.CodeInternal, Message: "k8s: proxy pod 10.244.1.7: relay_ip_fenced: the proxy pod's IP is still fenced for another run whose termination is unknown"}
+	overWire := func(err error) error {
+		t.Helper()
+		b, merr := json.Marshal(runnerwire.Reply{Error: runnerwire.ErrorFor(err)})
+		if merr != nil {
+			t.Fatal(merr)
+		}
+		var rep runnerwire.Reply
+		if uerr := json.Unmarshal(b, &rep); uerr != nil {
+			t.Fatal(uerr)
+		}
+		return rep.Error.Err()
+	}
+	fenced := overWire(fmt.Errorf("k8s: proxy pod 10.244.1.7: %w", runner.ErrRelayIPFenced))
 	if hint, reason := sandboxCreateFailure(fenced); reason != reasonRelayIPFenced || !strings.Contains(hint, "still held for an earlier run") {
 		t.Fatalf("fenced = %q %q", hint, reason)
 	}
 	for _, err := range []error{
+		overWire(errors.New("k8s: proxy pod 10.244.1.7: relay_ip_fenced: named, not coded")),
 		&runnerwire.Error{Code: runnerwire.CodeRefused, Message: "relay_ip_fenced: x"},
-		&runnerwire.Error{Code: runnerwire.CodeInternal, Message: "pod relay_ip_fenced without its colon"},
 		errors.New("relay_ip_fenced: not from the runner"),
 	} {
 		if _, reason := sandboxCreateFailure(err); reason == reasonRelayIPFenced {

@@ -10,14 +10,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// Containment-pending kinds a Kubernetes runner reports (design K1 §3.1 Q2), the values of
+// Containment-pending kinds a Kubernetes runner reports, the values of
 // runner.ContainmentAgentOnly and runner.ContainmentPendingDelete.
 const (
 	ContainmentPendingAgentOnly = "agent_only"
 	ContainmentPendingDelete    = "pending_delete"
 )
 
-// Node-record attestations (design K1 §3.1 (b)), the values of runner.AttestNodePoweredOff and
+// Node-record attestations, the values of runner.AttestNodePoweredOff and
 // runner.AttestNoPriorHolder.
 const (
 	NodeRecordPoweredOff    = "node_powered_off"

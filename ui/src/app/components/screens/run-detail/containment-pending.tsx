@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// A local run its Kubernetes runner holds as containment pending (design K1 §3.1 Q2): the egress bound
+// A local run its Kubernetes runner holds as containment pending: the egress bound
 // while it holds, "termination unknown" once the bound has passed, the name-reuse and association labels,
-// and for security operators the node record form (§3.1 (b), Fable r8 L2) with the machines it must name.
+// and for security operators the node record form with the machines it must name.
 // Everything shown is the server's: the bound, whether it passed, and whether a record needs two people.
 
 import * as React from "react";

@@ -3,11 +3,12 @@
 
 package api
 
-// The organisation's side of a Kubernetes runner's node-loss containment (design K1 §3.1), against a
+// The organisation's side of a Kubernetes runner's node-loss containment, against a
 // real Postgres: the runner's containment-pending report is kept, held for leases and shown with its
 // egress bound, and a node record is made by the people the rules name and carried to the runner.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -37,6 +39,7 @@ func newContainmentEnv(t *testing.T, secondHuman bool) *containmentEnv {
 	t.Helper()
 	e := newOrgRunnerEnv(t, secondHuman)
 	e.cfg.RunnerAuditPrepare = func(_ context.Context, ev types.AuditEvent) (types.AuditEvent, error) { return ev, nil }
+	e.cfg.RunConfigKey = bytes.Repeat([]byte{7}, kek.DEKSize)
 	e.srv = New(e.cfg)
 	ctx := context.Background()
 	rid := e.claimedRunner(e.personP)
@@ -275,7 +278,7 @@ func TestPG_NodeRecordOnePerson(t *testing.T) {
 	}
 	rec := actions[0].NodeRecord
 	if rec.Attestation != runner.AttestNodePoweredOff || rec.Source != types.NodeRecordSourceProviderConsole || rec.SourceID != "i-0abc123" ||
-		len(rec.Approvers) != 1 || !rec.Approvers[0].Human || !strings.HasPrefix(rec.Approvers[0].Principal, "sha256:") || rec.FourEyes ||
+		len(rec.Approvers) != 1 || !rec.Approvers[0].Human || !strings.HasPrefix(rec.Approvers[0].Principal, "hmac-sha256:") || rec.FourEyes ||
 		!store.SameJSON(mustJSON(rec.Tuple), tuple) || actions[0].Ref != e.run.SandboxRef {
 		t.Fatalf("the record on PENDING = %+v", actions[0])
 	}

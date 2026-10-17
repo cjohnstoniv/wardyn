@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// A Kubernetes runner's node-loss containment on run detail (design K1 §3.1 Q2 and (b)): the line a
+// A Kubernetes runner's node-loss containment on run detail: the line a
 // held run shows, and the security operator's node record form. The three labels the design names
 // ("containment pending; egress bounded until T", "egress bound passed; termination unknown", "node
 // name reused") are kept word for word, in sentence case; the sentences under them say the same plainly.

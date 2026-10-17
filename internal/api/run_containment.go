@@ -4,15 +4,16 @@
 package api
 
 // A Kubernetes runner that deleted a run's pods but cannot prove the processes stopped reports the run
-// as containment pending (design K1 §3.1 Q2). The organisation keeps that report until the runner
+// as containment pending. The organisation keeps that report until the runner
 // reports the proxy stopped, holds the run for leases and refuses its token renewal meanwhile, and shows
 // its egress bound on run detail. A security operator's node record ("node powered off" or "no prior
-// holder", §3.1 (b)) is the release when no evidence will come: made by one or two people as the rules
+// holder") is the release when no evidence will come: made by one or two people as the rules
 // below say, sent to the runner on a stop_proxy, and accepted or refused there against the runner's own
 // acceptance list.
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -41,7 +43,7 @@ const (
 	maxNodeRecordSourceID = 256
 )
 
-// The sentences the reviewer of a held node record reads beside the diff (design K1 §3.1 (b), Fable r8 L2).
+// The sentences the reviewer of a held node record reads beside the diff.
 var nodeRecordReviewNotes = []string{
 	"A deleted Node object is not confirmation that a machine is off.",
 	"A machine cut off from the network may still be running the run's pods.",
@@ -72,7 +74,7 @@ func (s *Server) runContainmentPending(ctx context.Context, run types.AgentRun) 
 }
 
 // nodeRecordNeedsTwo is whether a node record for held needs two people: always after a recorded name
-// reuse (owner #8) and on the no-association path (owner #7a), and otherwise when four-eyes is on.
+// reuse and on the no-association path, and otherwise when four-eyes is on.
 func nodeRecordNeedsTwo(held store.RunContainmentPendingRow) bool {
 	return GovernanceSecondHumanEnabled() || held.NameReused || held.NoCausalAssociation
 }
@@ -146,9 +148,9 @@ func nodeRecordRequestRefusal(req types.RunNodeRecordRequest) string {
 	return ""
 }
 
-// nodeRecordAttestationRefusal applies the attestation rules the organisation can check itself (design
-// K1 §3.1 (b)): after a recorded name reuse only "node powered off" is accepted, and "no prior holder"
-// is for the no-association path only. Preconditions (i) and (ii) need the runner's acceptance list, so
+// nodeRecordAttestationRefusal applies the attestation rules the organisation can check itself: after a
+// recorded name reuse only "node powered off" is accepted, and "no prior holder" is for the no-association
+// path only. Preconditions (i) and (ii) need the runner's acceptance list, so
 // the runner decides them.
 func nodeRecordAttestationRefusal(attestation string, held store.RunContainmentPendingRow) string {
 	if attestation != types.NodeRecordNoPriorHolder {
@@ -225,7 +227,12 @@ func (s *Server) handlePostRunNodeRecord(w http.ResponseWriter, r *http.Request)
 			after: after, changed: changedPaths(nil, after), notes: nodeRecordReviewNotes, baseState: runNodeRecordState(held)})
 		return
 	}
-	rec, err := change.record(nodeRecordApprover(principalFromRequest(r), oidcEmailFromContext(r.Context())))
+	approver, err := s.nodeRecordApprover(principalFromRequest(r), oidcEmailFromContext(r.Context()))
+	if err != nil {
+		writeServerError(w, r, "node record approver", err)
+		return
+	}
+	rec, err := change.record(approver)
 	if err != nil {
 		writeServerError(w, r, "encode node record", err)
 		return
@@ -267,19 +274,28 @@ func (c runNodeRecordChange) record(approvers ...runner.NodeRecordApprover) (run
 		Source: c.Source, SourceID: c.SourceID}, nil
 }
 
-// nodeRecordApprover is one person as the runner receives them: a case-folded SHA-256 of the principal and
-// of the email, so the runner can tell people apart (one principal, or one email, is one person) while the
-// immutable action row that carries the record holds no personal data. Who approved is on the audit rows.
-func nodeRecordApprover(principal, email string) runner.NodeRecordApprover {
+// nodeRecordApprover is one person as the runner receives them: keyed pseudonyms of the case-folded
+// principal and email, HMAC-SHA256 under a key derived from the server's run config key. The runner only
+// tests them for equality, so it can still tell people apart (one principal, or one email, is one person).
+// The action row holds the pseudonyms, which tie back to a person only with the server's key; who approved
+// is on the audit rows. With no key the record is refused rather than written with a guessable value.
+func (s *Server) nodeRecordApprover(principal, email string) (runner.NodeRecordApprover, error) {
+	if len(s.cfg.RunConfigKey) != kek.DEKSize {
+		return runner.NodeRecordApprover{}, errors.New("no server key for node-record pseudonyms")
+	}
+	derive := hmac.New(sha256.New, s.cfg.RunConfigKey)
+	derive.Write([]byte("wardyn node-record approver"))
+	key := derive.Sum(nil)
 	pseudonym := func(v string) string {
 		v = strings.ToLower(strings.TrimSpace(v))
 		if v == "" {
 			return ""
 		}
-		sum := sha256.Sum256([]byte(v))
-		return "sha256:" + hex.EncodeToString(sum[:])
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(v))
+		return "hmac-sha256:" + hex.EncodeToString(mac.Sum(nil))
 	}
-	return runner.NodeRecordApprover{Principal: pseudonym(principal), Email: pseudonym(email), Human: true}
+	return runner.NodeRecordApprover{Principal: pseudonym(principal), Email: pseudonym(email), Human: true}, nil
 }
 
 func nodeRecordAuditData(c runNodeRecordChange, rec runner.NodeRecord, a types.RunnerPendingAction) map[string]any {
@@ -314,7 +330,15 @@ func applyRunNodeRecordChange(s *Server, r *http.Request, q store.Querier, ch ty
 	if err := decodeHeldPayload(ch.Payload, &c); err != nil {
 		return govApplied{}, err
 	}
-	rec, err := c.record(nodeRecordApprover(ch.ProposedBy, ch.ProposedByEmail), nodeRecordApprover(principalFromRequest(r), oidcEmailFromContext(r.Context())))
+	proposer, err := s.nodeRecordApprover(ch.ProposedBy, ch.ProposedByEmail)
+	if err != nil {
+		return govApplied{}, err
+	}
+	approver, err := s.nodeRecordApprover(principalFromRequest(r), oidcEmailFromContext(r.Context()))
+	if err != nil {
+		return govApplied{}, err
+	}
+	rec, err := c.record(proposer, approver)
 	if err != nil {
 		return govApplied{}, err
 	}

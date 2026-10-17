@@ -1,7 +1,7 @@
 -- Copyright 2026 The Wardyn Authors
 -- SPDX-License-Identifier: Apache-2.0
 
--- The organisation's side of a Kubernetes runner's node-loss containment (design K1 §3.1).
+-- The organisation's side of a Kubernetes runner's node-loss containment.
 --
 -- run_containment_pending is the last containment-pending report a runner sent for a run: the runner has
 -- deleted the run's pods but holds no proof that the processes stopped. The row is removed only when the
@@ -38,6 +38,7 @@ CREATE INDEX IF NOT EXISTS run_node_records_run ON run_node_records (run_id, cre
 
 -- A stop_proxy that carries a node record is not bound to an outage loss: it has no containment_lost_at
 -- and carries the record as its proof. Every other stop_proxy keeps 0175's binding, unchanged.
+-- On a live upgrade the re-check holds an ACCESS EXCLUSIVE lock on runner_pending_actions while it scans the table.
 ALTER TABLE runner_pending_actions
     DROP CONSTRAINT IF EXISTS runner_pending_actions_binding,
     ADD CONSTRAINT runner_pending_actions_binding CHECK (

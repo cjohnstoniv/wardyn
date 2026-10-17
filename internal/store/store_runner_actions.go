@@ -292,7 +292,7 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 
 // RunHeldContainedOnRunner reports whether the run's runner holds it contained: a kill, end, stop_proxy
 // or quarantine was queued for it and no later recover_containment succeeded, or the runner reported it
-// containment pending (design K1 §3.1 Q2). Such a runner refuses any lease for the run, and a refused
+// containment pending. Such a runner refuses any lease for the run, and a refused
 // lease ends its session.
 func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
 	var held bool
