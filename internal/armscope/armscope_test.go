@@ -185,7 +185,7 @@ func TestAdmit_RefusesPathAndMethodOverrideHeaders(t *testing.T) {
 	for _, name := range []string{
 		"X-Original-URL", "X-Original-Uri", "X-Rewrite-URL", "X-Forwarded-Prefix", "x_original_url", "X_REWRITE_URL",
 		"X-Rewrite-URI", "X-Forwarded-Uri", "X-Forwarded-Path", "X-Original-Path", "X-Envoy-Original-Path", "X-Override-URL",
-		"x_forwarded_path", "X-Override-Uri",
+		"x_forwarded_path", "X-Override-Uri", "X-Forwarded-URL", "X-Override-Path", "x_rewrite_path",
 		"X-Method", "X-Http-Method", "X-Custom-Method-Hint",
 	} {
 		if err := scope(false).Admit(http.MethodGet, base, http.Header{name: {"/subscriptions/" + other}}); !errors.Is(err, ErrUnreadable) {
