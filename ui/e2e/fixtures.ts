@@ -130,6 +130,17 @@ export const test = base.extend({
 
     await use(page);
 
+    // A spec's route splice that round-trips through route.fetch() can still be running when the body
+    // ends (the shell polls, so a read lands at any moment). Closing the context then disposes that
+    // response under the handler, and "apiResponse.json: Response has been disposed" fails a test
+    // whose body passed (#1523 #1805 #1926 #1927 #2057). Every route goes, its errors ignored, before
+    // the context closes. Bounded: the call ends in a browser round trip that once hung for the whole
+    // test timeout during a reload (#1927), and nothing after this needs it.
+    await Promise.race([
+      page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+
     if (pageHealthAllowed(testInfo.file)) return;
     if (pageErrors.length > 0) {
       throw new Error(`uncaught page error(s) during "${testInfo.title}":\n${pageErrors.join("\n---\n")}`);

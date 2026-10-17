@@ -180,10 +180,23 @@ func TestPG_AttachLeases(t *testing.T) {
 	if released, _ := pg.ReleaseAttachLease(ctx, run, taker); !released {
 		t.Fatal("the holder could not release its lease")
 	}
-	if ok, _ := pg.AcquireAttachLease(ctx, lease(a, "A"), uuid.Nil, 50*time.Millisecond); !ok {
+	if ok, _ := pg.AcquireAttachLease(ctx, lease(a, "A"), uuid.Nil, time.Minute); !ok {
 		t.Fatal("could not take a free lease")
 	}
-	time.Sleep(120 * time.Millisecond)
+	// The ttl sets the expiry: a minute from the database's now when it was taken, so at most a
+	// minute from now, and not far less.
+	var left float64
+	if err := pool.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM expires_at - now())::float8 FROM run_attach_leases WHERE run_id = $1`, run).Scan(&left); err != nil {
+		t.Fatalf("read the lease expiry: %v", err)
+	}
+	if left <= 30 || left > 60 {
+		t.Fatalf("the lease expires %.1fs from now, want the one-minute ttl (30s, 60s]", left)
+	}
+	// Lapse the lease by moving its expiry into the past instead of sleeping past a short ttl,
+	// so a loaded box or a stepped clock cannot change the outcome.
+	if _, err := pool.Exec(ctx, `UPDATE run_attach_leases SET expires_at = now() - interval '1 second' WHERE run_id = $1`, run); err != nil {
+		t.Fatalf("lapse the lease: %v", err)
+	}
 	if held, _ := pg.HoldsAttachLease(ctx, run, a); held {
 		t.Error("a lapsed lease is still held")
 	}

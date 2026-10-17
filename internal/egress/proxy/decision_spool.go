@@ -71,6 +71,9 @@ type spoolReservation struct {
 // summary without findings (a skip or bypass).
 const spoolRecordEnvelope = 64 << 10
 
+// spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused.
+const spoolAdmitTimeout = 5 * time.Second
+
 // spoolReservationBytes is the most a request's final decision record may take.
 // A request that may be scanned while content inspection is on (a body-bearing
 // one, or one with a query when forward egress is inspected: an API door scans
@@ -99,23 +102,36 @@ func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, erro
 	if s.closed || s.localErr != nil {
 		return uuid.Nil, errors.New("runner audit spool unavailable")
 	}
-	if err := s.local.CanRecord(ctx); err != nil {
-		if errors.Is(err, runnerspool.ErrFull) {
-			return uuid.Nil, errors.Join(err, s.local.Refuse(ctx))
+	err := s.local.CanRecord(ctx)
+	if err == nil {
+		var depth int
+		var bytes int64
+		depth, bytes, _, err = s.local.Stats(ctx)
+		if err == nil && (depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes) {
+			err = runnerspool.ErrFull
 		}
-		return uuid.Nil, err
 	}
-	depth, bytes, _, err := s.local.Stats(ctx)
+	if errors.Is(err, runnerspool.ErrFull) {
+		return uuid.Nil, errors.Join(err, s.refuse(ctx))
+	}
 	if err != nil {
 		return uuid.Nil, err
-	}
-	if depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes {
-		return uuid.Nil, errors.Join(runnerspool.ErrFull, s.local.Refuse(ctx))
 	}
 	id := uuid.New()
 	s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
 	s.heldBytes += need
 	return id, nil
+}
+
+// refuse counts one refused admission for the builtin:spool-full record. Only a genuinely full spool is
+// counted: a count trips the overflow that refuses all egress until replay, so an admission that ran out
+// of time or whose client hung up (context.DeadlineExceeded, context.Canceled) gets an uncounted 503
+// instead. The count runs on its own deadline, since the request's own may be nearly spent. The caller
+// holds s.mu.
+func (s *decisionSink) refuse(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), spoolAdmitTimeout)
+	defer cancel()
+	return s.local.Refuse(ctx)
 }
 
 // drop ends a reservation; the caller holds s.mu.
@@ -139,7 +155,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 			"the request target is too long to record in the run's egress audit, so it was not sent")
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), spoolAdmitTimeout)
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
 	if err != nil {

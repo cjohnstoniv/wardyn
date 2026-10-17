@@ -145,7 +145,7 @@ func TestWaitReady_409StillWaits(t *testing.T) {
 	srv, counts := countingReadyServer(t, runID, http.StatusConflict, `{"error":"run has no sandbox to read (state=RUNNING)"}`)
 	c := &sdk.Client{BaseURL: srv.URL}
 
-	_, err := waitForRunReady(context.Background(), io.Discard, c, runID, 30*time.Millisecond, false)
+	_, err := waitForRunReady(context.Background(), io.Discard, c, runID, time.Second, false) // wide: two polls must fit before it even on a loaded host
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != 124 {
 		t.Fatalf("err = %v, want exit 124 (a 409 is transient and must run to the deadline)", err)

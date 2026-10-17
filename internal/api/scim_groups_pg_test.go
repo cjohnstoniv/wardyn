@@ -160,6 +160,11 @@ func newMoverWorld(t *testing.T, shape ...func(*Config)) *moverWorld {
 	cookies[0] = mint(&w.withGroup, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{groupClaim, "other-team"}})
 	cookies[1] = mint(&w.without, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{"other-team"}})
 	cookies[2] = mint(&w.truncated, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{"other-team"}, GroupsOverage: true})
+	// The sessions a removal must cut were issued clearly before it, so the ordering the tests assert
+	// does not depend on the wall clock holding still across the two instants.
+	for i, c := range cookies {
+		cookies[i] = backdated(t, c, clockStepMargin)
+	}
 	w.moverCookies = cookies[:]
 	w.memberCookie = mint(&w.otherMember, entrafake.Identity{Username: memberEmail, Subject: "sub-member", Groups: []string{groupClaim}})
 	w.unrelatedCookie = mint(&w.unrelatedTruncated, entrafake.Identity{Username: bystanderMail, Subject: "sub-bystander", GroupsOverage: true})
@@ -244,10 +249,6 @@ func TestSCIMGroupMemberRemoveRevokesTheMoversTokens(t *testing.T) {
 		t.Run(strings.TrimSuffix(fixture, ".json"), func(t *testing.T) {
 			w := newMoverWorld(t)
 			e := w.e
-			// The sessions to be revoked were issued clearly before the removal.
-			for i, c := range w.moverCookies {
-				w.moverCookies[i] = backdated(t, c, clockStepMargin)
-			}
 			for _, c := range w.moverCookies {
 				if !e.cookieWorks(e.a, c) {
 					t.Fatal("control: a session does not work before the removal")
