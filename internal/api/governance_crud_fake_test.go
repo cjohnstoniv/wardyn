@@ -376,11 +376,11 @@ func (s *composedUIAppsStore) GetGovernanceProfileChain(context.Context, uuid.UU
 	return []types.GovernanceProfile{s.leaf, s.base}, nil
 }
 
-// TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial pins what the two ceiling read
-// surfaces say about an overlay that empties ui_apps over a base that lists one: the base's list is
-// kept, and the denial is what narrows it (the admin view carries deny_ui_apps; a member's
-// /policies/default carries the list a run is clamped against).
-func TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial(t *testing.T) {
+// TestComposedUIAppsDenial_ReadSurfacesShowTheDenial pins what the two ceiling read surfaces say
+// about an overlay that empties ui_apps over a base that lists one: the admin view keeps the base's
+// list beside deny_ui_apps, and a member's /policies/default lists no UI apps, since a run under the
+// ceiling gets none (boundUIApps).
+func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 	docs := []types.UIApp{{Name: "docs", Port: 8000}}
 	base := types.GovernanceProfile{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{
 		AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2, UIApps: docs}}
@@ -425,7 +425,7 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial(t *testi
 	if err := json.Unmarshal(w.Body.Bytes(), &def); err != nil {
 		t.Fatal(err)
 	}
-	if def.GovernanceProfileName != "leaf" || !slices.Equal(def.UIApps, docs) {
-		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and the base's list", def.GovernanceProfileName, def.UIApps)
+	if def.GovernanceProfileName != "leaf" || len(def.UIApps) != 0 {
+		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and no UI apps", def.GovernanceProfileName, def.UIApps)
 	}
 }
