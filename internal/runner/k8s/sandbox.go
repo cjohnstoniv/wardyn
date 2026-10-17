@@ -11,10 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -44,6 +48,20 @@ func activeDeadline(lifetimeCap time.Duration) *int64 {
 	}
 	secs := int64((lifetimeCap + podDeadlineGrace) / time.Second)
 	return &secs
+}
+
+// podDeadline is activeDeadline capped by Config.MaxPodLifetime (N6): min(run cap + grace, max) on
+// both pods, and max for a run with no cap. With max = 0 the server spec is byte-identical.
+func (d *Driver) podDeadline(lifetimeCap time.Duration) *int64 {
+	base := activeDeadline(lifetimeCap)
+	if d.cfg.MaxPodLifetime <= 0 {
+		return base
+	}
+	limit := int64(d.cfg.MaxPodLifetime / time.Second)
+	if base == nil || *base > limit {
+		return &limit
+	}
+	return base
 }
 
 // proxyConfigSecretKey is the Secret data key CreateSandbox writes the proxy
@@ -119,6 +137,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
+	if d.runnerMode() && d.cfg.DecisionSink == nil {
+		return runner.Sandbox{}, errDecisionSinkUnwired
+	}
+	defer d.brackets.Delete(proxyPodName(spec.RunID))
+	defer d.brackets.Delete(agentPodName(spec.RunID))
 	// The drives come LAST in preflight since it's the only step that
 	// writes; their PVCs outlive the run on purpose and carry no
 	// wardyn.run-id label, so rollback can never delete the person's storage.
@@ -151,9 +174,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// any surviving Secret always has both NetworkPolicies to be found by.
 	agentLabels := wardynLabels(spec.RunID, componentAgent, nil)
 	proxyLabels := wardynLabels(spec.RunID, componentProxy, nil)
+	objLabels := func(component string) map[string]string {
+		return d.stampRunner(wardynLabels(spec.RunID, component, spec.Labels))
+	}
 
 	agentNetPol := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: agentNetPolName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentAgent, spec.Labels)},
+		ObjectMeta: metav1.ObjectMeta{Name: agentNetPolName(spec.RunID), Namespace: ns, Labels: objLabels(componentAgent)},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: agentLabels},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
@@ -169,7 +195,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	proxyNetPol := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: proxyNetPolName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
+		ObjectMeta: metav1.ObjectMeta{Name: proxyNetPolName(spec.RunID), Namespace: ns, Labels: objLabels(componentProxy)},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: proxyLabels},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
@@ -179,7 +205,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			// SECURITY: both rules share the metadata-excluding peer — a
 			// peer-less DNS rule would permit port 53 to the metadata address,
 			// voiding the Except on the rule beside it.
-			Egress: []networkingv1.NetworkPolicyEgressRule{
+			Egress: append([]networkingv1.NetworkPolicyEgressRule{
 				{ // DNS
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
@@ -190,7 +216,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				{ // everything except the cloud-metadata address
 					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
 				},
-			},
+			}, d.runnerdPeerRules()...),
 		},
 	}
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, proxyNetPol, metav1.CreateOptions{}); err != nil {
@@ -202,6 +228,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyJSON, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: build proxy config: %w", err))
+	}
+	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
+		return fail(err)
 	}
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
@@ -221,7 +250,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName(spec.RunID),
 			Namespace: ns,
-			Labels:    wardynLabels(spec.RunID, componentProxy, spec.Labels),
+			Labels:    objLabels(componentProxy),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: secretData,
@@ -234,7 +263,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
+			ActiveDeadlineSeconds:        d.podDeadline(spec.Resources.LifetimeCap),
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
@@ -307,7 +336,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
 	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
-	createdProxy, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{})
+	if err := d.runnerPodSpec(proxyPod, componentProxy, spec.ProxyConfig.ControlPlaneURL); err != nil {
+		return fail(err)
+	}
+	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
@@ -316,6 +348,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyIP, err := d.waitPodIP(ctx, clock, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
+	}
+	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
+		// Contained before it ever opens, rather than running to its deadline (Fable L5).
+		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
 	}
 
 	// (5) Agent pod: idle main container, hostAliases pinning "wardyn-proxy" to
@@ -336,7 +372,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// No BlockOwnerDeletion: that would need an extra permission on pods/finalizers.
 		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, OwnerReferences: ownedByPod(createdProxy)},
 		Spec: corev1.PodSpec{
-			ActiveDeadlineSeconds:        activeDeadline(spec.Resources.LifetimeCap),
+			ActiveDeadlineSeconds:        d.podDeadline(spec.Resources.LifetimeCap),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
@@ -354,7 +390,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				// SECURITY: credential-bearing env is a secretKeyRef into the run
 				// Secret, never inlined; Exec copies this whole slice onto the
 				// ephemeral container it adds.
-				Env:             append(envVars(spec.Env), secretEnvVars(spec.RunID, spec.SecretEnv)...),
+				Env:             append(envVars(d.withRunnerTrustedCA(spec.Env)), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
 				Resources:       resourceRequirements(spec.Resources),
 			}},
@@ -382,7 +418,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	d.placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
-	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, agentPod, metav1.CreateOptions{}); err != nil {
+	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
+		return fail(err)
+	}
+	if _, err := d.createPod(ctx, spec.RunID, componentAgent, agentPod); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
 
@@ -441,7 +480,7 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, po
 	var lastReason string
 	var pulls pullWatch
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		pod, gerr := d.readPod(pollCtx, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -579,7 +618,7 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 	var lastGetErr error
 	var lastReason string
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		pod, gerr := d.readPod(pollCtx, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -654,3 +693,121 @@ func notMetadataIPBlock() *networkingv1.IPBlock {
 // isNotFound reports whether err is a k8s "not found" API error, so
 // Stop/Kill stay idempotent on an already-gone sandbox.
 func isNotFound(err error) bool { return err != nil && apierrors.IsNotFound(err) }
+
+// stampRunner sets the runner-id label (runner mode) over any value a caller supplied.
+func (d *Driver) stampRunner(labels map[string]string) map[string]string {
+	if d.runnerMode() {
+		labels[runner.LabelRunnerID] = d.cfg.RunnerID
+	}
+	return labels
+}
+
+// runnerdPeerRules is the proxy NetworkPolicy's explicit egress peer to runnerd on the relay and
+// sink ports (runner mode): ipBlock semantics for pod IPs depend on the CNI (R9), a pod peer does not.
+func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
+	p := d.cfg.RunnerdPeer
+	if !d.runnerMode() || p == nil {
+		return nil
+	}
+	return []networkingv1.NetworkPolicyEgressRule{{
+		Ports: []networkingv1.NetworkPolicyPort{
+			{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(p.RelayPort))},
+			{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(p.SinkPort))},
+		},
+		To: []networkingv1.NetworkPolicyPeer{{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": p.Namespace}},
+			PodSelector:       &metav1.LabelSelector{MatchLabels: maps.Clone(p.PodLabels)},
+		}},
+	}}
+}
+
+// runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
+// (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2) and hard_deny (§5.3). The proxy
+// decodes strictly, so a proxy that does not know a key refuses to start.
+func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byte) ([]byte, error) {
+	if !d.runnerMode() {
+		return b, nil
+	}
+	b, err := runner.WithTrustedCA(b, d.cfg.TrustedCAPEM)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: proxy trusted CA: %w", err)
+	}
+	sink, err := d.cfg.DecisionSink(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: decision sink: %w", err)
+	}
+	return runner.WithProxyConfigKeys(b, map[string]any{"self_lapse": true, "decision_sink": sink, "hard_deny": d.hardDeny})
+}
+
+// withRunnerTrustedCA appends runnerd's own CA bundle to a sandbox's CA trust (runner mode); it
+// returns a copy, never the caller's map.
+func (d *Driver) withRunnerTrustedCA(env map[string]string) map[string]string {
+	if !d.runnerMode() || d.cfg.TrustedCAPEM == "" {
+		return env
+	}
+	env = maps.Clone(env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, env)
+	return env
+}
+
+// runnerPodSpec applies runner mode to a pod before its create: the runner-id label, the stop-proof
+// finalizer (set in the create request, so it needs no extra verb), and for the proxy
+// RestartPolicy Never (a proxy exit is terminal, §6.2) and a hostAlias mapping the control plane's
+// internal hostname to the relay Service. Server mode is untouched.
+func (d *Driver) runnerPodSpec(pod *corev1.Pod, component, controlPlaneURL string) error {
+	if !d.runnerMode() {
+		return nil
+	}
+	pod.Labels = d.stampRunner(pod.Labels)
+	pod.Finalizers = append(pod.Finalizers, stopProofFinalizer)
+	if component != componentProxy {
+		return nil
+	}
+	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	if d.cfg.ControlPlaneRelay == nil {
+		return errors.New("k8s: runner mode has no control-plane relay")
+	}
+	u, err := url.Parse(controlPlaneURL)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("k8s: control-plane URL %q: %v", controlPlaneURL, err)
+	}
+	ip, err := d.cfg.ControlPlaneRelay(u)
+	if err != nil {
+		return err
+	}
+	pod.Spec.HostAliases = append(pod.Spec.HostAliases, corev1.HostAlias{IP: ip, Hostnames: []string{u.Hostname()}})
+	return nil
+}
+
+// createPod creates a pod; in runner mode it first persists the bracket's lower end (a node list
+// scoped by the pod's own nodeSelector), then records the create response's UID, and routes the
+// start wait's reads of the pod through the bracket.
+func (d *Driver) createPod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*corev1.Pod, error) {
+	if !d.runnerMode() {
+		return d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	}
+	b := &bracket{d: d, runID: runID, component: component, selector: pod.Spec.NodeSelector}
+	if err := b.before(ctx, pod.Name); err != nil {
+		return nil, err
+	}
+	created, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if err := b.created(created); err != nil {
+		return nil, err
+	}
+	d.brackets.Store(pod.Name, b)
+	return created, nil
+}
+
+// readPod is the start wait's pod read: through the pod's bracket in runner mode.
+func (d *Driver) readPod(ctx context.Context, name string) (*corev1.Pod, error) {
+	if v, ok := d.brackets.Load(name); ok {
+		return v.(*bracket).get(ctx, name)
+	}
+	return d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+}

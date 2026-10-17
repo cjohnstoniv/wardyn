@@ -114,7 +114,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	podName := "wardyn-egress-canary-" + suffix
 	// labelRun carries this invocation's own unique suffix so two wardynd instances booting concurrently
 	// don't share a selector — instance A's phase-B deny-all netpol must never match instance B's phase-A pod.
-	labels := wardynLabels(runID, componentCanary, nil)
+	labels := d.stampRunner(wardynLabels(runID, componentCanary, nil)) // a runner's own, not foreign (§3.4 item 3)
 
 	if denyAll {
 		netpolName := "wardyn-egress-canary-netpol-" + suffix
@@ -155,6 +155,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	}
 	// Same placement as the run pods: the canary must prove enforcement on the nodes runs use.
 	d.placement.apply(pod, runID, componentCanary, nil)
+	pod.Labels = d.stampRunner(pod.Labels)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}

@@ -6,6 +6,7 @@
 package k8s
 
 import (
+	"errors"
 	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
@@ -40,6 +41,21 @@ func buildConfig(d substrate.Deps) Config {
 		AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
 		AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
 	}
+}
+
+// NewRunner builds the driver for wardyn-runnerd (runner mode, design K1 §3.3): the sandbox
+// WARDYN_K8S_* knobs through buildConfig, then the runner's own fields from apply. The runs
+// namespace is --runs-namespace, so WARDYN_K8S_NAMESPACE is refused rather than ignored.
+func NewRunner(d substrate.Deps, apply func(*Config)) (*Driver, error) {
+	if os.Getenv("WARDYN_K8S_NAMESPACE") != "" {
+		return nil, errors.New("k8s: a runner takes its runs namespace from --runs-namespace; unset WARDYN_K8S_NAMESPACE")
+	}
+	cfg := buildConfig(d)
+	apply(&cfg)
+	if cfg.RunnerID == "" {
+		return nil, errors.New("k8s: runner driver has no runner id")
+	}
+	return New(cfg)
 }
 
 // Self-register the Kubernetes substrate so a blank import (cmd/wardynd under
