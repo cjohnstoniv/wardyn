@@ -129,7 +129,7 @@ function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: 
   return (
     <>
       <span />
-      <Button type="button" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
+      <Button type="button" variant="outline" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
     </>
   );
 }
@@ -170,18 +170,41 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const { mine, failed } = useMyComponents();
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
+  // A dialog that chains into another (the custom form into the full editor) unmounts the button that opened it, so
+  // focus would fall to the page. The button is remembered and takes focus back once the last dialog is gone.
+  const opener = React.useRef<HTMLElement | null>(null);
+  const open = (d: Door) => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setDoor(d); };
   const [names, setNames] = React.useState<string[] | null>(null);
+  const [namesError, setNamesError] = React.useState<string>();
+  const [namesTry, setNamesTry] = React.useState(0);
 
-  // The saved secret names a dialog offers are read when one opens.
+  // The saved secret names a dialog offers are read when one opens. A read that failed is not an empty list:
+  // the dialog opens without names (a tokenless path still works) and says why, with a retry.
   React.useEffect(() => {
     if (!door || door === "host") return;
     let live = true;
-    secrets.listSecrets().then((n) => live && setNames(n), () => live && setNames([]));
+    secrets.listSecrets().then(
+      (n) => { if (live) { setNames(n); setNamesError(undefined); } },
+      (e: unknown) => { if (live) { setNames([]); setNamesError(getErrorMessage(e)); } },
+    );
     return () => { live = false; };
+  }, [door, namesTry]);
+  const namesFailure = namesError ? { message: namesError, retry: () => setNamesTry((n) => n + 1) } : undefined;
+
+  React.useEffect(() => {
+    if (door) return;
+    const back = opener.current;
+    opener.current = null;
+    if (!back) return;
+    const t = setTimeout(() => {
+      const active = document.activeElement;
+      if ((!active || active === document.body) && back.isConnected) back.focus();
+    }, 0);
+    return () => clearTimeout(t);
   }, [door]);
 
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
-  const close = () => { setDoor(null); setNames(null); };
+  const close = () => { setDoor(null); setNames(null); setNamesError(undefined); };
   const added = (message: string) => { announce(message); close(); };
   const attach = (ref: ComponentRef) => { edit((i) => attachComponent(i, ref)); added(ref.name ? NR_TOOLS.COMPONENT_ADDED_NAMED(ref.name) : NR_TOOLS.COMPONENT_ADDED); };
   const addSecret = (a: SecretAddition) => {
@@ -223,6 +246,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
         icon={row.category === "mcp" ? CARD_ICON.mcp : CARD_ICON.api}
         title={row.name}
         org
+        body={row.description || undefined}
         brings={<Brings hosts={row.hosts} deliveries={row.secrets.map((s) => MODE_DELIVERY[s.delivery.mode])} />}
         look={on ? "added" : reason ? "off" : "plain"}
       >
@@ -258,7 +282,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           <p className="text-sm text-muted-foreground">{NR_TOOLS.ADD_BODY}</p>
         </div>
         <div className="flex max-w-[16rem] flex-col items-end gap-1">
-          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => setDoor("custom")}>
+          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => open("custom")}>
             <Plus aria-hidden />
             {NR_TOOLS.CUSTOM_COMPONENT}
           </Button>
@@ -291,7 +315,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
               key={key}
               icon={generic.icon}
               title={title}
-              body={generic.body}
+              body={row?.description || generic.body}
               brings={row && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
               look={on ? "added" : off || reason ? "off" : "plain"}
             >
@@ -314,9 +338,9 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
         {show("api") && org("api").map(orgCard)}
         {show("secret") && (
           <>
-            <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => setDoor("secret")} />
-            <DoorCard icon={CARD_ICON.host} title={NR_TOOLS.HOST_CARD_TITLE} body={NR_TOOLS.HOST_CARD_BODY} button={NR_TOOLS.HOST_CARD_BUTTON} onOpen={() => setDoor("host")} />
-            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => setDoor("mcp")} />
+            <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => open("secret")} />
+            <DoorCard icon={CARD_ICON.host} title={NR_TOOLS.HOST_CARD_TITLE} body={NR_TOOLS.HOST_CARD_BODY} button={NR_TOOLS.HOST_CARD_BUTTON} onOpen={() => open("host")} />
+            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => open("mcp")} />
           </>
         )}
       </ul>
@@ -341,6 +365,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
       {door === "secret" && names && (
         <AddSecretDialog
           names={names}
+          namesFailure={namesFailure}
           hosts={access?.hosts.map((h) => h.host) ?? []}
           residentAllowed={residentAllowed}
           mayDefine={mayDefine}
@@ -349,8 +374,8 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           onClose={close}
         />
       )}
-      {door === "mcp" && names && <AddMcpDialog names={names} onAdd={attach} onClose={close} />}
-      {door === "custom" && names && <CustomComponentDialog names={names} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
+      {door === "mcp" && names && <AddMcpDialog names={names} namesFailure={namesFailure} onAdd={attach} onClose={close} />}
+      {door === "custom" && names && <CustomComponentDialog names={names} namesFailure={namesFailure} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
     </section>
   );
 }

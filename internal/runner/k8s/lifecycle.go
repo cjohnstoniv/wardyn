@@ -180,6 +180,11 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 // below). Split out so CreateSandbox's rollback can share this exact ordering
 // even when no live pod exists yet to resolve a label from.
 func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeriodSeconds *int64) error {
+	if d.runnerMode() {
+		// Runner mode: completion evidence per pod in the one order, NetworkPolicies held until
+		// both pods are proven stopped (design K1 §3.1, stop_proxy.go).
+		return d.teardownRunner(ctx, runID, gracePeriodSeconds)
+	}
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
 
@@ -324,6 +329,10 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{
 		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
+	}
+	if d.runnerMode() {
+		// A runner sweeps only what it created (design K1 §3.1 RunnerID).
+		listOpts.LabelSelector += "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID
 	}
 	netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
 	if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {

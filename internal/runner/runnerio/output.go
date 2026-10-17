@@ -106,7 +106,7 @@ func (s *Server) outputAck(raw json.RawMessage) error {
 }
 
 func (s *Server) recoverOutput(ctx context.Context, peer *runnerwire.Peer, id uint32, raw json.RawMessage) (any, error) {
-	args, err := decode[runnerwire.RefArgs](raw)
+	args, err := decode[runnerwire.RecoverOutputArgs](raw)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,10 @@ func (s *Server) recoverOutput(ctx context.Context, peer *runnerwire.Peer, id ui
 		return runnerwire.RecoverResult{Unrecoverable: true}, nil
 	}
 	found.mu.Lock()
-	lost := found.start() != 0 || found.interrupted || found.stopped != nil || found.state.Failure != ""
+	// Bytes already discarded (acknowledged by an org process that has since gone) leave a gap: the
+	// copy starts after them, and only for an org that says it can mark one.
+	start := found.start()
+	lost := (start != 0 && !args.Gap) || found.interrupted || found.stopped != nil || found.state.Failure != ""
 	found.mu.Unlock()
 	if lost {
 		return runnerwire.RecoverResult{Unrecoverable: true}, nil
@@ -139,6 +142,6 @@ func (s *Server) recoverOutput(ctx context.Context, peer *runnerwire.Peer, id ui
 	if err != nil {
 		return nil, err
 	}
-	go s.copyOutput(s.life(peer), st, found, 0)
-	return runnerwire.RecoverResult{Stream: st.ID()}, nil
+	go s.copyOutput(s.life(peer), st, found, start)
+	return runnerwire.RecoverResult{Stream: st.ID(), Gap: start}, nil
 }

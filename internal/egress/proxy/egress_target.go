@@ -91,6 +91,11 @@ func blockKindOf(err error) blockKind {
 // ruleSource is "" except "site-config:internal-host" or
 // "site-config:egress-redirect"; only evaluate() consumes it.
 func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
+	// A k8s runner's hard deny comes before every admission below, the
+	// operator's literal trust and the internal_hosts lift included (§5.3).
+	if p.hardDeny.name(host) {
+		return "", "", errHardDenied(host)
+	}
 	// The operator's OWN exactly-allowed literal is answered FIRST, before
 	// the upstream branch and the vet, since it has no hostname behind it to
 	// rebind. ABOVE the upstream branch, not below it, so every re-vet path
@@ -400,7 +405,11 @@ func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 // unchanged) — a host with one liftable and one non-liftable answer is denied.
 func (p *Proxy) vetHost(host string) IPGuardResult {
 	normalized := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	return vetHostLift(host, p.res, func(ip net.IP) bool {
+	res, refused, ok := p.hardDenyVet(host)
+	if !ok {
+		return refused
+	}
+	return vetHostLift(host, res, func(ip net.IP) bool {
 		return p.liftInternalHost(normalized, ip)
 	})
 }

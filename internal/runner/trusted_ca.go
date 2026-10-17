@@ -5,7 +5,9 @@ package runner
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 )
 
@@ -147,4 +149,41 @@ func InstallSandboxTrustedCA(corpPEM string, sandboxEnv map[string]string) {
 		sandboxEnv["WARDYN_MITM_CA_PEM"] = corpPEM
 	}
 	SetSandboxCATrustVars(sandboxEnv, true)
+}
+
+// WithTrustedCA returns the proxy config b with trusted_ca_pem set to a runner's own bundle. Both
+// runner substrates apply it on create (and Docker on ReplaceProxy too), since a revive rebuilds from
+// the organisation's stored config, which never carries a CA for a runner. The value REPLACES
+// whatever is there: the organisation's roots stay off a runner's proxy. An empty bundle leaves b
+// untouched.
+func WithTrustedCA(b []byte, pemBundle string) ([]byte, error) {
+	if pemBundle == "" {
+		return b, nil
+	}
+	return WithProxyConfigKeys(b, map[string]any{"trusted_ca_pem": pemBundle})
+}
+
+// WithProxyConfigKeys returns the proxy config b with each key of kv set to its value, replacing
+// any value already there. A runner adds the keys only it knows (its CA bundle, the k8s runner's
+// self-lapse, decision sink and hard denies) to the config BuildProxyConfig made. The proxy decodes
+// strictly, so a key it does not know refuses its start rather than being ignored.
+func WithProxyConfigKeys(b []byte, kv map[string]any) ([]byte, error) {
+	if len(kv) == 0 {
+		return b, nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, errors.New("proxy config is empty")
+	}
+	for k, v := range kv {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		data[k] = raw
+	}
+	return json.Marshal(data)
 }

@@ -34,6 +34,9 @@ type podDemand struct {
 	// NotTerminating quota scopes: both run pods carry one exactly when the run has its own
 	// lifetime cap (activeDeadline, sandbox.go), so a run with none is NotTerminating-scoped.
 	terminating bool
+	// secrets and networkPolicies are the per-run objects the pod carries in the count: CreateSandbox
+	// makes them once per run, so only the first pod holds them.
+	secrets, networkPolicies int64
 }
 
 // runPods is the run's two pods as the quota and the scheduler see them: the agent pod (its
@@ -43,7 +46,7 @@ func (d *Driver) runPods(res runner.Resources) []podDemand {
 	agent, proxy := resourceRequirements(res), proxyResources(false)
 	pc, term := d.placement.PriorityClassName, activeDeadline(res.LifetimeCap) != nil
 	return []podDemand{
-		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc, terminating: term},
+		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc, terminating: term, secrets: 1, networkPolicies: 2},
 		{requests: proxy.Requests, limits: proxy.Limits, priorityClass: pc, terminating: term},
 	}
 }
@@ -131,6 +134,10 @@ func podUse(p podDemand, key corev1.ResourceName) int64 {
 	switch key {
 	case corev1.ResourcePods, "count/pods":
 		return 1
+	case corev1.ResourceSecrets, "count/secrets":
+		return p.secrets
+	case "count/networkpolicies.networking.k8s.io":
+		return p.networkPolicies
 	case corev1.ResourceCPU, corev1.ResourceRequestsCPU:
 		return quantityOf(key, *p.requests.Cpu())
 	case corev1.ResourceMemory, corev1.ResourceRequestsMemory:

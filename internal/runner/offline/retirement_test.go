@@ -102,11 +102,12 @@ func TestRetirementDefersLiveOutputAndRejectsWrongSettlement(t *testing.T) {
 		func(p *types.RunnerRetirement) { p.ExitHash = "foreign" },
 	} {
 		bad := a
+		bad.ID = uuid.New()
 		p := *a.Retirement
 		change(&p)
 		bad.Retirement = &p
-		if _, err := m.apply(t.Context(), bad); err == nil {
-			t.Fatal("changed execution/exit proof accepted")
+		if got, err := m.apply(t.Context(), bad); err != nil || got.Outcome != types.RunnerActionRefused {
+			t.Fatalf("changed execution/exit proof = %+v %v, want refused", got, err)
 		}
 	}
 	m.outputSettled = func(context.Context, uuid.UUID, string) (int64, bool, error) { return 8, false, nil }

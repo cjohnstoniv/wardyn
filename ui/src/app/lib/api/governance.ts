@@ -281,7 +281,7 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
-  // The ordinary human type id both previews send. An empty value means "no type tier" to the
+  // The user type id both previews send: the picker's choice, Standard when there is no picker. An empty value means "no type tier" to the
   // server, which is not what a signed-in person's run is given.
   user_type: string;
 }
@@ -298,7 +298,7 @@ export interface GovernancePreviewInput {
 // positionally to pick which claim an `email_local` home is named from. Array
 // .prototype.sort is stable, so every other line keeps the order it was typed
 // in. The ranking itself stays in SQL.
-export function previewClaims(claims: string): GovernancePreviewInput {
+export function previewClaims(claims: string, userType: string = USER_TYPE_STANDARD): GovernancePreviewInput {
   const lines = claims
     .split("\n")
     .map((c) => c.trim())
@@ -306,7 +306,7 @@ export function previewClaims(claims: string): GovernancePreviewInput {
   return {
     user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
     groups: lines,
-    user_type: USER_TYPE_STANDARD,
+    user_type: userType || USER_TYPE_STANDARD,
   };
 }
 
@@ -355,7 +355,7 @@ export const governance = {
   // refusing a profile that would MINT credential eligibility; every 4xx
   // surfaces as an HttpError carrying the server's own message.
   async createProfile(input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
-    return writeProfile(await wfetch("/governance/profiles", { method: "POST", body: JSON.stringify(input) }));
+    return writeProfile(await wfetch("/governance/profiles", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
   },
 
   // PUT /api/v1/governance/profiles/{id} -> 200 {profile, warnings}. Rename
@@ -363,7 +363,7 @@ export const governance = {
   // assigned profile, so the update path has to carry the name.
   async updateProfile(id: string, input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
     return writeProfile(
-      await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) }),
+      await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) }),
     );
   },
 
@@ -387,7 +387,7 @@ export const governance = {
   // (200) rather than accumulating a second (201). The console reloads either
   // way, so the status is not surfaced.
   async upsertAssignment(input: GovernanceAssignmentInput): Promise<GovernanceAssignment> {
-    const res = await wfetch("/governance/assignments", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/governance/assignments", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     return asJson<GovernanceAssignment>(res);
   },
 
@@ -426,7 +426,7 @@ export const governance = {
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
   // HttpError whose message is its own sentence.
   async approveChange(id: string): Promise<GovernanceChange> {
-    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST", asPerson: true });
     return asJson<GovernanceChange>(res);
   },
 
@@ -435,6 +435,7 @@ export const governance = {
   async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return asJson<GovernanceChange>(res);

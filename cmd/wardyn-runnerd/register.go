@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,11 +27,52 @@ import (
 )
 
 func newRegisterCommand() *cobra.Command {
-	var org, tokenFile, stateDir, name string
+	var org, tokenFile, stateDir, name, sub, arch, trustedCAFile string
+	var ifUnregistered bool
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags})
+		if sub != "docker" && sub != "k8s" {
+			return fmt.Errorf("--substrate %q: want docker or k8s", sub)
+		}
+		if sub == "docker" && arch != "" {
+			return fmt.Errorf("--arch (%s) applies only to --substrate=k8s: a Docker runner reports its engine's", archEnv)
+		}
+		if sub == "k8s" {
+			if err := checkArch(arch); err != nil {
+				return err
+			}
+		}
+		if ifUnregistered {
+			// The chart's init container runs on every pod start: a saved identity for this
+			// organisation means registration already happened, and no token is read or spent.
+			dir := stateDir
+			if dir == "" {
+				var err error
+				if dir, err = runneridentity.DefaultDir(); err != nil {
+					return err
+				}
+			}
+			if _, err := runneridentity.Load(dir, org); err == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "already registered; nothing to do")
+				return nil
+			}
+		}
+		args := registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, reuseKey: ifUnregistered}
+		done, err := registerRunner(cmd, args)
+		// The chart's init container: a registration that could not reach the organisation is retried
+		// with the same key a bounded number of times, each failure logged, before the pod restarts
+		// it (and the restart retries with that key too, never failing on the key file).
+		for attempt := 1; ifUnregistered && err != nil && registrationTransient(err) && attempt < registerAttempts; attempt++ {
+			wait := registerBackoff << (attempt - 1)
+			fmt.Fprintf(cmd.ErrOrStderr(), "registration attempt %d of %d failed: %v\nretrying in %s\n", attempt, registerAttempts, err, wait)
+			select {
+			case <-cmd.Context().Done():
+				return cmd.Context().Err()
+			case <-time.After(wait):
+			}
+			done, err = registerRunner(cmd, args)
+		}
 		if err != nil {
 			return err
 		}
@@ -45,6 +87,10 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "file containing the single-use registration token")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
+	cmd.Flags().StringVar(&sub, "substrate", "docker", "where this runner's runs execute: docker or k8s (k8s measures nothing: give every total as a flag)")
+	cmd.Flags().StringVar(&arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture this runner reports, amd64 or arm64")
+	cmd.Flags().StringVar(&trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) the registration call trusts, as serve's flag of the same name")
+	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
 	_ = cmd.MarkFlagRequired("token-file")
@@ -83,12 +129,50 @@ func registrationFailure(err error) error {
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }
 
+// registrationKey is the key a registration submits: with reuse (--if-unregistered), the one an
+// earlier, incomplete registration left in stateDir; otherwise, or when there is none, a new one.
+func registrationKey(stateDir string, reuse bool) (ed25519.PrivateKey, error) {
+	if reuse {
+		if key, err := runneridentity.PendingKey(stateDir); err != nil || key != nil {
+			return key, err
+		}
+	}
+	return runneridentity.Generate(stateDir)
+}
+
+// registerAttempts and registerBackoff bound the init container's retry of a registration that
+// could not reach the organisation: 2, 4, 8 and 16 s apart. Vars only so a test can shorten them.
+var (
+	registerAttempts = 5
+	registerBackoff  = 2 * time.Second
+)
+
+// registrationTransient reports a failure that says nothing about the token: the organisation was not
+// reached, or answered a 5xx with no reason of its own. A retry with the same key and token either
+// succeeds or gets the organisation's own refusal.
+func registrationTransient(err error) bool {
+	var apiErr *sdk.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status >= http.StatusInternalServerError && apiErr.Reason == ""
+	}
+	return errors.As(err, new(*url.Error))
+}
+
 // registerArgs are register's inputs: setup passes the same ones from its own flags.
 type registerArgs struct {
 	org, tokenFile, stateDir, name string
 	limits                         *registerLimits
 	// proxyImage is the image that measures a VM-backed engine's disk; "" is the release image.
 	proxyImage string
+	// noMeasure (k8s): no engine to measure or ask, so every total comes from a flag.
+	noMeasure bool
+	// arch (k8s) is --arch, reported in place of the engine's.
+	arch string
+	// trustedCAFile is --trusted-ca-file: extra roots the registration call trusts beside the system's.
+	trustedCAFile string
+	// reuseKey (--if-unregistered) submits the key an earlier, incomplete registration left in the
+	// state directory instead of refusing on it.
+	reuseKey bool
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -101,19 +185,47 @@ type registeredRunner struct {
 }
 
 // registerRunner measures this host, settles the limits, spends the token and saves the identity. A
-// refused limit or a missing token file returns before anything is spent.
+// refused limit or a missing token file returns before anything is spent, and before any question is asked.
 func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error) {
 	org, tokenFile, stateDir, name := a.org, a.tokenFile, a.stateDir, a.name
 	if err := federation.CheckOrgURL(org); err != nil {
 		return registeredRunner{}, err
 	}
-	// The limits are measured and checked before anything is spent: a refused limit keeps the token.
-	measured, err := measureWithVMDisk(cmd.Context(), a.proxyImage)
-	if err != nil {
-		measured = types.RunnerAmounts{}
+	// The machine name is what the host calls itself, reported beside the display name; a host that
+	// cannot say registers without one.
+	machine, _ := os.Hostname()
+	if name == "" {
+		if machine == "" {
+			return registeredRunner{}, errors.New("this host reports no name: pass --name")
+		}
+		name = machine
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
-	if in, out := cmd.InOrStdin(), cmd.OutOrStdout(); asksAt(in, out) {
+	token, err := readRegistrationToken(tokenFile)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	// Read before anything is spent, like the token: an unusable bundle keeps both.
+	bundle, _, err := loadTrustedCA(a.trustedCAFile)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	orgClient, err := orgHTTPClient(bundle)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	// The limits are measured and checked before anything is spent: a refused limit keeps the token.
+	var measured types.RunnerAmounts
+	if !a.noMeasure {
+		var err error
+		if measured, err = measureWithVMDisk(cmd.Context(), a.proxyImage); err != nil {
+			measured = types.RunnerAmounts{}
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "measuring this computer failed: %v\n", err)
+		}
+	}
+	if in, out := cmd.InOrStdin(), cmd.OutOrStdout(); !a.noMeasure && asksAt(in, out) {
 		if err := a.limits.ask(cmd, in, out, measured); err != nil {
 			return registeredRunner{}, err
 		}
@@ -129,20 +241,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 			return registeredRunner{}, err
 		}
 	}
-	// The machine name is what the host calls itself, reported beside the display name; a host that
-	// cannot say registers without one.
-	machine, _ := os.Hostname()
-	if name == "" {
-		if machine == "" {
-			return registeredRunner{}, errors.New("this host reports no name: pass --name")
-		}
-		name = machine
-	}
-	token, err := readRegistrationToken(tokenFile)
-	if err != nil {
-		return registeredRunner{}, err
-	}
-	key, err := runneridentity.Generate(stateDir)
+	key, err := registrationKey(stateDir, a.reuseKey)
 	if err != nil {
 		return registeredRunner{}, err
 	}
@@ -150,7 +249,13 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
-	arch := engineArch(cmd.Context())
+	if orgClient != nil {
+		client.HTTPClient.Transport = orgClient.Transport
+	}
+	arch := a.arch
+	if arch == "" && !a.noMeasure {
+		arch = engineArch(cmd.Context())
+	}
 	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
 	if err != nil {
 		return registeredRunner{}, registrationFailure(err)

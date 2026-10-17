@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -43,6 +44,8 @@ type reviveStore struct {
 	// outage run whose agent stopped can); CountNonTerminalRuns counts it
 	// unless except names it.
 	selfCounted bool
+	// countErr makes CountNonTerminalRuns fail, as an unreadable store would.
+	countErr error
 }
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
@@ -127,6 +130,9 @@ func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.Governanc
 // CountNonTerminalRuns: the deployment's one other run fills the cap when capFull;
 // the run itself counts when selfCounted, unless except names it.
 func (s *reviveStore) CountNonTerminalRuns(_ context.Context, except uuid.UUID) (int, error) {
+	if s.countErr != nil {
+		return 0, s.countErr
+	}
 	n := 0
 	if s.capFull {
 		n++
@@ -382,18 +388,29 @@ func TestReviveRun_Refusals(t *testing.T) {
 			f.rs.cfg, _ = runner.BuildProxyConfig(uuid.New(), runner.ProxyConfig{RunToken: "x", ControlPlaneURL: "http://x"}, 3128)
 		}, http.StatusConflict},
 	}
+	denied := map[string]string{"the git broker would lose GitHub": "revive_ceiling_denies_git_broker"}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newReviveFixture(t)
 			tc.arrange(f)
-			if code := f.revive(t); code != tc.code {
-				t.Fatalf("revive: code %d, want %d", code, tc.code)
+			w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive: code %d, want %d", w.Code, tc.code)
 			}
 			if len(f.rr.replaced) != 0 {
 				t.Error("a refused revive replaced the proxy")
 			}
 			if lostAt, _ := f.st.lost(); lostAt == nil {
 				t.Error("a refused revive cleared the lost mark")
+			}
+			// Only the ceiling refusals write a `denied` run.revive row, naming the reason.
+			if want := denied[name]; want != "" {
+				if got := errorReason(w); got != want {
+					t.Errorf("reason = %q, want %q", got, want)
+				}
+				if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "denied" || leaseAuditData(t, ev[0])["reason"] != want {
+					t.Errorf("run.revive rows = %+v, want one denied row naming %q", ev, want)
+				}
 			}
 		})
 	}
@@ -664,6 +681,56 @@ func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
 	}
 }
 
+// TestRevive_RevokesTheTokensTheReplacedProxyRenewed: a token the replaced proxy renewed since it started stays
+// valid until its own expiry unless the revive revokes it. The ids the last renewal recorded (the minted token and
+// the one it presented) are revoked once the old proxy is replaced, never on the kept-proxy arm, and the fresh
+// token is never among them.
+func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
+	mint := func(t *testing.T, f *reviveFixture) (identity.RunIdentity, identity.RunIdentity) {
+		t.Helper()
+		a, err := f.srv.cfg.Identity.MintRunIdentity(context.Background(), f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := f.srv.cfg.Identity.MintRunIdentity(context.Background(), f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.ls.jtis = []string{a.JTI, b.JTI}
+		return a, b
+	}
+	verifies := func(f *reviveFixture, id identity.RunIdentity) bool {
+		_, err := f.srv.cfg.Identity.Verify(context.Background(), id.Token, internalAudience)
+		return err == nil
+	}
+
+	t.Run("replaced proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		renewed, presented := mint(t, f)
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive: code %d, want 200", code)
+		}
+		if verifies(f, renewed) || verifies(f, presented) {
+			t.Errorf("a token the replaced proxy renewed still verifies (minted %v, presented %v)", verifies(f, renewed), verifies(f, presented))
+		}
+		if _, verr := f.srv.cfg.Identity.Verify(context.Background(), f.newConfig(t).RunToken, internalAudience); verr != nil {
+			t.Errorf("the fresh token does not verify: %v", verr)
+		}
+	})
+	t.Run("kept proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.st.run.LostAt, f.st.run.LostReason = nil, ""
+		renewed, presented := mint(t, f)
+		f.rr.replaceErr = errors.New("docker: inspect agent for its proxy address: boom") // old proxy untouched
+		if code := f.revive(t); code != http.StatusBadGateway {
+			t.Fatalf("revive: code %d, want 502", code)
+		}
+		if !verifies(f, renewed) || !verifies(f, presented) {
+			t.Error("a token the kept proxy renewed was revoked; the proxy still runs on it")
+		}
+	})
+}
+
 // TestReviveRun_AgentStatusProbeErrorRefuses is the Minor fix (Fable
 // review): reviveNeedsAgentStart must not read "the probe failed" as "the
 // agent is running". An outage run whose Status cannot be observed (a wedged
@@ -809,11 +876,15 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 	cases := map[string]struct {
 		door, deny, live bool
 		code             int
+		ceil             []string // the ceiling's denied entries when it is not the bare Resource Manager host
 	}{
-		"the profile is unchanged":                  {door: true, code: http.StatusOK},
-		"the profile now denies Resource Manager":   {door: true, deny: true, code: http.StatusConflict},
-		"it does on a live run too":                 {door: true, deny: true, live: true, code: http.StatusConflict},
-		"the profile already denied it at dispatch": {deny: true, code: http.StatusOK},
+		"the profile is unchanged":                    {door: true, code: http.StatusOK},
+		"the profile now denies Resource Manager":     {door: true, deny: true, code: http.StatusConflict},
+		"it does on a live run too":                   {door: true, deny: true, live: true, code: http.StatusConflict},
+		"the profile already denied it at dispatch":   {deny: true, code: http.StatusOK},
+		"a wildcard entry covers it":                  {door: true, deny: true, code: http.StatusConflict, ceil: []string{"*.azure.com"}},
+		"a port-qualified entry covers it":            {door: true, deny: true, code: http.StatusConflict, ceil: []string{armscope.Host + ":443"}},
+		"a ceiling that denies only the sign-in host": {door: true, code: http.StatusOK, ceil: []string{proxy.AzureLoginHost}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -834,8 +905,12 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.rs.cfg = stored
-			if tc.deny {
-				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, armscope.Host)
+			if tc.deny || len(tc.ceil) > 0 {
+				deny := []string{armscope.Host}
+				if len(tc.ceil) > 0 {
+					deny = tc.ceil
+				}
+				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, deny...)
 			}
 			if tc.live {
 				f.st.run.LostAt, f.st.run.LostReason = nil, ""
@@ -847,6 +922,9 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 			if tc.code != http.StatusOK {
 				if got := errorReason(w); got != "revive_ceiling_denies_azure_cli" {
 					t.Errorf("reason = %q, want the literal %q", got, "revive_ceiling_denies_azure_cli")
+				}
+				if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "denied" || leaseAuditData(t, ev[0])["reason"] != "revive_ceiling_denies_azure_cli" {
+					t.Errorf("run.revive rows = %+v, want one denied row naming the ceiling reason", ev)
 				}
 				if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || (lostAt == nil) != tc.live || string(f.rs.cfg) != string(stored) {
 					t.Errorf("replaced %d, lost_at %v, stored config changed %v; want the proxy, the run and its stored config as they were",

@@ -45,8 +45,11 @@ func (k *sshKeyLimiters) allow(fingerprint string, now time.Time) (admitted, tra
 		b = &authFailedLimiter{}
 		k.buckets[fingerprint] = b
 	}
+	// Charged under k.mu, so evictIdle never meets a bucket between its lookup and its charge: a holder
+	// charging after the unlock could have its bucket evicted and charge an orphan, one extra burst.
+	admitted = b.allow(now)
 	k.mu.Unlock()
-	return b.allow(now), true
+	return admitted, true
 }
 
 // evictIdle removes the key whose bucket has been idle longest, if any has refilled to its burst.

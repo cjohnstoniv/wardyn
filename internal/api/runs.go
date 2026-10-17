@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -29,7 +28,6 @@ import (
 // devcontainer build pulls a base image and runs the repo's full setup.
 const imageBuildTimeout = 30 * time.Minute
 
-// DRAFT (M2 canon pending)
 const (
 	// createRunGrantAbortHint is the failure_hint a run carries when POST /runs
 	// answered 500 AFTER the run row existed: the row is persisted and the
@@ -399,7 +397,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // Create and the pool queue's start wire a run the same way. A grant write failure has already
 // answered 500 (ok is false).
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
-	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
+	req createRunRequest, comps runComponents, delivery localJudgement,
 ) (grantWiring, []string, bool) {
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
@@ -579,7 +577,7 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		confinementSource = "requested"
 	}
 	data := map[string]any{
-		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
+		"agent": req.Agent, "repo": redactRepoURL(req.Repo), "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
 	}
@@ -672,7 +670,7 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
-	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	// ResourcesApplied is the CPU, memory and PIDs the run asked for and got (stepResources).
 	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 

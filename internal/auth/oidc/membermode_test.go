@@ -394,7 +394,10 @@ func TestMemberMode_NoCredentialNeverSurvivesExit(t *testing.T) {
 	}
 	sort.Strings(callers)
 	sort.Strings(signers)
-	want := []string{"membermode.go", "oidc_callback.go"}
+	// session_life.go re-mints the cookie the request carried, view fields as they were: a re-mint
+	// racing a view switch can restore the previous view, which never raises the effective role above
+	// the person's role.
+	want := []string{"membermode.go", "oidc_callback.go", "session_life.go"}
 	if !slices.Equal(callers, want) {
 		t.Errorf("session re-sign sites = %v, want %v — a NEW one must decide what it does with "+
 			"MemberModeNoCredential (a re-issue that copies a whole decoded Session would carry the "+

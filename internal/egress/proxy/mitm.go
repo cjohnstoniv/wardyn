@@ -188,7 +188,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // the run's owner for one they defined. A model's host is never one (the gate refuses it), so #4
 // cannot reach #1's traffic.
 func (p *Proxy) isMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
@@ -211,7 +211,7 @@ func (p *Proxy) mitmLLMHost(host string, port int) bool {
 // compileMITMHosts does) so case/trailing-dot can't miss the entry and read as any-port. 0 means the
 // entry named no port and stays any-port (legacy).
 func (p *Proxy) mitmPortAllowed(host string, port int) bool {
-	cport := p.mitmPorts[strings.TrimSuffix(strings.ToLower(host), ".")]
+	cport := p.mitmPorts[hostKey(host)]
 	return cport == 0 || cport == port
 }
 
@@ -223,7 +223,7 @@ func (p *Proxy) mitmPortAllowed(host string, port int) bool {
 // api.anthropic.com/api.openai.com, this check alone stops a corp artifact token from silently
 // landing on real Anthropic/OpenAI traffic, bypassing the mitmLLM intent gate.
 func (p *Proxy) isCorpMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return false
 	}
@@ -237,7 +237,7 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // channelSharedGateway: only a brokered route names the schema, so a direct request's body is
 // marked uninspected (refused under fail-closed blocking), never read as one vendor's by chance.
 func (p *Proxy) channelForHost(host string) contentscan.Channel {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if vendor, ok := p.gatewayVendorOf(h); ok {
 		if vendor == "" {
 			return channelSharedGateway
@@ -336,6 +336,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	if err != nil {
 		return
 	}
+	defer p.trackTunnel(clientConn)()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = clientConn.Close()
 		return
@@ -379,10 +380,19 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	}
 	// Otherwise the client speaks plaintext and `served` stays raw; the same strip-inject-forward
 	// path runs below either way, via a real http.Server for correct framing/keep-alive/timeouts.
+	// Serve returns as soon as the one-conn listener's second Accept fails, while the conn is still
+	// being served; wait for the conn itself to end so the tunnel stays tracked for a drain to close.
+	connDone := make(chan struct{})
+	var connOnce sync.Once
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
 			p.serveMITMRequest(rw, rr, host, port)
 		}),
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			if st == http.StateClosed || st == http.StateHijacked {
+				connOnce.Do(func() { close(connDone) })
+			}
+		},
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout bounds the whole request incl. body (anti slow-loris); WriteTimeout stays 0
 		// since model responses legitimately stream for a long time.
@@ -390,6 +400,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		IdleTimeout: 90 * time.Second,
 	}
 	_ = srv.Serve(&oneConnListener{conn: served})
+	<-connDone
 }
 
 // mitmReadTimeout is the inner server's per-request read bound. A var only so

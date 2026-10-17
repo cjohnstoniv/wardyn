@@ -12,7 +12,7 @@
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
-  - the eight image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
+  - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
@@ -278,6 +278,14 @@ crash or a usage limit resumes with the same command:
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format already in use
    (`### Added` / `### Changed` / `### Fixed`).
    - Keep entries user-facing and specific.
+   - **Fill `### Defaults changed by this upgrade`**, the section's first heading after its summary.
+     - It lists every default this release changes with an effect an operator can see on upgrade.
+     - Each entry says what changed, which deployments it reaches and what to set for the old behaviour; write
+       `None.` when there are none.
+     - Every entry also lands in the registry `defaultChanges` ([internal/api/defaults_changed.go](internal/api/defaults_changed.go)),
+       with a predicate over a deployment's own configuration, so setup status names it where it applies.
+     - A registry entry names the first release that shipped the change, a release candidate included (`0.9.3-rc.2`), so
+       an estate on that candidate is not told again at the final release.
    - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
      (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
      cutting — this has drifted from the shipped version before, twice.
@@ -483,19 +491,20 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)",
-    "trivy (wardynd-fips)"
+    "trivy (wardynd-fips)", "runner-units", "trivy (wardyn-runnerd)"
   ]
 }
 JSON
 ```
 
 - The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
-- The last, **`trivy (wardynd-fips)`, is not required today**: its job runs and reports on every pull request, but a red `trivy (wardynd-fips)` does not block a merge until the owner runs this PATCH.
-- Run as written, the command drops nothing that is required now and adds that one context.
+- The last three, **`trivy (wardynd-fips)`, `runner-units` and `trivy (wardyn-runnerd)`**, are not required today.
+- Their jobs report on every pull request, but a red one blocks no merge until the owner runs this PATCH.
+- Run as written, the command drops nothing that is required now and adds those three contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
 - Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
-- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the eight images a release publishes.
+- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the nine images a release publishes.
 - Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
 - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
   apart.
@@ -551,9 +560,10 @@ JSON
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
     - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
-      `wardyn-runner-units.tar.gz` and a cosign-signed `SHA256SUMS` to the Release —
+      `wardyn-runner-units.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
+  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).
   - The supply-chain artifacts are no longer yours to remember; the demo videos
     in step 7 still are.
   - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
@@ -580,7 +590,7 @@ JSON
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardynd-fips wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
+  for img in wardynd wardynd-fips wardyn-proxy wardyn-runnerd agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

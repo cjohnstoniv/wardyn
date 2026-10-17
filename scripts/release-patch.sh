@@ -130,15 +130,22 @@ while IFS= read -r t; do
 done < <(git tag -l "v$XY.*")
 [ -n "$LATEST" ] || die "no v$XY.* tag to patch from"
 [[ "$(vkey "$V")" > "$LATEST_KEY" ]] || die "$V must be greater than every v$XY.* tag; the newest is $LATEST"
-# FROM is the newest tag the release line already contains: an rc tagged from a
-# candidate branch is not on origin/release/X.Y, and its pins are not in the tree.
+# FROM is the newest tag the candidate already contains: an rc tagged from a
+# candidate branch is not on origin/release/X.Y, so its pins are in the tree only
+# when the candidate (BRANCH) was built on top of it.
+FROM_BASE="origin/$RB"
+if [ -n "$BRANCH" ]; then
+  for ref in "refs/heads/$BRANCH" "refs/remotes/origin/$BRANCH"; do
+    if git rev-parse --verify -q "$ref" >/dev/null; then FROM_BASE="$ref"; break; fi
+  done
+fi
 FROM=""; FROM_KEY=""
 while IFS= read -r t; do
   [ "$t" = "v$V" ] && continue
   k="$(vkey "${t#v}")" || continue
   if [ -z "$FROM_KEY" ] || [[ "$k" > "$FROM_KEY" ]]; then FROM="${t#v}"; FROM_KEY="$k"; fi
-done < <(git tag -l "v$XY.*" --merged "origin/$RB")
-[ -n "$FROM" ] || die "no v$XY.* tag is reachable from origin/$RB"
+done < <(git tag -l "v$XY.*" --merged "$FROM_BASE")
+[ -n "$FROM" ] || die "no v$XY.* tag is reachable from $FROM_BASE"
 
 # A tag vV may exist only as this candidate's own, resumed release.
 if git rev-parse --verify -q "refs/tags/v$V" >/dev/null; then

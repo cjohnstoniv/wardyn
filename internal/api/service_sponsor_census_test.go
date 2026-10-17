@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// sponsorReachRoutes are the five routes a service identity's sponsor reaches (F3): the handler that asks
+// sponsorReachRoutes are the six routes a service identity's sponsor reaches (F3): the handler that asks
 // ownsRunOrSponsorOrAdmin, and the route line that mounts it. GET /runs has no per-run check: its handler
 // lists through the store's sponsor-aware pager, which the second test pins.
 var sponsorReachRoutes = map[string]string{
@@ -22,9 +22,11 @@ var sponsorReachRoutes = map[string]string{
 	"handleRunEvents": `r.Get("/runs/{id}/events", s.handleRunEvents)`,
 	"handleRunOutput": `r.Get("/runs/{id}/output", s.handleRunOutput)`,
 	"handleKillRun":   `r.Post("/runs/{id}/kill", s.handleKillRun)`,
+	// The containment hold is part of what run detail shows; its pod and node identities stay with security operators.
+	"handleGetRunContainment": `r.Get("/runs/{id}/containment", s.handleGetRunContainment)`,
 }
 
-// TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the four per-run handlers above, once
+// TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the five per-run handlers above, once
 // each, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
 // reaches, and has to be classified here before it merges.
 func TestSponsorReach_RouteCensus(t *testing.T) {

@@ -17,14 +17,14 @@ import (
 // else: never gatewayVendor (which enrols a host in the relaxed private-address vet) and never
 // llmUpstreams (which would make /wardyn/llm/* forward to the host with no route gate).
 
-// compileChannelHosts lower-cases and dot-trims the configured host keys, like every host lookup.
+// compileChannelHosts keys the configured hosts by hostKey, like every host lookup.
 func compileChannelHosts(m map[string]string) map[string]string {
 	if len(m) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(m))
 	for host, vendor := range m {
-		out[strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")] = vendor
+		out[hostKey(host)] = vendor
 	}
 	return out
 }

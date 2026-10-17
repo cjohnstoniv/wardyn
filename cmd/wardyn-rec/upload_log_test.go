@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -164,6 +165,29 @@ func TestUploadLog_OverCapSendsMarkedPrefix(t *testing.T) {
 		if fileSum(t, path) != before {
 			t.Errorf("%d bytes: the local log was modified", size)
 		}
+	}
+}
+
+// The cut backs up to a line end in the last 4 KiB, so it does not slice through a secret on that line.
+func TestUploadLog_OverCapCutsAtALineEnd(t *testing.T) {
+	srv, puts := logServer(t, http.StatusNoContent)
+	size := int64(maxLogUploadBytes + 1)
+	path := sparseLog(t, size)
+	keep := int64(maxLogUploadBytes - logMarkerReserve)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("\n"), keep-100); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := uploadLog(path, srv.URL, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("the first %d of %d bytes were uploaded", keep-99, size)
+	if tail := string((*puts)[0].tail); !strings.Contains(tail, want) {
+		t.Errorf("marker %q does not say %q", tail[max(0, len(tail)-200):], want)
 	}
 }
 

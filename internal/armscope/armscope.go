@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
@@ -66,12 +67,34 @@ var tenantReads = []string{"subscriptions", "providers", "tenants"}
 
 // methodOverride reports whether a header name is a spelling of "act as this
 // method instead": X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override,
-// X-Ms-Http-Method, in any case and with hyphens or underscores. Whether
+// X-Ms-Http-Method, X-Method, in any case and with hyphens or underscores. Whether
 // Resource Manager honours one is not documented, so a request that carries
 // one is refused: the method Azure would act on is not knowable.
 func methodOverride(header string) bool {
-	name := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
-	return strings.Contains(name, "httpmethod") || strings.Contains(name, "methodoverride")
+	return strings.Contains(normalizedHeader(header), "method")
+}
+
+// pathOverride reports whether a header name asks a front end to act on another
+// path than the request line's: X-Original-URL, X-Original-URI, X-Original-Path,
+// X-Envoy-Original-Path, X-Rewrite-URL, X-Rewrite-URI, X-Rewrite-Path, X-Forwarded-Prefix,
+// X-Forwarded-URL, X-Forwarded-Uri, X-Forwarded-Path, X-Override-URL, X-Override-URI,
+// X-Override-Path, in any case and with hyphens or underscores. Refused for the same reason as methodOverride: the path Azure would
+// act on is not knowable.
+func pathOverride(header string) bool {
+	name := normalizedHeader(header)
+	for _, part := range []string{
+		"originalurl", "originaluri", "originalpath", "rewriteurl", "rewriteuri", "rewritepath",
+		"forwardedprefix", "forwardedurl", "forwardeduri", "forwardedpath", "overrideurl", "overrideuri", "overridepath",
+	} {
+		if strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedHeader(header string) string {
+	return strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
 }
 
 // Subscription is id as this package compares it: a GUID in lowercase. ok is
@@ -127,7 +150,7 @@ func (s Scope) Admit(method, rawPath string, h http.Header) error {
 // DELETE write, and anything else is refused.
 func readMethod(method string, h http.Header) (bool, error) {
 	for k := range h {
-		if methodOverride(k) {
+		if methodOverride(k) || pathOverride(k) {
 			return false, fmt.Errorf("%w: it carries %s", ErrUnreadable, k)
 		}
 	}
@@ -141,20 +164,35 @@ func readMethod(method string, h http.Header) (bool, error) {
 }
 
 // segmentMarks are the characters no segment may hold, written raw or
-// percent-encoded: a semicolon starts a path parameter some servers drop before
-// routing (so "..;" can route as ".."), a question mark and a hash end the
-// path, and a percent sign left after one decode is a second layer of encoding
-// a server that decodes again would read differently.
-const segmentMarks = ";?#%"
+// percent-encoded: a question mark and a hash end the path, and a percent sign
+// left after one decode is a second layer of encoding a server that decodes
+// again would read differently. A semicolon is judged apart (pathParameter).
+const segmentMarks = "?#%"
+
+// pathParameter reports whether seg, the decoded segment at index i, uses a
+// semicolon in a way that could change which path is routed. A semicolon starts
+// a path parameter some servers drop before routing, so "..;" can route as "..",
+// and one in the first two segments could change which subscription is reached.
+// Resource Manager's own names use it later in a path ("VM;iaasvmcontainerv2;rg;vm"
+// is a backup item), so there it is refused only when nothing precedes it or what
+// precedes it is a dot or a lookalike for one.
+func pathParameter(i int, seg string) bool {
+	head, _, found := strings.Cut(seg, ";")
+	if !found {
+		return false
+	}
+	return i < 2 || head == "" || dotLookalike(head)
+}
 
 // segments decodes rawPath into its lowercased segments. Resource Manager
 // compares paths without regard to case, so the comparison here does too. One
 // trailing slash is tolerated. Refused rather than resolved: an empty segment
 // anywhere else, a backslash, a segment adoscope.UnescapeName would not route
 // as it reads (a dot segment, an encoded separator, a control character), and
-// any of segmentMarks in the path as it arrived or in a segment once decoded.
+// any of segmentMarks in the path as it arrived or in a segment once decoded, and
+// a semicolon where pathParameter refuses it.
 func segments(rawPath string) ([]string, error) {
-	if !strings.HasPrefix(rawPath, "/") || strings.ContainsAny(rawPath, `\;?#`) {
+	if !strings.HasPrefix(rawPath, "/") || strings.ContainsAny(rawPath, `\?#`) {
 		return nil, fmt.Errorf("%w: its path is not a plain absolute path", ErrUnreadable)
 	}
 	rest := strings.TrimSuffix(rawPath[1:], "/")
@@ -167,10 +205,27 @@ func segments(rawPath string) ([]string, error) {
 			return nil, fmt.Errorf("%w: its path has an empty segment", ErrUnreadable)
 		}
 		seg, err := adoscope.UnescapeName(raw)
-		if err != nil || strings.ContainsAny(seg, segmentMarks) {
+		if err != nil || strings.ContainsAny(seg, segmentMarks) || pathParameter(i, seg) {
+			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
+		}
+		if dotLookalike(seg) {
 			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
 		}
 		parts[i] = strings.ToLower(seg)
 	}
 	return parts, nil
+}
+
+// dotLookalike reports whether seg has no letter or digit and holds a dot or a
+// non-ASCII character: a fullwidth dot, ".." with a zero-width character or
+// "..+" is a dot segment to a layer that folds or strips it. The invisible
+// fillers Unicode files under letters (the Hangul fillers, among others) are
+// not letters here: they draw nothing, and a layer that strips them leaves a dot.
+func dotLookalike(seg string) bool {
+	if strings.IndexFunc(seg, func(r rune) bool {
+		return (unicode.IsLetter(r) || unicode.IsDigit(r)) && !unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r)
+	}) >= 0 {
+		return false
+	}
+	return strings.IndexFunc(seg, func(r rune) bool { return r == '.' || r > unicode.MaxASCII }) >= 0
 }

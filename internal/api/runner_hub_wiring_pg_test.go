@@ -6,10 +6,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -97,4 +102,47 @@ func TestRunnerHubWiringPG_PresenceAuditOrder(t *testing.T) {
 			t.Fatalf("runner.disconnect data = %s, want last_seen_at", ev.Data)
 		}
 	}
+}
+
+// failEveryFourthGetRunner fails the fourth runner read of each session: Serve's two Lookup reads and the
+// admission re-read in Hub.start come first, so the fourth is the one the production Connected callback makes.
+type failEveryFourthGetRunner struct {
+	store.PG
+	calls atomic.Int32
+}
+
+func (s *failEveryFourthGetRunner) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
+	if s.calls.Add(1)%4 == 0 {
+		return types.Runner{}, errors.New("runner read failed")
+	}
+	return s.PG.GetRunner(ctx, id)
+}
+
+// A failing runner read in the production Connected callback (the one runner.connect is written
+// from) refuses the session: the runner never reaches READY and no runner.connect row is written.
+func TestRunnerHubWiringPG_ConnectedReadFailureRefusesTheSession(t *testing.T) {
+	f := newAdmissionFixture(t)
+	failing := &failEveryFourthGetRunner{PG: f.st}
+	f.srv.runnerHub(failing) // the hub is built once, from this store
+	s := f.connect(t, nil, f.liveRow())
+	deadline := time.Now().Add(10 * time.Second)
+	for failing.calls.Load() < 4 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if failing.calls.Load() < 4 {
+		t.Fatalf("the Connected read was never made (%d runner reads)", failing.calls.Load())
+	}
+	time.Sleep(300 * time.Millisecond)
+	if f.srv.runnerEndpoint(f.rn.ID).link.Online() {
+		t.Fatal("a session whose Connected read failed reached READY")
+	}
+	rec := f.srv.cfg.Audit.(*syncAudit)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, ev := range rec.events {
+		if ev.Action == placement.ActionRunnerConnect {
+			t.Fatalf("runner.connect written for a refused session: %+v", ev)
+		}
+	}
+	_ = s
 }

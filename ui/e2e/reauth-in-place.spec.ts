@@ -7,6 +7,7 @@ import type { Page, Request } from "@playwright/test";
 import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, newRunHeading, test } from "./fixtures";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_RENEW } from "../src/app/lib/reauth-copy";
+import { SESSION_EXPIRES_HEADER } from "../src/app/lib/api/session-activity";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 // #483 — a session that ends mid-page keeps the page. A real screen with a
@@ -110,6 +111,15 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
 const EXPIRING_SOON = "Your session is expiring soon.";
 const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
 const isMe = (url: string) => new URL(url).pathname === "/api/v1/me";
+// Counts /me answers from now on. A read is awaited by counting, not by waitForResponse called afterwards: an
+// answer that lands before that call is never seen again, and the wait runs out.
+function meReads(page: Page): { count: number } {
+  const seen = { count: 0 };
+  page.on("response", (r) => {
+    if (isMe(r.url())) seen.count += 1;
+  });
+  return seen;
+}
 
 /** On /admin/providers with a git row typed but not saved, under a session
  *  two minutes from its end. `answer` changes what /me says from then on. */
@@ -148,6 +158,7 @@ test.describe("the expiry banner: sign in again in place", () => {
   test("the same person signing in keeps the tab and the draft, and the expiry moved", async ({ page }) => {
     const { answer } = await draftUnderAnExpiringSession(page);
     const opened = page.waitForEvent("popup");
+    const reads = meReads(page);
     await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
     const popup = await opened;
 
@@ -156,7 +167,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeFocused();
     // The old session answering /me is not a renewal: the strip keeps waiting.
-    await page.waitForResponse((r) => isMe(r.url()));
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(1);
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible();
 
     const later = inMinutes(60);
@@ -198,6 +209,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
 
     // Cancel: the window closes and the banner is back, on the same page.
+    const reads = meReads(page);
     await page.getByRole("button", { name: REAUTH_RENEW.CANCEL }).click();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
@@ -205,8 +217,7 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
     await expect.poll(() => popup.isClosed()).toBe(true);
     // /me is still read, and the same person answering it changes nothing.
-    await page.waitForResponse((r) => isMe(r.url()));
-    await page.waitForResponse((r) => isMe(r.url()));
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(2);
     expect(await sameDocument(page)).toBe(true);
     await expect(page.getByTestId("provider-row-github").locator("textarea")).toHaveValue(BASE_URL);
 
@@ -216,6 +227,26 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page).toHaveURL(/\/providers$/);
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+  });
+});
+
+// While the server renews sessions it names the cookie's expiry in a header on every answer, this /me's
+// included. The banner follows that, not the /me body: the same body without the header draws the
+// banner (draftUnderAnExpiringSession above).
+test.describe("the expiry banner follows the expiry the server names", () => {
+  test("a renewed expiry in the header clears the banner the /me body alone would draw", async ({ page }) => {
+    const reads = meReads(page);
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const headers = { ...response.headers(), [SESSION_EXPIRES_HEADER.toLowerCase()]: inMinutes(60) };
+      delete headers["content-length"];
+      await route.fulfill({ response, headers, json: { ...(await response.json()), session_expires_at: inMinutes(2) } });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/admin/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(1);
+    await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
   });
 });
 

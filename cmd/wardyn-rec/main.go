@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -227,7 +228,27 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
+	// A termination aimed at wardyn-rec reaches asciinema too, so the recorder ends and the cast is
+	// delivered below; without this wardyn-rec dies first and nothing is flushed.
+	forward := make(chan os.Signal, 1)
+	signal.Notify(forward, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(forward)
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("asciinema: %w", err)
+	}
+	waited := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case sig := <-forward:
+				_ = cmd.Process.Signal(sig)
+			case <-waited:
+				return
+			}
+		}
+	}()
+	runErr := cmd.Wait()
+	close(waited)
 	// Prefer the sidecar exit code (the agent's true $?) when the trailer wrote
 	// it — this is the load-bearing value, not asciinema's own. run removes any
 	// earlier call's sidecar first, so a file found here is this call's.
@@ -388,10 +409,29 @@ func uploadLog(srcPath, uploadURL, runToken string) error {
 	if size <= maxLogUploadBytes {
 		return putBody(io.NewSectionReader(f, 0, size), size, uploadURL, runToken)
 	}
-	keep := int64(maxLogUploadBytes - logMarkerReserve)
-	marker := fmt.Sprintf("\n[wardyn-rec: log truncated: the first %d of %d bytes were uploaded; the rest was not]\n", keep, size)
+	keep := cutAtLine(f, int64(maxLogUploadBytes-logMarkerReserve))
+	marker := recording.LogCutMarker(keep, size)
 	return putBody(io.MultiReader(io.NewSectionReader(f, 0, keep), strings.NewReader(marker)),
 		keep+int64(len(marker)), uploadURL, runToken)
+}
+
+// logCutWindow is how far back cutAtLine looks for a line end.
+const logCutWindow = 4 << 10
+
+// cutAtLine moves a cut at keep back to just after the last newline in the window before it. The
+// server masks whole secrets only, so a cut through a secret would store its prefix unmasked; a
+// line end inside the window keeps that to a secret that spans lines. No newline there (or an
+// unreadable window) leaves the cut where it was.
+func cutAtLine(f *os.File, keep int64) int64 {
+	start := max(0, keep-logCutWindow)
+	buf := make([]byte, keep-start)
+	if _, err := f.ReadAt(buf, start); err != nil {
+		return keep
+	}
+	if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
+		return start + int64(i) + 1
+	}
+	return keep
 }
 
 // putCast is uploadCast's request, shared with the tail uploader's parts.

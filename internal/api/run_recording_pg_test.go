@@ -68,7 +68,7 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	org.Recording = types.RecordingRequired
-	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	refusedOff("organisation requires")
@@ -78,7 +78,7 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 	}
 
 	org.Recording = types.RecordingPreferred
-	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	e.setRecords(id, false)
@@ -146,7 +146,7 @@ func (e *placementEnv) requireRecording(rec types.RecordingRequirement) {
 		e.t.Fatal(err)
 	}
 	org.Recording = rec
-	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -367,7 +367,7 @@ func TestPG_DefaultsWriteWithoutRecordingKeepsIt(t *testing.T) {
 
 	// The keep is the store's, against the row it writes, not a read the handler made earlier.
 	put("require recording again", `{"recording":"required"}`)
-	got, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), types.RunnerPoolDefaults{}, "admin")
+	_, got, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), types.RunnerPoolDefaults{}, "admin")
 	if err != nil || got.Recording != types.RecordingRequired {
 		t.Fatalf("store write without recording = %+v, %v; want required kept", got, err)
 	}

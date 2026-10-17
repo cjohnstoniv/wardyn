@@ -15,11 +15,9 @@ import "time"
 const (
 	// HoldWindowEgress is how long an egress_domain wait_for_review request
 	// holds the sandbox from when it was raised (proxy's defaultHoldTimeout).
-	// This under-reports a policy authored above 30s (first_use_hold_seconds,
-	// up to maxHoldTimeout) — ported verbatim from the TS rule it replaces;
-	// fixing the under-report is a separate proxy change (the proxy would
-	// need to stamp its own resolved hold_seconds into the raise scope),
-	// not this one.
+	// The proxy now stamps its own resolved hold into the raise scope
+	// (requested_scope.hold_seconds, up to maxHoldTimeout) and Hold reads it;
+	// this is the window for a row that carries none.
 	HoldWindowEgress = 30 * time.Second
 	// HoldWindowADOCapability is how long an Azure DevOps capability
 	// escalation (a tool_call with grant_id set) holds the sandbox (proxy's

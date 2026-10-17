@@ -30,6 +30,9 @@ const noOrgUserPoolDefaultMsg = "There is no organization default for user pools
 // personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
 const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"
 
+// personalRevisionDefaultMsg refuses a person's own defaults naming a revision.
+const personalRevisionDefaultMsg = "revision belongs to the organization's default; a personal default has none"
+
 // livePool reads an organization pool for an administrator's write; ok=false: the 404 or 500 is
 // written. A person's user pool is the 404 an unknown id gets: no administrator writes one.
 func (s *Server) livePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (types.RunnerPool, bool) {
@@ -381,6 +384,10 @@ func defaultsView(d types.RunnerPoolDefaults, rows []store.RunnerPoolCatalogueRo
 	return d
 }
 
+// orgDefaultStaleMsg answers a write of the organisation's defaults that names a revision another
+// administrator's write has since passed.
+const orgDefaultStaleMsg = "The organization's default pool changed since you read it. Reload it and try again."
+
 func (s *Server) handleGetOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -429,14 +436,19 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	if present["recording"] && d.Recording == "" {
 		d.Recording = types.RecordingPreferred
 	}
-	before, err := ps.GetRunnerPoolOrgDefaults(r.Context())
-	if err == nil {
-		d, err = ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	before, saved, err := ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	if errors.Is(err, store.ErrNotFound) {
+		writePoolNotFound(w)
+		return
+	}
+	if errors.Is(err, store.ErrRunnerPoolStale) {
+		writeErrorReason(w, http.StatusConflict, string(runnerpool.ReasonStale), orgDefaultStaleMsg)
+		return
 	}
 	if err != nil {
 		writeServerError(w, r, "write organisation runner pool defaults", err)
 		return
 	}
-	s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": before, "after": d})
-	writeJSON(w, http.StatusOK, d)
+	s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": before, "after": saved})
+	writeJSON(w, http.StatusOK, saved)
 }

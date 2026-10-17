@@ -75,6 +75,18 @@ func (f *runnerRegistrationFake) ListRunnersByOwner(_ context.Context, owner str
 	return out, nil
 }
 
+// ListVisibleRunnersByOwner applies the rules the store's query does: no lapsed unclaimed runner, and no
+// revoked one unless someone other than the owner revoked it within revokedShown.
+func (f *runnerRegistrationFake) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error) {
+	mine, _ := f.ListRunnersByOwner(ctx, owner)
+	return slices.DeleteFunc(mine, func(row types.Runner) bool {
+		if runnerLapsed(row, now) {
+			return true
+		}
+		return row.State == types.RunnerRevoked && (row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-revokedShown)))
+	}), nil
+}
+
 func (f *runnerRegistrationFake) ListUnusedRunnerRegistrationTokensPage(_ context.Context, now time.Time, owner string, p store.Page) ([]types.RunnerRegistrationToken, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -414,10 +426,11 @@ func TestRunnersSwitchRefusesAnOrgURLThatIsNotHTTPS(t *testing.T) {
 		{"https", "https://org.example.com", "https://wardynd.internal:8443", http.StatusOK},
 		{"loopback http for development", "http://127.0.0.1:8080", "https://wardynd.internal:8443", http.StatusOK},
 		{"unset control plane", "https://org.example.com", "", http.StatusConflict},
-		{"plain http", "http://org.example.com", "", http.StatusConflict},
-		{"unset", "", "", http.StatusConflict},
-		{"userinfo", "https://user:pw@org.example.com", "", http.StatusConflict},
+		{"plain http", "http://org.example.com", "https://wardynd.internal:8443", http.StatusConflict},
+		{"unset", "", "https://wardynd.internal:8443", http.StatusConflict},
+		{"userinfo", "https://user:pw@org.example.com", "https://wardynd.internal:8443", http.StatusConflict},
 		{"plain http control plane", "https://org.example.com", "http://wardynd.internal:8080", http.StatusConflict},
+		{"loopback http control plane serves no relay", "https://org.example.com", "http://127.0.0.1:8080", http.StatusConflict},
 		{"https control plane", "https://org.example.com", "https://wardynd.internal:8443", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

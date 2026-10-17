@@ -72,7 +72,7 @@ vi.mock("../lib/api/core", async (importOriginal) => ({
 // Ticket mint / take-over lanes are unused by the describes in this file
 // (none of them exercise the member or take-over paths), stubbed only so the
 // component's own import of this module resolves.
-vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(async () => "ticket"), takeoverAttach: vi.fn() } }));
 
 // Fake WebSocket
 class FakeWebSocket {

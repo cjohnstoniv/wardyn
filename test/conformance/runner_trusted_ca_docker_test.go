@@ -244,6 +244,10 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		if code, out := sandboxExec(t, cli, ref, "true"); code != 0 {
 			t.Fatalf("the revived sandbox does not run: exit %d %s", code, out)
 		}
+		// The mount shows the emptied file: nothing of the removed CA is left at the path the sandbox reads.
+		if code, out := sandboxExec(t, cli, ref, "test", "!", "-s", runner.TrustedCAMountPath); code != 0 {
+			t.Fatalf("the revived sandbox still has CA bytes at %s: exit %d %s", runner.TrustedCAMountPath, code, out)
+		}
 	})
 
 	t.Run("without it", func(t *testing.T) {

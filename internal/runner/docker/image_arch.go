@@ -95,7 +95,7 @@ func (d *Driver) archRunnable(ctx context.Context, ref string, info image.Inspec
 		if !cached {
 			// This runner never learns which setting supplied ref, so the text says how to find it.
 			source := fmt.Sprintf("If this is an agent image, it comes from the WARDYN_AGENT_IMAGES entry whose value is %s, or is the published default if no entry has it; add a <key>@%s entry (used by runs on a registered %s runner) or build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64)", ref, eng, eng)
-			if ref == d.cfg.ProxyImage {
+			if ref == d.proxyImage() {
 				source = fmt.Sprintf("This is the proxy image, set by WARDYN_PROXY_IMAGE or, for a registered %s runner, WARDYN_PROXY_IMAGE_%s; point one of them at an %s image or build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64)", eng, strings.ToUpper(eng), eng)
 			}
 			slog.Warn(fmt.Sprintf("running %s (%s image) under emulation on an %s engine; expect it to be slower. Selected image: %s. %s. If it is a published Wardyn image, check your mirror copied all platforms (docker buildx imagetools inspect %s)",
@@ -106,6 +106,17 @@ func (d *Driver) archRunnable(ctx context.Context, ref string, info image.Inspec
 	return &imageArchError{msg: fmt.Sprintf(
 		"this runner's engine is %s and cannot run %s, a single-architecture %s image (exec format error). Name an image for %s or publish a multi-arch one",
 		eng, ref, img, eng)}
+}
+
+var _ runner.ImageDescriber = (*Driver)(nil)
+
+// DescribeImage implements runner.ImageDescriber over the engine's local image store.
+func (d *Driver) DescribeImage(ctx context.Context, ref string) (string, error) {
+	res, err := d.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("docker: image inspect %q: %w", ref, err)
+	}
+	return describeSelectedImage(ref, res.InspectResponse), nil
 }
 
 // describeSelectedImage says which image the local store resolved ref to: the registry digest, the

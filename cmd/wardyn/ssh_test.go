@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -514,6 +515,62 @@ func TestRunSSH_RefusesAProxyCommandTheDaemonWouldRefuse(t *testing.T) {
 			out, err := runSSHWith(t, body, mode)
 			if err == nil || !strings.Contains(err.Error(), "ProxyCommand") || out != "" {
 				t.Errorf("%s with %q: out=%q err=%v, want a refusal and no output", mode, bad, out, err)
+			}
+		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// #1974: a plain-http, non-loopback server is refused before any request.
+// --------------------------------------------------------------------------
+
+type countingTransport struct {
+	n    int
+	body string
+}
+
+func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n++
+	return &http.Response{
+		StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(c.body)), Request: r,
+	}, nil
+}
+
+func TestRunSSH_RefusesPlainHTTPToANonLoopbackServerBeforeAnyRequest(t *testing.T) {
+	for _, tc := range []struct {
+		url     string
+		refused bool
+	}{
+		{"http://wardyn.example.com:8080", true},
+		{"http://10.1.2.3", true},
+		{"http://localhost:8080", false},
+		{"http://[::1]:8080", false},
+		{"https://wardyn.example.com", false},
+	} {
+		// every mode runs the same /healthz-derived gateway, ProxyCommand included
+		for _, mode := range []string{"--print", "--config", "--json", "--advertised-proxy"} {
+			rt := &countingTransport{body: proxyHealthz}
+			fakeBinOnPath(t, "ssh", "#!/bin/sh\nexit 0\n")
+			cmd := sshCmd(func() *sdk.Client {
+				return &sdk.Client{BaseURL: tc.url, Token: "admin-token", HTTPClient: &http.Client{Transport: rt}}
+			})
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetContext(context.Background())
+			cmd.SetArgs([]string{testRunID, mode})
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			err := cmd.Execute()
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "plain http") || !strings.Contains(err.Error(), "use https://") {
+					t.Errorf("%s %s: err = %v, want the plain-http refusal", tc.url, mode, err)
+				}
+				if rt.n != 0 || exitCodeFor(err) == 0 {
+					t.Errorf("%s %s: %d requests sent, exit %d; want none and non-zero", tc.url, mode, rt.n, exitCodeFor(err))
+				}
+				continue
+			}
+			if err != nil || rt.n != 1 {
+				t.Errorf("%s %s: err = %v, requests = %d; want success after one /healthz", tc.url, mode, err, rt.n)
 			}
 		}
 	}

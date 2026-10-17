@@ -4,6 +4,8 @@
 package api
 
 import (
+	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,5 +112,61 @@ func TestRelayedViaOrgRoutesAreInternalOnly(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s via_org with a human admin token = %d %s, want 401", m, w.Code, w.Body.String())
 		}
+	}
+}
+
+// The relay server speaks HTTP/1.1 only, so one relay stream carries one request at a time.
+func TestRelayServerSpeaksHTTP1Only(t *testing.T) {
+	srv := newRelayHTTPServer(http.NotFoundHandler(), &tls.Config{NextProtos: []string{"h2", "http/1.1"}})
+	if srv.TLSNextProto == nil || len(srv.TLSNextProto) != 0 {
+		t.Fatalf("TLSNextProto = %v, want a non-nil empty map (it switches h2 off)", srv.TLSNextProto)
+	}
+	for _, p := range srv.TLSConfig.NextProtos {
+		if p == "h2" {
+			t.Fatalf("the relay's TLS config still offers h2: %v", srv.TLSConfig.NextProtos)
+		}
+	}
+}
+
+// One runner cannot hold more than maxRelayPerRunner relay streams, and a closed stream frees its slot.
+func TestRelayListenerCapsStreamsPerRunner(t *testing.T) {
+	var l relayListener
+	l.start()
+	t.Cleanup(func() { _ = l.Close() })
+	a, b := uuid.New(), uuid.New()
+	var accepted []net.Conn // the server accepts each stream and holds it open, as a live request would
+	for range maxRelayPerRunner {
+		c, peer := net.Pipe()
+		t.Cleanup(func() { _ = peer.Close() })
+		if err := l.offerFor(a, c); err != nil {
+			t.Fatalf("stream below the cap refused: %v", err)
+		}
+		acc, err := l.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted = append(accepted, acc)
+	}
+	over, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close(); _ = over.Close() })
+	if err := l.offerFor(a, over); err == nil {
+		t.Fatal("a stream past the per-runner cap was accepted")
+	}
+	other, peer2 := net.Pipe()
+	t.Cleanup(func() { _ = peer2.Close(); _ = other.Close() })
+	if err := l.offerFor(b, other); err != nil {
+		t.Fatalf("another runner was refused by the first runner's cap: %v", err)
+	}
+	_ = accepted[0].Close()
+	_ = accepted[0].Close() // a second Close gives nothing back
+	again, peer3 := net.Pipe()
+	t.Cleanup(func() { _ = peer3.Close(); _ = again.Close() })
+	if err := l.offerFor(a, again); err != nil {
+		t.Fatalf("closing a relay stream did not free its slot: %v", err)
+	}
+	extra, peer4 := net.Pipe()
+	t.Cleanup(func() { _ = peer4.Close(); _ = extra.Close() })
+	if _, _ = l.Accept(); l.offerFor(a, extra) == nil {
+		t.Fatal("a double Close freed two slots")
 	}
 }

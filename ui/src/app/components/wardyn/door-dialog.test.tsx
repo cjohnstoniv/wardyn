@@ -43,11 +43,13 @@ vi.mock("../../lib/api/model-provider-credentials", () => ({
   },
 }));
 
+import { DoorDialog } from "./door-dialog";
 import { useModelAccessDoor, type OpenDoorOptions } from "./model-access-context";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "./copy/door";
 import { HttpError } from "../../lib/api/core";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../lib/test-fixtures";
+import type { DoorTarget } from "../../lib/model-access";
 import type { SetupStatus } from "../../lib/types";
 import { WithDoor } from "../../../test/door-harness";
 
@@ -428,6 +430,44 @@ describe("a status refresh while the door is open", () => {
     s.provider_access![0].cause = "store_unreadable";
     view.rerender(tree2(s));
     expect(screen.getByLabelText("Token")).toBe(box);
+    expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
+  });
+});
+
+describe("a latched door and an unreadable store", () => {
+  const unreadable = () => {
+    const s = providerStatus([{ provider: claude, state: "not_configured" }]);
+    s.provider_access![0].cause = "store_unreadable";
+    return s;
+  };
+  const signin: DoorTarget = { kind: "signin", login: "anthropic", provider: claude };
+  const key: DoorTarget = { kind: "key", provider: claude, token: false, stored: false };
+  const dialog = (target: DoorTarget | null, status: SetupStatus) => (
+    <DoorDialog target={target} access={status.provider_access} focusSeq={0} onCancel={() => {}} onDone={() => {}} onRemoved={() => {}} onCloseAutoFocus={() => {}} />
+  );
+
+  it("a switch from the sign-in door to the key door for the same provider drops the latch", () => {
+    const view = render(dialog(signin, providerStatus([{ provider: claude, state: "not_configured" }])));
+    expect(screen.getByTestId("fake-pane")).toBeInTheDocument();
+    view.rerender(dialog(signin, unreadable()));
+    expect(screen.getByTestId("fake-pane")).toBeInTheDocument();
+    expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
+    view.rerender(dialog(key, unreadable()));
+    expect(screen.getByText(CONNECTIONS.COULD_NOT_CHECK)).toBeInTheDocument();
+    expect(screen.queryByTestId("fake-pane")).toBeNull();
+  });
+
+  it("closing a latched door does not draw 'Could not check' while it fades out", () => {
+    // jsdom has no animations: report one that differs between open and closed so the content stays mounted.
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = real(el, pseudo);
+      return new Proxy(style, { get: (t, k) => (k === "animationName" ? (el.getAttribute("data-state") === "closed" ? "out" : "in") : Reflect.get(t, k)) });
+    });
+    const view = render(dialog(signin, providerStatus([{ provider: claude, state: "not_configured" }])));
+    view.rerender(dialog(signin, unreadable()));
+    view.rerender(dialog(null, unreadable()));
+    expect(screen.getByRole("dialog", { hidden: true })).toHaveAttribute("data-state", "closed");
     expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
   });
 });

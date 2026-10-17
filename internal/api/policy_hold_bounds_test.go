@@ -34,7 +34,7 @@ func TestValidatePolicySpec_HoldBounds(t *testing.T) {
 		}
 	}
 
-	// Asserted THROUGH the DRAFT constants, never against a literal: an M2
+	// Asserted THROUGH the constants, never against a literal: an M2
 	// rewording of either refusal must not need this file edited to stay true.
 	holdsRefusal := func(got int) string { return fmt.Sprintf(maxHoldsRefusal, maxHoldsPerSpec, got) }
 	secondsRefusal := func(got int) string {

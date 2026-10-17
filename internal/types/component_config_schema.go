@@ -5,7 +5,6 @@ package types
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,7 +17,7 @@ import (
 
 // The declarative configuration schema of a custom component (0.9): the typed
 // fields a component author exposes, with labels, groups, bounds, defaults and
-// one level of conditional visibility, so the New Run wizard can render the
+// conditional visibility (a chain of at most 64 fields), so the New Run wizard can render the
 // component's settings with its own controls. It is data, never code: no
 // markup, no expressions, no references to fetch. The vocabulary is closed and
 // versioned, and anything outside it is refused rather than ignored.
@@ -40,7 +39,6 @@ const (
 	MaxConfigSchemaFields      = 64
 	MaxConfigSchemaGroups      = 16
 	MaxConfigOptions           = 64
-	MaxConfigListItems         = 32
 	MaxConfigLabelRunes        = 80
 	MaxConfigDescriptionRunes  = 500
 	MaxConfigOptionValueRunes  = 128
@@ -56,12 +54,11 @@ type ConfigFieldKind string
 // The closed field kinds. Object and nested kinds are deliberately absent:
 // a field is one value, and layout is groups.
 const (
-	ConfigKindString     ConfigFieldKind = "string"
-	ConfigKindBoolean    ConfigFieldKind = "boolean"
-	ConfigKindInteger    ConfigFieldKind = "integer"
-	ConfigKindNumber     ConfigFieldKind = "number"
-	ConfigKindEnum       ConfigFieldKind = "enum"
-	ConfigKindStringList ConfigFieldKind = "string_list"
+	ConfigKindString  ConfigFieldKind = "string"
+	ConfigKindBoolean ConfigFieldKind = "boolean"
+	ConfigKindInteger ConfigFieldKind = "integer"
+	ConfigKindNumber  ConfigFieldKind = "number"
+	ConfigKindEnum    ConfigFieldKind = "enum"
 	// ConfigKindSecretRef picks one of the person's stored secrets by name.
 	// It never holds a secret value.
 	ConfigKindSecretRef ConfigFieldKind = "secret_ref"
@@ -112,10 +109,8 @@ type ConfigField struct {
 	// Min and Max bound an integer or number.
 	Min *float64 `json:"min,omitempty"`
 	Max *float64 `json:"max,omitempty"`
-	// MaxLen bounds a string or each string_list entry, in bytes.
+	// MaxLen bounds a string, in bytes.
 	MaxLen int `json:"max_len,omitempty"`
-	// MaxItems bounds a string_list.
-	MaxItems int `json:"max_items,omitempty"`
 	// Options are an enum's choices.
 	Options []ConfigOption `json:"options,omitempty"`
 	// VisibleWhen shows the field only while another field holds one value.
@@ -296,7 +291,7 @@ func validateConfigText(path, s string, maxRunes int, required bool, add func(st
 func validateConfigField(path string, f ConfigField, add func(string, string, ...any)) {
 	numeric := f.Kind == ConfigKindInteger || f.Kind == ConfigKindNumber
 	switch f.Kind {
-	case ConfigKindString, ConfigKindBoolean, ConfigKindInteger, ConfigKindNumber, ConfigKindEnum, ConfigKindStringList, ConfigKindSecretRef:
+	case ConfigKindString, ConfigKindBoolean, ConfigKindInteger, ConfigKindNumber, ConfigKindEnum, ConfigKindSecretRef:
 	default:
 		add(path+".kind", "%q is not a supported kind", f.Kind)
 		return
@@ -304,17 +299,11 @@ func validateConfigField(path string, f ConfigField, add func(string, string, ..
 	if !numeric && (f.Min != nil || f.Max != nil) {
 		add(path, "min and max apply to integer and number fields only")
 	}
-	if f.MaxLen != 0 && f.Kind != ConfigKindString && f.Kind != ConfigKindStringList {
-		add(path+".max_len", "applies to string and string_list fields only")
+	if f.MaxLen != 0 && f.Kind != ConfigKindString {
+		add(path+".max_len", "applies to string fields only")
 	}
 	if f.MaxLen < 0 || f.MaxLen > MaxComponentConfigValueBytes {
 		add(path+".max_len", "must be 0 to %d", MaxComponentConfigValueBytes)
-	}
-	if f.MaxItems != 0 && f.Kind != ConfigKindStringList {
-		add(path+".max_items", "applies to string_list fields only")
-	}
-	if f.MaxItems < 0 || f.MaxItems > MaxConfigListItems {
-		add(path+".max_items", "must be 0 to %d", MaxConfigListItems)
 	}
 	if numeric && f.Min != nil && f.Max != nil && *f.Min > *f.Max {
 		add(path, "min is above max")
@@ -361,12 +350,13 @@ func validateConfigOptions(path string, f ConfigField, add func(string, string, 
 // field, and each key to the component env-name rules (reserved names too).
 func validateConfigBindings(fields []ConfigField, add func(string, string, ...any)) {
 	seen := map[ConfigBinding]bool{}
+	targetOf := map[string]ConfigBindTarget{} // a key's first target: one env var is never config and secret
 	counts := map[ConfigBindTarget]int{}
 	for i, f := range fields {
 		path := fmt.Sprintf("fields[%d].bind", i)
 		switch f.Bind.Target {
 		case ConfigBindConfig:
-			if f.Kind == ConfigKindStringList || f.Kind == ConfigKindSecretRef {
+			if f.Kind == ConfigKindSecretRef {
 				add(path, "a %s field cannot feed a config value", f.Kind)
 			}
 		case ConfigBindSecret:
@@ -388,6 +378,10 @@ func validateConfigBindings(fields []ConfigField, add func(string, string, ...an
 		if seen[f.Bind] {
 			add(path, "%s %q is fed by two fields", f.Bind.Target, f.Bind.Key)
 		}
+		if t, ok := targetOf[f.Bind.Key]; ok && t != f.Bind.Target {
+			add(path, "%q is fed by a %s field and a %s field: one variable cannot be both", f.Bind.Key, t, f.Bind.Target)
+		}
+		targetOf[f.Bind.Key] = f.Bind.Target
 		seen[f.Bind] = true
 		counts[f.Bind.Target]++
 	}
@@ -414,7 +408,7 @@ func validateConfigVisibility(fields []ConfigField, byID map[string]ConfigField,
 			add(path+".field", "%q is not a field of this schema", c.Field)
 		case c.Field == f.ID:
 			add(path+".field", "a field cannot depend on itself")
-		case ref.Kind == ConfigKindStringList || ref.Kind == ConfigKindSecretRef:
+		case ref.Kind == ConfigKindSecretRef:
 			add(path+".field", "a %s field cannot be a condition", ref.Kind)
 		case len(c.Equals) == 0:
 			add(path+".equals", "is required")
@@ -463,8 +457,6 @@ func checkConfigValue(f ConfigField, raw json.RawMessage) string {
 		if !ok || !slices.ContainsFunc(f.Options, func(o ConfigOption) bool { return o.Value == s }) {
 			return "must be one of the field's options"
 		}
-	case ConfigKindStringList:
-		return configListProblem(f, v)
 	case ConfigKindSecretRef:
 		s, ok := v.(string)
 		if !ok || len(s) > configSecretNameMaxBytes || !SecretNameRE.MatchString(s) {
@@ -504,24 +496,6 @@ func configNumberProblem(f ConfigField, v any) string {
 	}
 	if f.Min != nil && x < *f.Min || f.Max != nil && x > *f.Max {
 		return "is outside the field's bounds"
-	}
-	return ""
-}
-
-func configListProblem(f ConfigField, v any) string {
-	list, ok := v.([]any)
-	if !ok {
-		return "must be a list of strings"
-	}
-	limit := cmp.Or(f.MaxItems, MaxConfigListItems)
-	if len(list) > limit {
-		return fmt.Sprintf("has %d entries; the limit is %d", len(list), limit)
-	}
-	for _, e := range list {
-		s, ok := e.(string)
-		if msg := configStringProblem(s, ok, f.MaxLen); msg != "" {
-			return "entries " + msg
-		}
 	}
 	return ""
 }

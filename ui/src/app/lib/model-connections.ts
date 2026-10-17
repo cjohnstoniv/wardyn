@@ -42,6 +42,8 @@ export function connectionRows(status: SetupStatus | null | undefined): Connecti
 
 const CONNECTED_STATES = new Set(["live", "expiring"]);
 
+const isStoreUnreadable = (a: SetupProviderAccess) => a.state === "not_configured" && a.cause === "store_unreadable";
+
 export interface ConnectionsSummary {
   label: string;
   tone: "success" | "warning" | "neutral";
@@ -67,10 +69,13 @@ export function connectionsSummary(rows: ConnectionRow[]): ConnectionsSummary {
   for (const { provider } of rows) for (const h of provider.default_for ?? []) defaultHarnesses.add(h);
   const connected = (harnessId: string) =>
     rows.some((r) => (r.provider.default_for ?? []).includes(harnessId) && CONNECTED_STATES.has(r.access.state));
-  const needsYou = [...defaultHarnesses].some((h) => !connected(h));
-  return needsYou
-    ? { label: CONNECTIONS.SUMMARY_NEEDS_YOU, tone: "warning" }
-    : { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
+  // A row the store could not be read for is "Could not check", never a call to replace the credential.
+  const unreadable = (harnessId: string) =>
+    rows.some((r) => (r.provider.default_for ?? []).includes(harnessId) && isStoreUnreadable(r.access));
+  const missing = [...defaultHarnesses].filter((h) => !connected(h));
+  if (missing.some((h) => !unreadable(h))) return { label: CONNECTIONS.SUMMARY_NEEDS_YOU, tone: "warning" };
+  if (missing.length > 0) return { label: CONNECTIONS.COULD_NOT_CHECK, tone: "neutral" };
+  return { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
 }
 
 export interface ConnectionRowCopy {

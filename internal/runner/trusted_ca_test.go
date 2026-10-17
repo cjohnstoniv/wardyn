@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"testing"
@@ -120,5 +121,21 @@ func TestInstallSandboxTrustedCA_EmptyIsNoOp(t *testing.T) {
 	InstallSandboxTrustedCA("", nonMITMEnv)
 	if len(nonMITMEnv) != 0 {
 		t.Errorf("a non-MITM run's env gained a key with corpPEM=\"\": got %v, want empty", nonMITMEnv)
+	}
+}
+
+// WithTrustedCA replaces an organisation value (never meant for a runner's proxy) and leaves the
+// config alone with no bundle.
+func TestWithTrustedCA(t *testing.T) {
+	in := []byte(`{"run_token":"tok","trusted_ca_pem":"org-ca-pem"}`)
+	out, err := WithTrustedCA(in, "runner-ca-pem")
+	var got struct {
+		CA string `json:"trusted_ca_pem"`
+	}
+	if err != nil || json.Unmarshal(out, &got) != nil || got.CA != "runner-ca-pem" {
+		t.Fatalf("WithTrustedCA = %s, %v; want the runner's bundle in place of the org's", out, err)
+	}
+	if out, err := WithTrustedCA(in, ""); err != nil || string(out) != string(in) {
+		t.Fatalf("WithTrustedCA(no bundle) = %s, %v; want the config untouched", out, err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -225,7 +226,7 @@ func (e *scimEnv) groupJobsDone(identityID, groupID string) bool {
 	}
 	n := 0
 	for _, j := range jobs {
-		if j.Target != groupID {
+		if j.Target != groupID || strings.HasPrefix(j.Step, store.JobStepRefusalAudit) {
 			continue
 		}
 		n++
@@ -747,4 +748,210 @@ func (r *revokeRaceStore) RevokeAPIToken(ctx context.Context, id uuid.UUID, prin
 		}
 	}
 	return r.PG.RevokeAPIToken(ctx, id, principal, now)
+}
+
+// A member whose emails name more than one principal has no forms to remove: nothing is cut or revoked, the
+// request answers 5xx, and the removal stays pending with the reason where the card shows it. Once the
+// address names one principal, the retry finishes it.
+func TestSCIMGroupRemovalWaitsForOneOwner(t *testing.T) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	seed := func(principal string) (uuid.UUID, string) {
+		raw := apiTokenPrefix + uuid.NewString()
+		f := false
+		tok, err := e.st.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: principal, Email: twin, Role: "user", UserType: types.UserTypeStandard,
+			Groups: []string{groupClaim}, GroupsTruncated: &f, Name: "t", CreatedAt: time.Now().UTC(),
+		}, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok.ID, raw
+	}
+	tok1, raw1 := seed("sub-t1")
+	tok2, raw2 := seed("sub-t2")
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	g, code := e.postGroup(e.a, groupExternalID, "Engineering")
+	if code != http.StatusCreated {
+		t.Fatalf("POST /Groups = %d", code)
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add member = %d %s", r.Code, r.Body.String())
+	}
+	cuts := func() int {
+		var n int
+		if err := e.pool.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM oidc_session_revocations) + (SELECT count(*) FROM oidc_session_cuts)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	patch := groupRemovePatch(t, "entra-doc-patch-group-remove-members-value-array.json", id)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+			t.Fatalf("attempt %d = %d %s, want 5xx while the owner is ambiguous", attempt, r.Code, r.Body.String())
+		}
+	}
+	if e.groupJobsDone(id, g.ID) || len(e.rows(e.a, "scim.group.member_remove")) != 0 {
+		t.Fatal("a refused removal is recorded as done")
+	}
+	jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindGroupRemove)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		if j.Done || (j.Step == store.GroupStepSessions) != (j.LastError == reasonOwnerAmbiguous) {
+			t.Errorf("ledger row %+v, want every step pending and the reason on the session step", j)
+		}
+	}
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 1 || got[0].Step != store.GroupStepSessions || got[0].LastError != reasonOwnerAmbiguous {
+		t.Errorf("pending = %+v, want the removal listed with %s", got, reasonOwnerAmbiguous)
+	}
+	rows := e.rows(e.a, "person.deprovision")
+	if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindGroupRemove {
+		t.Errorf("person.deprovision rows = %+v, want one denied %s for the removal and none for its retry", rows, reasonOwnerAmbiguous)
+	}
+	if n := cuts(); n != 0 {
+		t.Errorf("%d session cuts written for a refused removal, want none", n)
+	}
+	if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) || !e.tokenWorks(e.b, raw1) || !e.tokenWorks(e.b, raw2) {
+		t.Error("a token of a principal the address names was revoked")
+	}
+
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE principal = 'sub-t2'`); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.patchGroup(e.b, g.ID, patch); r.Code != http.StatusOK {
+		t.Fatalf("the retry once the address names one principal = %d %s", r.Code, r.Body.String())
+	}
+	if !e.groupJobsDone(id, g.ID) || len(e.rows(e.b, "scim.group.member_remove")) != 1 {
+		t.Error("the retry did not finish the removal")
+	}
+	if !e.tokenRevoked(tok1) || cuts() == 0 {
+		t.Error("the retry did not reach the one principal the address names")
+	}
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 0 {
+		t.Errorf("pending after the retry = %+v, want none", got)
+	}
+}
+
+// A group removal refused while neither the store nor the spool takes its person.deprovision row keeps the row
+// owed: every retry writes it again, nothing is cut and the epoch is unchanged, and once the audit write works
+// exactly one row lands and later retries write none.
+func TestSCIMGroupRemovalKeepsItsAuditRowOwedUntilWritten(t *testing.T) {
+	e, id, g, patch := newAmbiguousGroupMember(t)
+	epoch := e.identity(id).AuthorityEpoch
+	attempt := func(when string, wantRows, wantTried int) {
+		t.Helper()
+		if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+			t.Fatalf("%s = %d %s, want 5xx while the owner is ambiguous", when, r.Code, r.Body.String())
+		}
+		rows := len(e.rows(e.a, "person.deprovision")) + len(e.rows(e.b, "person.deprovision"))
+		tried := e.a.audit.attempts("person.deprovision") + e.b.audit.attempts("person.deprovision")
+		if rows != wantRows || tried != wantTried || e.identity(id).AuthorityEpoch != epoch {
+			t.Errorf("%s: rows %d tried %d epoch %d, want %d %d %d", when, rows, tried, e.identity(id).AuthorityEpoch, wantRows, wantTried, epoch)
+		}
+	}
+
+	e.a.audit.fail("person.deprovision", true)
+	attempt("the removal while the audit write fails", 0, 1)
+	attempt("its retry while the audit write fails", 0, 2)
+	e.a.audit.fail("person.deprovision", false)
+	attempt("the retry once the audit write works", 1, 3)
+	attempt("a later retry", 1, 3)
+	if e.groupJobsDone(id, g.ID) {
+		t.Error("a refused removal is recorded as done")
+	}
+}
+
+// newAmbiguousGroupMember is a group with one member whose address two principals hold, sub-t1 and sub-t2,
+// and the patch that removes them: the removal is refused with reasonOwnerAmbiguous until one is gone.
+func newAmbiguousGroupMember(t *testing.T) (*scimEnv, string, scimGroup, string) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	for _, principal := range []string{"sub-t1", "sub-t2"} {
+		f := false
+		if _, err := e.st.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: principal, Email: twin, Role: "user", UserType: types.UserTypeStandard,
+			Groups: []string{groupClaim}, GroupsTruncated: &f, Name: "t", CreatedAt: time.Now().UTC(),
+		}, apiTokenPrefix+uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	g, code := e.postGroup(e.a, groupExternalID, "Engineering")
+	if code != http.StatusCreated {
+		t.Fatalf("POST /Groups = %d", code)
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add member = %d %s", r.Code, r.Body.String())
+	}
+	return e, id, g, groupRemovePatch(t, "entra-doc-patch-group-remove-members-value-array.json", id)
+}
+
+// A refused removal's owed row is written once the audit write works, though the removal finished in
+// between and its ledger rows read done.
+func TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterItFinishes(t *testing.T) {
+	e, id, g, patch := newAmbiguousGroupMember(t)
+	e.a.audit.fail("person.deprovision", true)
+	if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+		t.Fatalf("the removal = %d %s, want 5xx while the owner is ambiguous", r.Code, r.Body.String())
+	}
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE principal = 'sub-t2'`); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusOK {
+		t.Fatalf("the retry once the address names one principal = %d %s", r.Code, r.Body.String())
+	}
+	if !e.groupJobsDone(id, g.ID) || len(e.rows(e.a, "scim.group.member_remove")) != 1 {
+		t.Fatal("the retry did not finish the removal")
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.sweepAs(e.a, id)
+	if got := refusalReasons(t, e, e.a, e.b); !maps.Equal(got, map[string]int{reasonOwnerAmbiguous: 1}) {
+		t.Errorf("person.deprovision reasons = %v, want the owed %s row once", got, reasonOwnerAmbiguous)
+	}
+}
+
+// A refused removal's owed row is written once the audit write works, though the removal was refused for
+// another reason in between.
+func TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges(t *testing.T) {
+	e, id, g, patch := newAmbiguousGroupMember(t)
+	e.a.audit.fail("person.deprovision", true)
+	if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+		t.Fatalf("the removal = %d %s, want 5xx while the owner is ambiguous", r.Code, r.Body.String())
+	}
+	unreadable := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: "IdentityAliasValues"} })
+	unreadable.audit.fail("person.deprovision", true)
+	e.sweepAs(unreadable, id)
+	e.a.audit.fail("person.deprovision", false)
+	recovered := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: "IdentityAliasValues"} })
+	e.sweepAs(recovered, id)
+	want := map[string]int{reasonOwnerAmbiguous: 1, reasonIdentityDirectoryUnreadable: 1}
+	if got := refusalReasons(t, e, e.a, e.b, unreadable, recovered); !maps.Equal(got, want) {
+		t.Errorf("person.deprovision reasons = %v, want %v", got, want)
+	}
+}
+
+// An owed refusal row of a member added back to the group before it was written is still written by the
+// sweeper, and /scim/status lists it until then.
+func TestSCIMSweeperWritesAnOwedRefusalRowAfterTheMemberIsAddedBack(t *testing.T) {
+	e, id, g, patch := newAmbiguousGroupMember(t)
+	e.a.audit.fail("person.deprovision", true)
+	if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+		t.Fatalf("the removal = %d %s, want 5xx while the owner is ambiguous", r.Code, r.Body.String())
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add back = %d %s", r.Code, r.Body.String())
+	}
+	fails, err := e.st.GroupRemovalFailures(context.Background(), 10)
+	if err != nil || !slices.ContainsFunc(fails, func(f store.DeprovisionFailure) bool { return strings.HasPrefix(f.Step, store.JobStepRefusalAudit) }) {
+		t.Errorf("group removal failures = %+v (%v), want the owed refusal row listed", fails, err)
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.sweepAs(e.a, id)
+	e.sweepAs(e.a, id)
+	if got := refusalReasons(t, e, e.a, e.b); !maps.Equal(got, map[string]int{reasonOwnerAmbiguous: 1}) {
+		t.Errorf("person.deprovision reasons = %v, want the owed %s row once", got, reasonOwnerAmbiguous)
+	}
 }

@@ -39,7 +39,20 @@ func exitCode(ctx context.Context, err error) int {
 }
 
 func rootCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "wardyn-runnerd", Short: "Run a registered Wardyn runner", Version: version.String(), SilenceUsage: true, SilenceErrors: true}
+	cmd := &cobra.Command{Use: "wardyn-runnerd", Short: "Run a registered Wardyn runner", Version: version.String(), SilenceUsage: true, SilenceErrors: true,
+		// Every command that talks to Docker follows the engine the docker CLI would use (resolveDockerHost);
+		// the Docker SDK reads DOCKER_HOST alone.
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			home, _ := os.UserHomeDir()
+			host, err := resolveDockerHost(os.Getenv, home)
+			if err != nil {
+				return err
+			}
+			if host != "" && host != os.Getenv("DOCKER_HOST") {
+				return os.Setenv("DOCKER_HOST", host)
+			}
+			return nil
+		}}
 	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newServeCommand(productionRunnerHooks))
 	return cmd
 }

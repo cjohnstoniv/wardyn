@@ -272,6 +272,10 @@ const (
 	reasonGrantRunMismatch                    = "grant_run_mismatch"          // the grant belongs to a different run
 	reasonGrantNotFound                       = "grant_not_found"             // no such grant
 	reasonGrantRequiresSPIRE                  = "grant_requires_spire"        // the grant needs the embedded SPIRE identity provider
+	reasonGrantRunRevoked                     = "grant_run_revoked"           // the run's credentials were revoked, so nothing is minted for it
+	reasonGrantNotApproved                    = "grant_not_approved"          // the grant's approval is not in the approved state
+	reasonGrantRefRulesetRequired             = "grant_ref_ruleset_required"  // a required GitHub ref ruleset does not confine the repository
+	reasonGrantKindUnsupported                = "grant_kind_unsupported"      // this server cannot mint a credential of the grant's kind
 	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
 	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
 	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
@@ -517,7 +521,7 @@ const (
 	reasonAttachSessionCapReached = "attach_session_cap_reached" // this run already has the maximum number of live terminal sessions on this replica
 )
 
-// /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is
+// /api/v1/presets (presets.go): validatePresetRequest's whole check is
 // one cause bucket, the same grain as reasonSiteConfigInvalid. Deliberately
 // NOT split per arm (#656 final review round L2 considered it: the "user type
 // does not exist" and "unknown confinement_class" arms echo POST /runs' own
@@ -955,6 +959,7 @@ const (
 	reasonRunnerRegistrationUnavailable = "runner_registration_unavailable"
 	reasonRemoteRunnerNotFound          = "remote_runner_not_found" // no remote-hosted runner has that id (the operators' /remote-runners routes)
 	reasonRunnerRegistrationRateLimited = "runner_registration_rate_limited"
+	reasonRunnerTokenRateLimited        = "runner_token_rate_limited" // a person minted too many runner registration tokens in an hour
 	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
 	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
 	reasonRunnerKeyAlreadyRegistered    = "runner_key_already_registered"
@@ -970,6 +975,7 @@ const (
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
+	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

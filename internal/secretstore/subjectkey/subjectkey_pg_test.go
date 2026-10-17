@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 func TestSubjectKeys_LocalContract(t *testing.T) {
@@ -109,5 +110,34 @@ func TestSubjectKeyHandles(t *testing.T) {
 	}
 	if next, _, err := a.CurrentHandle(ctx, owner, purpose); err != nil || next == h || next == uuid.Nil {
 		t.Errorf("the next generation's handle = %s, %v; want a fresh one", next, err)
+	}
+}
+
+// Destroying a subject that never had a key still records when: the tombstone is what tells a
+// write queued before the erasure that its subject is gone, and the next key is generation 2.
+func TestDestroyWithNoKeyLeavesATombstone(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := kek.NewLocalPurpose(id, kek.PurposeCred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := subjectkeytest.Manager(pool, k)
+	ctx := t.Context()
+	const owner, purpose = "never-keyed@corp.test", subjectkey.PurposeAuditSeal
+	before := time.Now().Add(-time.Minute)
+
+	if gens, err := m.Destroy(ctx, owner, purpose); err != nil || len(gens) != 0 {
+		t.Fatalf("Destroy with no key = (%v, %v); want no generations", gens, err)
+	}
+	gone, err := store.NewPG(pool).SubjectKeyDestroyedSince(ctx, owner, purpose, before)
+	if err != nil || !gone {
+		t.Fatalf("SubjectKeyDestroyedSince after destroying a never-keyed subject = (%v, %v); want true", gone, err)
+	}
+	if v, _, err := m.Current(ctx, owner, purpose); err != nil || v != 2 {
+		t.Fatalf("Current after the tombstone = (%d, %v); want generation 2", v, err)
 	}
 }

@@ -114,6 +114,8 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String(), func() error { return c.DeleteMyRunnerPool(ctx, pool) }},
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddMyRunnerToPool(ctx, pool, runner); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveMyRunnerFromPool(ctx, pool, runner) }},
+		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddRunnerPoolRunner(ctx, pool, runner); return err }},
+		{"DELETE", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveRunnerPoolRunner(ctx, pool, runner) }},
 		{"GET", "/api/v1/runner-pool-defaults", func() error { _, err := c.GetOrgRunnerPoolDefaults(ctx); return err }},
 		{"PUT", "/api/v1/runner-pool-defaults", func() error { _, err := c.SetOrgRunnerPoolDefaults(ctx, client.RunnerPoolDefaults{}); return err }},
 		{"GET", "/api/v1/me/runner-pool-defaults", func() error { _, err := c.GetMyRunnerPoolDefaults(ctx); return err }},
@@ -240,5 +242,46 @@ func TestAbsentLimitsLeaveThePoolsLimitsAlone(t *testing.T) {
 	}
 	if (client.UpdateRunnerPoolRequest{Revision: 2}).Validate() == nil {
 		t.Error("an update that changes nothing was accepted")
+	}
+}
+
+func TestOwnRunnerPoolFindsOrMakesTheCallersUserPool(t *testing.T) {
+	mine, other, org := uuid.New(), uuid.New(), uuid.New()
+	var pools []client.RunnerPoolCatalogueEntry
+	var created bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/runner-pools":
+			_ = json.NewEncoder(w).Encode(client.RunnerPoolList{Pools: pools})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runner-pools/"+mine.String():
+			_ = json.NewEncoder(w).Encode(client.RunnerPool{ID: mine, Name: "Laptop"})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/me/runner-pools":
+			created = true
+			_ = json.NewEncoder(w).Encode(client.RunnerPool{ID: other, Name: "laptop"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "t")
+	ctx := context.Background()
+	choice := func(id uuid.UUID, scope client.RunnerPoolScope) client.RunnerPoolCatalogueEntry {
+		return client.RunnerPoolCatalogueEntry{RunnerPoolChoice: client.RunnerPoolChoice{ID: id, Name: "Laptop", Scope: scope}}
+	}
+
+	// An organization pool of the same name is not the caller's: a user pool is made.
+	pools = []client.RunnerPoolCatalogueEntry{choice(org, client.RunnerPoolOrganization)}
+	if p, fresh, err := c.OwnRunnerPool(ctx, "laptop"); err != nil || !fresh || !created || p.ID != other {
+		t.Fatalf("no own pool: got %v fresh=%v created=%v err=%v, want a new user pool", p.ID, fresh, created, err)
+	}
+	created = false
+	pools = append(pools, choice(mine, client.RunnerPoolUser))
+	if p, fresh, err := c.OwnRunnerPool(ctx, "LAPTOP"); err != nil || fresh || created || p.ID != mine {
+		t.Fatalf("own pool: got %v fresh=%v created=%v err=%v, want the existing one in any case", p.ID, fresh, created, err)
+	}
+	pools = append(pools, choice(other, client.RunnerPoolUser))
+	if _, _, err := c.OwnRunnerPool(ctx, "laptop"); err == nil || !strings.Contains(err.Error(), "2 of your pools") || created {
+		t.Fatalf("two own pools: err = %v created=%v, want a by-id refusal and nothing made", err, created)
 	}
 }

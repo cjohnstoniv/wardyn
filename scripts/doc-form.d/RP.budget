@@ -3,4 +3,13 @@
 # docs/operations/runner-pools.md 1855 adds 266 over 1589 (setup sets the server runner's limits): a remote-hosted runner's limits: what setup sets and the admin step by hand; measured.
 # docs/operations/runner-pools.md 1867 adds 12 over 1855 (0.9.3 D), measured: run_type_missing.
 # docs/operations/runner-pools.md 1873 adds 6 (0.9.3 C2), measured: the defaults PUT keeps an omitted recording.
-docs/operations/runner-pools.md=1873 share=35
+# docs/operations/runner-pools.md 1893 adds 26 over 1867 (0.9.3 RV6G), measured: the organization default's revision and its migration.
+# docs/operations/runner-pools.md 1899 = 1873 + 26 (RV6G), measured at the wave-B merge.
+# docs/operations/runner-pools.md 1924 adds 25 over 1899, measured: the admin pool list's 1,000 cap and X-Wardyn-Truncated.
+# docs/operations/runner-pools.md 1926 adds 27 over 1899, measured (FIN-A2b): a pool's limits are edited, never removed, and empty blocks bound nothing.
+# docs/operations/runner-pools.md 1951, measured at the FIN-A2b merge into the final train (both sides' sentences).
+# docs/operations/runner-pools.md 1920 = 1899 + 21, measured: the BARRIERS and refused-runner notes.
+# docs/operations/runner-pools.md 1972 = 1951 + 21, measured: at the FIN-C2 merge into the final train (both sides' sentences).
+# docs/operations/runner-pools.md 1976 = 1972 + 4, measured: the add row names organization runners.
+# docs/operations/runner-pools.md 1980 = 1976 + 4, measured: the organization pool row names organization runners.
+docs/operations/runner-pools.md=1980 share=35

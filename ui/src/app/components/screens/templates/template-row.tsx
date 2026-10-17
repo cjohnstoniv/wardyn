@@ -76,7 +76,7 @@ export function TemplateRow({
       </div>
       <div className="min-w-0 space-y-1">
         <CellLabel>{T.COL_AVAILABLE}</CellLabel>
-        <Chip tone={t.scope === "person" ? "primary" : "neutral"}>{scopeLabel(t)}</Chip>
+        <Chip>{scopeLabel(t)}</Chip>
         {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
       </div>
       <div className="min-w-0">
@@ -96,7 +96,7 @@ export function TemplateRow({
       </div>
       <div className="space-y-1.5 md:justify-self-end">
         <div className="flex flex-wrap gap-1.5 md:justify-end">
-          <Button asChild size="sm">
+          <Button asChild variant="outline" size="sm">
             <Link to={startHref(t)} aria-describedby={nameId}>
               {T.USE}
             </Link>

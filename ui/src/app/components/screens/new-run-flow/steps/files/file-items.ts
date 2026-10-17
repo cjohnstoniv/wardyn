@@ -139,8 +139,8 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
         key: r.key, kind: "repo", name: r.name, path: (alone && entry.target) || served || r.path, branch: ref ?? r.ref,
         readOnly: false, locked: false, pathEditable: alone, storedOn: [],
         // The server opens a workspace start with no repository named in the workspace's first target, and folders
-        // come before repositories: a repository is the start only when named, or when no folder comes with it.
-        starts: f?.repo ? startsAt(intent, ws, r.repo, r.siblings.length) : !folders.length && startsAt(intent, ws, r.repo, r.siblings.length),
+        // come before repositories: a repository is the start only when named, or when it is the first one cloned and no folder comes with it.
+        starts: startsAt(intent, ws, r.repo, !folders.length && r === rows[0]),
         canStart: true,
         workspaceId: ws, repo: r.repo, siblings: r.siblings,
       });

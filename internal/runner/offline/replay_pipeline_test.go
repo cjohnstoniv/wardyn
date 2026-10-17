@@ -6,14 +6,17 @@ package offline
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
@@ -73,6 +76,13 @@ func replayAgainstOrg(t *testing.T, m *Manager, reply func(n int, row runnerspoo
 
 func spoolBacklog(t *testing.T, k int) (*Manager, uuid.UUID, *runnerspool.Spool) {
 	t.Helper()
+	m, id, spool, _ := spoolBacklogAt(t, k)
+	return m, id, spool
+}
+
+// spoolBacklogAt is spoolBacklog that also returns the fixture's organisation time.
+func spoolBacklogAt(t *testing.T, k int) (*Manager, uuid.UUID, *runnerspool.Spool, time.Time) {
+	t.Helper()
 	m, _, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
 	if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
@@ -86,7 +96,7 @@ func spoolBacklog(t *testing.T, k int) (*Manager, uuid.UUID, *runnerspool.Spool)
 	for range k {
 		appendDecision(t, spool, id)
 	}
-	return m, id, spool
+	return m, id, spool, org
 }
 
 func appendDecision(t *testing.T, spool *runnerspool.Spool, id uuid.UUID) {
@@ -218,5 +228,60 @@ func TestSpoolReplayBoundedByHeadAtStart(t *testing.T) {
 	rest, _, err := replayAgainstOrg(t, m, func(int, runnerspool.Record) orgReply { return orgAck })
 	if err != nil || !slices.Equal(seqs(rest), span(k+1, 2*k)) {
 		t.Fatalf("later appends: %v, %d rows", err, len(rest))
+	}
+}
+
+// A run whose spool will not open does not stop the other runs' backlogs reaching the org; the
+// replay still fails, so the runner does not come ready with a spool it never replayed.
+func TestSpoolReplayGoesOnPastAnUnopenableSpool(t *testing.T) {
+	m, good, _, org := spoolBacklogAt(t, 3)
+	var bad uuid.UUID
+	for {
+		bad = createLocal(t, m, org)
+		if bad.String() < good.String() {
+			break
+		}
+	}
+	spools := filepath.Join(m.dir, "spools")
+	if err := os.MkdirAll(spools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spools, bad.String()), []byte("not a spool"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := replayAgainstOrg(t, m, func(int, runnerspool.Record) orgReply { return orgAck })
+	if err == nil || !strings.Contains(err.Error(), bad.String()) {
+		t.Fatalf("replay = %v, want the unopenable spool named", err)
+	}
+	if !slices.Equal(seqs(rows), span(1, 3)) {
+		t.Fatalf("the other run's backlog was %v, want 1..3", seqs(rows))
+	}
+}
+
+// A quarantine that lands while a run's backlog is being replayed stops the batches after it and its exit.
+func TestSpoolReplayStopsWhenTheRunIsQuarantinedMidReplay(t *testing.T) {
+	const k = 3 * runnerspool.ReplayBatch
+	m, id, _ := spoolBacklog(t, k)
+	// An unsent exit: the held run's exit stays unsent, as for a run held before the replay began.
+	m.mu.Lock()
+	r := m.state.Runs[id]
+	r.Exit = &runnerwire.AgentExit{}
+	m.state.Runs[id] = r
+	m.mu.Unlock()
+	rows, _, err := replayAgainstOrg(t, m, func(n int, _ runnerspool.Record) orgReply {
+		if n == 1 {
+			m.mu.Lock()
+			r := m.state.Runs[id]
+			r.Quarantine = &types.RunnerQuarantine{}
+			m.state.Runs[id] = r
+			m.mu.Unlock()
+		}
+		return orgAck
+	})
+	if err != nil {
+		t.Fatalf("replay = %v", err)
+	}
+	if len(rows) == 0 || len(rows) > runnerspool.ReplayBatch {
+		t.Fatalf("%d rows reached the org, want only the batch in flight when the quarantine landed (1..%d)", len(rows), runnerspool.ReplayBatch)
 	}
 }

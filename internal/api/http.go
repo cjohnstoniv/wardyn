@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -250,7 +251,8 @@ func isMutatingMethod(m string) bool {
 // arrives from a non-loopback peer. This does NOT replace isLoopbackHost: browser
 // DNS-rebinding runs in the victim's own browser (loopback peer, attacker Host),
 // which the Host check catches. We deliberately do NOT install middleware.RealIP
-// (see server.go), so r.RemoteAddr is the real socket peer, never an X-Forwarded-For.
+// (see server.go), so r.RemoteAddr is the real socket peer, or the client a
+// WARDYN_TRUSTED_PROXIES peer reported (realip.go), never an unlisted caller's header.
 // A malformed/empty RemoteAddr fails closed (treated as non-loopback).
 func isLoopbackRemoteAddr(remoteAddr string) bool {
 	host := remoteAddr
@@ -320,10 +322,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// loopback-only for a real guarantee (the Compose default already
 	// publishes 127.0.0.1).
 	if s.cfg.LocalMode {
-		op := s.cfg.LocalOperator
-		if op == "" {
-			op = "local:operator"
-		}
+		op := s.localSeat()
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// N1 (direct-network guard): the no-auth local surface must answer ONLY to
 			// a loopback TCP PEER. The Host header (checked next) is forgeable by a
@@ -752,7 +751,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// refusals into their first row plus one summary row carrying the count.
 	// Before the limiter, so the count is the true number of refusals rather than
 	// the number that happened to survive rate-limiting.
-	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr)
+	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr, audit.ProxyPeer(r.Context()))
 	// The closing streak's summary goes out FIRST, so the row order in the trail
 	// matches the order the refusals happened in (and so a test reading "the last
 	// row" still reads this request's row, not the previous streak's summary) —
@@ -920,10 +919,11 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 		}
 		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		if run, ok := s.refuseTerminalRun(w, r, claims); !ok || s.refuseRelayBinding(w, r, claims, run) {
+		run, ok := s.refuseTerminalRun(w, r, claims)
+		if !ok || s.refuseRelayBinding(w, r, claims, run) {
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(contextWithLiveRun(r.Context(), run)))
 	})
 }
 

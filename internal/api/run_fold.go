@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -101,9 +100,9 @@ type runFold struct {
 	harnesses      []types.RunHarness
 	image          *client.ImageFact
 	harnessChoices []harnessChoice
-	// localDelivery is the credential delivery policy a local run was judged on (stepLocalEligibility);
-	// create persists its grants by the same policy, never a second read.
-	localDelivery placement.DeliveryPolicy
+	// localDelivery is the credential delivery policy and trust class a local run was judged at
+	// (stepLocalEligibility); create persists its grants by the same judgement, never a second read.
+	localDelivery localJudgement
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -127,6 +126,9 @@ type runFoldStep struct {
 //   - Workspace seed after policy, the drive after the seed: seeding can set
 //     req.Image, so its re-checks follow it, and its onboarding gate is the
 //     chokepoint on the resolved spec that no drive may answer before.
+//   - An Azure DevOps card edit on a policy that names no set straight after the
+//     seed: it narrows the default profile of the row that admits the run's
+//     repository, which a selected workspace names only once seeded.
 //   - The harness set after the workspaces: every included harness meets the
 //     primary's doors, and the set's image refusals read the seeded image and
 //     the workspaces' base images.
@@ -167,6 +169,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
+	{(*Server).stepADOOverride, foldAll},
 	{(*Server).stepDrive, foldAll},
 	{(*Server).stepWorkspaces, foldAll},
 	{(*Server).stepHarnessSet, foldAll},

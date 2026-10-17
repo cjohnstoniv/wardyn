@@ -65,7 +65,39 @@
 # docs/OPERATIONS.md 54173 adds 65 over 54108 (0.9 release text for the fix sets merged at release); measured.
 # docs/OPERATIONS.md 54329 adds 156 over 54173 (0.9.1 L8), measured: shared-ingress pointer, bedrock_sso cross-link, refused AWS renewal, runner-limits upgrade steps.
 # docs/OPERATIONS.md 54345 adds 16 over 54329 (0.9.3 C): the 0180 migrator-rationale entry the claims check requires.
-docs/OPERATIONS.md=54345
+# docs/OPERATIONS.md 54600 adds 271 over 54329 (0.9.3 RV5), measured: corporate-proxy CONNECT ports, capacity table rows, migrator list 0166/0169, pre-upgrade check scope, no identity-provider logout.
+# docs/OPERATIONS.md 54616 = 54345 + 271 (RV5), measured at the wave-A merge.
+# docs/OPERATIONS.md 54543 adds 214 over 54329 (0.9.3), measured: the leaver bullets on a suspension or group removal whose emails do not resolve, and the restore runbook's revocation-order steps.
+# docs/OPERATIONS.md 54830 = 54616 + 214 (SEC1), measured at the wave-A merge.
+# docs/OPERATIONS.md 54382 adds 53 over 54329, measured (0.9.3 K3a): the 0181_runner_org_trust migration line (renumbered from 0180 at the wave-A merge).
+# docs/OPERATIONS.md 54882 = 54830 + 52 (K3a), measured at the wave-A merge.
+# docs/OPERATIONS.md 54382 adds 53 over 54329, measured (0.9.3 K3a): the 0180_runner_org_trust migration line.
+# K4 (0.9.3): docs/OPERATIONS.md 54415 measured, +33 for the 0181 migration line (agent_runs.runner_trust_class).
+# docs/OPERATIONS.md 54915 = 54882 + 33 (K4), measured at the wave-B merge.
+# docs/OPERATIONS.md 54567 adds 238 over 54329, measured: the purge runners step and its back-fill, the CA precedence and unresolvable-name behaviour, and the go checksum database default with its opt-out.
+# docs/OPERATIONS.md 54608 adds 41 over 54567, measured: the go checksum database upgrade note.
+# docs/OPERATIONS.md 55194 = 54915 + 279 (RV4f), measured at the wave-C merge.
+# docs/OPERATIONS.md 55312 = 55194 + 118, measured: the SCIM Groups setup step and the group-removal lag note.
+# docs/OPERATIONS.md 55205 adds 11 over 55194, measured: the runner_pools erasure scope also erases the person's stored preferences.
+# docs/OPERATIONS.md 55239 adds 34 over 55205, measured: the shared-email erasure sentence and the organisation MCP server key lock.
+# docs/OPERATIONS.md 55357, measured at the FIN-A2a merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55237 adds 32 over 55205, measured (FIN-A2b): 0157 and 0162 validate their checks under an exclusive lock, so a large pre-0.9.0 upgrade belongs in a quiet window.
+# docs/OPERATIONS.md 55389, measured at the FIN-A2b merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55399 adds 205 over 55194 (0.9.3 FIN-E), measured: migrations 0183 and 0185, the late-streamed pending-key rows, and the partition catch-up bound.
+# docs/OPERATIONS.md 55594, measured at the FIN-E2 merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55220 = 55194 + 26, measured: the output-gap line.
+# docs/OPERATIONS.md 55620 = 55594 + 26, measured: at the FIN-C2 merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55235 adds 41 over 55194 (0.9.3 FIN-B), measured: one line saying the sandbox error text and decision row drop the CA name and constraint names for every host.
+# docs/OPERATIONS.md 55290 adds 55 over 55235: the erasure launch-intent count line and the migration 0188 line (0.9.3 FIN-B2).
+# docs/OPERATIONS.md 55690, measured at the FIN-B2 merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55716, measured at the second decided-rows merge into the final train (both sides' sentences).
+# docs/OPERATIONS.md 55904 = 55880 + 24, measured: the recording-off sentences beside the setup status row.
+# docs/OPERATIONS.md 56036 = 55904 + 132, measured: merge of the AWS SSO renewal section beside the runner recovery and containment notes.
+# docs/OPERATIONS.md 56211 = 56036 + 175, measured: merge of the run output source section.
+docs/OPERATIONS.md=56211
+# docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
+# docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
+# docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.
 # docs/OPERATIONS.md 84747 adds 1534 over 83186 for the 0.8.9 component docs: 1158 (the Custom components section, including settings, attach rules, requirements, what a launch leaves behind, one credential per host and the shared secret), 90+7+5 (the `custom_component` feature value), 18 (nine kinds need only the absence of a deny), 17 (the audit log shrinks only by the partition drop), 31 (the `components` erasure row keeps the run's policy and grants), 58+30 (A46 on the run-scoped and export reads), 9 (`capability_feature` names components), 46 (a shared-secret run's policy export is a record), 58 (Azure DevOps lane redirects lose their token), 10 (buildInjector refuses a second rule for a host). The diff tool counts 1537, the gate 1534.
 # 0.9 runner registration: +27 words for the guarded admin token route tier row.
 # Combined runner registration, baseline and identity changes: measured docs/OPERATIONS.md 85164 prose words.

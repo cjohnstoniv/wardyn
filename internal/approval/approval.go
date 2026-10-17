@@ -34,8 +34,10 @@ var ErrAlreadyDecided = types.ErrApprovalAlreadyDecided
 type Store interface {
 	CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error)
 	GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
-	// ListApprovals returns approvals filtered by state (empty = all).
-	ListApprovals(ctx context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error)
+	// ListExpiredPendingApprovals returns up to limit PENDING approvals whose id sorts after afterID
+	// (keyset order) and that the sweep would expire: requested at or before cutoff, or past their
+	// own expires_at at now. The expiry sweep pages it so it never reads the fleet's pending set.
+	ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error)
 	// ListPendingApprovalsForRuns returns the PENDING approvals of the given
 	// runs only, so a per-run dedup or cancel never reads the fleet.
 	ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error)
@@ -196,61 +198,70 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	now := time.Now().UTC()
 	cutoff := now.Add(-olderThan)
 
-	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
-	if err != nil {
-		return 0, nil, fmt.Errorf("approval: list for expiry: %w", err)
-	}
-
 	expired := 0
 	byKind := map[string]int{}
-	// Collected, not returned on the first failure: ListApprovals is ordered
-	// and re-listed the same way every tick, so returning early would strand
-	// every row sorted after the first failure. Expire what can be, report the
-	// rest — same shape FSStore.Sweep uses.
+	// Collected, not returned on the first failure: the keyset order is the same every tick, so
+	// returning early would strand every row sorted after the first failure. Expire what can be,
+	// report the rest — same shape FSStore.Sweep uses.
 	var failures []error
-	for _, ap := range pending {
-		runBound := ap.ExpiresAt != nil && !ap.ExpiresAt.After(now)
-		if ap.RequestedAt.After(cutoff) && !runBound {
-			continue
+	var after uuid.UUID
+	for {
+		batch, err := st.ListExpiredPendingApprovals(ctx, now, cutoff, after, expireBatch)
+		if err != nil {
+			return expired, byKind, errors.Join(append(failures, fmt.Errorf("approval: list for expiry: %w", err))...)
 		}
-		// Scope left at zero value (not ScopeRun): an expiry is a sweep nobody
-		// decided, not a decision.
-		if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
-			State: types.ApprovalExpired, DecidedBy: "system", Reason: "stale",
-		}); err != nil {
-			if errors.Is(err, ErrAlreadyDecided) {
-				// Race with a concurrent Decide, not a failure to report.
-				continue
+		for _, ap := range batch {
+			if expireOne(ctx, st, ap, cutoff, &failures) {
+				expired++
+				byKind[TallyKey(ap)]++
 			}
-			failures = append(failures, fmt.Errorf("approval: expire %s: %w", ap.ID, err))
-			continue
 		}
-		expired++
-		byKind[TallyKey(ap)]++
-
-		auditData, _ := json.Marshal(map[string]any{
-			"approval_id": ap.ID,
-			"cutoff":      cutoff,
-			"expires_at":  ap.ExpiresAt,
-		})
-		ev := types.AuditEvent{
-			ID:        uuid.New(),
-			Time:      time.Now().UTC(),
-			RunID:     &ap.RunID,
-			ActorType: types.ActorSystem,
-			Actor:     "wardyn/approval-sweeper",
-			Action:    "approval.expire",
-			Target:    ap.ID.String(),
-			Outcome:   "success",
-			Data:      json.RawMessage(auditData),
+		if len(batch) < expireBatch {
+			return expired, byKind, errors.Join(failures...)
 		}
-		// Log-loud instead of swallowing — a dropped approval.expire audit must
-		// be visible.
-		if err := st.Record(ctx, ev); err != nil {
-			audit.LogWriteFailure(ctx, ev, err)
-		}
+		after = batch[len(batch)-1].ID
 	}
-	return expired, byKind, errors.Join(failures...)
+}
+
+// expireBatch is how many pending rows one sweep page reads.
+const expireBatch = 256
+
+// expireOne moves one stale approval to EXPIRED and records the audit row, reporting whether it did.
+// A failure is appended to failures; a lost race with a concurrent decide is not one.
+func expireOne(ctx context.Context, st Store, ap types.ApprovalRequest, cutoff time.Time, failures *[]error) bool {
+	// Scope left at zero value (not ScopeRun): an expiry is a sweep nobody
+	// decided, not a decision.
+	if _, err := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+		State: types.ApprovalExpired, DecidedBy: "system", Reason: "stale",
+	}); err != nil {
+		// A race with a concurrent Decide is not a failure to report.
+		if !errors.Is(err, ErrAlreadyDecided) {
+			*failures = append(*failures, fmt.Errorf("approval: expire %s: %w", ap.ID, err))
+		}
+		return false
+	}
+	auditData, _ := json.Marshal(map[string]any{
+		"approval_id": ap.ID,
+		"cutoff":      cutoff,
+		"expires_at":  ap.ExpiresAt,
+	})
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      time.Now().UTC(),
+		RunID:     &ap.RunID,
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/approval-sweeper",
+		Action:    "approval.expire",
+		Target:    ap.ID.String(),
+		Outcome:   "success",
+		Data:      json.RawMessage(auditData),
+	}
+	// Log-loud instead of swallowing — a dropped approval.expire audit must
+	// be visible.
+	if err := st.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+	return true
 }
 
 // ExpireOne transitions a single PENDING approval straight to EXPIRED,

@@ -76,6 +76,7 @@ export const RUNNERS = {
 } as const;
 
 export const RUNNER = {
+  CANCEL: "Cancel",
   // D-UI-a's placement words, reused byte for byte (NEW_RUN_FLOW.PLACEMENT.ONLINE / OFFLINE_WORD).
   ONLINE: "Online",
   OFFLINE: RUNNER_OFFLINE_WORD,
@@ -140,6 +141,8 @@ export const MY_RUNNER = {
   POOL_PLACEHOLDER: "Pool name",
   POOL_DEFAULT: "Make it my default pool",
   CLAIM_POOL_FAILED: (name: string, pool: string, why: string) => `${name} is claimed but isn't in ${pool}. Add it from My pools. ${why}`,
+  // Owner-approved 2026-10-17: the runner joined the pool; only making it the default failed.
+  CLAIM_DEFAULT_FAILED: (name: string, pool: string, why: string) => `${name} is in ${pool} but isn't your default pool yet. Set it from My pools. ${why}`,
   CLAIM_MISMATCH: (name: string) =>
     `That fingerprint doesn't match ${name}'s key. Check you're claiming the computer you registered. If you didn't register ${name}, revoke it.`,
   CLAIMED_TOAST: (name: string) => `${name} is claimed. It can run your runs now.`,
@@ -210,6 +213,9 @@ export const LOCAL_RUN = {
   LAPSE_TITLE: (name: string) => `${name} has been offline for over an hour`,
   LAPSE_BODY: (name: string, when: string) =>
     `Its runner stops this run's network on its own after an hour offline, and keeps the agent and files. Wardyn last heard from ${name} at ${when}, so it can't confirm that yet.`,
+  UNKNOWN_TITLE: (name: string) => `Wardyn can't tell from here whether ${name} is connected`,
+  UNKNOWN_BODY: (name: string, when: string) =>
+    `Wardyn last heard from ${name} at ${when}, and this server can't say whether it is online now. After an hour offline its runner stops this run's network on its own and keeps the agent and files. If you revive it while ${name} is out of reach, Wardyn says so.`,
   REVIVE_WHEN_BACK: (name: string) => `You can revive it once ${name} is back online.`,
   STOPPED_TITLE: "This run's network was stopped",
   STOPPED_BODY: (name: string) =>
@@ -226,6 +232,11 @@ export const LOCAL_RUN = {
   KILL_DONE: (elapsed: string, name: string) =>
     `An operator killed this run ${elapsed} in. ${name} reported it removed the sandbox; Wardyn issues it no more credentials.`,
   KILL_FILES_LOCAL: (name: string) => `Files the run wrote to a folder on ${name} are still there; scratch is gone.`,
+  // A kill whose stop was queued for an offline runner (run.kill data.sandbox_stop "queued"): the credentials
+  // are gone, the sandbox is not yet.
+  KILL_QUEUED: (elapsed: string, name: string) =>
+    `This run was killed ${elapsed} in while ${name} was offline. Its credentials were revoked at once, and ${name} was told to remove the sandbox when it next connects.`,
+  KILL_QUEUED_FILES: (name: string) => `Until ${name} reconnects, the sandbox and anything the run wrote stay there.`,
   TERMINAL_OFFLINE: (name: string) => `${name} is offline, so its terminal can't be reached. The session keeps running there.`,
   SPOOLED: (when: string) => `Recorded offline at ${when}`,
   SPOOL_FULL: "Refused — the runner's offline log was full",

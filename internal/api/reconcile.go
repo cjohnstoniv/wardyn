@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
@@ -257,7 +259,10 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // comment), so retrying against a sandbox that in fact came down fine is a
 // safe no-op. Clears the ref on success so the run drops out of future
 // sweeps; a still-failing teardown leaves it set (stopSandboxOrAudit already
-// audits it with teardown_error) for the NEXT boot to retry.
+// audits it with teardown_error) for the NEXT boot to retry. A runner run's
+// teardown follows the runner's last answer: an end it refused is retried as a
+// kill, an end or a kill it applied clears the ref, and a kill it refused is not
+// queued again. A direct stop an online runner refuses is followed by one kill.
 //
 // It also re-runs revokeRunCascade: a run that
 // reaches this pass may have had its ORIGINAL finalize/kill/idle-stop
@@ -277,15 +282,59 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 			continue
 		}
 		s.revokeRunCascade(ctx, run.ID)
-		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep") {
+		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
+		torn := false
+		switch {
+		case answered && outcome == types.RunnerActionSuccess:
+			torn = true // the runner applied an end or a kill: a proven stop
+		case answered && kind == types.RunnerActionKill && outcome == types.RunnerActionRefused:
+			continue // queued again it would be refused again; the ref stays
+		case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
+			// A record the runner keeps only for containment refuses an end, every boot, but takes
+			// a kill, which stops its agent.
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", s.cfg.Runner.KillSandbox)
+		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
+			// The same record refuses a direct stop from an online runner, which leaves no answer to
+			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", func(ctx context.Context, ref string) error {
+				err := s.cfg.Runner.StopSandbox(ctx, ref)
+				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
+					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
+				}
+				if kerr := s.cfg.Runner.KillSandbox(ctx, ref); kerr != nil {
+					return errors.Join(err, kerr)
+				}
+				return nil
+			})
+		default:
+			torn = s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep")
+		}
+		if !torn {
 			continue // still stuck; audited above, ref stays set for the next boot
 		}
-		if serr := s.cfg.Store.SetSandboxRef(ctx, run.ID, ""); serr != nil {
+		if serr := s.clearSandboxRef(ctx, run.ID); serr != nil {
 			slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
 				slog.String("run_id", run.ID.String()), slog.Any("err", serr))
 		}
 	}
 	return nil
+}
+
+// lastRunnerTeardown is the runner's latest answer to a queued end or kill of
+// run's sandbox, or answered false off Postgres, for a run on no runner, or
+// when it cannot be read (the sweep then queues the end it always has).
+func (s *Server) lastRunnerTeardown(ctx context.Context, run types.AgentRun) (types.RunnerActionKind, string, bool) {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok || run.RunnerID == nil || s.cfg.Runner == nil {
+		return "", "", false
+	}
+	kind, outcome, answered, err := st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: orphan sweep could not read the runner's last teardown answer",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return "", "", false
+	}
+	return kind, outcome, answered
 }
 
 // sweepOrphanedBuilds reaps envbuild build containers orphaned by a crashed or
@@ -599,6 +648,12 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
 	// Unclaimed runners that outlived their 24h wait.
 	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
+	// Ended runs' runner_resident values, erased by the runners this replica
+	// holds; on every replica, after the passes above that end runs.
+	pass("runner resident erase sweep", s.sweepResidentErase(ctx))
+	// Ended runner runs' retirements, one step each; on every replica, as
+	// each step is one transaction under the run lock.
+	pass("runner retirement producer", s.produceRunnerRetirements(ctx))
 	return first
 }
 

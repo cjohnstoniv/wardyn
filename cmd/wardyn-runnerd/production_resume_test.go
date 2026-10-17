@@ -95,8 +95,8 @@ func newResumeRuntimeFixture(t *testing.T) *resumeRuntimeFixture {
 		sub:   &resumeObservedSubstrate{Fake: runnertest.NewFake(), observed: make(chan struct{}, 8)},
 		peers: make(chan *runnerwire.Peer, 2), conns: make(chan *resumeObservedConn, 2), connected: make(chan error, 2), hubDone: make(chan error, 2),
 		entered: make(chan struct{}), release: make(chan struct{}), frames: make(chan runnerwire.Frame, 8)}
-	f.runtime, err = localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: f.runnerID, PrivateKey: key}, f.stateDir, f.sub,
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized)
+	f.runtime, err = runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: f.runnerID, PrivateKey: key}, f.stateDir, f.sub,
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}

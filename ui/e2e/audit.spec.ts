@@ -214,3 +214,24 @@ test("a failed-connection row keeps its sentence visible beside a long cause", a
     expect(box?.width ?? 0, `sentence width at ${width}`).toBeGreaterThan(100);
   }
 });
+
+// A run.build row the image cache answered says the image was reused; a real build still says built.
+test("a cache-hit image row reads reused, a build reads built", async ({ page }) => {
+  const row = (id: string, data: Record<string, unknown>) => ({
+    id,
+    time: new Date().toISOString(),
+    actor_type: "system",
+    actor: "wardynd",
+    action: "run.build",
+    target: `ws-${id}`,
+    outcome: "success",
+    run_id: "run_e2eimagecache",
+    data,
+  });
+  await page.route(/\/api\/v1\/audit(\?|$)/, (route) =>
+    route.fulfill({ json: [row("hit", { cache_hit: true }), row("miss", { cache_hit: false })] }),
+  );
+  await page.reload();
+  await expect(verb(page, "Reused the cached sandbox image — ws-hit")).toBeVisible();
+  await expect(verb(page, "Built the sandbox image — ws-miss")).toBeVisible();
+});

@@ -141,6 +141,7 @@ export const LOST_OUTAGE =
 export const LOST_K8S = "The node it ran on restarted. Files on your drive are kept; the rest is gone.";
 export const REVIVE = "Revive";
 export const REVIVING = "Reviving… (about a minute)";
+export const REVIVE_STILL_STARTING = "The runner is still starting this run. Check back in a minute.";
 export function revivePolicy(hostsBlocked: number): string {
   return `Policy updated at revive: ${hostsBlocked} host${hostsBlocked === 1 ? "" : "s"} now blocked.`;
 }
@@ -176,5 +177,7 @@ export const PAUSE_IDLE_FLOOR_SEC = 630;
 
 export const OLDER_LIMITS_CHIP = "Older limits";
 export const RESTART_WITH_CURRENT_LIMITS = "Restart with current limits";
+/** Lead wording 2026-10-17 (FR-0163): how far a bulk restart has come, shown while it runs. */
+export const RESTART_PROGRESS = (done: number, total: number) => `${done} of ${total}`;
 export const RESTART_HINT =
   "Restarts each run's network proxy with its owner's current limits. Terminals stay open; requests in flight fail once.";

@@ -43,6 +43,12 @@ type fakeVault struct {
 	revoked      bool // the policy is gone: every data/ and metadata/ call is denied
 	kv           map[string]*kvEntry
 	force        []int // statuses to answer with, one per request, before anything else
+	// landThenFail answers the next data write 503 after it has been applied: a
+	// write that landed whose answer was lost. createdSkew shifts the creation
+	// time the metadata reports for every version; noCreated leaves it out.
+	landThenFail int
+	createdSkew  time.Duration
+	noCreated    bool
 	// denyPath, when non-empty, refuses (403) every call whose path contains
 	// it — persistent, unlike force's one-shot queue, so it can target one
 	// owner's calls across a login/retry without also catching another's.
@@ -61,6 +67,7 @@ type kvEntry struct {
 	maxVersions int
 	custom      map[string]string
 	versions    map[int]map[string]string // nil value = deleted
+	created     map[int]time.Time
 }
 
 func newFakeVault(t *testing.T) *fakeVault {
@@ -209,6 +216,10 @@ func (f *fakeVault) data(w http.ResponseWriter, method, p string, body map[strin
 		}
 		e.current++
 		e.versions[e.current] = d
+		if e.created == nil {
+			e.created = map[int]time.Time{}
+		}
+		e.created[e.current] = time.Now()
 		if e.maxVersions > 0 {
 			for v := range e.versions {
 				if v <= e.current-e.maxVersions {
@@ -217,6 +228,11 @@ func (f *fakeVault) data(w http.ResponseWriter, method, p string, body map[strin
 			}
 		}
 		f.kv[p] = e
+		if f.landThenFail > 0 {
+			f.landThenFail--
+			fail(w, http.StatusServiceUnavailable, "the answer was lost")
+			return
+		}
 		reply(w, 200, map[string]any{"data": map[string]any{"version": e.current}})
 	case http.MethodDelete:
 		if e != nil {
@@ -244,7 +260,11 @@ func (f *fakeVault) metadata(w http.ResponseWriter, r *http.Request, p string, b
 			if d == nil {
 				dt = time.Now().UTC().Format(time.RFC3339)
 			}
-			versions[strconv.Itoa(v)] = map[string]any{"deletion_time": dt, "destroyed": false}
+			ver := map[string]any{"created_time": e.created[v].Add(f.createdSkew).UTC().Format(time.RFC3339Nano), "deletion_time": dt, "destroyed": false}
+			if f.noCreated {
+				delete(ver, "created_time")
+			}
+			versions[strconv.Itoa(v)] = ver
 		}
 		reply(w, 200, map[string]any{"data": map[string]any{"current_version": e.current, "max_versions": e.maxVersions,
 			"cas_required": f.casRequired, "custom_metadata": e.custom, "versions": versions}})

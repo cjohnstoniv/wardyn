@@ -129,6 +129,30 @@ test.describe("Templates: filters and rows", () => {
     await expect(names(page)).toHaveText([PLATFORM_BASELINE.name, ORG_BASELINE.name]);
   });
 
+  test("a sign-in that cannot confirm the person's groups says so over the list, and says nothing otherwise", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: { ...ME_ONLY, groups_unverified: true } });
+    await openTemplates(page);
+    await expect(page.getByText(T.GROUPS_UNVERIFIED)).toBeVisible();
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await page.reload();
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    await expect(page.getByText(T.GROUPS_UNVERIFIED)).toHaveCount(0);
+  });
+
+  test("one teal action: Use is an outline button and the Only me chip is neutral (DR-0057)", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openTemplates(page);
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    const teal = page.locator("main").locator('.bg-primary:not([role="switch"])');
+    await expect(teal).toHaveCount(1);
+    await expect(teal).toHaveText(T.NEW_FROM_SCRATCH);
+    const row = rowOf(page, NIGHTLY.name);
+    await expect(row.getByRole("link", { name: T.USE })).not.toHaveClass(/bg-primary/);
+    await expect(row.getByText(T.SCOPE_ME, { exact: true })).not.toHaveClass(/text-primary/);
+  });
+
   test("each row shows its kind, what it needs, who it is for, what it includes and its revision", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
@@ -375,6 +399,19 @@ test.describe("Save as template and Save as policy", () => {
     await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled();
   });
 
+  test("a subset with nothing checked keeps Save off and says why (FUG-L771)", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openReview(page);
+    await press(page, NR_REVIEW.SAVE_TEMPLATE);
+    const dialog = page.getByRole("dialog", { name: NR_SAVE.TITLE_TEMPLATE });
+    await dialog.getByLabel(NR_SAVE.NAME_LABEL).fill("None");
+    await dialog.getByLabel(NR_SAVE.INCLUDE_SUBSET).check();
+    const boxes = dialog.getByRole("checkbox");
+    for (let i = 0; i < (await boxes.count()); i++) await boxes.nth(i).uncheck();
+    await expect(dialog.getByText("Choose at least one part to include.", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: NR_SAVE.CONFIRM_TEMPLATE })).toBeDisabled();
+  });
+
   test("Save as policy keeps only network, credential and access rules, as a policy", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openReview(page);
@@ -436,6 +473,23 @@ test.describe("Start from a saved template and Run again", () => {
     await expect(page.getByRole("dialog", { name: NR_LAUNCH.TITLE }).getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("");
   });
 
+  test("while its list is on the way each picker says what it is loading (FUG-L771)", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route("**/api/v1/me/launch-intents*", async (route) => { await held; await route.fulfill({ json: { intents: [] } }); });
+    await page.route("**/api/v1/templates*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await held;
+      await route.fulfill({ json: { templates: [], publish: ME_ONLY } });
+    });
+    await startFrom(page, NR_SHAPE.SOURCE_TEMPLATE);
+    await expect(page.getByRole("combobox", { name: NR_SHAPE.TEMPLATE_LABEL })).toHaveText("Loading saved templates…");
+    await press(page, NR_SHAPE.SOURCE_AGAIN);
+    await expect(page.getByRole("combobox", { name: NR_SHAPE.PREVIOUS_LABEL })).toHaveText("Loading previous runs…");
+    release();
+    await expect(page.getByText(NR_SHAPE.EMPTY_AGAIN)).toBeVisible();
+  });
+
   test("with no earlier run the picker says so", async ({ page }) => {
     await page.route("**/api/v1/me/launch-intents*", (route) => route.fulfill({ json: { intents: [] } }));
     await startFrom(page, NR_SHAPE.SOURCE_AGAIN);
@@ -461,3 +515,32 @@ test.describe("Start from a saved template and Run again", () => {
     await expect(page.getByText(NR_SHAPE.EMPTY_TEMPLATES)).toBeVisible();
   });
 });
+
+test.describe("Templates: Publish to organization (FR-0120)", () => {
+  test("asks first with what a shared template shows, and publishes only on confirm, with a toast", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: { org: true, groups: [], groups_unverified: false } });
+    const copies: unknown[] = [];
+    await page.route("**/api/v1/templates/*/copy", (route) => {
+      copies.push(route.request().postDataJSON());
+      return route.fulfill({ status: 201, json: revisionOf(NIGHTLY) });
+    });
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/templates");
+    await expect(page.getByRole("heading", { name: T.TITLE, level: 1 })).toBeVisible();
+
+    await rowOf(page, NIGHTLY.name).getByRole("button", { name: T.PUBLISH }).click();
+    const dialog = page.getByRole("alertdialog", { name: T.PUBLISH_TITLE(NIGHTLY.name) });
+    await expect(dialog.getByText(NR_SAVE.SHARED_DISCLOSURE)).toBeVisible();
+    expect(copies).toHaveLength(0);
+
+    await dialog.getByRole("button", { name: T.CANCEL }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(copies).toHaveLength(0);
+
+    await rowOf(page, NIGHTLY.name).getByRole("button", { name: T.PUBLISH }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: T.PUBLISH }).click();
+    await expect(page.getByText(T.PUBLISHED(NIGHTLY.name))).toBeVisible();
+    expect(copies).toEqual([{ scope: "org" }]);
+  });
+});
+

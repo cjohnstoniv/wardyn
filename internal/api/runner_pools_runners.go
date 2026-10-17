@@ -19,6 +19,7 @@ import (
 // poolRunnerLister reads a user pool's member runners (store.PG).
 type poolRunnerLister interface {
 	ListRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]types.Runner, error)
+	ListOrgRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]types.Runner, error)
 }
 
 var _ poolRunnerLister = store.PG{}
@@ -41,31 +42,8 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 	}
 	owner := row.Pool.Owner != "" && row.Pool.Owner == poolOwner(r.Context())
 	out := []client.RunnerPoolMemberView{}
-	if row.Pool.Scope == types.RunnerPoolUser {
-		rs, ok := s.runnerInventoryStore(w)
-		if !ok {
-			return
-		}
-		lister, ok := s.cfg.Store.(poolRunnerLister)
-		if !ok {
-			writeErrorReason(w, http.StatusNotImplemented, reasonRunnerRegistrationUnavailable, "runner inventory requires the Postgres store backend")
-			return
-		}
-		rows, err := lister.ListRunnerPoolRunners(r.Context(), row.Pool.ID)
-		if err != nil {
-			writeServerError(w, r, "list runner pool runners", err)
-			return
-		}
-		rows = slices.DeleteFunc(rows, func(row types.Runner) bool { return row.State == types.RunnerRevoked })
-		views, ok := s.runnerViews(w, r, rs, rows, !owner)
-		if !ok {
-			return
-		}
-		for i := range views {
-			v := views[i]
-			out = append(out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v,
-				Limits: v.Limits, Usage: v.Usage})
-		}
+	if !s.appendRunnerMembers(w, r, row.Pool, owner, &out) {
+		return
 	}
 	if len(row.ExecutorIDs) > 0 {
 		rrs, ok := s.remoteRunnerStore(w)
@@ -94,4 +72,58 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// appendRunnerMembers adds the self-hosted members to out: a user pool's runners its owner holds, or an
+// organization pool's organization runners. Every reader of an organization pool sees the runner; only a security
+// operator also sees who owns, minted, trusted and revoked it, as the administrators' inventory shows them.
+// It reports false after answering the request itself.
+func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, pool types.RunnerPool, owner bool, out *[]client.RunnerPoolMemberView) bool {
+	if _, ok := s.cfg.Store.(store.OrgRunnerPoolStore); !ok && pool.Scope != types.RunnerPoolUser {
+		return true // a store that cannot add an organization runner holds none
+	}
+	rs, ok := s.runnerInventoryStore(w)
+	if !ok {
+		return false
+	}
+	lister, ok := s.cfg.Store.(poolRunnerLister)
+	if !ok {
+		writeErrorReason(w, http.StatusNotImplemented, reasonRunnerRegistrationUnavailable, "runner inventory requires the Postgres store backend")
+		return false
+	}
+	// A user pool is read by its owner (the person's own view) or by a security operator, who sees what the
+	// inventory shows. An organization runner has no person's own view: the inventory's, or less.
+	list, admin := lister.ListRunnerPoolRunners, !owner
+	if pool.Scope != types.RunnerPoolUser {
+		list, admin = lister.ListOrgRunnerPoolRunners, true
+	}
+	rows, err := list(r.Context(), pool.ID)
+	if err != nil {
+		writeServerError(w, r, "list runner pool runners", err)
+		return false
+	}
+	if pool.Scope == types.RunnerPoolUser {
+		rows = slices.DeleteFunc(rows, func(row types.Runner) bool { return row.State == types.RunnerRevoked })
+	}
+	views, ok := s.runnerViews(w, r, rs, rows, admin)
+	if !ok {
+		return false
+	}
+	for i := range views {
+		v := views[i]
+		if pool.Scope != types.RunnerPoolUser && !s.isSecurityOperator(r.Context()) {
+			withoutPeople(&v)
+		}
+		*out = append(*out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v,
+			Limits: v.Limits, Usage: v.Usage})
+	}
+	return true
+}
+
+// withoutPeople clears the fields of a runner view that name the people behind it (its owner, who minted,
+// trusted and revoked it, and why), which only a security operator or the runner's own owner reads.
+func withoutPeople(v *types.RunnerView) {
+	v.Owner, v.MintedBy, v.MintedByEmail = "", "", ""
+	v.TrustSetBy, v.TrustSetAt = "", nil
+	v.RevokedBy, v.RevokedByEmail, v.RevokeReason = "", "", ""
 }

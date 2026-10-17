@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -49,7 +50,14 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var ok bool
-	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, f.mode == foldPreflight)
+	// A promoted run's start replays the fold its create already ran, which wrote the policy audit rows
+	// once: the replay writes none, as a dry door writes none.
+	dry := f.promoted
+	if f.mode == foldPreflight {
+		ctx = context.WithValue(ctx, reviewDoorKey{}, true)
+		dry = true
+	}
+	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, dry)
 	if ok {
 		recordPolicySource(rec, f.source, f.spec)
 	}
@@ -213,12 +221,20 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections)
+		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains}
+		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, bound)
 		if refusal != nil {
 			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)
 		}
+		f.policyWarns = append(f.policyWarns, bound.dropped...)
 		f.reqEvents = append(f.reqEvents, events...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
+	}
+	// The mount map was read before this fold, which can narrow a mount to read-only: show the final one.
+	for i, a := range f.attachments {
+		if j := slices.IndexFunc(f.spec.WorkspaceMounts, func(m types.WorkspaceMount) bool { return a.Kind == attachmentFolder && m.Target == a.Target }); j >= 0 {
+			f.attachments[i].ReadOnly = f.spec.WorkspaceMounts[j].ReadOnlyOrDefault()
+		}
 	}
 	return true
 }
@@ -343,6 +359,14 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, true, false, false)
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
+	}
+	if f.mode == foldPreflight {
+		w := f.w
+		// Every setup row but model access, which the refusal itself answers.
+		f.w = credentialSetupWriter{w, func() []SetupItem {
+			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs)
+		}}
+		defer func() { f.w = w }()
 	}
 	var choice runProviderChoice
 	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
@@ -563,10 +587,55 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 	}
 	rl.CPUMillis, rl.MemoryMiB = a.CPUMillis.Applied, a.MemoryMiB.Applied
 	f.spec.Resources = &rl
+	if idle := f.place.limits.Idle; idle != nil {
+		f.spec.AutoStopAfterSec = poolIdleStop(f.spec.AutoStopAfterSec, *idle)
+	}
+	// The clamp already folded a PIDs cut into the shared warning; this is the signal that says which one.
+	f.place.applied.PidsLimit = appliedPids(f.source, f.ceiling, rl.PidsLimit, s.inheritDeploymentResources(nil).PidsLimit)
 	if (a.CPUMillis.Capped || a.MemoryMiB.Capped) && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
 		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
 	}
 	return true
+}
+
+// poolIdleStop is a run's auto_stop_after_sec under its pool's idle stop (an Interactive run's only;
+// Idle is nil for a Background run): the pool's default when the policy sets none (0, or the -1 an
+// interactive session uses for never), never above the pool's cap. The idle reaper stops the run on that
+// value as on any other.
+func poolIdleStop(sec int, idle types.EffectiveLimit) int {
+	if sec <= 0 && !idle.Default.Unlimited {
+		sec = idle.Default.Value
+	}
+	if !idle.Cap.Unlimited && (sec <= 0 || sec > idle.Cap.Value) {
+		sec = idle.Cap.Value
+	}
+	return sec
+}
+
+// addRemoteInstead appends how to run a refused run on a remote-hosted runner, to a sent 4xx and to a
+// denial decision (status 0), which is written from the decision's sentence (the reason's own when it has
+// none). A decision that hides its cause or answers with another reason keeps its body, and a server error says nothing.
+func (f *runRefusal) addRemoteInstead(pool string) {
+	if f == nil {
+		return
+	}
+	if f.status == 0 && f.decision != nil && f.err == nil && f.drive == nil {
+		d := f.decision
+		if d.Effect == authz.EffectHidden || d.WireReason != "" {
+			return
+		}
+		sentence := d.Sentence
+		if ref, ok := authz.Lookup(d.Reason); ok && sentence == "" {
+			sentence = ref.Sentence
+		}
+		if sentence != "" {
+			d.Sentence = sentence + " " + remoteInsteadMsg(pool)
+		}
+		return
+	}
+	if f.status >= http.StatusBadRequest && f.status < http.StatusInternalServerError {
+		f.body.Error += " " + remoteInsteadMsg(pool)
+	}
 }
 
 // stepLocalEligibility is before confinement/provider liveness: create may
@@ -582,19 +651,24 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
-	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
-		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	if f.place.remoteOffered {
+		refusal.addRemoteInstead(f.place.pool.Name)
 	}
 	if refusal.write(s, f.w, f.r) {
 		return false
+	}
+	// The run is bound only to a runner of the trust class its plan was admitted at. A run that waits is
+	// judged again at its start, the promotion's runner's class first (candidateTrusts).
+	if req.Placement == types.PlacementLocal && f.place.pooled {
+		f.place.narrowToTrust(f.localDelivery.trust)
 	}
 	// A launch that waits on the pool's remote-hosted runners records this step's answer for the person's
 	// own: the queue then never offers it a runner of theirs that frees first, which the start would
 	// refuse here, ending a run that was accepted to wait.
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
-		_, local := s.localPlacementRefusal(f.r, req, true, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 		// A read that failed answers nothing (a server error carries its error, not a status): the launch
 		// then behaves as one with nothing recorded.
 		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)
@@ -683,6 +757,42 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 	}
 	if f.mode != foldCreate {
 		(&mainDriveDecision{MiB: md.MiB}).apply(&f.spec)
+	}
+	return true
+}
+
+// stepADOOverride applies an Azure DevOps narrowing that waited for the workspace seeding, so a
+// repository a selected workspace adds resolves its provider row's default profile as dispatch will,
+// before any step grades the policy. The diff on the run's policy source and the provenance rows are
+// what applying it with the other edits would have recorded.
+func (s *Server) stepADOOverride(f *runFold, rec *foldRecorder) bool {
+	e := f.source.edits
+	if e == nil || e.adoPending == nil {
+		return true
+	}
+	o := *e.adoPending
+	e.adoPending = nil
+	base, refusal := s.adoOverrideBase(f.r.Context(), f.r, f.spec, f.req)
+	if refusal == nil {
+		refusal = applyADOOverride(&f.spec, o, base, e)
+	}
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	if e.applied.AzureDevOps == nil {
+		return true // the person kept the whole set: no edit
+	}
+	e.folded.AzureDevOpsCapabilities = slices.Clone(f.spec.AzureDevOpsCapabilities)
+	if f.source.OverridesDiff == nil {
+		f.source.OverridesDiff = &client.RunOverridesDiff{}
+	}
+	f.source.OverridesDiff.AzureDevOps = e.applied.AzureDevOps
+	all := &foldRecorder{}
+	recordPolicySource(all, f.source, f.spec)
+	for _, row := range all.rows {
+		if row.Field == fieldADOCaps {
+			rec.add(row.Field, row.Value, row.Source, row.Effect)
+		}
 	}
 	return true
 }

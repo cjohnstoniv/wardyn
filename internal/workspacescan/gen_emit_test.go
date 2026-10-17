@@ -19,7 +19,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 			{Stage: "test", Command: "go test ./..."},
 		},
 	}
-	files, err := EmitEnvAsCode(p, nil, "")
+	files, err := EmitEnvAsCode(p, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestEmitEnvAsCode(t *testing.T) {
 
 func TestEmitEnvAsCode_MavenNoteAndNoGoNoise(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Java"}, PackageManagers: []string{"maven"}}
-	files, err := EmitEnvAsCode(p, nil, "")
+	files, err := EmitEnvAsCode(p, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestEmitEnvAsCode_ResolvedBaseRef(t *testing.T) {
 	const custom = "mycorp/build:2024.3"
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
 
-	files, err := EmitEnvAsCode(p, nil, custom)
+	files, err := EmitEnvAsCode(p, nil, false, custom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestEmitEnvAsCode_ResolvedBaseRef(t *testing.T) {
 // about the workspace's integrations.
 func TestEmitEnvAsCode_AlwaysBakesAgentTool(t *testing.T) {
 	p := WorkspaceProfile{Languages: []string{"Go"}, Confidence: "high", Source: "deterministic"}
-	files, err := EmitEnvAsCode(p, nil, "")
+	files, err := EmitEnvAsCode(p, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

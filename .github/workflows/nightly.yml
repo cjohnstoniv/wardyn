@@ -52,17 +52,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -105,17 +99,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -165,17 +153,11 @@ jobs:
       RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|busybox:latest|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -250,17 +232,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -298,17 +274,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - name: Docker available
         run: docker --version
       - name: Build the agent image the test-drive launches runs with
@@ -329,17 +299,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - name: Docker available
         run: docker --version
       - name: One-shot governed run (BYOA exec mode, sealed policy)
@@ -389,17 +353,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -453,17 +411,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -530,10 +482,16 @@ jobs:
   # release.yml's watched= (guard 13) rather than NOTIFY_EXEMPT.
   provider-subscription-docker-pg:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     timeout-minutes: 20
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: wardyn
           POSTGRES_DB: wardyn
@@ -545,17 +503,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(busybox:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -611,17 +563,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - name: Docker available
         run: docker --version
       - name: Shared-host concurrency test (two project-scoped stacks up at once)
@@ -652,17 +598,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|ubuntu:24\.04)@'
       - name: Docker available
         run: docker --version
       - name: Build wardynd
@@ -707,17 +647,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -800,6 +734,11 @@ jobs:
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
+            stage: "true"
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
+            build-args: |
+              RELEASE_BUILD=true
             stage: "true"
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
@@ -1010,17 +949,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1175,17 +1108,11 @@ jobs:
       WARDYN_QUICKSTART_SSH_PORT: "2522"
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|registry:2)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1256,17 +1183,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1331,17 +1252,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1395,17 +1310,18 @@ jobs:
           path: test/reports/e2e/kind-survival-walk.log
           if-no-files-found: error
 
-  # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
-  # `make kind-quickstart` cluster as the job above; the laptop is its own
-  # dedicated compose project this job builds fresh (nightly runners share
-  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
-  # kind-survival-walk above.
-  hybrid-walk:
+  # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and
+  # deletes its own clusters (the 1.31 kubelet floor, then the latest kind node image), stands up a
+  # real organisation (wardynd and postgres from deploy/helm/wardyn), enrols runnerd through its
+  # chart and rendered Role, and runs test/k6 against both, then under runnerd's own token.
+  # bind-delete-serial and bind-delete-overlap are the release gate for the unbound-pod arm: a pod
+  # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
+  # has gone green here, the same posture kind-survival-walk has.
+  k6-kind-conformance:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    timeout-minutes: 150
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -1418,6 +1334,64 @@ jobs:
           [ -z "$running" ] || docker start $running >/dev/null
           docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Kubernetes runner kind conformance (floor and latest kubelet)
+        env:
+          WARDYN_TEST_K8S: "1"
+          K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/k6-kind-conformance.sh 2>&1 | tee test/reports/e2e/k6-kind-conformance.log
+          echo "K6_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the harness ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/k6-kind-conformance.log
+          if [ "${K6_EXIT:-}" = "77" ]; then
+            echo "::error::k6-kind-conformance.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the step"
+            exit 1
+          fi
+          if [ "${K6_EXIT:-1}" != "0" ]; then
+            echo "::error::k6-kind-conformance.sh exited ${K6_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^k6-kind-conformance: PASS' "$log" || { echo "::error::the harness never reached its own closing PASS line"; exit 1; }
+      - name: Upload harness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: k6-kind-conformance-results
+          path: test/reports/e2e/
+          if-no-files-found: error
+
+  # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
+  # `make kind-quickstart` cluster as the job above; the laptop is its own
+  # dedicated compose project this job builds fresh (nightly runners share
+  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
+  # kind-survival-walk above.
+  hybrid-walk:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim|alpine:3\.20)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1493,17 +1467,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1557,17 +1525,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(postgres:17)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1607,17 +1569,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1699,11 +1655,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
+      packages: read
       contents: read
       pull-requests: read
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: wardyn
           POSTGRES_DB: wardyn
@@ -1715,16 +1675,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -1754,19 +1704,13 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: ''
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24' # the agent image's base is node:24

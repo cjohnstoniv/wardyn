@@ -76,19 +76,6 @@ func TestRunnerTrustedCA_ProxyOnCreateAndReviveAndSandbox(t *testing.T) {
 	}
 }
 
-// withTrustedCA replaces an organisation value (never meant for a runner's proxy) and leaves the
-// config alone with no bundle.
-func TestWithTrustedCA(t *testing.T) {
-	in := []byte(`{"run_token":"tok","trusted_ca_pem":"org-ca-pem"}`)
-	out, err := withTrustedCA(in, "runner-ca-pem")
-	if err != nil || trustedCAOf(t, out) != "runner-ca-pem" {
-		t.Fatalf("withTrustedCA = %s, %v; want the runner's bundle in place of the org's", out, err)
-	}
-	if out, err := withTrustedCA(in, ""); err != nil || string(out) != string(in) {
-		t.Fatalf("withTrustedCA(no bundle) = %s, %v; want the config untouched", out, err)
-	}
-}
-
 // The runner's bundle file is mounted read-only into every sandbox. runnerd refuses a bundle over
 // 64 KiB, so with nothing staged it always fits WARDYN_MITM_CA_PEM. When it and the PEM the
 // organisation staged do not fit one environment string, it is left out and rides the mount alone;

@@ -58,8 +58,9 @@ type bootFlags struct {
 	// WHICH org. Unset (the default) means no hybrid posture at all, and
 	// validateHybridPosture (boot_posture.go) is a no-op. orgEnrolToken is
 	// meaningless without it.
-	orgURL       *string
-	runnerOrgURL *string
+	orgURL         *string
+	runnerOrgURL   *string
+	trustedProxies *string
 	// orgEnrolToken is WARDYN_ORG_ENROLMENT_TOKEN — a secret, so never logged
 	// and never echoed in a boot refusal.
 	orgEnrolToken *string
@@ -269,6 +270,8 @@ type bootFlags struct {
 	// hurry must not be able to crash-loop a daemon.
 	awsSSOProxyInject  *string
 	allowTestEndpoints *bool
+	// ssoRefresh is the AWS SSO renewal tuning, validated at boot.
+	ssoRefresh awsSSORefreshFlags
 
 	// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100) size the sign-in
 	// sandbox itself — see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
@@ -363,6 +366,8 @@ type bootFlags struct {
 	// oidcSessionTTL replaces the ID token's expiry as a console session's lifetime — see
 	// oidc.Config.SessionTTL. Zero keeps the ID token's expiry.
 	oidcSessionTTL *time.Duration
+	// sessionLife is the console session-lifetime behaviours, each off by default.
+	sessionLife sessionLifeFlags
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
@@ -419,6 +424,7 @@ func parseBootFlags() *bootFlags {
 		memberWritableRoots:    flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
 		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
+		trustedProxies:         flagEnv("trusted-proxies", "WARDYN_TRUSTED_PROXIES", "", "comma-separated CIDRs of the reverse proxies in front of wardynd; a request from one of them takes its client address from X-Forwarded-For, read right to left to the first address outside the list. Empty (default) reads no forwarding header"),
 		runnerOrgURL:           flagEnv("runner-org-url", "WARDYN_RUNNER_ORG_URL", "", "public organisation URL bound into registered runner identities; HTTPS required except loopback HTTP for development, without userinfo, query or fragment. Unset disables runner registration and streams"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		scimToken:              flagEnv("scim-token", "WARDYN_SCIM_TOKEN", "", "secret bearer the SCIM 2.0 Users routes (/scim/v2/Users) accept, at least 32 bytes; unset (default) mounts no SCIM route. Requires OIDC on a single-tenant Entra issuer and TLS"),
@@ -533,6 +539,7 @@ func parseBootFlags() *bootFlags {
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
+		ssoRefresh:             registerAWSSSORefreshFlags(),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
 		harnessLoginCPUMillis:   flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),
@@ -602,7 +609,7 @@ func parseBootFlags() *bootFlags {
 		recoveryManifest:        flag.Bool("recovery-manifest", false, "maintenance mode, every other wardynd must be stopped: write manifest.json into -recovery-set, tying the database snapshot to the staged spool, then exit (default false)"),
 		recoveryVerify:          flag.Bool("recovery-verify", false, "maintenance mode, every other wardynd must be stopped: check that the database at WARDYN_PG_DSN and the staged spool in -recovery-set are the pair the manifest recorded, then exit (default false)"),
 		recoveryRehearse:        flag.Bool("recovery-rehearse", false, "maintenance mode: check a restored database (WARDYN_REHEARSE_PG_DSN) against the recovery set in -recovery-set, with the deployment's keys in the environment, then exit: 0 pass, 3 refused, 4 fail, 5 incomplete (default false)"),
-		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify reads"),
+		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify and -recovery-rehearse read"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
@@ -619,6 +626,7 @@ func parseBootFlags() *bootFlags {
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
+		sessionLife:            registerSessionLifeFlags(),
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),

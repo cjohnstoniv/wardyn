@@ -35,12 +35,13 @@ const (
 	OrphanedBuild      = "orphaned_build"
 	RunOutput          = "run_output"
 	RunQueue           = "run_queue"
+	AWSSSORenewal      = "aws_sso_renewal"
 )
 
 // Names lists every sweep, in the order the status output uses.
 var Names = []string{
 	IdleReaper, TerminalSandbox, ApprovalExpiry, RunSecret,
-	CredentialExpiry, RecordingRetention, RunWatcher, OrphanedBuild, RunOutput, RunQueue,
+	CredentialExpiry, RecordingRetention, RunWatcher, OrphanedBuild, RunOutput, RunQueue, AWSSSORenewal,
 }
 
 // StaleAfterIntervals is how many of its own intervals a sweep may go without a

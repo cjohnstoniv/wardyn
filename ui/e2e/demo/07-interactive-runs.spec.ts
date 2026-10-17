@@ -96,6 +96,7 @@ import {
   NEW_RUN_HEADING,
   newRunHeading,
   openNameDialog,
+  chooseProvider,
   providerPicker,
   runTitleField,
   startGuided,
@@ -289,12 +290,10 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   if ((await mainDriveSize.count()) > 0 && (await mainDriveSize.inputValue()) === "") await mainDriveSize.fill("10");
   await nextStep(page, NEW_RUN_HEADING.tools);
 
-  // The model provider the managed credential rides on. OPEN: index 1 is the
-  // first provider after the "Choose a model provider" placeholder; lead: is
-  // that the managed-subscription provider on the recording stack?
+  // The model provider the managed credential rides on: the first connected one, chosen by its label.
   const provider = providerPicker(page, "claude-code");
   await expect(provider, "no model provider serves Claude Code — V01's model step did not stick").toBeEnabled({ timeout: 30_000 });
-  await provider.selectOption({ index: 1 });
+  await chooseProvider(provider);
 
   // The old Confinement/Network cards and the policy editor's Minimal chip are
   // GONE. "What this run can reach" on Tools and access lists the network: the

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -127,6 +128,9 @@ func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
 // the refusal counted. The spool's own bounds are the backlog a dropped runner
 // link may build: admission never waits on the link itself.
 func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
+	if s.remote != nil {
+		return s.remote.reserve(ctx, need)
+	}
 	sawFull := false
 	for {
 		if err := s.lockCtx(ctx); err != nil {
@@ -217,17 +221,32 @@ func (s *decisionSink) drop(id uuid.UUID) {
 	delete(s.reservations, id)
 }
 
-func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); s.drop(id); s.mu.Unlock() }
+func (s *decisionSink) release(id uuid.UUID) {
+	if s.remote != nil {
+		s.remote.release(id)
+		return
+	}
+	s.mu.Lock()
+	s.drop(id)
+	s.mu.Unlock()
+}
 
 // admitSpoolHTTP reserves r's audit record before r is served. mitmHost is the
 // terminated tunnel's host for an inner request, "" for one ServeHTTP admits.
 func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost string) (*http.Request, func()) {
-	if p.sink == nil || p.sink.local == nil {
+	// Also the gate for a terminated tunnel's inner requests: no credential is
+	// injected once a self-lapsing proxy has closed.
+	if !p.lapse.serving() {
+		refuseClosed(w)
+		return nil, nil
+	}
+	if p.sink == nil || (p.sink.local == nil && p.sink.remote == nil) {
 		return r, func() {}
 	}
 	// JSON can expand one control byte into six. Refuse an oversized target
 	// before forwarding rather than discover that the final row cannot fit.
 	if r.URL == nil || 6*(len(r.URL.String())+len(r.Host)+len(r.Method)) > runnerspool.MaxRecordBytes-4096 {
+		p.recordTooLarge(r, mitmHost)
 		p.refuseUnaudited(w, r, mitmHost, http.StatusRequestURITooLong, reasonAuditRecordTooLarge, "egress audit record too large",
 			"the request target is too long to record in the run's egress audit, so it was not sent")
 		return nil, nil
@@ -255,6 +274,31 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 		return nil, nil
 	}
 	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
+}
+
+// ruleSourceAuditRecordTooLarge marks the deny written for a request whose target is too long to record.
+const ruleSourceAuditRecordTooLarge = "builtin:audit-record-too-large"
+
+// tooLargeFieldBytes bounds each request string the too-large deny keeps.
+const tooLargeFieldBytes = 512
+
+// recordTooLarge writes a bounded deny for a request refused because its target cannot be recorded:
+// the host, method and the start of the path, never the query. It was never sent, so it needs no
+// reservation; a spool with no room counts it as a refusal, as any unadmitted deny.
+func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
+	host, path := mitmHost, ""
+	if r.URL != nil {
+		path = r.URL.Path
+		if host == "" {
+			host = r.URL.Hostname()
+		}
+	}
+	if host == "" {
+		host = r.Host
+	}
+	clip := func(v string) string { return strings.ToValidUTF8(v[:min(len(v), tooLargeFieldBytes)], "") }
+	p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: clip(strings.ToLower(host)), Method: clip(strings.ToUpper(r.Method)),
+		Path: clip(path), Time: p.now()}, egress.Deny, ruleSourceAuditRecordTooLarge))
 }
 
 // refuseUnaudited answers a request the audit could not record, keeping its
@@ -311,11 +355,19 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		if !held.used {
 			keep = min(max(keep, 0), spoolFollowUpBytes)
 		}
-		s.heldBytes -= held.bytes - keep
+		freed := held.bytes - keep
 		held.bytes, held.used = keep, true
 		s.reservations[id] = held
 		charged = true
+		// The append runs without s.mu, so concurrent decisions share one spool commit (runnerspool's
+		// group commit) and admission does not wait behind it. freed stays held until the record is in
+		// the spool's own count, so no admission sees that room twice.
+		s.appending.Add(1)
+		s.mu.Unlock()
 		err = s.local.AppendAdmitted(ctx, log)
+		s.mu.Lock()
+		s.appending.Done()
+		s.heldBytes -= freed
 	} else if err == nil {
 		depth, bytes, _, statErr := s.local.Stats(ctx)
 		switch {
@@ -346,8 +398,33 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 }
 
 func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client, out io.Writer) (*decisionSink, error) {
+	if cfg.DecisionSink != nil {
+		remote, err := newRemoteSink(cfg.RunID, *cfg.DecisionSink)
+		if err != nil {
+			return nil, err
+		}
+		return &decisionSink{remote: remote, out: out}, nil
+	}
 	if cfg.DecisionSpoolDir != "" {
+		if err := preparedSpool(cfg.DecisionSpoolDir); err != nil {
+			return nil, err
+		}
 		return newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
 	}
 	return newDecisionSink(cfg.ControlPlaneURL, token, cfg.DecisionBufferSize, client, out), nil
+}
+
+// preparedSpool refuses a spool directory wardyn-runnerd did not prepare. Only a wardyn-runnerd from 0.9.3-rc.2
+// or older still sets decision_spool_dir, with this image when it follows its organisation: it creates the
+// run's spool, state.json included, in its own state directory and mounts it there before the proxy starts. A
+// directory without state.json is no mount, or one an engine that cannot see wardyn-runnerd's state directory
+// made up: a spool opened there would never reach the organisation.
+func preparedSpool(dir string) error {
+	_, err := os.Lstat(filepath.Join(dir, "state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("the run's audit spool %s holds no state.json, so wardyn-runnerd's spool for this run is not mounted there: "+
+			"the Docker engine does not see wardyn-runnerd's state directory. Upgrade wardyn-runnerd, whose proxies then share no directory with it, "+
+			"or share that directory with the engine", dir)
+	}
+	return err
 }

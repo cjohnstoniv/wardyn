@@ -35,10 +35,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// awsSSOCreateWaitBudget is how long create watches: the holder's whole token
-// exchange (two attempts and the delay between them) and a second, so it follows
-// awsSSORefreshTimeout if that is ever raised. A var for the tests.
-var awsSSOCreateWaitBudget = 2*awsSSORefreshTimeout + awsSSORefreshRetryDelay + time.Second
+// awsSSOCreateWaitBudget, when set, replaces createWaitBudget: a var for the tests.
+var awsSSOCreateWaitBudget time.Duration
+
+// createWaitBudget is how long create watches: the holder's whole token
+// exchange (two attempts and the delay between them, as tuned) and a second.
+func (s *Server) createWaitBudget() time.Duration {
+	if awsSSOCreateWaitBudget > 0 {
+		return awsSSOCreateWaitBudget
+	}
+	t := s.awsSSOTuning()
+	return 2*t.Timeout + t.RetryDelay + time.Second
+}
 
 // awsSSOCreateWaitTick is the pause between two polls, and each poll's deadline.
 var awsSSOCreateWaitTick = 250 * time.Millisecond
@@ -88,7 +96,7 @@ func (s *Server) awaitAWSSSORenewalInFlight(ctx context.Context, scope awsSSOSco
 		slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
 	baseline, _ := ctx.Value(awsSSORenewalBaselineKey{scope}).(awsSSORenewalBaseline)
 	w := awsSSORenewalWatch{s: s, scope: scope, blob: blob, fingerprint: awsSSOTokenFingerprint(blob.RefreshToken), baseline: baseline}
-	stop := time.Now().Add(awsSSOCreateWaitBudget)
+	stop := time.Now().Add(s.createWaitBudget())
 	tick := time.NewTicker(awsSSOCreateWaitTick)
 	defer tick.Stop()
 	for {
@@ -154,7 +162,7 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context) (awsSSOBlob, string, bool
 		return w.blob, "", false, err
 	case !found:
 		return w.blob, awsSSORefreshSpentSentence, true, nil
-	case cur.servableFor(w.s.cfg.Now(), awsSSORefreshServeFloor):
+	case cur.servableFor(w.s.cfg.Now(), w.s.awsSSOTuning().ServeFloor):
 		cur.maskGeneration = w.blob.maskGeneration
 		return cur, "", true, nil
 	}

@@ -39,19 +39,19 @@ func templateFieldInvalidMsg(path, detail string) string {
 }
 
 func templateFieldExcludedMsg(path string) string {
-	return fmt.Sprintf("%s is never part of a template: it belongs to one launch, or it is retired.", path)
+	return fmt.Sprintf("%s cannot be set in a document: it is entered at launch, set by the server, or retired.", path)
 }
 
 func templateSecretRefusedMsg(path string) string {
-	return fmt.Sprintf("%s holds what looks like a secret. A template keeps references to secrets, never their values.", path)
+	return fmt.Sprintf("%s holds what looks like a secret. A document keeps references to secrets, never their values.", path)
 }
 
 func templateRunStateRefusedMsg(path string) string {
-	return fmt.Sprintf("%s is state of one run. A template holds reusable choices, not a run's history or authority.", path)
+	return fmt.Sprintf("%s is state of one run. A document holds choices, not a run's history or authority.", path)
 }
 
 func templateMetadataInContentMsg(path string) string {
-	return fmt.Sprintf("%s is set by the server from who saves the template. Remove it from the document.", path)
+	return fmt.Sprintf("%s is set by the server, never by a document. Remove it from the document.", path)
 }
 
 func templateFieldUnavailableMsg(path string) string {

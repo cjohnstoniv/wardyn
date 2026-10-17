@@ -1,7 +1,9 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/operations/integrations.md 2683 adds 74 over 2609: 0.9 final docs pass 2, measured: signing in for an AWS or Azure CLI component.
-docs/operations/integrations.md=2683 share=30
-docs/operations/launch-presets.md=390 share=35
+# docs/operations/integrations.md 2753 adds 70: Azure Activity Log attribution and the ARM-only scope line (0.9.3 FIN-B2).
+docs/operations/integrations.md=2753 share=30
+# docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
+docs/operations/launch-presets.md=432 share=35
 docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
@@ -24,8 +26,39 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1697 adds 162 (0.9.3 C): the "Session recordings" section, measured.
 # docs/operations/hybrid-laptops.md 1923 = 1761 (rc.1 batch) + 162 (C), measured at the rc.2 merge.
 # docs/operations/hybrid-laptops.md 1923 adds 162 (0.9.3 lane C): how laptop recordings work and reach the org.
+# docs/operations/hybrid-laptops.md 1859 adds 324 over 1535 (0.9.3 E), measured: the runner stream admission limits table with its memory bound, and the "Trusted proxies" chain-rule section.
+# docs/operations/hybrid-laptops.md 1862 adds 3 over 1859 (0.9.3 E r1), measured: a loopback or unspecified X-Forwarded-For entry keeps the TCP peer.
+# docs/operations/hybrid-laptops.md 1867 adds 5 (0.9.3 lane E r2 docs): where a device-forwarded row keeps the peer.
+# docs/operations/hybrid-laptops.md 2253 = 1923 + 330 (E), measured at the wave-A merge.
+# docs/operations/hybrid-laptops.md 2077 adds 316 over 1761 (0.9.3 Fr), measured: the upstream proxy, running without a service and Docker engine sections.
+# docs/operations/hybrid-laptops.md 2295 adds 218 over 2077 (0.9.3 Fr fix round 1), measured: the proxy-image section (follows the organisation, any image, the pin), the --no-service refusal and quoted command, and the plist-credential warning.
+# docs/operations/hybrid-laptops.md 2787 = 2253 + 534 (Fr), measured at the wave-A merge.
+# docs/operations/hybrid-laptops.md 1786 adds 25 (0.9.3 F-R14), measured: an org-shared MCP credential is refused on a runner.
+# docs/operations/hybrid-laptops.md 2812 = 2787 + 25 (Fo), measured at the wave-A merge.
+# docs/operations/hybrid-laptops.md 1796 adds 35 over 1761 (0.9.3 F-R12b), measured: a gateway-routed key or custom_endpoint provider is refused on your own runner.
+# docs/operations/hybrid-laptops.md 2847 = 2812 + 35 (FR12b), measured at the wave-A merge.
+# docs/operations/hybrid-laptops.md 1788 adds 27 over 1761 (0.9.3 RV5), measured: macOS MDM posture path and the runner_posture_unmet vs placement_credential split.
+# docs/operations/hybrid-laptops.md 2874 = 2847 + 27 (RV5), measured at the wave-A merge.
+# docs/operations/hybrid-laptops.md 1923 adds 162 over 1761 (0.9.3 C): the "Session recordings" section, measured.
+# docs/operations/hybrid-laptops.md 2874 = 2874 + 0 (K2), measured at the wave-A merge.
 # docs/operations/hybrid-laptops.md 1780 adds 19 (0.9.3 SPOOL), measured: behaviour of a full spool during a link drop.
 # docs/operations/hybrid-laptops.md 1940 = C + SPOOL, measured at the rc.2 merge.
 # docs/operations/hybrid-laptops.md 1973 adds 50 (0.9.3 C2), measured: org-side console and SSH recording, uploads a declining runner's run refuses, a defaults write keeps recording.
 # docs/operations/hybrid-laptops.md 1992 = C + SPOOL + C2, measured at the rc.2 merge.
-docs/operations/hybrid-laptops.md=1992 share=35
+# docs/operations/hybrid-laptops.md 2945 = 2874 + 71 (SPOOL + C2), measured at the rc.2 into final merge.
+# docs/operations/hybrid-laptops.md 2141 adds 380 over 1761 (0.9.3 PKG), measured: the macOS package and MDM section and its managed-preferences key table.
+# docs/operations/hybrid-laptops.md 2255 adds 114 over 2141 (0.9.3 PKG round 2), measured: Open Anyway and MDM-agent install wording, the single-instance lock, the per-user profile path.
+# docs/operations/hybrid-laptops.md 3439 = 2945 + 494 (PKG), measured at the wave-B merge.
+# docs/operations/hybrid-laptops.md 3747 adds 308 over 3439 (0.9.3 RR-de), measured: four runner_resident classes, best-effort erasure and its four late cases, the broker and Azure DevOps limits.
+# docs/operations/hybrid-laptops.md 3765 adds 18 over 3747 (0.9.3 RR-de review), measured: the run end in the keystore cap and the older-runner refusal.
+# docs/operations/hybrid-laptops.md 3538 adds 99 over 3439 (0.9.3 FIN-E), measured: the posture-on-record notes and the proxy-image skew note.
+# docs/operations/hybrid-laptops.md 3864, measured at the FIN-E2 merge into the final train (both sides' sentences).
+# docs/operations/hybrid-laptops.md 3926 adds 62, measured: runner trust classes (with the required --reason) and by_trust in Resident credentials and posture.
+# docs/operations/hybrid-laptops.md 4022 adds 96 over 3926, measured: the control-plane restart and re-registration rows in Offline and revocation.
+# docs/operations/hybrid-laptops.md 4039 = 4022 + 17, measured at the K7 merge: the line pointing at the organisation runner in a cluster.
+# docs/operations/hybrid-laptops.md 4041 = 4039 + 2, measured: merge of the containment-only kill sentence beside the organisation-runner pointer.
+# docs/operations/hybrid-laptops.md 4509 = 4041 + 468, measured: merge of the runner decision sink section, plus the pinned-image clause.
+docs/operations/hybrid-laptops.md=4509 share=35
+# docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
+# docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
+# docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.

@@ -6,7 +6,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -257,9 +259,38 @@ var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
 // WARDYN_RUNNER_STATE_DIR into the unit's env file that way). The runner's
 // deploy templates (deploy/runner/*.service, *.plist, *.env.example) are
 // scanned for every WARDYN_ name they carry, since they exist to set them.
-func readVars(t *testing.T, root string) map[string]bool {
+func readVars(t *testing.T, root string) map[string]bool { return scanVars(t, root, false) }
+
+// readerVars is the reverse ratchet's view: only what reads a variable. A "WARDYN_X=" assignment
+// written into a unit's env file and a name a deploy template merely carries set a variable; they
+// read nothing, so a documented variable that only they mention has lost its reader.
+func readerVars(t *testing.T, root string) map[string]bool { return scanVars(t, root, true) }
+
+var (
+	litAll     = regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]|(WARDYN_[A-Z0-9_]+)=`)
+	litReaders = regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]`)
+)
+
+// lineVars returns the WARDYN_* names one source line counts for. A Go comment line counts for
+// nothing, and in readers mode neither does a shell comment line inside an embedded script.
+func lineVars(line string, readersOnly bool) []string {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "//") || (readersOnly && strings.HasPrefix(trimmed, "#")) {
+		return nil
+	}
+	lit := litAll
+	if readersOnly {
+		lit = litReaders
+	}
+	var names []string
+	for _, m := range lit.FindAllStringSubmatch(line, -1) {
+		names = append(names, strings.Join(m[1:], ""))
+	}
+	return names
+}
+
+func scanVars(t *testing.T, root string, readersOnly bool) map[string]bool {
 	t.Helper()
-	lit := regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]|(WARDYN_[A-Z0-9_]+)=`)
 	seen := map[string]bool{}
 	add := func(name string) {
 		// A trailing "_" is a prefix (refuseRetiredModelEnv's "WARDYN_BEDROCK_")
@@ -281,11 +312,8 @@ func readVars(t *testing.T, root string) map[string]bool {
 				return err
 			}
 			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "//") {
-					continue
-				}
-				for _, m := range lit.FindAllStringSubmatch(line, -1) {
-					add(m[1] + m[2] + m[3])
+				for _, name := range lineVars(line, readersOnly) {
+					add(name)
 				}
 			}
 			return nil
@@ -294,7 +322,11 @@ func readVars(t *testing.T, root string) map[string]bool {
 			t.Fatalf("walk %s: %v", sub, err)
 		}
 	}
-	for _, glob := range []string{"*.service", "*.plist", "*.env.example"} {
+	globs := []string{"*.service", "*.plist", "*.env.example"}
+	if readersOnly {
+		globs = globs[:2] // an env example only writes; the unit and plist read through ${WARDYN_...}
+	}
+	for _, glob := range globs {
 		files, err := filepath.Glob(filepath.Join(root, "deploy", "runner", glob))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("deploy/runner/%s matched no file (err %v) — the runner's templates moved", glob, err)
@@ -304,12 +336,61 @@ func readVars(t *testing.T, root string) map[string]bool {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range wardynVarLit.FindAllString(string(b), -1) {
+			for _, name := range templateVars(string(b), readersOnly) {
 				add(name)
 			}
 		}
 	}
 	return seen
+}
+
+// templateVars is the WARDYN_* names a deploy/runner template names: every one for the forward
+// ratchet, only the ones it expands (${WARDYN_X}) for the reverse ratchet's readers.
+func templateVars(text string, readersOnly bool) []string {
+	if !readersOnly {
+		return wardynVarLit.FindAllString(text, -1)
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		out = append(out, lineVars(line, true)...)
+	}
+	return out
+}
+
+// TestEnvDoc_ReaderScanCountsRunnerTemplateExpansions pins that a variable only a runner template
+// expands (a unit's ExecStart) is a reader, while one it merely mentions in a comment is not.
+func TestEnvDoc_ReaderScanCountsRunnerTemplateExpansions(t *testing.T) {
+	unit := "# WARDYN_RUNNER_MENTIONED is only named here\nExecStart=__WARDYN_RUNNERD__ serve --state-dir ${WARDYN_RUNNER_STATE_DIR}\n"
+	if got := templateVars(unit, true); !reflect.DeepEqual(got, []string{"WARDYN_RUNNER_STATE_DIR"}) {
+		t.Errorf("readers in the unit = %v, want only WARDYN_RUNNER_STATE_DIR", got)
+	}
+	if got := templateVars(unit, false); !slices.Contains(got, "WARDYN_RUNNER_MENTIONED") {
+		t.Errorf("the forward scan lost a name the unit mentions: %v", got)
+	}
+}
+
+// TestEnvDoc_ReaderScanCountsOnlyReads pins what the reverse ratchet counts as a reader: a Go
+// string literal and a real shell expansion do; a WARDYN_X= assignment (a dead writer) and a
+// comment, Go or shell, do not. The forward ratchet still sees the assignment.
+func TestEnvDoc_ReaderScanCountsOnlyReads(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+		readers    []string
+		all        []string
+	}{
+		{"go literal", `	v := os.Getenv("WARDYN_LIVE")`, []string{"WARDYN_LIVE"}, []string{"WARDYN_LIVE"}},
+		{"real expansion feeding a flag", `exec runner --org "${WARDYN_ORG_URL:-}"`, []string{"WARDYN_ORG_URL"}, []string{"WARDYN_ORG_URL"}},
+		{"dead writer", `	env += "WARDYN_DEAD=1\n"`, nil, []string{"WARDYN_DEAD"}},
+		{"go comment", `	// reads ${WARDYN_COMMENTED} and "WARDYN_COMMENTED"`, nil, nil},
+		{"shell comment", `# set ${WARDYN_COMMENTED} first`, nil, []string{"WARDYN_COMMENTED"}},
+	} {
+		if got := lineVars(tc.line, true); !reflect.DeepEqual(got, tc.readers) {
+			t.Errorf("%s: readers of %q = %v, want %v", tc.name, tc.line, got, tc.readers)
+		}
+		if got := lineVars(tc.line, false); !reflect.DeepEqual(got, tc.all) {
+			t.Errorf("%s: names on %q = %v, want %v", tc.name, tc.line, got, tc.all)
+		}
+	}
 }
 
 // documentedVars tokenizes docs/ENV.md into the exact WARDYN_* names it names.
@@ -489,7 +570,7 @@ var envDocRetired = map[string]bool{
 func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 	root := repoRoot(t)
 	docText := readEnvDoc(t, root)
-	seen := readVars(t, root)
+	seen := readerVars(t, root)
 
 	documented := documentedVars(docText)
 	for v := range documented {

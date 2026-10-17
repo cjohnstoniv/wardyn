@@ -433,7 +433,7 @@ const (
 	egressRetryNever  = "never"
 )
 
-// DRAFT (M2 canon pending) — the FIVE sentences a builtin:private-ip 403 can tell
+// The FIVE sentences a builtin:private-ip 403 can tell
 // a HOSTNAME's operator, each its own constant so the owner's canon sitting is a
 // one-line diff. Four compose the LIFTABLE refusal (cause, remedy, the console's
 // second copy of the cidrs hint, lifetime); the fifth replaces the remedy and the
@@ -520,19 +520,27 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 	ip := net.ParseIP(h)
 	if ip == nil {
 		// A non-canonical spelling (inet_aton form, zoned IPv6) is refused by the
-		// step-0 guard unconditionally, so the internal_hosts remedy is never true
-		// for it even when the decoded address is in a liftable range.
+		// step-0 guard whatever its range, so the internal_hosts remedy is never true
+		// for it. Where the decoded address is in a liftable range, the way out is to
+		// write it canonically; where it is never liftable, that is the sentence.
 		if dec := nonCanonicalLiteralIP(h); dec != nil {
+			if k, _ := isBlockedIP(dec); neverLiftableClass[k] == "" {
+				return "literal IP " + h + " is a non-standard way to write " + dec.String() + ". The proxy refuses every non-standard spelling, " +
+					"and no internal_hosts entry lifts that; write the address as " + dec.String() + "."
+			}
 			return "literal IP " + h + " decodes to " + dec.String() + ", " + egressNeverLiftableRemedy
 		}
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}
-		// The join site for the four DRAFT sentences above: cause, remedy,
-		// hint, lifetime. Any owner ruling is an edit to this expression and
+		// The join site for the four sentences above: cause, remedy,
+		// hint, lifetime. Any wording change is an edit to this expression and
 		// the constant it names, nowhere else.
 		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
 			siteInternalHostsCIDRHint + " " + egressDenialSuffix
+	}
+	if kind == blockHardDeny {
+		return neverLiftableDetail("literal IP "+ip.String(), kind)
 	}
 	if pol != nil {
 		if _, denied := pol.deniedExact[ip.String()]; denied {

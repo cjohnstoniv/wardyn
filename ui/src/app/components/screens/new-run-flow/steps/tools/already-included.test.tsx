@@ -13,13 +13,14 @@ import { AlreadyIncluded } from "./already-included";
 
 afterEach(cleanup);
 
+const NO_CREDENTIAL = "No credential is set up for this repository, so the run starts without one.";
 const TWO_HARNESSES: RunIntent = { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }] };
 const rowOf = (name: string) => screen.getByText(name, { selector: "strong" }).closest("li") as HTMLElement;
 const open = async (name: string) => userEvent.click(within(rowOf(name)).getByRole("button", { name: NR_TOOLS.DETAILS_FOR(name) }));
 
 describe("Already included", () => {
   it("lists what the earlier steps bring, each with its chip and sub-line, and offers nothing to add or remove", () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }] }} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }], startup: { kind: "harness", tool: "claude-code" } }} />);
     expect(screen.getByRole("heading", { level: 2, name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();
     expect(screen.getByText(NR_TOOLS.INCLUDED_BODY)).toBeInTheDocument();
     const harness = within(rowOf("Claude Code"));
@@ -37,6 +38,17 @@ describe("Already included", () => {
     render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={intent} />);
     expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.SUB_STARTS)).toBeInTheDocument();
     expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+  });
+
+  it("starts a background agent task's agent with the run, and no harness with a command (DR-0230)", () => {
+    const task: RunIntent = { ...TWO_HARNESSES, workload: { kind: "agent_task", agent: "codex-cli" } };
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={task} />);
+    expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.SUB_STARTS)).toBeInTheDocument();
+    expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+    cleanup();
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={{ ...TWO_HARNESSES, startup: { kind: "command", command: "make test" } }} />);
+    expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.SUB_STARTS)).not.toBeInTheDocument();
   });
 
   it("marks a row that still needs setup, and a ready one", () => {
@@ -88,5 +100,15 @@ describe("Already included", () => {
     render(<AlreadyIncluded names={HARNESS_NAMES} answered access={undefined} intent={{}} />);
     expect(screen.getByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("says why a repository that create gives no credential needs setup (FUG-L369)", () => {
+    const access = { ...SCENARIO_ACCESS.member, rows: SCENARIO_ACCESS.member.rows.map((r) => (r.name === "acme/web" ? { ...r, status: "needs_setup" as const, reason: "repo_no_credential" } : r)) };
+    const { rerender } = render(<AlreadyIncluded names={HARNESS_NAMES} answered access={access} intent={{}} />);
+    expect(within(rowOf("acme/web")).getByText(NO_CREDENTIAL)).toBeInTheDocument();
+    expect(within(rowOf("acme/web")).getByText(NR_TOOLS.STATUS_NEEDS_SETUP)).toBeInTheDocument();
+    // Until the server has answered this draft, the old answer's reason is not claimed.
+    rerender(<AlreadyIncluded names={HARNESS_NAMES} answered={false} access={access} intent={{}} />);
+    expect(screen.queryByText(NO_CREDENTIAL)).not.toBeInTheDocument();
   });
 });

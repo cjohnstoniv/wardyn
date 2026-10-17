@@ -7,7 +7,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,16 +30,20 @@ const ghCLIToken = "ghs_cli_minted"
 // TLS server: it answers every mint with ghCLIToken and records every other
 // request.
 type ghUpstream struct {
-	srv   *httptest.Server
-	mu    sync.Mutex
-	mints int
-	seen  []string // "METHOD path auth"
+	srv    *httptest.Server
+	mu     sync.Mutex
+	mints  int
+	seen   []string // "METHOD path auth"
+	onMint func()   // runs when a mint request arrives, before the upstream records it
 }
 
 func newGHUpstream(t *testing.T) *ghUpstream {
 	t.Helper()
 	u := &ghUpstream{}
 	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/internal/credentials/mint" && u.onMint != nil {
+			u.onMint()
+		}
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		if r.URL.Path == "/api/v1/internal/credentials/mint" {
@@ -219,6 +225,23 @@ func TestGitHubAPI_MintRelayAndShutdownRevoke(t *testing.T) {
 	}
 }
 
+// A mint that is still in flight when the shutdown revoke runs is skipped by it, so the request that
+// minted it hands the token back itself and forwards nothing; a request after that mints nothing.
+func TestGitHubAPI_MintInFlightAtShutdownIsHandedBack(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	up.onMint = func() { p.revokeGitHubAPITokens(t.Context()) }
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	mints, seen := up.counts()
+	if want := "DELETE /installation/token token " + ghCLIToken; mints != 1 || len(seen) != 1 || seen[0] != want {
+		t.Fatalf("mints %d seen %q, want one mint handed straight back as %q and nothing forwarded", mints, seen, want)
+	}
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	if mints2, seen2 := up.counts(); mints2 != 1 || len(seen2) != 1 {
+		t.Fatalf("after shutdown began: mints %d seen %q, want nothing more", mints2, seen2)
+	}
+}
+
 // Shutdown hands the cached token back before it stops serving: the runtime's
 // stop timeout may kill the process while http.Shutdown still waits on open
 // sandbox connections.
@@ -266,4 +289,66 @@ func TestGitHubAPI_OtherPortTunnelRefused(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.handleConnect(rec, req)
 	ghRefused(t, rec)
+}
+
+// A deny on the door's host wins over the door: a revive whose owner's profile now denies
+// api.github.com keeps the stored door, and the CONNECT that would reach it is denied, so the proxy
+// neither fails to start nor serves the host.
+func TestGitHubAPI_DeniedHostIsNotServedByTheDoor(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxySpec(t, up, types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}, DeniedDomains: []string{"api.github.com"}})
+	req := httptest.NewRequest(http.MethodConnect, "api.github.com:443", nil)
+	req.Host = "api.github.com:443"
+	rec := httptest.NewRecorder()
+	p.handleConnect(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d body %s, want 403", rec.Code, rec.Body)
+	}
+	if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+		t.Fatalf("a denied host reached upstream: mints %d seen %q", mints, seen)
+	}
+}
+
+// The door answers every request on its host before injection runs, so an injection rule there
+// would never send its credential: boot refuses the pair, whatever the spelling of the host.
+func TestGitHubAPI_DoorHostCarriesNoInjectionRule(t *testing.T) {
+	door := &GitHubAPIGrant{Grants: map[string]uuid.UUID{"acme": uuid.New()}}
+	for _, host := range []string{"api.github.com", "API.GitHub.com.", " api.github.com "} {
+		c := Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", GitHubAPI: door, Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: host}}}}
+		err := c.validateTerminatedGates()
+		if err == nil || !strings.Contains(err.Error(), "GitHub CLI door's host") {
+			t.Fatalf("injection rule on %q beside the door: err = %v, want the one-credential refusal", host, err)
+		}
+	}
+	c := Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", GitHubAPI: door, Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "other.test"}}}}
+	if err := c.validateTerminatedGates(); err != nil {
+		t.Fatalf("injection rule on another host: %v", err)
+	}
+	c = Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "api.github.com"}}}}
+	if err := c.validateTerminatedGates(); err != nil {
+		t.Fatalf("injection rule on api.github.com with no door: %v", err)
+	}
+}
+
+// stuckResolver never answers until released.
+type stuckResolver struct{ release chan struct{} }
+
+func (r stuckResolver) LookupIP(string) ([]net.IP, error) {
+	<-r.release
+	return nil, errors.New("released")
+}
+
+// The shutdown revoke keeps to its budget when the name lookup hangs: the lookup takes no context.
+func TestGitHubAPI_ShutdownRevokeKeepsItsBudgetOnAStuckLookup(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	stuck := stuckResolver{release: make(chan struct{})}
+	t.Cleanup(func() { close(stuck.release) })
+	p.res = stuck
+	start := time.Now()
+	p.revokeGitHubAPITokens(t.Context())
+	if took := time.Since(start); took > gitHubAPIRevokeBudget+time.Second {
+		t.Fatalf("the revoke took %s with a stuck lookup, want at most its %s budget", took, gitHubAPIRevokeBudget)
+	}
 }

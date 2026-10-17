@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type * as React from "react";
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType, type InitialEntry } from "react-router-dom";
@@ -44,12 +44,12 @@ function Where() {
 }
 
 const unavailable: SeedLoaders = { template: () => Promise.reject(new Error("no")), again: () => Promise.reject(new Error("no")) };
-function show(entry: InitialEntry, loaders: SeedLoaders = unavailable) {
+function show(entry: InitialEntry, loaders: SeedLoaders = unavailable, screens = probes) {
   render(
     <MemoryRouter initialEntries={[entry]}>
       <OperatorProvider operator={false} principal="alice">
         <Routes>
-          <Route path="/runs/new" element={<><NewRunRoute loaders={loaders} screens={probes} /><Where /></>} />
+          <Route path="/runs/new" element={<><NewRunRoute loaders={loaders} screens={screens} /><Where /></>} />
           <Route path="/runs" element={<Where />} />
         </Routes>
       </OperatorProvider>
@@ -163,5 +163,11 @@ describe("New Run route (U9)", () => {
     await screen.findByText("start");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(await screen.findByText("/runs")).toBeInTheDocument();
+  });
+
+  it("paints the console's loading mark while a step's chunk is in flight, not a blank page", async () => {
+    const inFlight = React.lazy(() => new Promise<{ default: React.ComponentType<NewRunScreenProps> }>(() => undefined));
+    show("/runs/new", unavailable, { ...probes, start: inFlight });
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
   });
 });

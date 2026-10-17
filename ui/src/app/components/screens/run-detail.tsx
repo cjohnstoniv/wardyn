@@ -64,7 +64,7 @@ import { SummaryHeader } from "./run-detail-summary-header";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
-import { RunLifetimeBanner } from "./run-detail/run-lifetime-banner";
+import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { RunEndsRow } from "./run-detail/run-ends-row";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
@@ -288,7 +288,7 @@ function RunDetailPage({ id }: { id: string }) {
               ending-soon — mutually exclusive server facts) plus the
               persistent Ends/wait row, both self-contained per the
               LaunchWarningsNote pattern above. */}
-          <RunLifetimeBanner run={run} pending={pending} onChanged={() => load(false)} />
+          <RunLifetimeWithContainment run={run} pending={pending} onChanged={() => load(false)} />
           <RunEndsRow run={run} onChanged={() => load(false)} />
 
           <RunDetailCommandBar

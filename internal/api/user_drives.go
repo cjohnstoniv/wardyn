@@ -223,7 +223,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 
 // the org switch and the deployment's drive ceiling
 
-// DRAFT (M2 canon pending). The two ORG-level refusals every drive write meets,
+// The two ORG-level refusals every drive write meets,
 // in one block so the post-sitting swap is a one-file diff and the tests assert
 // through the constants (the string gate, §9.3).
 const (

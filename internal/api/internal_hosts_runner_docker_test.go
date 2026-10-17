@@ -126,6 +126,7 @@ func TestInternalHostsOnRunnerDocker(t *testing.T) {
 
 	// The organisation removes the declaration; the run is revived.
 	sc.InternalHosts = nil
+	srv.cfg.Store = reviveTrustDispatchStore{srv.cfg.Store.(siteConfigDispatchStore)}
 	raw, err := srv.loadRunProxyConfig(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -216,4 +217,21 @@ func waitForDecision(t *testing.T, logs func() string, prefix, host string, skip
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// reviveTrustDispatchStore adds the trust facts a local revive re-reads (trustChangedRefusal): the
+// bound runner's stored class and the class the run was admitted at, both personal. createRun records
+// the latter, and dispatchInternalHostsRun writes its run without it, so a revive test swaps this in.
+type reviveTrustDispatchStore struct{ siteConfigDispatchStore }
+
+func (reviveTrustDispatchStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	return types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal}, nil
+}
+
+func (reviveTrustDispatchStore) RunRunnerTrustClass(context.Context, uuid.UUID) (types.RunnerTrustClass, error) {
+	return types.RunnerTrustPersonal, nil
+}
+
+func (reviveTrustDispatchStore) SetRunRunnerTrustClass(context.Context, uuid.UUID, types.RunnerTrustClass) error {
+	return nil
 }

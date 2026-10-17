@@ -26,8 +26,13 @@ RT_TMP=""
 trap 'rm -rf "$WORK" ${RT_TMP:+"$RT_TMP"}' EXIT
 
 bash -n "$INSTALL" || fail "install.sh has a syntax error"
+# Warnings and errors only: info and style findings differ between shellcheck releases and would turn a
+# hosted runner's upgrade red. CI always has it (hosted runners ship it), so a missing one there fails
+# rather than letting the check go quiet.
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$INSTALL" || fail "shellcheck rejected install.sh"
+  shellcheck -S warning "$INSTALL" || fail "shellcheck rejected install.sh"
+elif [ -n "${CI:-}" ]; then
+  fail "shellcheck is not installed on this CI runner, so install.sh would go unchecked"
 fi
 
 plist_get() { python3 -I -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); print(eval(sys.argv[2]))' "$1" "$2"; }
@@ -110,6 +115,25 @@ for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.e
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
+grep -qF "Kept the runner identity in: $H/.config/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the default identity directory: $OUT"
+
+# The identity setup kept under a custom XDG_CONFIG_HOME is the one the message names.
+X="$WORK/home-xdgid"
+mkdir -p "$X/.config/wardyn"
+printf 'WARDYN_RUNNER_STATE_DIR=%s\n' "$X/xdg/wardyn/runner" >"$X/.config/wardyn/runnerd.env"
+run_install xdgid --uninstall
+[ "$RC" -eq 0 ] && grep -qF "Kept the runner identity in: $X/xdg/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the identity directory from runnerd.env (rc=$RC): $OUT"
+
+# A unit setup put under a custom XDG_CONFIG_HOME, because the user manager searches it, goes too.
+X="$WORK/home-xdg"
+mkdir -p "$X/xdg/systemd/user" "$X/.local/share/wardyn/bin"
+: >"$X/xdg/systemd/user/wardyn-runnerd.service"; : >"$X/.local/share/wardyn/bin/wardyn-runnerd"
+export STUB_LOG="$X/stub.log"
+set +e
+OUT="$(HOME="$X" XDG_CONFIG_HOME="$X/xdg" PATH="$BIN:$PATH" env -u XDG_DATA_HOME bash "$INSTALL" --uninstall 2>&1)"
+RC=$?
+set -e
+[ "$RC" -eq 0 ] && [ ! -e "$X/xdg/systemd/user/wardyn-runnerd.service" ] || fail "uninstall left the unit under XDG_CONFIG_HOME (rc=$RC): $OUT"
 
 stub uname 'echo Darwin'
 M="$WORK/home-mac"

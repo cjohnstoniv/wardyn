@@ -603,6 +603,10 @@ spec:
             - name: WARDYN_MAX_CONCURRENT_RUNS
               value: {{ .Values.maxConcurrentRuns | int | quote }}
             {{- end }}
+            {{- if and .Values.trustedProxies (not (hasKey $eff "WARDYN_TRUSTED_PROXIES")) }}
+            - name: WARDYN_TRUSTED_PROXIES
+              value: {{ .Values.trustedProxies | quote }}
+            {{- end }}
             {{- /* $eff holds env and extraEnv names alike, so either one naming
             GOMEMLIMIT replaces this default instead of sitting beside it. */ -}}
             {{- if and .Values.goMemLimit (not (hasKey $eff "GOMEMLIMIT")) }}

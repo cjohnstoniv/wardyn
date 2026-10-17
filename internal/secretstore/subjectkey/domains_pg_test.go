@@ -224,6 +224,46 @@ func TestManager_OneDomainsKeyOpensOnlyThatDomain(t *testing.T) {
 	}
 }
 
+// outageTransit fails every unwrap with err, as a key service that cannot be reached or refuses this
+// process does.
+type outageTransit struct {
+	*fakeTransit
+	err error
+}
+
+func (o outageTransit) Unwrap(context.Context, []byte, map[string]string) ([]byte, error) {
+	return nil, o.err
+}
+
+// A key service outage or a revoked access during an unwrap is reported as that, not as a wrap that
+// does not unwrap (moved, forged, corrupted or retired); a service that refused the wrap itself keeps
+// that wording. The cause stays visible to errors.Is either way.
+func TestManager_UnwrapOutageIsNotReportedAsACorruptWrap(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	a := newFakeTransit("a")
+	seeded := subjectkeytest.Manager(pool, a)
+	if _, _, err := seeded.Current(t.Context(), "in-a", subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		cause   error
+		wantMsg string
+	}{
+		"unreachable":    {fmt.Errorf("vault: %w", secretstore.ErrUnavailable), "could not unwrap"},
+		"access revoked": {fmt.Errorf("vault: %w", kek.ErrAccess), "could not unwrap"},
+		"wrap refused":   {fmt.Errorf("vault: %w", kek.ErrRefused), "does not unwrap"},
+	} {
+		m := subjectkeytest.Manager(pool, outageTransit{a, tc.cause})
+		_, err := m.Key(t.Context(), "in-a", subjectkey.PurposeCred, 1)
+		if !errors.Is(err, tc.cause) || !strings.Contains(err.Error(), tc.wantMsg) {
+			t.Errorf("%s: Key = %v, want the cause kept and %q in the text", name, err, tc.wantMsg)
+		}
+		if name != "wrap refused" && strings.Contains(err.Error(), "does not unwrap") {
+			t.Errorf("%s: an outage reads as a corrupt wrap: %v", name, err)
+		}
+	}
+}
+
 // A person whose groups are assigned to two domains is refused by name, and
 // nothing is written.
 func TestManager_AmbiguousMembershipRefusesTheNewGeneration(t *testing.T) {

@@ -8,7 +8,7 @@ import type { RunIntent } from "../draft/run-intent";
 import { intentToWire } from "../draft/intent-to-wire";
 import {
   attachDrive, attachFolder, attachWorkspace, chooseNothing, commitSize, detachDrive, excludeRepo, filesIssues, includeRepo, liftLegacyDrive,
-  mainDriveMiB, mibToGibText, parseGiB, repoIncluded, setDriveReadOnly, setMainDrive, setRepoRef, setStartsAtDrive, setStartsHere,
+  mainDriveMiB, mibToGibText, parseGiB, parseSize, sizeField, repoIncluded, setDriveReadOnly, setMainDrive, setRepoRef, setStartsAtDrive, setStartsHere,
   setStartSubpath, setWorkspaceReadOnly, setWorkspaceTarget, startsAt,
 } from "./files-lens";
 
@@ -30,9 +30,9 @@ describe("Starts here never attaches (U6)", () => {
 
   it("reads a start folder with no repo as the workspace's only repository", () => {
     const intent = setStartsHere(BASE, "w1");
-    expect(startsAt(intent, "w1", "acme/api", 1)).toBe(true);
-    expect(startsAt(intent, "w1", "acme/api", 2)).toBe(false);
-    expect(startsAt(setStartsHere(BASE, "w1", "acme/web"), "w1", "acme/api", 2)).toBe(false);
+    expect(startsAt(intent, "w1", "acme/api", true)).toBe(true);
+    expect(startsAt(intent, "w1", "acme/api", false)).toBe(false);
+    expect(startsAt(setStartsHere(BASE, "w1", "acme/web"), "w1", "acme/api", true)).toBe(false);
   });
 });
 
@@ -110,6 +110,23 @@ describe("main drive size (A8)", () => {
     expect(mibToGibText(8192)).toBe("8");
     expect(mibToGibText(1000, "floor")).toBe("0.9");
     expect(mibToGibText(1000)).toBe("1");
+  });
+
+  it("keeps a size under 0.1 GiB out of zero: whole MiB in the field", () => {
+    expect(sizeField(32)).toEqual({ text: "32", unit: "MiB" });
+    expect(sizeField(102)).toEqual({ text: "102", unit: "MiB" });
+    expect(sizeField(103)).toEqual({ text: "0.1", unit: "GiB" });
+    expect(sizeField(1000, "floor")).toEqual({ text: "0.9", unit: "GiB" });
+    expect(sizeField(4096)).toEqual({ text: "4", unit: "GiB" });
+  });
+
+  it("reads the field's text in its own unit", () => {
+    expect(parseSize("32", "MiB")).toBe(32);
+    expect(parseSize("32.4", "MiB")).toBe(32);
+    expect(parseSize("0.5", "GiB")).toBe(512);
+    for (const bad of ["", "0", "-4", "x"]) expect(parseSize(bad, "MiB")).toBeUndefined();
+    expect(commitSize("500", 1000, "MiB")).toEqual({ mib: 500, clamped: false });
+    expect(commitSize("2000", 1000, "MiB")).toEqual({ mib: 1000, clamped: true });
   });
 
   it("a size over the cap becomes the cap and says it was clamped; one at or under is kept", () => {

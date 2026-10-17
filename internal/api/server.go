@@ -17,6 +17,7 @@ import (
 	"crypto/ed25519"
 	"net"
 	"net/http/httputil"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -362,6 +363,9 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
+	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
+	AWSSSORefresh AWSSSORefreshTuning
 	// Secrets is the at-rest secret store. It backs the admin secret-management
 	// endpoints (PUT/DELETE/list — values are NEVER readable via the API) and
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
@@ -485,6 +489,9 @@ type Config struct {
 	// and the recommended production default, for honest /healthz visibility. Nil
 	// => the components object is omitted.
 	Components map[string]ComponentInfo
+	// RecordingSelection is the WARDYN_RECORDING_STORE value (pg, fs or off). Components reports "none" when
+	// no store came up, which is the same for fs with no directory and for off; setup status tells them apart.
+	RecordingSelection string
 	// AgeKeyDurable: the age key was SUPPLIED (WARDYN_AGE_KEY), not generated at boot, or no local key holds anything (store
 	// mode, a key service). False, stored secrets are unreadable after a restart: /setup/status warns. Computed in cmd/wardynd.
 	AgeKeyDurable bool
@@ -495,6 +502,8 @@ type Config struct {
 	SecretKeyService string
 	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
 	SecretKeyServiceStaticKey bool
+	// SecretKeyServiceNodeRole: the key service is reached with the EC2 node's instance role; /setup/status words kek_service_static_key for it.
+	SecretKeyServiceNodeRole bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
 	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
@@ -518,6 +527,8 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
+	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
 	// TRUE) makes applyWorkspaceRequirements apply the same provenance gate
 	// to a scan_seeded EGRESS requirement that the SECRET side has always applied
@@ -705,6 +716,8 @@ type Server struct {
 	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
+	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	revokedEndRetry revokedEndRetry
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
@@ -879,7 +892,10 @@ type Server struct {
 	// ponytail: process-local, so per replica and per restart: a replica or a
 	// restarted process that has not seen the refusal grades the session live
 	// and passes Review until its own dispatch is refused and re-marks it.
+	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
+	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).
+	ssoRenew awsSSORenewSchedule
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
@@ -960,36 +976,4 @@ func New(cfg Config) *Server {
 		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
 	}
 	return s
-}
-
-// Audit-spool drain cadence: a modest ticker with a bounded per-tick batch so a
-// large post-outage backlog replays over several ticks without holding the spool
-// lock (blocking Append) for long or hammering the store in one burst.
-const (
-	auditSpoolDrainInterval = 30 * time.Second
-	auditSpoolDrainBatch    = 200
-)
-
-// recordAudit is a best-effort audit emit for control-plane-originated events.
-// Audit failures must never block the primary operation (the Recorder owns
-// durability/retry); we swallow the error after the event is constructed.
-func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
-	if s.cfg.Audit == nil {
-		return
-	}
-	if ev.ID == uuid.Nil {
-		ev.ID = uuid.New()
-	}
-	if ev.Time.IsZero() {
-		ev.Time = s.cfg.Now().UTC()
-	}
-	ev.Data = audit.StampRelay(ctx, ev.Data)
-	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
-	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
-	// Invariant 6, C1: the audit log is the system of record. A failed durable
-	// write is handled by the shared recorder chain (spoolingRecorder below
-	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
-	// event to the durable local fallback so it is never silently lost — for every
-	// audit writer, not just this one. So there is no API-layer-only spool here.
-	_ = s.cfg.Audit.Record(ctx, ev)
 }

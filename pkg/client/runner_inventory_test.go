@@ -66,6 +66,9 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	if err := c.RevokeRunnerToken(ctx, id); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.RevokeMyRunner(ctx, id); err != nil {
+		t.Fatal(err)
+	}
 	if s, err := c.GetRunnerSettings(ctx); err != nil || !s.Enabled {
 		t.Fatalf("GetRunnerSettings = %+v, %v", s, err)
 	}
@@ -74,7 +77,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	}
 	want := []string{
 		"GET /api/v1/runners?state=revoked", "GET /api/v1/runners", "GET /api/v1/runners/" + id.String(),
-		"GET /api/v1/me/runners", "GET /api/v1/me/runners/" + id.String(), "GET /api/v1/runners?state=all&limit=2&offset=4", "GET /api/v1/runners/tokens?owner=alice", "DELETE /api/v1/runners/tokens/" + id.String(),
+		"GET /api/v1/me/runners", "GET /api/v1/me/runners/" + id.String(), "GET /api/v1/runners?state=all&limit=2&offset=4", "GET /api/v1/runners/tokens?owner=alice", "DELETE /api/v1/runners/tokens/" + id.String(), "DELETE /api/v1/me/runners/" + id.String(),
 		"GET /api/v1/runners/settings", "PUT /api/v1/runners/settings",
 	}
 	if len(got) != len(want) {

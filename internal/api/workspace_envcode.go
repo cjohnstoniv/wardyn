@@ -86,9 +86,10 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	// committable output so an exported workspace pulls from the corp mirror.
 	// Best-effort: a store error / no site-config just omits them.
 	var artifactBases map[string]string
+	var goSumDBOff bool
 	if s.cfg.Store != nil {
 		if sc, scErr := s.cfg.Store.GetSiteConfig(r.Context()); scErr == nil {
-			artifactBases = artifactBaseURLs(sc)
+			artifactBases, goSumDBOff = artifactBaseURLs(sc), artifactGoSumDBOff(sc)
 		}
 	}
 	// baseRef: the SAME "explicit non-recommended choice" predicate
@@ -99,7 +100,7 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		baseRef = b.Image
 	}
-	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, baseRef)
+	files, gerr := workspacescan.EmitEnvAsCode(profile, artifactBases, goSumDBOff, baseRef)
 	if gerr != nil {
 		writeServerError(w, r, "generate env-as-code", gerr)
 		return nil, false

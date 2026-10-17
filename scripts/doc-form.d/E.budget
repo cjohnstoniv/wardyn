@@ -48,4 +48,29 @@
 # docs/ENV.md 37321 adds 57 over 37264 (0.9.3 A1 fix), measured: CA file delivery, WARDYN_PROXY_IMAGE_PINNED.
 # docs/ENV.md 37330 adds 9 (0.9.3 A1 fix): the CA mount path and the staged-PEM rule.
 # docs/ENV.md 37370 adds 40 over 37330, measured (0.9.3 ADO): the WARDYN_ADO_LANE_DECLINED row.
-docs/ENV.md=37370 share=5
+# docs/ENV.md 37156 adds 37 over 37119 (0.9.3 E), measured: the WARDYN_TRUSTED_PROXIES row, which the env-doc guard requires.
+# docs/ENV.md 37406 = 37370 + 36 (E), measured at the wave-A merge.
+# docs/ENV.md 37505 adds 175 over 37330 (0.9.3 Fr), measured: the WARDYN_UPSTREAM_PROXY row and details section, and the WARDYN_PROXY_IMAGE_PINNED row now read by serve.
+# docs/ENV.md 37533 adds 28 over 37505 (0.9.3 Fr fix round 1), measured: the PINNED row names the unmarked-image rule, and the plist-credential warning.
+# docs/ENV.md 37609 = 37406 + 203 (Fr), measured at the wave-A merge.
+# docs/ENV.md 37334 adds 4 (0.9.3 RV2): WARDYN_RUN_OUTPUT_RETENTION_DAYS now has an upper bound, stated in its Details.
+# docs/ENV.md 37340 adds 6 over 37334, measured (0.9.3 RV2 r2): the EC2 node instance role also raises kek_service_static_key.
+# docs/ENV.md 37620 = 37609 + 11 (RV2), measured at the wave-A merge.
+# docs/ENV.md 37334 adds 4 (0.9.3 RV4e, FR-0161): the run-output retention day bound.
+# docs/ENV.md 37619 = 37620 - 1 (RV4e), measured at the wave-A merge.
+# docs/ENV.md 37389 adds 59 (0.9.3 M-6/R19): the air-gapped default of the drive probe image.
+# docs/ENV.md 37679 = 37619 + 60 (M2), measured at the wave-A merge.
+# docs/ENV.md 37476 adds 146 over 37330 (0.9.3 K2), measured: the seven WARDYN_RUNNERD_* rows a Kubernetes runner reads, which the env-doc guard requires.
+# docs/ENV.md 37518 adds 42 over 37476 (0.9.3 K8), measured: the WARDYN_RUNNERD_ARCH row, which the env-doc guard requires.
+# docs/ENV.md 37868 = 37679 + 189 (K2), measured at the wave-A merge.
+# docs/ENV.md 37655 adds 536 over 37119 (0.9.3 LIFE): the five session-lifetime rows and details sections, which the env-doc guard requires; measured.
+# docs/ENV.md 37693 adds 38 over 37655 (0.9.3 LIFE review): the idle-timeout turn-on and rollout-stamp sentences; measured.
+# docs/ENV.md 38442 = 37868 + 574 (LIFE), measured at the wave-B merge.
+# docs/ENV.md 38569 = 38442 + 127, measured: WARDYN_K8S_READ_NODES also shortens a start wait for a placement no healthy node allows.
+# docs/ENV.md 38704 adds 135 over 38569, measured: the Entra hour under WARDYN_OIDC_SESSION_TTL, the pointer to the sliding shape, and the activity and expiry headers under the renewal and idle settings (0.9.3 console session lifetime).
+# docs/ENV.md 38722 adds 18 over 38704, counted from the diff: a renewal sets the expiry from the request, and the proxy hint for Sec-Fetch-Site (0.9.3 console session lifetime, review).
+# docs/ENV.md 39200 = 38722 + 478, measured: merge of the AWS SSO renewal settings beside the session-lifetime rows.
+# docs/ENV.md 39236 = 39200 + 36, measured: merge of the run output source rows; the lane's lines land unchanged.
+docs/ENV.md=39236 share=5
+# docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
+# docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

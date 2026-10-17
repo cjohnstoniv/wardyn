@@ -164,8 +164,6 @@ func mainDriveUnenforceableMsg() string {
 
 // mainDriveUnenforceableUnpooledMsg is the same refusal for a run in no pool, which has no pool to
 // choose instead.
-//
-// DRAFT (M2 canon pending)
 func mainDriveUnenforceableUnpooledMsg() string {
 	return "This run's policy sets a disk size that this server's runner can't cap. Ask your admin."
 }
@@ -173,6 +171,4 @@ func mainDriveUnenforceableUnpooledMsg() string {
 // warnDiskPolicyCut is the clamp warning when the run's own policy, not an operator maximum, cut a
 // requested disk size; composer.WarnResourcesCapped would blame an operator for a policy the person
 // may have written.
-//
-// DRAFT (M2 canon pending)
 const warnDiskPolicyCut = "disk size reduced to the size this run's policy sets"

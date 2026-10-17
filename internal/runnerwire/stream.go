@@ -16,7 +16,28 @@ import (
 // ResetError is what a read or write on an aborted stream answers.
 type ResetError struct{ Code uint32 }
 
-func (e *ResetError) Error() string { return fmt.Sprintf("runnerwire: stream reset (code %d)", e.Code) }
+func (e *ResetError) Error() string {
+	return fmt.Sprintf("runnerwire: stream ended: %s (code %d)", resetReason(e.Code), e.Code)
+}
+
+// resetReason says in a sentence why a stream was reset, so the line a person reads is not a bare code.
+func resetReason(code uint32) string {
+	switch code {
+	case ResetCancelled:
+		return "it was cancelled"
+	case ResetReconnect:
+		return "the connection was replaced"
+	case ResetRefused:
+		return "it was refused"
+	case ResetInternal:
+		return "serving it failed"
+	case ResetNoSuchPeer:
+		return "the other side of the relay is not connected"
+	case ResetCapacity:
+		return "there is no room for another stream"
+	}
+	return "reason unknown"
+}
 
 // Stream is one byte stream: a pty, an exec's stdio, a relay or an output
 // copy. Read and Write may run in their own goroutines. A writer blocks on
@@ -35,6 +56,7 @@ type Stream struct {
 	buf          []byte
 	remoteClosed bool
 	localClosed  bool
+	readClosed   bool // this end stopped reading: the buffer was dropped and later bytes are discarded
 	reset        error
 	opened       chan struct{}
 	done         chan struct{}
@@ -101,7 +123,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 	s.mu.Lock()
-	for len(s.buf) == 0 && s.reset == nil && !s.remoteClosed {
+	for len(s.buf) == 0 && s.reset == nil && !s.remoteClosed && !s.readClosed {
 		if !s.readBy.IsZero() && !time.Now().Before(s.readBy) {
 			s.mu.Unlock()
 			return 0, os.ErrDeadlineExceeded
@@ -112,6 +134,10 @@ func (s *Stream) Read(b []byte) (int, error) {
 		err := s.reset
 		s.mu.Unlock()
 		return 0, err
+	}
+	if s.readClosed {
+		s.mu.Unlock()
+		return 0, io.ErrClosedPipe
 	}
 	if len(s.buf) == 0 {
 		s.mu.Unlock()
@@ -200,6 +226,26 @@ func (s *Stream) CloseWrite() error {
 	return err
 }
 
+// CloseRead stops this end reading while leaving the write half as it is. The unread buffer is dropped
+// and the connection credit it held returned at once; bytes the peer sends afterwards are discarded and
+// their connection credit returned too, so a stream nobody reads cannot pin the connection's window. The
+// peer's per-stream window is not refilled: a peer still writing waits on it until it closes its end or
+// the stream is reset. A Read returns io.ErrClosedPipe from here on.
+func (s *Stream) CloseRead() error {
+	s.mu.Lock()
+	if s.readClosed || s.reset != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.readClosed = true
+	owed := s.releaseHeldLocked()
+	s.buf = nil
+	s.cond.Broadcast()
+	s.mu.Unlock()
+	s.p.returnCredit(owed)
+	return nil
+}
+
 // Reset aborts the stream with code and tells the peer.
 func (s *Stream) Reset(code uint32) error {
 	if !s.abort(code) {
@@ -207,6 +253,18 @@ func (s *Stream) Reset(code uint32) error {
 	}
 	s.p.forget(s.id)
 	return s.p.send(s.p.ctx, Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
+}
+
+// resetQueued is Reset for the read loop: the RESET frame goes to the reply worker rather than being
+// written here, because a read loop that waits on a write can stop two peers reading each other. It
+// returns an error when the reply queue refused the frame (full, which only a flooding peer reaches); the
+// callers that return it end the link.
+func (s *Stream) resetQueued(code uint32) error {
+	if !s.abort(code) {
+		return nil
+	}
+	s.p.forget(s.id)
+	return s.p.answer(Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
 }
 
 // Close aborts the stream only, never the sandbox, the agent or any sidecar.
@@ -244,6 +302,11 @@ func (s *Stream) deliver(b []byte) error {
 	if s.reset != nil {
 		s.mu.Unlock()
 		s.p.returnCredit(int64(len(b))) // discarded, so it is the sender's again
+		return nil
+	}
+	if s.readClosed {
+		s.mu.Unlock()
+		s.p.returnCredit(int64(len(b))) // nobody will read it, so it is the sender's again
 		return nil
 	}
 	defer s.mu.Unlock()

@@ -438,13 +438,15 @@ func (s *Store) Delete(ctx context.Context, owner, name, ref string) error {
 		return err
 	}
 	var deleted bundle
-	status, err := s.c.call(ctx, http.MethodDelete, "secrets/"+sn, nil, &deleted)
+	status, retried, err := s.c.callRetried(ctx, http.MethodDelete, "secrets/"+sn, nil, &deleted)
 	if err != nil {
 		return err
 	}
 	rep := secretstore.DeleteReport{Store: Name, RecoverableDays: deleted.Attributes.RecoverableDays}
+	// A 404 after a retry may be our own first attempt, still being deleted:
+	// purge waits for it instead of reporting nothing to purge.
 	if s.purge {
-		if err := s.purgeDeleted(ctx, sn, status != http.StatusNotFound, deletePolls); err != nil {
+		if err := s.purgeDeleted(ctx, sn, status != http.StatusNotFound || retried, deletePolls); err != nil {
 			slog.Warn("azurekv: the credential is soft-deleted but was not purged; the organisation can recover it until the vault's retention ends",
 				slog.String("secret", sn), slog.Int("recoverable_days", rep.RecoverableDays), slog.Any("err", err))
 		} else {

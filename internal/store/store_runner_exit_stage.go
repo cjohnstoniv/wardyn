@@ -50,8 +50,17 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 		return ErrRunnerExecutionRefused
 	}
 	// The org already settled this run (terminal, or ended at its lease): the
-	// exit is acknowledged without a receipt, so it can make no transition.
-	if run.State.IsTerminal() || (run.State == types.RunRunning && run.LostAt != nil && run.LostReason == types.LostEnded) {
+	// exit can make no transition. A terminal run keeps it as a receipt-only
+	// row, so its retirement receipt names the exit the runner holds; it never
+	// enters exit work, acceptance or the tail, and is never overwritten.
+	if run.State.IsTerminal() {
+		if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash,receipt_only) VALUES($1,$2,$3,$4,$5,true)
+ ON CONFLICT (run_id,generation) DO NOTHING`, runID, exit.Generation, runnerID, payload, hash); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if run.State == types.RunRunning && run.LostAt != nil && run.LostReason == types.LostEnded {
 		return tx.Commit(ctx)
 	}
 	if run.State != types.RunRunning || (run.LostAt != nil && (run.Interactive || run.LostReason != types.LostOutage)) {
@@ -77,7 +86,7 @@ type RunnerExitWork struct {
 func (s PG) ListRunnerExitWork(ctx context.Context, after uuid.UUID) ([]RunnerExitWork, error) {
 	return collect(ctx, s.Pool, "list", "runner exit work", `SELECT x.runner_id,x.run_id,x.payload FROM runner_execution_exits x
  JOIN runner_executions e ON e.run_id=x.run_id AND e.generation=x.generation
- WHERE NOT x.tail_complete AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id'
+ WHERE NOT x.tail_complete AND NOT x.receipt_only AND x.run_id>$1 AND e.exec_id<>'' AND e.exec_id=x.payload->>'exec_id'
  ORDER BY x.run_id LIMIT 100`, []any{after}, func(row pgx.Row) (RunnerExitWork, error) {
 		var out RunnerExitWork
 		var payload []byte

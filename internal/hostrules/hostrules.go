@@ -66,7 +66,8 @@ var artifactEcosystems = []string{"npm", "pip", "cargo", "maven", "go", "nuget"}
 // EmitArtifactConfig turns operator-configured artifact-registry redirects (ecosystem ->
 // corporate base URL) into the per-tool config each toolchain reads to use the corporate
 // mirror. Returns files (path -> content, relative to HOME) and env (Go's GOPROXY/GOSUMDB,
-// which has no config file).
+// which has no config file). Go's checksum database stays on, reached through the mirror's
+// /sumdb/ path; goSumDBOff is the per-mirror opt-out for one that does not proxy it.
 //
 // Output is URL-ONLY, no secret: a registry token is injected proxy-side, never written to
 // a committable/readable config file. Maven's settings.xml is MIRRORS-ONLY — no <proxies>,
@@ -76,7 +77,7 @@ var artifactEcosystems = []string{"npm", "pip", "cargo", "maven", "go", "nuget"}
 // Injection safety: base URLs come from site-config, which validateSiteConfig already
 // rejects if they contain shell/XML metacharacters, so embedding base verbatim into
 // TOML/XML/ini here is safe.
-func EmitArtifactConfig(bases map[string]string) (files map[string]string, env map[string]string) {
+func EmitArtifactConfig(bases map[string]string, goSumDBOff bool) (files map[string]string, env map[string]string) {
 	files = map[string]string{}
 	env = map[string]string{}
 	for _, eco := range artifactEcosystems {
@@ -96,7 +97,10 @@ func EmitArtifactConfig(bases map[string]string) (files map[string]string, env m
 			files[".m2/settings.xml"] = mavenMirrorSettings(base)
 		case "go":
 			env["GOPROXY"] = base
-			env["GOSUMDB"] = "off"
+			env["GOSUMDB"] = "sum.golang.org " + strings.TrimRight(base, "/") + "/sumdb/sum.golang.org"
+			if goSumDBOff {
+				env["GOSUMDB"] = "off"
+			}
 		case "nuget":
 			files[".nuget/NuGet/NuGet.Config"] = nugetConfig(base)
 		}

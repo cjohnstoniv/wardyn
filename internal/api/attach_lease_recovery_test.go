@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -94,7 +95,7 @@ func TestLeaseRecoveryADatabaseErrorKeepsTheWriterFencedAndLogsOnce(t *testing.T
 	if n := len(leases.reacquireCalls()); n != 3 {
 		t.Fatalf("reacquire calls = %d, want one per tick and one from the fence check", n)
 	}
-	if got := logs.with("wardynd: could not take back a run's attach lease; the client's input is held until it can"); len(got) != 1 {
+	if got := logs.with("wardynd: could not take back a run's attach lease; the client's input is discarded until it can"); len(got) != 1 {
 		t.Fatalf("logged %d times, want once for the run of errors", len(got))
 	}
 
@@ -298,5 +299,37 @@ func TestLeaseKeeperLeavesAPromotedObserverStillTakingItsLease(t *testing.T) {
 	}
 	if row, found := leases.row(leaseCovRun); !found || row.HolderID != bob.h.id {
 		t.Fatalf("lease row = %+v (found %v), want bob's", row, found)
+	}
+}
+
+// FUG-L750 N5: a recovery that takes the lease back for a writer that has since left, and so gives it
+// back, tells the other replicas the lease is free, as every other release does.
+func TestLeaseRecoveryGivingTheLeaseBackTellsTheOtherReplicas(t *testing.T) {
+	p := newLeaseCovPair(t)
+	p.leases.advance(attachLeaseTTL + time.Second)
+	entered, unblock := blockReacquire(p.leases)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.srv.attachLeaseTick(t.Context())
+	}()
+	<-entered
+
+	releaseAttach(p.releaseAlice) // the client's socket ends while the recovery is in flight
+	unblock()
+	<-done
+
+	if row, found := p.leases.row(leaseCovRun); found {
+		t.Fatalf("lease row = %+v, want none left for a client that is gone", row)
+	}
+	// One notice is the leaving client's own release; the second is the recovery's.
+	free := 0
+	for _, k := range p.notices() {
+		if k == livebus.KindAttachFree {
+			free++
+		}
+	}
+	if free != 2 {
+		t.Errorf("attach_free notices = %d, want 2: the departing writer's and the lease the recovery gave back", free)
 	}
 }

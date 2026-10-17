@@ -13,6 +13,18 @@
 # docs/POLICIES.md 17990 adds 77 over 17913 (the ref-ruleset check samples a nested outside name): the nested read, its reason and the sampled-check limit; measured.
 # docs/POLICIES.md 17996 adds 6 over 17990 (a third, two-component outside sample): measured.
 # docs/POLICIES.md 18190 adds 83 over 18107 (0.9 RS-15, after merging lane/090-RS-12); measured at merge.
-docs/POLICIES.md=18190 share=12
+# docs/POLICIES.md 18194 adds 4 over 18190 (0.9.3 SEC3), measured: the workspace_repos repo sentence pointing to git_pat.
+# docs/POLICIES.md 18207 = 18190 + 17 (SEC3), measured at the wave-B merge.
+# docs/POLICIES.md 18228 adds 38 over 18190 (DOCS3): the exact GitHub and Azure DevOps deny-host lists in allowed_domains.
+# docs/POLICIES.md 18258 = 18207 + 51 (DOCS3), measured at the wave-B merge.
+# docs/POLICIES.md 18237 adds 47 over 18190, measured: requirement-row egress safety rests on write-side authorization and provenance, not a fold-time clamp.
+# docs/POLICIES.md 18311 = 18258 + 53 (RV4f), measured at the wave-C merge.
+# docs/POLICIES.md 18332 = 18311 + 21, measured: a component definition's description.
+# docs/POLICIES.md 18362 = 18332 + 30, measured: a deny of any GitHub-family host also withholds the GitHub CLI door.
+# docs/POLICIES.md 18317 adds 6 over 18311: the approval scope also carries the hold seconds (0.9.3 FIN-B2).
+# docs/POLICIES.md 18368, measured at the second decided-rows merge into the final train (both sides' sentences).
+# docs/POLICIES.md 18380 = 18368 + 12, measured: a GitHub CLI row is refused, not withheld, under a profile that blocks GitHub.
+# docs/POLICIES.md 18382 adds 2 over 18380, measured: the run policy is under spec (0.9.3 ASK-6 review).
+docs/POLICIES.md=18382 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

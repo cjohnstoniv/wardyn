@@ -40,7 +40,15 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	}
 	p.TrustedOutput = p.TrustedOutput || trustedOutput
 	corpus := inspectionCorpusOf(spec.ProxyConfig.Policy) // before the laptop copy drops it
-	stripped, ref := placement.LocalEligibility(p)
+	ref, err := s.dispatchTrustRefusal(ctx, run, p)
+	if err != nil {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
+		return false
+	}
+	var stripped runner.SandboxSpec
+	if ref == nil {
+		stripped, ref = placement.LocalEligibility(p)
+	}
 	if ref != nil {
 		// A personal component name stays out of the append-only record and the failure hint.
 		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail
@@ -239,6 +247,13 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 			stamp(placementCredentialIndex("ProxyConfig.BrokeredPATGrantIDs", i), row)
 		}
 	}
+	// A runner_resident ssh_key or git_pat answered by the runner's proxy: its
+	// stored grant, recorded runner_resident, of the kind the entry names.
+	for i, m := range spec.ProxyConfig.ResidentMints {
+		if row, found := byID[m.GrantID]; found && row.Delivery == types.GrantDeliveryResident && row.Spec.Kind == m.Kind {
+			stamp(placementCredentialIndex("ProxyConfig.ResidentMints", i), row)
+		}
+	}
 }
 
 // localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity
@@ -319,6 +334,20 @@ func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []
 			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = bedrockSSOSecretEnvOrigin(own)
 		}
 	}
+}
+
+// dispatchTrustRefusal is dispatch's trust door (grantModesRefusal) over the run's stored grants, at the
+// bound runner's trust class that localPlanFacts read into p.
+func (s *Server) dispatchTrustRefusal(ctx context.Context, run types.AgentRun, p placement.LocalPlan) (*placement.Refusal, error) {
+	rows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	owner := runIdentitySubject(ctx, run.CreatedBy)
+	return grantModesRefusal(p, rows, func(g types.CredentialGrant) (string, bool) {
+		origin, ref := s.localGrantOrigin(ctx, owner, g.Spec)
+		return origin.Delivery, ref == nil
+	}), nil
 }
 
 func localTrustedOutputRun(run types.AgentRun) bool {

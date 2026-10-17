@@ -18,13 +18,13 @@ import (
 func TestParseEndsIn(t *testing.T) {
 	for in, want := range map[string]int{
 		"90m": 5400, "36h": 129600, "2d": 172800, "1d12h": 129600, "0.5d": 43200, "30s": 30, "1h30m": 5400,
-		"1.5d": 129600, "2d12h": 216000,
+		"1.5d": 129600, "2d12h": 216000, ".5d": 43200, "1h.5d": 46800,
 	} {
 		if got, err := parseEndsIn(in); err != nil || got != want {
 			t.Errorf("parseEndsIn(%q) = %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"abc", "0s", "-5m", "500ms", "d", "2dd", "9999999999d", ".5d", "1..5d"} {
+	for _, in := range []string{"abc", "0s", "-5m", "500ms", "d", "2dd", "9999999999d", "1..5d"} {
 		if got, err := parseEndsIn(in); err == nil {
 			t.Errorf("parseEndsIn(%q) = %d, want an error", in, got)
 		}

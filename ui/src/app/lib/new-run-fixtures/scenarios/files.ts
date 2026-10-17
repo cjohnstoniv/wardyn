@@ -51,7 +51,7 @@ export const filesPreflight = (facts: MainDriveFacts, diskMib = 8192, runType: E
   runner_pool: { ...POOL, revision: 1, selection: "organisation_default" },
   runner_pools: [{ ...POOL, availability: "available", barriers: ["CC2"], main_drive: facts }],
   limits: limitsFor(runType, diskMib),
-  main_drive: { applied_mib: Math.min(diskMib, 4096), basis: "default", default_source: "pool", soft: false },
+  main_drive: { applied_mib: Math.min(diskMib, 4096), basis: "default", default_source: "pool", soft: true },
   attachments: [],
 });
 

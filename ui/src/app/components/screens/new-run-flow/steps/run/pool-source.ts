@@ -7,14 +7,12 @@
 // again, and the answer for the other type is never shown meanwhile.
 
 import * as React from "react";
-import { asJson, wfetch } from "../../../../../lib/api/core";
+import { runnerPools } from "../../../../../lib/api/runner-pools";
 import type { RunnerPoolList, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 
 export type LoadPools = (runType: RunnerPoolRunType | undefined, signal: AbortSignal) => Promise<RunnerPoolList>;
 
-// ponytail: runnerPools.list() takes no run_type yet; fold this into it when that module is open.
-export const loadPools: LoadPools = async (runType, signal) =>
-  asJson<RunnerPoolList>(await wfetch(`/runner-pools${runType ? `?run_type=${runType}` : ""}`, { method: "GET", signal }));
+export const loadPools: LoadPools = (runType, signal) => runnerPools.list(runType, signal);
 
 export type PoolsState = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; list: RunnerPoolList };
 

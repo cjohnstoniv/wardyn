@@ -45,6 +45,7 @@ export const agentProviders = {
       method: "PUT",
       // #483: this is the /providers screen's Save (useWriteDropped("agent-providers")).
       save: "agent-providers",
+      asPerson: true,
       headers,
       body: JSON.stringify(next),
     });

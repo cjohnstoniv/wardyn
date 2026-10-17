@@ -24,10 +24,12 @@ export const CLI_CARD: Record<CatalogueCLIKind, { name: string; body: string; ic
 export const CARD_ICON = { mcp: "MCP", api: "API", secret: "key", host: "net" } as const;
 
 const HARNESS_MARK: Record<string, string> = { "claude-code": "cc", "codex-cli": "cx" };
+/** The one mark every other harness shares (a custom or admin-declared one), so no harness id is cut to its first two letters. */
+const HARNESS_MARK_OTHER = "ag";
 
-/** The icon mark on a row of Already included (prototype rows "cc", "cx", "git", "dr", "$"). A harness the prototype has no mark for gets its first two letters. */
+/** The icon mark on a row of Already included (prototype rows "cc", "cx", "git", "dr", "$"). A harness the prototype has no mark for gets the shared "ag" mark. */
 export function includedMark(row: { from: string; name: string }): string {
-  if (row.from === "harness") return HARNESS_MARK[row.name] ?? row.name.slice(0, 2);
+  if (row.from === "harness") return HARNESS_MARK[row.name] ?? HARNESS_MARK_OTHER;
   return row.from === "repository" ? "git" : row.from === "drive" ? "dr" : "$";
 }
 

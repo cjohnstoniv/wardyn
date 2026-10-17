@@ -12,9 +12,9 @@ import type { ComponentRef } from "../../../../../lib/types/components";
 import { Input } from "../../../../ui/input";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { httpsParts, mcpRef } from "./catalogue-edits";
-import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
+import { NamesFailed, SELECT_CLASS, ToolDialog, ToolField, type NamesFailure } from "./tool-dialog";
 
-export function AddMcpDialog({ names, onAdd, onClose }: { names: readonly string[]; onAdd: (ref: ComponentRef) => void; onClose: () => void }) {
+export function AddMcpDialog({ names, namesFailure, onAdd, onClose }: { names: readonly string[]; namesFailure?: NamesFailure; onAdd: (ref: ComponentRef) => void; onClose: () => void }) {
   const id = React.useId();
   const [name, setName] = React.useState("");
   const [url, setUrl] = React.useState("");
@@ -52,6 +52,7 @@ export function AddMcpDialog({ names, onAdd, onClose }: { names: readonly string
           <option value="">{NR_TOOLS.MCP_NO_TOKEN}</option>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
+        <NamesFailed failure={namesFailure} />
       </ToolField>
       <p className="text-sm text-muted-foreground">{NR_TOOLS.MCP_LOCAL_SOON}</p>
     </ToolDialog>

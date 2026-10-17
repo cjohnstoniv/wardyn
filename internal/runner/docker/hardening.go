@@ -329,8 +329,6 @@ func kvmDeviceGID() string {
 // softDiskNotEnforceable: no policy wrote this disk size (a request or a default did), and the host
 // cannot keep it — the run goes UNCAPPED instead of failing closed (see runner.Resources.DiskMiBSoft
 // for why that asymmetry is the point).
-//
-// DRAFT (M2 canon pending)
 const softDiskNotEnforceable = "wardyn/docker: disk size not enforceable on this host — " +
 	"a requested or default size was set for this run and overlay2 over non-xfs cannot carry the quota, " +
 	"so the run proceeds WITHOUT a disk cap rather than failing closed (a size the run's policy writes still fails closed here); " +

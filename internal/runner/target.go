@@ -31,6 +31,13 @@ type TargetFacts struct {
 	// Records: the target records a run its organisation asks it to (Capabilities.SessionRecording,
 	// and for a self-hosted runner one that takes the per-run SandboxSpec.Record).
 	Records bool
+	// ExecOutputUncaptured: the target cannot capture an exec's output (Capabilities.ExecOutputUncaptured).
+	ExecOutputUncaptured bool
+	// ProbeErr comes only with a false answer: a configured executor whose probe failed. It might
+	// enforce the run, so a caller with no other candidate cannot decide admission and answers that
+	// it is unavailable, not that the target is offline.
+	ProbeErr error
+
 	// RecordsUnasked: a self-hosted runner older than per-run recording that records by its own
 	// setting whatever its organisation asks (session recording without the per-run flag). Its
 	// runner_declined mark is a guess, so a cast it uploads may clear it.
@@ -38,11 +45,20 @@ type TargetFacts struct {
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are
-// unknown (offline, nothing advertised yet, probe failed): a caller refuses on it
-// and never reads it as zero or as everything.
+// unknown (offline, nothing advertised yet, probe failed: then ProbeErr says why): a
+// caller refuses on it and never reads it as zero or as everything.
 type TargetInspector interface {
 	RunnerFacts(runnerID string) (TargetFacts, bool)
 	ExecutorFacts(ctx context.Context, executor string) (TargetFacts, bool)
+}
+
+// ExecOutputReporter answers whether the executor that runs a sandbox can capture
+// an exec's output (Capabilities.ExecOutputUncaptured): the executor that holds
+// ref, or with no ref yet the executor a create of that class would go to. A
+// deployment with several executors answers per run, not for all of them. known
+// is false when that executor cannot be named or asked.
+type ExecOutputReporter interface {
+	ExecOutputUncapturedFor(ctx context.Context, ref string, class types.ConfinementClass) (uncaptured, known bool)
 }
 
 // ExactExecutor creates the sandbox on the named configured executor and on no

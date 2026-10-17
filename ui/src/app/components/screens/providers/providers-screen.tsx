@@ -311,6 +311,7 @@ export function ProvidersScreen() {
               storage={draft.storage ?? {}}
               onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
               enforcement={enforcement}
+              kubernetes={setupStatus?.runner.kubernetes}
               operator={operator}
             />
           )}

@@ -19,7 +19,7 @@ package proxy
 // strings.Contains(detail, egressInternalHostsRemedy) — the constants against
 // themselves — so the separators, the order, and three of the four sentences
 // could be reworded with every gate green. Golden literals below: a reworded
-// constant reds HERE, which is exactly what a DRAFT string awaiting a canon
+// constant reds HERE, which is exactly what a string awaiting a wording
 // sitting needs.
 //
 // The rule SOURCE stays builtin:private-ip on both variants (its AUDIT-ACTIONS

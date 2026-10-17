@@ -66,6 +66,7 @@ derives its role.
   - It names a **base**, which is another profile (`base_profile_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
   - The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
   - A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
+  - In `GET /api/v1/governance` a composed profile's own `ceiling` holds only what it stores, so read the resolved answer under `effective.ceiling`.
 - *Authoring.*
   - A profile names at most one base.
   - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
@@ -186,7 +187,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
   - A profile that sets a size keeps it. Its `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) lower that size for its assigned members at create, preflight and dispatch, but since 0.9 never below the size an untouched run gets (`MemberCap`). Operators are exempt.
   - So a maximum below the deployment's default no longer shrinks a member's sandbox. To bound members below it, set a smaller size in the profile or lower the deployment's default.
-  - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own.
+  - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own. A size set in an overlay applies only over a base that sets one; over a base with none the deployment's default size applies.
 - **Limits that reach a running run (0.8.2, #1391, #1392).**
   - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
   - `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
@@ -214,6 +215,30 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.
   - **Not in the posture:** the model-provider hosts egress dispatch resolves from global configuration after this gate runs (a Bedrock run's region, for one), and any stored-credential residency.
   - A run's autonomy level is graded on what the run can reach and hold, not on where its model credential lives.
+- **The baseline the rubric grades against.**
+  - Egress `open` means an allowlisted host beyond the baseline, and secrets `powerful` includes an `api_key` to a host outside it.
+  - Both read one set: Wardyn's built-in public hosts (the vendor model APIs, the public code hosts and the package registries, `safeBaselineDomains` in [`internal/composer/risk.go`](../../internal/composer/risk.go)), plus what the operator declares.
+  - An operator declares hosts with `PUT /governance/egress-baseline`, or in the console under Governance, Baseline hosts.
+    - `baseline_hosts` are exact hostnames.
+    - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that suffix and every host under it.
+  - Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
+  - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
+  - Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
+  - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
+- **What the rubric can see here, at profile-write time.**
+  - A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
+  - It names the egress, secrets and confinement grades a run under the profile can get on this deployment, the rows those grades select, and the rows that cap nothing here.
+  - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
+
+    ```text
+    on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful
+    ```
+
+  - It claims only what the deployment forces on every run, so a row it calls inert really is.
+    - Confinement: the classes the deployment's runner offers at or above the profile's floor. With self-hosted runners on, or a runner that cannot answer, every class counts.
+    - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
+    - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
+    - Egress: always from `sealed` up, because a run can narrow its allowlist.
 ## When everyone is an admin, and what a refused person is told
 
 **The everyone-is-an-admin warning.** With SSO configured, the setup checklist's "Who is an admin" row grades `warn` — holding the console in the People step and showing every admin a banner above every page — on either of two conditions (#491):

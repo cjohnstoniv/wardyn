@@ -65,6 +65,8 @@ func TestLoadTrustedCARefuses(t *testing.T) {
 		{"empty", writeFile(t, filepath.Join(dir, "empty.pem"), ""), "no PEM-encoded certificates"},
 		{"a key beside the cert", writeFile(t, filepath.Join(dir, "combined.pem"), ca+keyPEM), `"PRIVATE KEY"`},
 		{"over 64 KiB", writeFile(t, filepath.Join(dir, "big.pem"), big), "KiB; runners take at most 64 KiB: name a file holding only your organisation's roots, not a merged system bundle"},
+		// A-R4-L2: refused on size alone, before the file is parsed (junk would otherwise read "no PEM-encoded certificates").
+		{"over the read bound", writeFile(t, filepath.Join(dir, "huge.pem"), strings.Repeat("x", maxCAFileRead+1)), "the file is over 1024 KiB; runners take at most 64 KiB of certificates"},
 	} {
 		if _, _, err := loadTrustedCA(tc.file); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want one naming %q", tc.name, err, tc.want)

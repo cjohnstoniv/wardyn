@@ -85,6 +85,31 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 	return nil
 }
 
+// CheckSelftest admits a BYOI selftest on ref only under the live lease an
+// Exec would need, and only while its generation is the lease's and not yet
+// attempted. It records nothing: the selftest is not that execution.
+func (m *Manager) CheckSelftest(ctx context.Context, ref string, generation uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
+	id, r, ok := m.findRef(ref)
+	if !ok {
+		return errors.New("runner reference has no durable binding")
+	}
+	if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || r.MutationFailure != nil || m.expired(id) {
+		return runner.ErrRunnerOffline
+	}
+	if generation == uuid.Nil || r.Lease.ExecutionGeneration != generation || r.Executions[generation] != "" {
+		return errors.New("selftest generation is not the lease's unattempted execution")
+	}
+	return nil
+}
+
 // AfterRefCall records real substrate changes before the org receives success.
 // A durable-state failure contains the proxy even when the wire call was lost.
 func (m *Manager) AfterRefCall(ctx context.Context, method, ref, execID string, generation uuid.UUID) error {

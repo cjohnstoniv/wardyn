@@ -47,7 +47,7 @@ func (s *Server) remoteRunnerConfigured(id string) bool {
 // refuseRemoteMember refuses, before any write, a remote-hosted runner id that cannot join pool: one
 // this server is not set up with (an unknown id reads the same). ok=true: the refusal is written.
 func (s *Server) refuseRemoteMember(w http.ResponseWriter, pool types.RunnerPool, rid string) bool {
-	if (types.RunnerPoolMember{PoolID: pool.ID, RemoteRunnerID: rid}).Validate(pool.Scope) != nil || !s.remoteRunnerConfigured(rid) {
+	if (types.RunnerPoolMember{PoolID: pool.ID, RemoteRunnerID: rid}).Validate(pool.Scope, "") != nil || !s.remoteRunnerConfigured(rid) {
 		writeErrorReason(w, runnerpool.ReasonMemberMismatch.Status(), string(runnerpool.ReasonMemberMismatch), runnerpool.RemoteNotConfiguredMsg(rid))
 		return true
 	}
@@ -411,7 +411,7 @@ func (s *Server) handleAddMyRemoteRunnerToPool(w http.ResponseWriter, r *http.Re
 	notAvailable := func() {
 		writeErrorReason(w, runnerpool.ReasonMemberMismatch.Status(), string(runnerpool.ReasonMemberMismatch), runnerpool.RemoteNotAvailableMsg(rid))
 	}
-	if (types.RunnerPoolMember{PoolID: pool.ID, RemoteRunnerID: rid}).Validate(pool.Scope) != nil || !s.remoteRunnerConfigured(rid) {
+	if (types.RunnerPoolMember{PoolID: pool.ID, RemoteRunnerID: rid}).Validate(pool.Scope, "") != nil || !s.remoteRunnerConfigured(rid) {
 		notAvailable()
 		return
 	}

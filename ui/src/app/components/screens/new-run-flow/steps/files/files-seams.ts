@@ -76,7 +76,7 @@ export interface MainDriveView {
   poolName?: string;
   /** Whole MiB; undefined when the pool and server set no cap. */
   capMib?: number;
-  capSource?: LimitSource;
+  capSource?: LimitSource | "policy";
   defaultMib?: number;
   facts?: MainDriveFacts;
   /** The Interactive lifetime's maximum in seconds, undefined when unlimited or unknown. */
@@ -92,11 +92,16 @@ export function readMainDrive(pre: FilesPreflight | null, runType: RunnerPoolRun
   const cap = disk && !disk.cap.unlimited ? disk.cap.value : undefined;
   const fallback = disk && !disk.default.unlimited && disk.default.value > 0 ? disk.default.value : undefined;
   const span = runType === "interactive" ? limits?.lifetime_span_sec.cap : undefined;
+  // A size the run's policy wrote is the size the run gets (a policy size is never soft), so it prefills the
+  // field and caps it: the pool's default and cap say nothing more about this run.
+  const applied = limits ? pre?.main_drive : undefined;
+  const policyMib = applied && (applied.basis === "policy" || applied.clamped_by === "policy") && applied.applied_mib > 0 ? applied.applied_mib : undefined;
+  const policyCaps = policyMib !== undefined && (cap === undefined || policyMib < cap);
   return {
     poolName: pre?.runner_pool?.name,
-    capMib: cap,
-    capSource: cap === undefined ? undefined : disk?.cap_source,
-    defaultMib: fallback ?? cap,
+    capMib: policyCaps ? policyMib : cap,
+    capSource: policyCaps ? "policy" : cap === undefined ? undefined : disk?.cap_source,
+    defaultMib: policyMib ?? fallback ?? cap,
     facts: pool?.main_drive,
     maxLifetimeSec: span && !span.unlimited ? span.value : undefined,
   };

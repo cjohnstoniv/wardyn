@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -123,7 +122,7 @@ func TestDerivedEgress_VetoedLanesMatchDispatch(t *testing.T) {
 			ctx, runID := context.Background(), uuid.New()
 			w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
 			dispatched := base.Clone()
-			gw, ok := fx.srv.persistRunGrants(ctx, w, r, runID, time.Now(), dispatched, types.PlacementRemote, placement.DeliveryPolicy{})
+			gw, ok := fx.srv.persistRunGrants(ctx, w, r, runID, time.Now(), dispatched, types.PlacementRemote, localJudgement{})
 			if !ok {
 				t.Fatalf("persistRunGrants answered %d %s", w.Code, w.Body.String())
 			}

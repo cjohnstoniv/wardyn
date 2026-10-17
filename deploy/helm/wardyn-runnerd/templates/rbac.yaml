@@ -1,0 +1,126 @@
+{{/*
+runnerd's RBAC. scripts/test-helm-runnerd.sh holds both halves to the control-plane chart's
+(deploy/helm/wardyn/templates/rbac.yaml): the runs-namespace Role is that chart's k8s-runner Role, rule
+for rule, plus the one `pods: patch` rule below; the ClusterRole is that chart's ClusterRole with
+k8s.readNodes on. Change a verb there and here together, or the test fails.
+
+Order: Helm creates ClusterRole, ClusterRoleBinding, Role and RoleBinding before any Deployment, on install
+and upgrade alike, so the image never starts ahead of a verb it needs. With rbac.create=false the operator
+must apply them before the image starts, including on an upgrade that adds a verb: runnerd's boot access
+review refuses to start otherwise.
+*/}}
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "runnerd.fullname" . }}-runs
+  namespace: {{ .Values.runsNamespace }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete", "deletecollection"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "list", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["list"]
+  # The one addition over the control-plane Role: removing the wardyn.dev/stop-proof finalizer. Namespaced;
+  # it also lets runnerd change a running pod's container image (threat model R14).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runnerd.fullname" . }}-runs
+  namespace: {{ .Values.runsNamespace }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "runnerd.fullname" . }}-runs
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "runnerd.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+{{/* The release namespace holds runnerd and what Helm keeps for the release (its release and image-pull secrets); these verbs reach every secret there, so nothing else of value belongs in it. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "runnerd.fullname" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "runnerd.fullname" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "runnerd.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "runnerd.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+{{/* nodes: list is a cluster-wide read of every Node's name, addresses, labels, taints and images (R14). */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "runnerd.clusterName" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "runnerd.clusterName" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "runnerd.clusterName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "runnerd.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

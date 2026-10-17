@@ -84,3 +84,38 @@ func TestRunComponents_MCPHarnessesPersistAndRevive(t *testing.T) {
 		}
 	}
 }
+
+// A queued launch replays its stored request: a reference's explicit empty
+// mcp_harnesses must still turn the server on for no harness once the run
+// starts, while a reference that names none gets every harness that can take it.
+func TestPG_QueuedRunKeepsAnEmptyMCPHarnessesList(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Shared", 1)
+	occupant := e.occupy(pool)
+	mcp := func(name, host, harnesses string) string {
+		return `{"name":"` + name + `","inline":{"hosts":["` + host + `"],"mcp":{"url":"https://` + host + `/mcp","transport":"http"}}` + harnesses + `}`
+	}
+	extra := `,"components":[` + mcp("Off", "mcp.off.test", `,"mcp_harnesses":[]`) + `,` + mcp("Default", "mcp.default.test", "") + `]`
+	queued := e.queuedLaunch(nil, e.reread(pool), extra)
+	e.free(occupant)
+	e.sweep()
+	e.waitStarted(queued.ID)
+	// The start folds the stored request afresh, so what it dispatched is the
+	// replay's own: server "off" is bound to no harness, "default" to claude-code.
+	pc := e.specFor(queued.ID).ProxyConfig
+	var servers []string
+	for _, sv := range pc.MCPServers {
+		servers = append(servers, sv.Key)
+	}
+	slices.Sort(servers)
+	if !slices.Equal(servers, []string{"default", "off"}) {
+		t.Fatalf("dispatched MCP servers %v, want default and off", servers)
+	}
+	bound := map[string][]string{}
+	for _, b := range pc.MCPBindings {
+		bound[b.Harness] = b.Servers
+	}
+	if !slices.Equal(bound["claude-code"], []string{"default"}) {
+		t.Errorf("claude-code bound to %v after the replay, want default alone: the explicit [] must keep off off", bound["claude-code"])
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -238,6 +239,137 @@ func (f *setupFixture) read(path string) string {
 	return string(b)
 }
 
+// An unreachable systemd user manager is reported as unreachable, not as one that searches another directory.
+func TestCheckServiceManagerNamesAnUnreachableManager(t *testing.T) {
+	var p setupPaths
+	answer := func(out string, err error) setupHost {
+		return setupHost{goos: "linux", home: "/h", run: func(context.Context, string, ...string) ([]byte, error) { return []byte(out), err }}
+	}
+	if err := answer("Failed to connect to bus\n", errors.New("exit status 1")).checkServiceManager(context.Background(), &p); err == nil || !strings.Contains(err.Error(), "did not answer") || strings.Contains(err.Error(), "does not search") {
+		t.Errorf("unreachable manager: %v", err)
+	}
+	if err := answer("/etc/systemd/user\n", nil).checkServiceManager(context.Background(), &p); err == nil || !strings.Contains(err.Error(), "does not search /h/.config/systemd/user") {
+		t.Errorf("manager that does not search the unit directory: %v", err)
+	}
+	if err := answer("/h/.config/systemd/user /etc/systemd/user\n", nil).checkServiceManager(context.Background(), &p); err != nil || p.unitFile != "/h/.config/systemd/user/wardyn-runnerd.service" {
+		t.Errorf("manager that searches it: %v, unit at %q", err, p.unitFile)
+	}
+}
+
+// The unit goes where the systemd user manager looks, whatever the shell's XDG_CONFIG_HOME: the manager's
+// own UnitPath decides, a unit already in one of its directories is rewritten in place, and a rerun keeps
+// the place (DR-0158).
+func TestSetupPutsTheUnitWhereTheUserManagerLooks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		searched []string // the manager's user configuration directories, in UnitPath order
+		existing string   // where a unit is already installed, "" for none
+		want     string
+	}{
+		"only the custom XDG directory":               {searched: []string{"xdg"}, want: "xdg"},
+		"only HOME though the shell sets XDG":         {searched: []string{"home"}, want: "home"},
+		"both with the unit already in the later one": {searched: []string{"xdg", "home"}, existing: "home", want: "home"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSetupFixture(t, "linux")
+			f.host.xdgConfig = filepath.Join(filepath.Dir(f.host.home), "xdg")
+			dirs := map[string]string{"home": filepath.Join(f.host.home, ".config", "systemd", "user"), "xdg": filepath.Join(f.host.xdgConfig, "systemd", "user")}
+			var unitPath []string
+			for _, s := range tc.searched {
+				unitPath = append(unitPath, dirs[s])
+			}
+			unitPath = append(unitPath, "/etc/systemd/user")
+			run := f.host.run
+			f.host.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				if name == "systemctl" && slices.Contains(args, "UnitPath") {
+					return []byte(strings.Join(unitPath, " ") + "\n"), nil
+				}
+				return run(ctx, name, args...)
+			}
+			if tc.existing != "" {
+				if err := os.MkdirAll(dirs[tc.existing], 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dirs[tc.existing], serviceUnit), []byte("old"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, o := range []setupOptions{{tokenFile: f.tokenFile}, {}} {
+				if _, err := f.run(o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := f.count("POST /api/v1/runners/register"); n != 1 {
+				t.Errorf("registered %d times", n)
+			}
+			for key, dir := range dirs {
+				b, err := os.ReadFile(filepath.Join(dir, serviceUnit))
+				switch {
+				case key == tc.want && (err != nil || !strings.Contains(string(b), "\nExecStart=")):
+					t.Errorf("no rendered unit in %s: %v %q", dir, err, b)
+				case key != tc.want && err == nil:
+					t.Errorf("a unit was written to %s too, which the manager was not to load", dir)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(f.host.home, ".config", "wardyn", "runnerd.env")); err != nil {
+				t.Errorf("the env file is not where the unit's EnvironmentFile looks: %v", err)
+			}
+		})
+	}
+}
+
+// The identity setup uses is the one the service's own record names; without a record, the one root that
+// holds one ($HOME when neither does); two with no record are refused before anything is stopped, written
+// or registered (DR-0163).
+func TestSetupKeepsTheRecordedIdentityAndRefusesTwo(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	f.host.xdgConfig = filepath.Join(filepath.Dir(f.host.home), "xdg")
+	homeDir, xdgDir := filepath.Join(f.host.home, ".config", "wardyn", "runner"), filepath.Join(f.host.xdgConfig, "wardyn", "runner")
+	put := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stateDir := func(what, want string) {
+		t.Helper()
+		if p, err := f.host.paths(); err != nil || p.stateDir != want {
+			t.Errorf("%s: state dir %q, %v; want %q", what, p.stateDir, err, want)
+		}
+	}
+	stateDir("fresh, XDG set in the shell only", homeDir)
+	put(filepath.Join(xdgDir, "runner.json"), "{}")
+	stateDir("one identity, under XDG", xdgDir)
+	put(filepath.Join(homeDir, "runner.json"), "{}")
+	_, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err == nil || !strings.Contains(err.Error(), "two runner identities are on this computer, in "+homeDir+" and in "+xdgDir) {
+		t.Fatalf("two identities and no record: %v", err)
+	}
+	if len(f.calls)+len(f.commands)+len(f.events) != 0 {
+		t.Errorf("a refused setup still acted: calls %v, commands %v, steps %v", f.calls, f.commands, f.events)
+	}
+	envFile := filepath.Join(f.host.home, ".config", "wardyn", "runnerd.env")
+	put(envFile, "WARDYN_RUNNER_ORG_URL="+f.org+"\nWARDYN_RUNNER_STATE_DIR="+xdgDir+"\n")
+	stateDir("two identities, the service records XDG", xdgDir)
+	put(envFile, "WARDYN_RUNNER_STATE_DIR="+homeDir+"\n")
+	stateDir("two identities, the service records HOME", homeDir)
+}
+
+// A binary path with a space, a quote or a systemd specifier stays one ExecStart argument.
+func TestSystemdQuoteKeepsOnePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"/home/a/.local/share/wardyn/bin/wardyn-runnerd": `"/home/a/.local/share/wardyn/bin/wardyn-runnerd"`,
+		"/home/a b/share/wardyn-runnerd":                 `"/home/a b/share/wardyn-runnerd"`,
+		`/h/100%/we"ird\$x/wardyn-runnerd`:               `"/h/100%%/we\"ird\\$$x/wardyn-runnerd"`,
+	} {
+		if got := systemdQuote(in); got != want {
+			t.Errorf("systemdQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
 func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	f := newSetupFixture(t, "linux")
 	p, err := f.host.paths()
@@ -262,7 +394,7 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	if st, err := os.Stat(p.envFile); err != nil || st.Mode().Perm() != 0o600 {
 		t.Errorf("env file mode: %v %v", st, err)
 	}
-	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart="+p.installed+" serve --org ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
+	if unit := f.read(p.unitFile); !strings.Contains(unit, "\nExecStart=\""+p.installed+"\" serve --org ") || strings.Contains(unit, "__WARDYN_RUNNERD__ serve") {
 		t.Errorf("unit not rendered:\n%s", unit)
 	}
 	if f.read(p.installed) != "binary" {
@@ -291,6 +423,11 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	if len(f.networks) != 2 {
 		t.Errorf("the network was not ensured on the second run: %v", f.networks)
 	}
+	// A rerun handed a new token says it kept the identity instead of passing for a new registration.
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil || f.count("POST /api/v1/runners/register") != 1 || !strings.Contains(out, "already registered, so the token in "+f.tokenFile+" was not used") {
+		t.Fatalf("a rerun with a token: registered %d times, %v\n%s", f.count("POST /api/v1/runners/register"), err, out)
+	}
 }
 
 func contains(list []string, want string) bool {
@@ -315,6 +452,7 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"default without pool":                   {setupOptions{claim: true, makeDefault: true}, nil, "--default needs --pool"},
 		"pool without claim":                     {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
 		"unsafe setting":                         {setupOptions{network: "net work"}, nil, "unsupported characters"},
+		"unsafe docker host":                     {setupOptions{}, func(f *setupFixture) { f.host.dockerHost = "unix:///run/docker.sock\nEnvironment=X=1" }, "unsupported characters"},
 		"docker unusable":                        {setupOptions{}, func(f *setupFixture) { f.engineErr = os.ErrPermission }, "permission denied"},
 		"relay probe unusable":                   {setupOptions{}, func(f *setupFixture) { f.relayErr = os.ErrPermission }, "No token was spent"},
 		"relay address another computer reaches": {setupOptions{relayListen: "192.168.1.20"}, nil, "never an address another computer can reach"},
@@ -728,6 +866,10 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	if !contains(f.commands, "launchctl bootstrap gui/501 "+p.plistFile) {
 		t.Errorf("agent not bootstrapped: %v", f.commands)
 	}
+	// The package's agent must be stopped before the setup agent starts, or two serves share one identity.
+	if i, j := slices.Index(f.commands, "launchctl bootout gui/501/com.wardyn.runnerd.managed"), slices.Index(f.commands, "launchctl bootstrap gui/501 "+p.plistFile); i < 0 || j < 0 || i > j {
+		t.Errorf("the managed agent was not booted out before bootstrap: %v", f.commands)
+	}
 	if !strings.Contains(out, `Docker engine "Docker Desktop" (docker-desktop): the run relay listens on 127.0.0.1 and a run's proxy reaches it at host-gateway`) {
 		t.Errorf("the engine and relay pair were not announced:\n%s", out)
 	}
@@ -852,5 +994,214 @@ func TestSetupSaysWhenTheEngineHasNoDiskCap(t *testing.T) {
 		if n := strings.Count(out, noDiskCapLine); err != nil || n != tc.want {
 			t.Errorf("capped=%v known=%v: the no-cap line appeared %d times, want %d (%v)\n%s", tc.capped, tc.known, n, tc.want, err, out)
 		}
+	}
+}
+
+// --no-service registers and installs the binary, writes the environment file and prints the command
+// that runs the runner, and installs nothing a login would start: no unit, no plist, no service
+// command, and no check that a systemd user manager would find a unit.
+func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			f.host.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+				return []byte("/nowhere"), nil // a user manager that would never find the unit
+			}
+			p, _ := f.host.paths()
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true})
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if f.count("POST /api/v1/runners/register") != 1 || f.read(p.installed) != "binary" {
+				t.Fatal("--no-service did not register or install the binary")
+			}
+			envFile := p.noServiceEnvFile()
+			env := f.read(envFile)
+			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + shellQuote(p.stateDir) + "\n"} {
+				if !strings.Contains(env, want) {
+					t.Errorf("env file lacks %q:\n%s", want, env)
+				}
+			}
+			if st, err := os.Stat(envFile); err != nil || st.Mode().Perm() != 0o600 {
+				t.Errorf("env file mode: %v %v", st, err)
+			}
+			for _, path := range []string{p.unitFile, p.plistFile} {
+				if path == "" {
+					continue
+				}
+				if _, err := os.Stat(path); err == nil {
+					t.Errorf("--no-service installed %s", path)
+				}
+			}
+			if len(f.commands) != 0 {
+				t.Errorf("--no-service ran %v", f.commands)
+			}
+			if want := "set -a; . " + shellQuote(envFile) + "; set +a; " + shellQuote(p.installed) + " serve --org " + shellQuote(f.org) + " --state-dir " + shellQuote(p.stateDir); !strings.Contains(out, want) {
+				t.Errorf("the run command is not printed (want %q):\n%s", want, out)
+			}
+			if strings.Contains(out, "Started the wardyn-runnerd") {
+				t.Errorf("--no-service claims to have started a service:\n%s", out)
+			}
+
+			// Setup run again without --proxy-image keeps what it wrote.
+			f.flagless = true
+			if _, err := f.run(setupOptions{noService: true}); err != nil {
+				t.Fatal(err)
+			}
+			if f.read(envFile) != env {
+				t.Error("a second --no-service run changed the environment file")
+			}
+		})
+	}
+}
+
+// Setup names the engine it checked in the service every time, the default socket included, so the
+// service never consults the person's docker context and cannot be moved by a later `docker context use`.
+func TestSetupPinsTheEngineInTheService(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{{"", defaultDockerSocket}, {"unix:///home/me/.colima/default/docker.sock", "unix:///home/me/.colima/default/docker.sock"}} {
+		t.Setenv("DOCKER_HOST", tc.env)
+		host, err := osSetupHost()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if host.dockerHost != tc.want {
+			t.Fatalf("DOCKER_HOST=%q: setup host engine = %q, want %q", tc.env, host.dockerHost, tc.want)
+		}
+		if env := (setupPlan{dockerHost: host.dockerHost}).serviceEnv(); !strings.Contains(env, "DOCKER_HOST="+tc.want+"\n") {
+			t.Errorf("service environment lacks DOCKER_HOST=%s:\n%s", tc.want, env)
+		}
+		if plist := renderLaunchAgent(setupPlan{dockerHost: host.dockerHost}); !strings.Contains(plist, "<string>"+tc.want+"</string>") {
+			t.Errorf("LaunchAgent lacks DOCKER_HOST %s:\n%s", tc.want, plist)
+		}
+	}
+}
+
+// On macOS every path holds "Application Support". The command --no-service prints, run through sh, must
+// reach the binary with the state directory as one argument and in its environment.
+func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	stub := "#!/bin/sh\nprintf 'state=%s\\n' \"$WARDYN_RUNNER_STATE_DIR\"\nfor a; do printf 'arg=%s\\n' \"$a\"; done\n"
+	if err := os.WriteFile(f.host.exe, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := f.host.paths()
+	if !strings.Contains(p.stateDir, " ") {
+		t.Fatalf("the macOS state directory %q has no space; the test proves nothing", p.stateDir)
+	}
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var command string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "  set -a; ") {
+			command = strings.TrimSpace(l)
+		}
+	}
+	if command == "" {
+		t.Fatalf("no run command printed:\n%s", out)
+	}
+	got, err := exec.Command("sh", "-c", command).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v\n%s", command, err, got)
+	}
+	for _, want := range []string{"state=" + p.stateDir + "\n", "arg=serve\n", "arg=--state-dir\narg=" + p.stateDir + "\n", "arg=--org\narg=" + f.org + "\n"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("the printed command's run lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// Setup run plain after a --no-service run and then a service setup that pinned another image and CA file
+// keeps the service's pins, not the older environment file's.
+func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	dir := t.TempDir()
+	caX := writeFile(t, filepath.Join(dir, "x.pem"), testCAPEM(t, "x"))
+	caZ := writeFile(t, filepath.Join(dir, "z.pem"), testCAPEM(t, "z"))
+	p, _ := f.host.paths()
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x", trustedCAFile: caX}); err != nil {
+		t.Fatal(err)
+	}
+	if env := f.read(p.noServiceEnvFile()); !strings.Contains(env, "proxy:x") {
+		t.Fatalf("the --no-service run wrote no X pin:\n%s", env)
+	}
+	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z", trustedCAFile: caZ}); err != nil {
+		t.Fatal(err)
+	}
+	f.flagless = true
+	if _, err := f.run(setupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	plist := f.read(p.plistFile)
+	for _, want := range []string{"proxy:z", caZ, "<key>WARDYN_PROXY_IMAGE_PINNED</key>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("the plain setup dropped %q from the LaunchAgent:\n%s", want, plist)
+		}
+	}
+	if strings.Contains(plist, "proxy:x") || strings.Contains(plist, caX) {
+		t.Errorf("the plain setup took the stale environment file's pins:\n%s", plist)
+	}
+}
+
+// A macOS service setup removes the environment file an earlier --no-service wrote, so deleting the plist
+// later and running --no-service again does not read the old pins back.
+func TestSetupLaunchAgentRemovesTheStaleNoServiceEnvironment(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	p, _ := f.host.paths()
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p.noServiceEnvFile()); !os.IsNotExist(err) {
+		t.Fatalf("the LaunchAgent setup left the --no-service environment file: %v", err)
+	}
+	if err := os.Remove(p.plistFile); err != nil {
+		t.Fatal(err)
+	}
+	f.flagless = true
+	if _, err := f.run(setupOptions{noService: true}); err != nil {
+		t.Fatal(err)
+	}
+	if env := f.read(p.noServiceEnvFile()); strings.Contains(env, "proxy:x") || strings.Contains(env, "proxy:z") {
+		t.Errorf("--no-service after the plist went read old pins back:\n%s", env)
+	}
+}
+
+// A path that holds a line break cannot be written to the environment file --no-service reads back, so
+// setup refuses it on every platform.
+func TestSetupRefusesATrustedCAPathWithALineBreak(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			ca := writeFile(t, filepath.Join(t.TempDir(), "ca\n.pem"), testCAPEM(t, "x"))
+			if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, trustedCAFile: ca}); err == nil || !strings.Contains(err.Error(), "unsupported characters") {
+				t.Fatalf("a CA path with a line break: %v", err)
+			}
+		})
+	}
+}
+
+// --no-service is refused, before a token is spent, while a service for this runner is installed: running
+// both would be two processes with one identity.
+func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+				t.Fatal(err)
+			}
+			registered := f.count("POST /api/v1/runners/register")
+			_, err := f.run(setupOptions{noService: true})
+			if err == nil || !strings.Contains(err.Error(), "already installed") {
+				t.Fatalf("--no-service beside an installed service = %v, want a refusal", err)
+			}
+			if f.count("POST /api/v1/runners/register") != registered {
+				t.Error("the refusal came after the registration")
+			}
+		})
 	}
 }

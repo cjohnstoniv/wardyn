@@ -43,6 +43,28 @@ func TestMeasureCluster(t *testing.T) {
 	}
 }
 
+// A quota that sets an amount to zero is that amount's measure, in either order with a positive quota,
+// and the nodes do not replace it.
+func TestMeasureClusterKeepsAnExplicitZeroQuota(t *testing.T) {
+	cpu := func(v string) corev1.ResourceQuota {
+		return corev1.ResourceQuota{Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{corev1.ResourceRequestsCPU: resource.MustParse(v)}}}
+	}
+	nodes := []corev1.ResourceList{{corev1.ResourceCPU: resource.MustParse("4")}}
+	for name, quotas := range map[string][]corev1.ResourceQuota{
+		"zero":             {cpu("0")},
+		"zero then 6":      {cpu("0"), cpu("6")},
+		"6 then zero":      {cpu("6"), cpu("0")},
+		"zero beside none": {cpu("0"), {}},
+	} {
+		if got := measureCluster(quotas, nodes); got.CPUMillis != 0 {
+			t.Errorf("%s: cpu = %d, want 0", name, got.CPUMillis)
+		}
+	}
+	if got := measureCluster([]corev1.ResourceQuota{{}}, nodes); got.CPUMillis != 4000 {
+		t.Errorf("a quota that does not set cpu: cpu = %d, want the nodes' 4000", got.CPUMillis)
+	}
+}
+
 // Measure says which read it could not make whenever an amount is left unknown, and says nothing when
 // every amount is known.
 func TestMeasureSaysWhyAnAmountIsUnknown(t *testing.T) {

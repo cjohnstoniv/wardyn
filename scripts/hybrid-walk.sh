@@ -6,10 +6,10 @@
 # org-kind walk. What IngestDeviceAudit itself does is ALREADY PROVEN,
 # hermetically, against a real Postgres: the batch-splice refusal by
 # TestPG_Devices_IngestBatchSpliceRefused
-# (internal/store/store_devices_federation_pg_test.go:499) and the duplicate
+# (internal/store/store_devices_federation_pg_test.go) and the duplicate
 # token/credential hash (23505) arms of MintEnrolmentToken/CreateDevice by
 # TestPG_Devices_DuplicateCredentialsAreConflicts
-# (internal/store/store_devices_pg_test.go:175) — this walk does not repeat
+# (internal/store/store_devices_pg_test.go) — this walk does not repeat
 # them. bootHybrid's ResetFederation-after-Put ordering (including every
 # crash-recovery permutation) is ALREADY PROVEN by
 # cmd/wardynd/boot_hybrid_test.go's own table

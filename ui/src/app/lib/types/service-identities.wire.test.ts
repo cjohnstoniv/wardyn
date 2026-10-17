@@ -37,6 +37,20 @@ function tsKeys(src: string, iface: string): string[] {
   return [...m[1].matchAll(/^\s*([a-z0-9_]+)\??\s*:/gm)].map((k) => k[1]);
 }
 
+/** The keys a Go struct writes with omitempty. */
+function goOmitempty(src: string, structName: string): string[] {
+  const m = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([\\s\\S]*?)\\n\\}`).exec(src);
+  if (!m) throw new Error(`struct ${structName} not found`);
+  return [...m[1].matchAll(/json:"([^",]+),[^"]*omitempty[^"]*"/g)].map((t) => t[1]);
+}
+
+/** The keys a TS interface declares optional. */
+function tsOptional(src: string, iface: string): string[] {
+  const m = new RegExp(`export\\s+interface\\s+${iface}\\b[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(stripComments(src));
+  if (!m) throw new Error(`interface ${iface} not found`);
+  return [...m[1].matchAll(/^\s*([a-z0-9_]+)\?\s*:/gm)].map((k) => k[1]);
+}
+
 function tsUnion(src: string, name: string): string[] {
   const m = new RegExp(`export\\s+type\\s+${name}\\s*=([^;]+);`).exec(stripComments(src));
   if (!m) throw new Error(`type ${name} not found`);
@@ -60,6 +74,8 @@ describe("invitations and service identities wire", () => {
     const tags = goJSONTags(read(file), goName);
     expect(tags.length).toBeGreaterThanOrEqual(2);
     expect(new Set(tsKeys(ts, tsName))).toEqual(new Set(tags));
+    // and the same keys are optional on each side: Go omits them when empty (FUG-L356)
+    expect(new Set(tsOptional(ts, tsName))).toEqual(new Set(goOmitempty(read(file), goName)));
   });
 
   it.each([

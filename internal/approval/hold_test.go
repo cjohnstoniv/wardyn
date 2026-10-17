@@ -98,6 +98,22 @@ func TestHold(t *testing.T) {
 			wantHeld: false,
 		},
 		{
+			name: "an egress row the proxy stamped hold_seconds 120 on is held for 120s",
+			ap: types.ApprovalRequest{
+				Kind: types.ApprovalEgressDomain, State: types.ApprovalPending, RequestedAt: now.Add(-100 * time.Second),
+				RequestedScope: mustScope(t, map[string]any{"host": "h", "mode": "wait_for_review", "hold_seconds": 120}),
+			},
+			wantHeld: true, wantUntil: now.Add(-100 * time.Second).Add(120 * time.Second), checkUntil: true,
+		},
+		{
+			name: "an egress hold_seconds above the proxy's ceiling falls back to 30s",
+			ap: types.ApprovalRequest{
+				Kind: types.ApprovalEgressDomain, State: types.ApprovalPending, RequestedAt: now,
+				RequestedScope: mustScope(t, map[string]any{"host": "h", "mode": "wait_for_review", "hold_seconds": 601}),
+			},
+			wantHeld: true, wantUntil: now.Add(types.HoldWindowEgress), checkUntil: true,
+		},
+		{
 			name: "a plain credential with wait_for_review is held, same 30s window",
 			ap: types.ApprovalRequest{
 				Kind: types.ApprovalCredential, State: types.ApprovalPending, RequestedAt: now,

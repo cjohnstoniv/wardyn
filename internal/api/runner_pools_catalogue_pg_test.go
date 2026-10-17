@@ -332,3 +332,117 @@ func TestPoolListAsksEachExecutorOnce(t *testing.T) {
 		}
 	}
 }
+
+// FUG-L402: every list row carries the pool's own state, revision and raw limits, the ones
+// GET /runner-pools/{id} answers, including an oversight row (a person's pool the administrator may
+// only manage), so the Pools tab reads no pool one by one.
+func TestPoolListCarriesEachPoolsOwnRecord(t *testing.T) {
+	e := newPlacementEnv(t)
+	limited := e.limitedPool("Limited", types.CC1, types.CC2)
+	off := e.createPool("Off", types.RunnerPoolOrganization)
+	if w := e.admin(http.MethodPut, poolPath(off.ID), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(off.ID))); w.Code != http.StatusOK {
+		t.Fatalf("disable = %d %s", w.Code, w.Body)
+	}
+	theirs := e.createOwnPool(e.other, "Theirs")
+
+	list, _ := e.list(nil, "")
+	for _, p := range []types.RunnerPool{limited, off, theirs} {
+		got := entryOf(t, list, p.ID)
+		w := e.admin(http.MethodGet, poolPath(p.ID), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", p.Name, w.Code, w.Body)
+		}
+		want := decodeJSON[types.RunnerPool](t, w)
+		if got.State != want.State || got.Revision != want.Revision || !reflect.DeepEqual(got.PoolLimits, want.Limits) {
+			t.Errorf("%s: list row state=%q revision=%d limits=%+v, the pool's own read says %q %d %+v",
+				p.Name, got.State, got.Revision, got.PoolLimits, want.State, want.Revision, want.Limits)
+		}
+	}
+	if got := entryOf(t, list, theirs.ID); got.Revision == 0 || got.Owner == "" {
+		t.Errorf("the oversight row = %+v, want its owner and revision", got)
+	}
+	if got := entryOf(t, list, limited.ID); got.PoolLimits == nil || got.State != types.RunnerPoolActive {
+		t.Errorf("the limited pool's row = %+v, want active with its raw limits", got)
+	}
+	if got := entryOf(t, list, off.ID); got.State != types.RunnerPoolDisabled {
+		t.Errorf("the switched-off pool's row state = %q, want disabled", got.State)
+	}
+}
+
+// FR-0130: both dry doors answer the caller's own runners in each pool (my_runners), as the pool list
+// does, and never another person's, so Review can say how many of them are online.
+func TestDryDoorsCarryTheCallersOwnRunnersInEachPool(t *testing.T) {
+	e := newPlacementEnv(t)
+	home := e.createPool("Home server", types.RunnerPoolUser)
+	mine := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+	e.maxRuns(mine, e.personP, types.RunnerMaxRunsCeiling)
+	e.addToPool(e.person, home.ID, mine)
+	e.online[mine] = true
+	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pool_members (pool_id, runner_id) VALUES ($1, $2)`, home.ID, theirs); err != nil {
+		t.Fatal(err)
+	}
+	bare := e.createOwnPool(e.person, "Bare")
+	want := []client.PoolRunner{{ID: mine, Name: "laptop", Online: true}}
+
+	for _, door := range placementDoors[1:] {
+		w := e.call(e.person, http.MethodPost, door, runBody(`"runner_pool_id":"`+home.ID.String()+`"`))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s = %d %s", door, w.Code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), theirs.String()) {
+			t.Fatalf("%s names another person's runner: %s", door, w.Body)
+		}
+		choices := decodeJSON[struct {
+			RunnerPools []client.RunnerPoolChoice `json:"runner_pools"`
+		}](t, w).RunnerPools
+		var sawHome, sawBare bool
+		for _, c := range choices {
+			switch c.ID {
+			case home.ID:
+				sawHome = true
+				if !reflect.DeepEqual(c.MyRunners, want) {
+					t.Errorf("%s: my_runners = %+v, want %+v", door, c.MyRunners, want)
+				}
+			case bare.ID:
+				sawBare = true
+				if len(c.MyRunners) != 0 {
+					t.Errorf("%s: a pool with none of the caller's runners lists %+v", door, c.MyRunners)
+				}
+			}
+		}
+		if !sawHome || !sawBare {
+			t.Errorf("%s: choices %+v, want both pools", door, choices)
+		}
+	}
+}
+
+// A person's pool that holds only a remote-hosted runner the people policy admits them to is listed with
+// that runner's barriers, as a launch into it would offer them; a policy that no longer admits them
+// leaves the pool with none.
+func TestPoolListUserPoolOffersItsAdmittedRemoteMembersBarriers(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createOwnPool(e.person, "Remote only")
+	e.setPeople("alpha", everyonePeople)
+	if w := e.call(e.person, http.MethodPut, myRemotePath(pool.ID, "alpha"), ""); w.Code != http.StatusCreated {
+		t.Fatalf("add alpha = %d %s", w.Code, w.Body)
+	}
+	available := func() []client.BarrierOption {
+		list, _ := e.list(e.person, "")
+		got := entryOf(t, list, pool.ID)
+		var out []client.BarrierOption
+		for _, o := range got.BarrierOptions {
+			if o.Available {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+	if len(available()) == 0 {
+		t.Fatal("a pool holding an admitted remote-hosted runner offers no barrier")
+	}
+	e.setPeople("alpha", "")
+	if got := available(); len(got) != 0 {
+		t.Fatalf("a runner the policy no longer admits still offers barriers: %+v", got)
+	}
+}

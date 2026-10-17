@@ -23,12 +23,16 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -99,7 +103,72 @@ type Config struct {
 	// under k8s.readNodes) so preflight and create can warn when no node a run may be placed on is large
 	// enough. Off by default: nodes are cluster-scoped and a shared-cluster tenant may not be granted them.
 	ReadNodes bool
+
+	// Runner mode (wardyn-runnerd, design K1 §3). Only runnerd sets these; with RunnerID empty every
+	// one is ignored and server mode is unchanged.
+	//
+	// RunnerID labels every object runner.LabelRunnerID; the sweep and label teardown select by it.
+	RunnerID string
+	// ControlPlaneRelay returns the relay Service ClusterIP for a run's control-plane URL; the proxy
+	// pod's hostAliases map the URL's host to it. It refuses a URL whose port is not the relay's.
+	ControlPlaneRelay func(*url.URL) (string, error)
+	// RunnerdPeer is runnerd's own pods, the proxy NetworkPolicy's explicit egress peer on the relay
+	// and sink ports.
+	RunnerdPeer *RunnerdPeer
+	// TrustedCAPEM is runnerd's corporate CA bundle, applied to the proxy config and the sandbox
+	// before pod construction (design K1 §5.2).
+	TrustedCAPEM string
+	// Arch is --arch (amd64 or arm64), merged into the node selector of every pod as
+	// kubernetes.io/arch (design K1 §6.1). Required in runner mode.
+	Arch string
+	// MaxPodLifetime caps both pods' activeDeadlineSeconds (N6). Zero leaves the server spec as is.
+	MaxPodLifetime time.Duration
+	// Evidence persists each run's k8s record in its offline record (the manager's atomic write).
+	// A failed save stops every sequence that depends on it.
+	Evidence EvidenceStore
+	// Fence applies a persisted relay fence in the relay: closes the run's connections and refuses
+	// its proxy IP. Called after the fence is durable, before runnerd's first delete.
+	Fence func(runID uuid.UUID, proxyIP string)
+	// Unfence releases a fenced run's proxy IP once the proxy's witness is persisted: its termination
+	// is known, and CNIs hand freed pod IPs to new pods.
+	Unfence func(runID uuid.UUID, proxyIP string)
+	// IPFenced reports a proxy IP another run's fence refuses (Fable L5).
+	IPFenced func(ip string) bool
+	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
+	// refuses to create a sandbox while it is nil (the sink did not start).
+	Sink DecisionSink
+	// HardDeny is written into every proxy config as hard_deny (design K1 §5.3).
+	HardDeny *HardDeny
 }
+
+// RunnerdPeer names runnerd's own pods for the proxy NetworkPolicy.
+type RunnerdPeer struct {
+	Namespace string
+	PodLabels map[string]string
+	RelayPort int32
+	SinkPort  int32
+}
+
+// DecisionSink is the part of runnerd's decision sink the driver drives: a per-run key whose hash
+// is persisted in the run's record before Register, the proxy's decision_sink value, the drain
+// before a delete, and the producer's settlement on completion evidence only.
+type DecisionSink interface {
+	NewKey() (key string, hash [32]byte, err error)
+	Register(runID uuid.UUID, hash [32]byte) error
+	ProxyConfig(key string) any
+	Drain(ctx context.Context, runID uuid.UUID) error
+	ProducerGone(ctx context.Context, runID uuid.UUID) error
+}
+
+// EvidenceStore is the manager's per-run evidence persistence: Load returns the run's last saved
+// record (nil when none) and Save writes it with the offline state's atomic write and fsync.
+type EvidenceStore interface {
+	LoadEvidence(runID uuid.UUID) ([]byte, error)
+	SaveEvidence(runID uuid.UUID, b []byte) error
+}
+
+// runnerMode reports a Driver wardyn-runnerd built.
+func (d *Driver) runnerMode() bool { return d.cfg.RunnerID != "" }
 
 func (c *Config) withDefaults() {
 	if c.StartTimeout <= 0 {
@@ -152,6 +221,15 @@ type Driver struct {
 	// in-memory state here: the buffer it feeds is in memory too, so a
 	// restarted wardynd has neither.
 	execOutputs sync.Map
+
+	// runLocks serialise each run's evidence read-modify-write (runner mode).
+	runLocks sync.Map
+	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).
+	brackets sync.Map
+	// hardDeny is Config.HardDeny with the substrate's own apiserver added (runner mode).
+	hardDeny *HardDeny
+	// now is the wall clock evidence bounds and stamps read; a test seam.
+	now func() time.Time
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
@@ -210,7 +288,25 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort}
+	if cfg.RunnerID != "" {
+		if cfg.Evidence == nil {
+			return nil, errors.New("k8s: runner mode requires an evidence store")
+		}
+		if cfg.HardDeny == nil {
+			return nil, errors.New("k8s: runner mode requires the proxy hard deny")
+		}
+		// Design K1 §3.4 item 1: only an enforced canary verdict boots a runner.
+		if cfg.AllowUnenforcedNetPol || cfg.AckAmbientDefaultDeny {
+			return nil, errRunnerNetPolOverride
+		}
+		if cfg.Arch == "" {
+			return nil, errors.New("k8s: runner mode requires an arch")
+		}
+		if placement, err = placement.withArch(cfg.Arch); err != nil {
+			return nil, err
+		}
+	}
+	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort, now: time.Now}
 
 	verdict, cerr := d.runEgressCanary(ctx)
 	switch verdict {
@@ -227,6 +323,14 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	case canaryAcknowledged:
 		logWarnAckAmbientDefaultDeny()
 		d.netPolAcked = true
+	}
+	if d.runnerMode() {
+		if !d.netPolEnforced {
+			return nil, errRunnerNetPolOverride
+		}
+		if d.hardDeny, err = cfg.HardDeny.withAPIServer(ctx, hostPort, net.DefaultResolver.LookupHost); err != nil {
+			return nil, err
+		}
 	}
 	return d, nil
 }

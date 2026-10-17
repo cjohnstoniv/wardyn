@@ -231,6 +231,15 @@ func TestSCIMPurgeErasesComponents(t *testing.T) {
 	}
 	if d := dataOf(t, rows[0]); d["components_erased"] != float64(1) {
 		t.Errorf("purge row = %v, want components_erased 1", d)
+	} else if _, ok := d["runner_pools_deleted"]; !ok {
+		t.Errorf("purge row = %v, want runner_pools_deleted", d)
+	} else {
+		// The invitation and service-identity steps count what they did; a person with none reads zero, not absent.
+		for _, key := range []string{"invitations_deleted", "invitations_cleared", "service_identities_cleared"} {
+			if got, ok := d[key]; !ok || got != float64(0) {
+				t.Errorf("purge row %s = %v (present %v), want 0", key, got, ok)
+			}
+		}
 	}
 	if _, err := e.st.GetComponent(t.Context(), by.saved.ID, "sub-bystander-comp"); err != nil {
 		t.Errorf("the bystander's saved component: %v", err)

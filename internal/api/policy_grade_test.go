@@ -5,7 +5,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,4 +143,32 @@ func findRiskItem(items []composer.RiskItem, field string) (composer.RiskItem, b
 		}
 	}
 	return composer.RiskItem{}, false
+}
+
+// TestGradePolicy_ReadsNoControlPlaneFile: a mount source is judged by its spelling when a policy is graded, so
+// the answer cannot tell a member whether a path exists on the control-plane host or where a symlink there
+// points. The save door still resolves the link and refuses a source that lands in a denied path.
+func TestGradePolicy_ReadsNoControlPlaneFile(t *testing.T) {
+	h := newHarness(t)
+	dir := t.TempDir()
+	file, link := filepath.Join(dir, "f"), filepath.Join(dir, "l")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Fatal(err)
+	}
+	body := func(src string) string {
+		return fmt.Sprintf(`{"spec":{"min_confinement_class":"CC2","workspace_mounts":[{"source":%q,"target":"/workspace/m"}]}}`, src)
+	}
+	for _, src := range []string{file + "/x", link} {
+		w := do(t, h.srv, http.MethodPost, "/api/v1/policies/grade", adminToken, body(src))
+		if w.Code != http.StatusOK {
+			t.Errorf("grade %s = %d %s, want 200", src, w.Code, w.Body.String())
+		}
+	}
+	save := fmt.Sprintf(`{"name":"p","spec":{"min_confinement_class":"CC2","workspace_mounts":[{"source":%q,"target":"/workspace/m"}]}}`, link)
+	if w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, save); w.Code != http.StatusBadRequest {
+		t.Errorf("save through a symlink into a denied path = %d %s, want 400", w.Code, w.Body.String())
+	}
 }

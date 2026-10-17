@@ -109,7 +109,7 @@ func TestSyncCommand_RefusesPlainHTTPToANonLoopbackServer(t *testing.T) {
 		"http://[::1]:8080":              false,
 		"https://wardyn.example.com":     false,
 	} {
-		err := syncRefusePlainHTTP(url)
+		err := refusePlainHTTPGateway("sync", url)
 		if refused != (err != nil) || (err != nil && !strings.Contains(err.Error(), "/healthz")) {
 			t.Errorf("%s: err = %v, want refused=%v with the reason", url, err, refused)
 		}

@@ -40,11 +40,6 @@
     "sentence": "\"run not found\""
   },
   {
-    "reason": "attach_ticket_foreign_run",
-    "target": "run.ID.String()",
-    "sentence": "\"run not found\""
-  },
-  {
     "reason": "audit_export_partition_filter",
     "target": "\"audit.export\"",
     "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
@@ -126,13 +121,13 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"me.tokens\"",
-    "sentence": "apiTokenFeatureRefusal"
+    "target": "\"runs.component\"",
+    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"runs.component\"",
-    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+    "target": "target",
+    "sentence": "apiTokenFeatureRefusal"
   },
   {
     "reason": "capKinds[capPolicy].reason",
@@ -465,6 +460,11 @@
     "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
   },
   {
+    "reason": "second_human_required",
+    "target": "r.URL.Path",
+    "sentence": "envGovernanceSecondHuman + \" is set: you minted this organization runner's token, so someone else claims it\""
+  },
+  {
     "reason": "security_admin_surface",
     "target": "ap.ID.String()",
     "sentence": "\"decision_scope always is operator-only\""
@@ -478,6 +478,11 @@
     "reason": "service_scope",
     "target": "r.URL.Path",
     "sentence": "serviceScopeRefusal"
+  },
+  {
+    "reason": "sponsor_not_entitled",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "src.reason",

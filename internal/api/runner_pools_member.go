@@ -26,7 +26,7 @@ import (
 // handleAddMyRunnerToPool puts the caller's own claimed self-hosted runner in their own user pool. A
 // runner that is unknown, unclaimed, revoked, bound to another organisation or another person's is
 // answered alike, with the runner id as the caller sent it and never a name; an organization pool is
-// told it takes remote-hosted runners only.
+// told it takes remote-hosted and organization runners only.
 func (s *Server) handleAddMyRunnerToPool(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -173,6 +173,10 @@ func (s *Server) handlePutMyRunnerPoolDefaults(w http.ResponseWriter, r *http.Re
 	}
 	if d.Recording != "" {
 		writePoolInvalid(w, "recording is an organisation setting; an admin sets it")
+		return
+	}
+	if d.Revision != 0 {
+		writePoolInvalid(w, personalRevisionDefaultMsg)
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, true)

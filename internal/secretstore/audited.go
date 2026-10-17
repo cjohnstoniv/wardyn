@@ -33,7 +33,13 @@ const (
 	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
+	PurposeBranchList   Purpose = "branch-list"
 	PurposeStatus       Purpose = "status"
+
+	// PurposeRunnerResident names a dispatch read of a runner_resident value,
+	// handed to the run's runner. Its site records the secret.read itself
+	// (SiteAudited), with the grant, the runner and its posture.
+	PurposeRunnerResident Purpose = "runner-resident"
 
 	// PurposeUnmarked is recorded, as a failure, for a Get whose caller set no
 	// purpose: Audited refuses it before the store is read.
@@ -312,6 +318,15 @@ func (a *audited) KeyService() string {
 func (a *audited) KeyServiceStaticKey() bool {
 	if d, ok := a.inner.(interface{ KeyServiceStaticKey() bool }); ok {
 		return d.KeyServiceStaticKey()
+	}
+	return false
+}
+
+// KeyServiceNodeRole forwards whether the key service is reached with the
+// node's instance role; false when the wrapped store does not say.
+func (a *audited) KeyServiceNodeRole() bool {
+	if d, ok := a.inner.(interface{ KeyServiceNodeRole() bool }); ok {
+		return d.KeyServiceNodeRole()
 	}
 	return false
 }

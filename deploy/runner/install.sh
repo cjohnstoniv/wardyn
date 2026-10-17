@@ -50,8 +50,13 @@ uninstall() {
     Linux)
       data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
       identity_dir="$HOME/.config/wardyn/runner"
+      # Setup names the identity directory in the env file, which can be under a custom XDG_CONFIG_HOME; read it before the file goes.
+      kept="$(sed -n 's/^WARDYN_RUNNER_STATE_DIR=//p' "$HOME/.config/wardyn/runnerd.env" 2>/dev/null | tail -n 1)" || true
+      kept="${kept#\'}"; kept="${kept%\'}"
+      [ -z "$kept" ] || identity_dir="$kept"
       systemctl --user disable --now "$UNIT" 2>/dev/null || true
-      rm -f "$HOME/.config/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env"
+      # Setup puts the unit where the user manager looks, which can be a custom XDG_CONFIG_HOME.
+      rm -f "$HOME/.config/systemd/user/$UNIT" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env"
       systemctl --user daemon-reload 2>/dev/null || true
       ;;
     Darwin)
@@ -65,7 +70,7 @@ uninstall() {
   rm -f "$data_dir/bin/wardyn-runnerd"
   echo "Removed the wardyn-runnerd service and binary."
   echo "Kept the runner identity in: $identity_dir"
-  echo "To revoke this runner, use My runner in the Wardyn console."
+  echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."
 }
 
 if [ "$UNINSTALL" = 1 ]; then

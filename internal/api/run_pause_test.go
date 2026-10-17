@@ -25,6 +25,7 @@ import (
 type pauseStore struct {
 	*dispatchTestStore
 	open, waiting bool
+	decided       bool // a request was decided since the pause began
 	stamps        int
 	settles       map[uuid.UUID]time.Time // run_pause_settles: run id to due_at
 }
@@ -87,7 +88,8 @@ func (s *pauseStore) ListPauseCandidates(ctx context.Context) ([]store.PauseCand
 	if run.State != types.RunRunning || run.LostAt != nil || run.SandboxRef == "" {
 		return nil, time.Time{}, nil
 	}
-	return []store.PauseCandidate{{Run: run, OpenRequest: s.open, WaitingRequest: s.waiting}}, time.Time{}, nil
+	return []store.PauseCandidate{{Run: run, OpenRequest: s.open, WaitingRequest: s.waiting,
+		RequestDecidedSincePause: s.decided && run.PausedAt != nil}}, time.Time{}, nil
 }
 
 func (s *pauseStore) StampRunActive(context.Context, uuid.UUID) (bool, error) {

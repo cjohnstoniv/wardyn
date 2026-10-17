@@ -370,3 +370,19 @@ describe("rowPresentation — a local run is presented as any other (RS8)", () =
     expect(rowPresentation(local({ runner_online: false, attention }), false)).toEqual(rowPresentation(run({ attention }), false));
   });
 });
+
+describe("rowPresentation — a QUEUED run (DR-0259)", () => {
+  const queue = { pool_id: "p", queued_at: "", deadline_at: "", position: 2, reason: "runner_pool_at_capacity" };
+
+  it("says Queued in the live blue, not the raw state in grey, with its place in line", () => {
+    const p = rowPresentation(run({ state: "QUEUED" as RunState, queue }), false);
+    expect(p).toMatchObject({ hue: "blue", word: "Queued", subword: "3rd in line", action: null, needsYou: false });
+    expect(glyphKindFor(p.hue, p.word, "QUEUED")).toBe("ring");
+  });
+
+  it("says just Queued when the wire carries no queue", () => {
+    const p = rowPresentation(run({ state: "QUEUED" as RunState }), false);
+    expect(p).toMatchObject({ hue: "blue", word: "Queued" });
+    expect(p.subword).toBeUndefined();
+  });
+});

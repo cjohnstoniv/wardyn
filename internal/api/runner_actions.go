@@ -12,6 +12,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -106,7 +108,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
-	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
+	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
 		}})
@@ -120,12 +122,27 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	return ep
 }
 
+// runnerOutputAccepted commits a runner run's accepted output end before the
+// runner is told (remote.Options.OutputAccepted).
+func (s *Server) runnerOutputAccepted(ctx context.Context, runID uuid.UUID, accepted int64) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return nil
+	}
+	return st.AdvanceRunnerOutputWatermark(ctx, runID, accepted)
+}
+
 func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind types.RunnerActionKind, ref string) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return store.ErrRunnerActionRefused
 	}
-	_, _, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	a, queued, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	if err == nil && queued {
+		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
+		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
+			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
+	}
 	return err
 }
 
@@ -165,7 +182,11 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		},
 		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
-		Ready:    func() { go s.releaseRunnerLeases(s.cfg.BaseCtx, id) },
+		Ready: func() {
+			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
+			s.startResidentErase(id)
+			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub)
+		},
 	}, nil
 }
 
@@ -223,8 +244,17 @@ func (s *Server) PendingFromRunner(ctx context.Context, runnerID uuid.UUID) ([]r
 	}
 	out := make([]runnerwire.PendingAction, 0, len(page))
 	for _, a := range page {
-		out = append(out, runnerwire.PendingAction{Retirement: a.Retirement, Quarantine: a.Quarantine, Recovery: a.Recovery,
-			ID: a.ID, Kind: a.Kind, RunID: a.RunID, Ref: a.Ref})
+		p := runnerwire.PendingAction{Retirement: a.Retirement, Quarantine: a.Quarantine, Recovery: a.Recovery,
+			ID: a.ID, Kind: a.Kind, RunID: a.RunID, Ref: a.Ref}
+		if a.NodeRecord != nil {
+			p.NodeRecord = new(runner.NodeRecord)
+			dec := json.NewDecoder(bytes.NewReader(a.NodeRecord))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(p.NodeRecord); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }

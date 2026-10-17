@@ -6,10 +6,10 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
-	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -41,9 +41,10 @@ func (s *Server) handleGetRunnerSettings(w http.ResponseWriter, r *http.Request)
 }
 
 // runnersEnableRefusal is why runners cannot be turned on now, or "". The public organisation URL
-// that runner identities are bound to must be HTTPS (loopback http for development), and so must the
-// control-plane URL the relay carries bearers over. An unset one is refused too: a runner's runs reach
-// the org only through the relay, and with no control-plane URL there is no internal listener to serve it.
+// that runner identities are bound to must be HTTPS (loopback http for development). The control-plane
+// URL must be https with no loopback exception: a runner's runs reach the org only through the relay,
+// which serves only on the internal TLS listener (startRelayListener), so an unset or http one leaves
+// enabled runners with nothing to connect to.
 func (s *Server) runnersEnableRefusal() string {
 	if federation.CheckOrgURL(s.cfg.RunnerOrgURL) != nil {
 		return "set WARDYN_RUNNER_ORG_URL to this organisation's public HTTPS URL (http is accepted only for localhost)"
@@ -51,8 +52,8 @@ func (s *Server) runnersEnableRefusal() string {
 	if s.cfg.ControlPlaneURL == "" {
 		return "set WARDYN_CONTROL_PLANE_URL to the internal TLS listener; a runner's runs reach it through the runner's relay"
 	}
-	if hoptls.CheckURL(s.cfg.ControlPlaneURL) != nil {
-		return "WARDYN_CONTROL_PLANE_URL is plain http:// to a non-loopback host; point it at the internal TLS listener"
+	if u, err := url.Parse(s.cfg.ControlPlaneURL); err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "WARDYN_CONTROL_PLANE_URL is not https://; point it at the internal TLS listener, which a runner's relay needs"
 	}
 	return ""
 }

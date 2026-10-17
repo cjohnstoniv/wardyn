@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,9 +32,12 @@ type Config struct {
 	// driver serves. The orphan sweep removes only sandboxes labelled with it,
 	// so an empty id never sweeps a runner's sandboxes.
 	RunnerID string
-	// RunnerStateDir enables a private per-run audit spool mounted only into
-	// the proxy. Set only by the registered runner daemon's local composition.
-	RunnerStateDir string
+	// DecisionSink and Evidence, set only by wardyn-runnerd, are its decision
+	// sink and its per-run record store. In runner mode (RunnerID set) every
+	// proxy sends its decisions to the sink with a key of its own, whose hash
+	// the run's record keeps; a create refuses while either is missing.
+	DecisionSink DecisionSink
+	Evidence     EvidenceStore
 	// ProxyImage is the OCI image for the wardyn-proxy sidecar. For v0 it may
 	// be a minimal image with the locally-built wardyn-proxy binary
 	// bind-mounted in via ProxyBinaryHostPath.
@@ -112,6 +116,11 @@ type Config struct {
 	// No flag, env or file sets it, and New refuses it outside a go test binary
 	// (testing.Testing).
 	TestProxyExtraHosts []string
+	// UpstreamProxyURL, set only by wardyn-runnerd, is the runner's own corporate upstream proxy
+	// (--upstream-proxy), validated at startup. It becomes every proxy's upstream_proxy_url, on create
+	// and on revive, as TrustedCAPEM becomes trusted_ca_pem; the organisation never sends one to a
+	// runner. It may carry a credential, so it is never logged. Empty changes nothing.
+	UpstreamProxyURL string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -189,6 +198,9 @@ type Driver struct {
 	engArch string
 	// archVerdicts caches, per archVerdictKey, a runnable archVerdictKind.
 	archVerdicts sync.Map
+
+	// proxyImg, once set by SetProxyImage, replaces Config.ProxyImage for every later sidecar.
+	proxyImg atomic.Pointer[string]
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers
@@ -366,3 +378,15 @@ func (d *Driver) ImageRemove(ctx context.Context, ref string) error {
 	}
 	return nil
 }
+
+// proxyImage is the sidecar image the next run starts: the one SetProxyImage named, else Config.ProxyImage.
+func (d *Driver) proxyImage() string {
+	if p := d.proxyImg.Load(); p != nil {
+		return *p
+	}
+	return d.cfg.ProxyImage
+}
+
+// SetProxyImage makes image the sidecar image for every run started or revived from now on, as the
+// organisation names it at each connect. Sidecars already running keep theirs.
+func (d *Driver) SetProxyImage(image string) { d.proxyImg.Store(&image) }

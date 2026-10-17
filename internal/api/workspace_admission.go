@@ -47,7 +47,7 @@ import (
 // upgraded deployment answers byte-for-byte what it answered before this
 // file existed.
 
-// The ADMIT.* strings — DRAFT (M2 canon pending). Frozen in
+// The ADMIT.* strings — Frozen in
 // docs/design/workspace-providers-prompt.md §7.1/§7.4; the tests assert THROUGH
 // these constants so the M2 swap is a one-file diff.
 //
@@ -136,6 +136,9 @@ func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos 
 // a policy the daemon simply could not read).
 func (s *Server) admitLauncherRepo(ctx context.Context, repos ...string) error {
 	repos = presentRepos(repos)
+	if repoURLUserinfoRefusal(repos...) != nil {
+		return errRepoURLUserinfo // a row stored before the doors refused it
+	}
 	if len(repos) == 0 || s.cfg.Store == nil {
 		return nil
 	}
@@ -161,6 +164,10 @@ func (s *Server) admitLauncherRepo(ctx context.Context, repos ...string) error {
 // disagree about what "this repository is not on an enabled provider" costs.
 // Reports false for any other error, which the caller maps as it always did.
 func (s *Server) writeAdmissionLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
+	if errors.Is(err, errRepoURLUserinfo) {
+		writeErrorReason(w, http.StatusBadRequest, reasonRepoURLCredentials, repoURLUserinfo400)
+		return true
+	}
 	if !errors.Is(err, errRepoNotAdmitted) {
 		return false
 	}

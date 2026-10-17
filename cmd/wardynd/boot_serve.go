@@ -132,6 +132,8 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     instead).
 //   - Credential expiry sweeper: delete stored sign-ins past their expires_at,
 //     daily (api.Server.SweepExpiredCredentials).
+//   - AWS SSO renewer: renew a live run's captured AWS SSO session before it
+//     expires, every minute on the sweeper leader (api.Server.RenewAWSSSOCredentials).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
@@ -206,6 +208,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
+	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
@@ -243,6 +246,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 			slog.InfoContext(ctx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
 		}
 	})
+
+	// RS-12: name each composed profile a narrowed base has left unresolvable, once.
+	leaderGo(rootCtx, leader, "governance.profiles.walk", srv.WarnUnresolvableProfiles)
 
 	// #1513: acknowledged SIEM delivery, off unless the webhook sink asks for it.
 	// f.auditSinks is nil only in the boot tests that build a bare bootFlags.

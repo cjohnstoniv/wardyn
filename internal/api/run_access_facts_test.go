@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,12 +12,14 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -192,6 +195,23 @@ func TestAccessHostVerdict(t *testing.T) {
 		{"listed.example", viaEgress, nil, false, verdictAllowed, ""},
 		{"a.wild.example", viaEgress, nil, false, verdictAllowed, ""},
 		{"ssh.github.com:443", viaEgress, nil, false, verdictAllowed, ""},
+		// A spelled port is matched as the proxy matches it: another port is neither allowed nor denied by an entry.
+		{"ssh.github.com:2222", viaEgress, nil, false, verdictNotAllowed, hostReasonAlwaysDeny},
+		{"listed.example:8443", viaEgress, nil, false, verdictAllowed, ""},
+		{"a.wild.example:8443", viaEgress, nil, false, verdictAllowed, ""},
+		{"blocked.example:8443", viaEgress, nil, false, verdictNotAllowed, hostReasonDeniedList},
+		{"blocked.example:8443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowAllEgress, s.DeniedDomains = true, []string{"blocked.example:443"}
+			return s
+		}, false, verdictAllowed, ""},
+		{"blocked.example:443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowAllEgress, s.DeniedDomains = true, []string{"blocked.example:443"}
+			return s
+		}, false, verdictNotAllowed, hostReasonDeniedList},
+		{"a.wild.example:8443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowedDomains = []string{"*.wild.example:443"}
+			return s
+		}, false, verdictNotAllowed, hostReasonAlwaysDeny},
 		{"blocked.example", viaModelLane, nil, false, verdictNotAllowed, hostReasonDeniedList},
 		{"api.provider.example", viaModelLane, nil, false, verdictAllowed, ""},
 		{"other.example", viaEgress, nil, false, verdictNotAllowed, hostReasonAlwaysDeny},
@@ -203,7 +223,8 @@ func TestAccessHostVerdict(t *testing.T) {
 		if tc.spec != nil {
 			sp = tc.spec(spec.Clone())
 		}
-		v, r := accessHostVerdict(client.AccessHost{Host: tc.host, Via: tc.via}, sp, tc.clamped)
+		_, _, port := domainmatch.Classify(tc.host)
+		v, r := accessHostVerdict(client.AccessHost{Host: tc.host, Port: port, Via: tc.via}, sp, tc.clamped)
 		if v != tc.verdict || r != tc.reason {
 			t.Errorf("%s via %s (clamped %v) = %s/%s, want %s/%s", tc.host, tc.via, tc.clamped, v, r, tc.verdict, tc.reason)
 		}
@@ -351,6 +372,11 @@ func TestAccessRepo_UnwiredSSHLaneBringsNoHostOrCredential(t *testing.T) {
 			if hasHost != tc.wired || hasKey != tc.wired {
 				t.Errorf("%s %s: lane host %v, ssh key %v, want %v: %+v", tc.agent, door, hasHost, hasKey, tc.wired, access)
 			}
+			// FUG-L369: a lane create drops is not a ready row. The row says no credential is set up for it.
+			row, ok := accessRow(access, "git_provider:github:ssh:acme")
+			if !ok || (row.Reason == reasonRepoNoCredential) == tc.wired || (!tc.wired && row.Status != accessNeedsSetup) {
+				t.Errorf("%s %s: repository row = %+v (%v), want status %s and reason %q only when the lane is dropped", tc.agent, door, row, ok, accessNeedsSetup, reasonRepoNoCredential)
+			}
 		}
 	}
 }
@@ -447,6 +473,8 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 		row             types.GitProvider
 		source          func(context.Context) (ADOEntraConfig, bool, error)
 		blob            *adoEntraBlob
+		blobOwner       string // whose namespace holds blob; the caller's when empty
+		unlistable      bool   // the store cannot list: the preview cannot say, and Review is not asked
 		preview, review bool
 		cause           string // of Review's git_credential fact, when it names one
 	}{
@@ -454,6 +482,8 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 		{name: "sign-in stored and live", row: entraRow, blob: blob(false)},
 		{name: "sign-in stored and ended", row: entraRow, blob: blob(true), cause: scmAccessCauseEnded},
 		{name: "own token, none added", row: ownPATTestRow()},
+		{name: "sign-in stored in another person's namespace", row: entraRow, blob: blob(false), blobOwner: "sub-other", preview: true, review: true},
+		{name: "store cannot list", row: entraRow, unlistable: true},
 		{name: "minted_pat without the console app", row: entraRow, source: console, cause: ReasonADOPATNeedsConsoleApp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,12 +495,20 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 			srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				FirstUseApproval: types.FirstUseDenyWithReview}
 			if tc.blob != nil {
-				if err := srv.storeADOEntraBlob(context.Background(), "sub-ado-op", scmTestRowID, *tc.blob); err != nil {
+				if err := srv.storeADOEntraBlob(context.Background(), cmp.Or(tc.blobOwner, "sub-ado-op"), scmTestRowID, *tc.blob); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if tc.unlistable {
+				var armed atomic.Bool
+				armed.Store(true)
+				srv.cfg.Secrets = secretsFailingReads{Store: srv.cfg.Secrets, armed: &armed}
+			}
 			body := `{"agent":"claude-code","task":"access","repo":"` + scmTestADORepo + `"}`
 			for door, want := range map[string]bool{previewDoor: tc.preview, preflightDoor: tc.review} {
+				if tc.unlistable && door == preflightDoor {
+					continue
+				}
 				w := do(t, srv, http.MethodPost, door, adoOperatorToken(st), body)
 				access := decodeAccess(t, door, w).Access
 				i := slices.IndexFunc(access.Setup, func(it SetupItem) bool { return it.Kind == "repo_credential" })
@@ -486,5 +524,36 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Each non-model credential is named by its kind and whose it is, never by a secret's name; a model
+// credential is left to the console, which names its provider.
+func TestCredentialLabel_ByKindAndOwner(t *testing.T) {
+	for _, tc := range []struct{ kind, owner, want string }{
+		{credKindGitHubApp, credOwnerOrgApp, "Your organisation's GitHub App"},
+		{credKindADOSignIn, credOwnerOwn, "Your Azure DevOps sign-in"},
+		{credKindAWSRole, credOwnerOwn, "Your AWS sign-in"},
+		{credKindAzureARM, credOwnerOwn, "Your Azure sign-in"},
+		{credKindGitPAT, credOwnerShared, "A Git token your organisation provides"},
+		{credKindSSHKey, credOwnerShared, "An SSH key your organisation provides"},
+		{credKindSecret, credOwnerOwn, "Your secret"},
+		{credKindSecret, credOwnerShared, "A secret your organisation provides"},
+		{credKindModel, credOwnerOwn, ""},
+	} {
+		if got := credentialLabel(tc.kind, tc.owner); got != tc.want {
+			t.Errorf("credentialLabel(%s, %s) = %q, want %q", tc.kind, tc.owner, got, tc.want)
+		}
+	}
+}
+
+// An organisation component's card carries the admin's description, and nothing of its secrets.
+func TestOrgComponentView_CarriesTheDescription(t *testing.T) {
+	v := orgComponentView(types.Component{ID: uuid.New(), Name: "Postgres", Definition: types.ComponentDefinition{
+		Description: "Query the analytics replica.", Hosts: []string{"db.example.com"},
+		Secrets: []types.ComponentSecret{{SecretName: "pg-password", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "PGPASSWORD"}}}}})
+	b, _ := json.Marshal(v)
+	if v.Description != "Query the analytics replica." || !strings.Contains(string(b), `"description":"Query the analytics replica."`) || strings.Contains(string(b), "pg-password") {
+		t.Errorf("view = %s, want the description and no secret name", b)
 	}
 }

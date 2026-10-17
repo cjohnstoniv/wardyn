@@ -147,6 +147,11 @@ func TestPG_PromotionHoldsEachRunnerToItsMaxRuns(t *testing.T) {
 	if _, _, err := start(busy.ID); !errors.Is(err, store.ErrRunnerAtCapacity) {
 		t.Fatalf("a start onto the full runner alone = %v, want ErrRunnerAtCapacity", err)
 	}
+	// A first candidate deleted since it was read does not blank the refusal: it names the first one left.
+	var full *store.RunnerAtCapacityError
+	if _, _, err := start(uuid.New(), busy.ID); !errors.As(err, &full) || full.Runner != busy.Name || full.Max != 1 {
+		t.Fatalf("a start whose first runner is gone = %+v, want a refusal naming %q and 1", full, busy.Name)
+	}
 	started, ok, err := start(busy.ID, free.ID)
 	if err != nil || !ok || started.RunnerID == nil || *started.RunnerID != free.ID {
 		t.Fatalf("a start offered the free runner too = %v %v on %v, want it on %s", ok, err, started.RunnerID, free.ID)

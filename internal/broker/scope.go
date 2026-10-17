@@ -67,18 +67,18 @@ func ttlFor(spec types.GrantSpec) time.Duration {
 	if spec.TTLSeconds <= 0 {
 		return defaultMaxTTL
 	}
-	ttl := time.Duration(spec.TTLSeconds) * time.Second
-	if ttl > defaultMaxTTL {
+	// Bound the seconds before scaling them: a huge stored value would overflow the Duration.
+	if spec.TTLSeconds > int(defaultMaxTTL/time.Second) {
 		return defaultMaxTTL
 	}
-	return ttl
+	return time.Duration(spec.TTLSeconds) * time.Second
 }
 
-// gitPATUsername resolves the git username to pair with a brokered PAT for a
+// GitPATUsername resolves the git username to pair with a brokered PAT for a
 // non-GitHub host. An explicit override always wins; otherwise Azure DevOps
 // (dev.azure.com and *.visualstudio.com) uses "pat" and everything else uses
 // "oauth2".
-func gitPATUsername(host, override string) string {
+func GitPATUsername(host, override string) string {
 	if override != "" {
 		return override
 	}
@@ -99,9 +99,13 @@ func newJTI() string {
 	return hex.EncodeToString(b[:])
 }
 
+// defaultTrustDomain is the SPIFFE trust domain a Broker names runs under until
+// WithTrustDomain says otherwise; it matches the embedded provider's default.
+const defaultTrustDomain = "wardyn.local"
+
 // spiffeForRun builds the canonical run SPIFFE id used as the audit actor when
 // the caller claims are synthesized (e.g. a run-scoped approval-path mint /
-// revoke cascade).
-func spiffeForRun(runID uuid.UUID) string {
-	return "spiffe://wardyn.local/agent-run/" + runID.String()
+// revoke cascade), under the deployment's trust domain.
+func spiffeForRun(trustDomain string, runID uuid.UUID) string {
+	return "spiffe://" + trustDomain + "/agent-run/" + runID.String()
 }

@@ -27,6 +27,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// completionWatcherReadRetryDelay is the pause before the watcher's second read of its run: a pool or
+// connection error that has just happened would otherwise repeat at once.
+const completionWatcherReadRetryDelay = 250 * time.Millisecond
+
 // startCompletionWatcher launches the detached goroutine that blocks until the
 // agent process exits and then propagates its outcome to the run's durable
 // state + audit trail. Invariants it upholds:
@@ -67,7 +71,19 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// worker owns the transition; Wait/reconcile must not race its CAS.
 		if s.cfg.Store != nil {
 			run, err := s.cfg.Store.GetRun(base, runID)
-			if err != nil || (run.Placement == types.PlacementLocal && run.RunnerID != nil) {
+			if err != nil { // one more read, after a short pause, before the 90 s lease sweep has to finish the run
+				select {
+				case <-time.After(completionWatcherReadRetryDelay):
+				case <-base.Done():
+				}
+				run, err = s.cfg.Store.GetRun(base, runID)
+			}
+			if err != nil {
+				slog.WarnContext(base, "wardynd: completion watcher not started; the lease sweep will finish the run",
+					slog.String("run_id", runID.String()), slog.Any("err", err))
+				return
+			}
+			if run.Placement == types.PlacementLocal && run.RunnerID != nil {
 				return
 			}
 		}
@@ -233,7 +249,12 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 	if s.cfg.Runner == nil || ref == "" {
 		return true
 	}
-	serr := s.cfg.Runner.StopSandbox(ctx, ref)
+	return s.teardownOrAudit(ctx, runID, ref, action, s.cfg.Runner.StopSandbox)
+}
+
+// teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
+func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
+	serr := teardown(ctx, ref)
 	if serr == nil {
 		return true
 	}
@@ -267,6 +288,7 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		data["proxy_config_error"] = perr.Error()
 	}
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 		if err != nil {
@@ -348,6 +370,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 // RUNNING->STOPPED, so the idle stop reaches the run's event feed and revokes
 // the run's Azure DevOps personal access tokens here.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
+	// The reaper's CAS does not go through casRunState, so the idle stop is counted and frees its slot here.
+	s.metrics.runTerminal(types.RunStopped)
+	s.kickQueue()
 	s.runEvents.idleStopped(runID)
 	s.cancelRunApprovals(ctx, runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
@@ -662,7 +687,8 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"id":     id,
 			"state":  types.RunKilled,
-			"errors": killData,
+			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
+			"reason": reasonInternalError,
 			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
 		})
 		return
@@ -705,7 +731,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	if !applied {
 		return false, nil, nil
 	}
-	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, false)
+	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, true)
 	return true, killData, nil
 }
 
@@ -796,9 +822,10 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // killTeardownTail takes one more choice from its caller: queuedOK
 // says a sandbox kill queued for an offline runner (runner.ErrPendingOnRunner)
 // is a clean teardown, applied when the runner reconnects, rather than a failed
-// step. A person's kill keeps reading it as a failure to retry; the lifetime kill
-// (killRunAtLifetime) has no person to retry it, and its run is already KILLED
-// at the org, so it records the sandbox stop as queued instead.
+// step. A person's kill and the lifetime kill record the sandbox stop as queued:
+// a retry would only find the same queued action, the run's identity is revoked
+// here, and the runner's receipt is audited as runner.action.apply (contained) or
+// runner.action.refuse. The login supersede still reads it as a failure.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
 	if run.State == types.RunQueued {

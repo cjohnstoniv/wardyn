@@ -13,7 +13,7 @@ This page is the service-identity half of the [#1508 design](invitations-service
 
 ## 2. Record
 
-Table `service_identities`, in migration 0196.
+Table `service_identities`, in migration 0157.
 
 | Field | Meaning |
 |---|---|
@@ -141,7 +141,7 @@ The record always names the sponsor:
 ## 9. Audit actor
 
 - New `actor_type` value `service`, with `actor` `service:<name>` and `data.sponsor` on every row (D8).
-- Migration 0196 widens the check on the partitioned `audit_events` parent only; `audit_events_legacy` takes no new rows. C1 reports the lock mode the rewrite takes, and its time.
+- Migration 0157 widens the check on the partitioned `audit_events` parent only; `audit_events_legacy` takes no new rows. C1 reports the lock mode the rewrite takes, and its time.
 - D8's fallback is taken only if C1 measures that rewrite as too slow. Its form is `actor_type` `system` with actor `service:<name>`.
 - Under the fallback, `operatorOwnedRequest`, `sessionRevokedSince`, `mayEnterRun` and `neverOperator` key on `withServiceIdentity`, never on the actor type. Otherwise every service run would read as operator-owned.
 - `TestServiceIdentity_RunsUnderItsOwnPrincipal` and `TestServiceIdentity_NeverOperatorNeverSecondHuman` run under both actor forms.

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +36,9 @@ const (
 	// ResolveWait must not retry a cap the way it retries a raise-in-flight
 	// (apPending with a Nil id), or it parks a goroutine/socket for the whole hold budget.
 	apCapped
+	// apRefused: the control plane refused to raise this host's approval for good (a per-run cap, a
+	// request it will not accept). Settled like apCapped: the next request is refused without a re-POST.
+	apRefused
 )
 
 // approvalClient implements the first-use approval flow against the control
@@ -126,8 +130,11 @@ const maxApprovalHosts = 4096
 // decision row evaluate writes. Here rather than at the call site so the state
 // and its audit label stay in one file.
 func approvalPendingReason(st approvalState) string {
-	if st == apCapped {
+	switch st {
+	case apCapped:
 		return ruleSourceApprovalHostCap
+	case apRefused:
+		return ruleSourceApprovalRefused
 	}
 	return "approval:pending"
 }
@@ -136,6 +143,10 @@ func approvalPendingReason(st approvalState) string {
 // maxApprovalHosts rather than by a human: "an approval is waiting on you" vs
 // "this run's host table is full, nothing was raised and nothing ever will be".
 const ruleSourceApprovalHostCap = "approval:host-cap"
+
+// ruleSourceApprovalRefused is the decision-log reason when the control plane refused the raise for good:
+// no approval row exists, so nobody is being asked.
+const ruleSourceApprovalRefused = "approval:refused"
 
 // approvalCapWarnOnce keeps the cap's log line to once per process: the
 // condition is a run-long state, and a per-request ERROR would bury it.
@@ -261,7 +272,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		}
 		r = a.Resolve(ctx, host)
 	}
-	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.ApprovalID == uuid.Nil {
+	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.ApprovalID == uuid.Nil {
 		return r
 	}
 	// Bound concurrent holds: over the cap, don't park another goroutine — fall
@@ -412,6 +423,8 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		return resolveResult{State: apApproved, ApprovalID: id}
 	case cur == apDenied:
 		return resolveResult{State: apDenied, ApprovalID: id}
+	case cur == apRefused:
+		return resolveResult{State: apRefused}
 	case needRaise:
 		// We already claimed apPending under the lock above, so exactly one
 		// goroutine reaches here for the first use of host — no duplicate raise.
@@ -421,9 +434,18 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 		st = a.hosts[host]
 		if err != nil {
 			// Fail closed: roll our claimed pending back to none; never clobber a
-			// decision that landed meanwhile.
+			// decision that landed meanwhile. A refusal the same raise will meet again is settled
+			// instead, so the host is not re-POSTed on every request.
+			var refused *raiseRefusedError
+			settled := errors.As(err, &refused)
 			if st.state == apPending && st.approvalID == uuid.Nil {
 				st.state = apNone
+				if settled {
+					st.state = apRefused
+				}
+			}
+			if settled {
+				return resolveResult{State: apRefused}
 			}
 			return resolveResult{State: apPending}
 		}
@@ -480,6 +502,9 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 type egressScope struct {
 	Host string `json:"host"`
 	Mode string `json:"mode,omitempty"`
+	// HoldSeconds is the hold this proxy resolved, in whole seconds, stamped for a wait_for_review run so the
+	// console shows a hold for as long as the proxy holds it, not for the default 30 s.
+	HoldSeconds int `json:"hold_seconds,omitempty"`
 }
 
 type raiseBody struct {
@@ -488,10 +513,11 @@ type raiseBody struct {
 }
 
 func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, error) {
-	body, err := json.Marshal(raiseBody{
-		Kind:           string(types.ApprovalEgressDomain),
-		RequestedScope: egressScope{Host: host, Mode: string(a.firstUseMode)},
-	})
+	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
+	if a.firstUseMode == types.FirstUseWaitForReview {
+		scope.HoldSeconds = int(a.holdTimeout / time.Second)
+	}
+	body, err := json.Marshal(raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope})
 	if err != nil {
 		return uuid.Nil, err
 	}

@@ -308,10 +308,6 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	} else if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
 		return err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
-	if err != nil {
-		return err
-	}
 	all, err := st.ListDeprovisionJobs(ctx, identityID, store.JobKindGroupRemove)
 	if err != nil {
 		return err
@@ -327,6 +323,28 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 			return errors.Join(runErr, st.FailDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, runErr))
 		}
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
+	}
+	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the removal.
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindGroupRemove, jobs); err != nil {
+		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", identityID.String()), slog.Any("err", err))
+	}
+	forms, err := s.leaverForms(ctx, st, ident)
+	if forms.refusal != "" {
+		// Nothing is cut or revoked while the person's forms do not resolve. The removal stays pending with the
+		// reason on its first unfinished step, for the provider's retry or the sweeper.
+		i := slices.IndexFunc(store.GroupRemovalSteps, pending)
+		if i < 0 {
+			return nil
+		}
+		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
+		owed, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
+		if owed != "" {
+			refused = errors.Join(refused, oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}))
+		}
+		return errors.Join(refused, finish(store.GroupRemovalSteps[i], errors.New(forms.refusal), nil))
+	}
+	if err != nil {
+		return err
 	}
 
 	var errs []error

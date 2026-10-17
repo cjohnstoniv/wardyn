@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -59,6 +60,22 @@ var terminalGraceRoutes = []string{
 // one and buy nothing, because renew's own check is stricter on every axis.
 // Pinned by TestTerminalRunRefusedFailClosed.
 var internalSelfGatedRoutes = []string{"/internal/token/renew"}
+
+type liveRunCtxKey struct{}
+
+// contextWithLiveRun carries the run row internalAuth's liveness gate read, so a handler behind it reads the
+// run's evidence source and the like from that read instead of a second one. run is nil when the gate read none.
+func contextWithLiveRun(ctx context.Context, run *types.AgentRun) context.Context {
+	if run == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, liveRunCtxKey{}, *run)
+}
+
+func liveRunFromContext(ctx context.Context) (types.AgentRun, bool) {
+	run, ok := ctx.Value(liveRunCtxKey{}).(types.AgentRun)
+	return run, ok
+}
 
 // refuseTerminalRun is internalAuth's liveness half: the run whose token
 // authenticated this call must still be non-terminal. It writes its own refusal

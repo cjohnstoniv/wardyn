@@ -73,15 +73,18 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		}
 	}
 	in.slots = s.slotCounts(ctx, usable)
-	in.fits = s.runnerFits(ctx)
+	var fitErr error
+	if in.fits, fitErr = s.runnerFits(ctx); fitErr != nil {
+		return client.RunnerPoolList{}, runServerError("read runner limits", fitErr)
+	}
 	for _, row := range rows {
 		if !subj.permits(row, owner) {
 			// Listed for a manager only: they may manage it (or, another person's user pool, oversee
 			// it), not use it, so nothing is computed for it.
-			out.Pools = append(out.Pools, client.RunnerPoolCatalogueEntry{
+			out.Pools = append(out.Pools, withPoolRecord(client.RunnerPoolCatalogueEntry{
 				RunnerPoolChoice: poolState{availability: client.RunnerPoolUnavailable, reason: runnerpool.ReasonNotFound}.choice(row),
 				RunTypes:         []types.RunnerPoolRunType{}, BarrierOptions: []client.BarrierOption{}, Owner: row.Pool.Owner,
-			})
+			}, row.Pool))
 			continue
 		}
 		permitted = append(permitted, row.Pool)
@@ -89,7 +92,7 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		if refusal != nil {
 			return client.RunnerPoolList{}, refusal
 		}
-		out.Pools = append(out.Pools, entry)
+		out.Pools = append(out.Pools, withPoolRecord(entry, row.Pool))
 	}
 	var refusal *runRefusal
 	if out.Default, refusal = s.poolDefault(r, permitted, org); refusal != nil {
@@ -99,6 +102,13 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		return client.RunnerPoolList{}, refusal
 	}
 	return out, nil
+}
+
+// withPoolRecord adds the pool's own state, revision and raw limits to its list row: what the Pools tab
+// otherwise reads pool by pool. The caller of GET /runner-pools/{id} could read the same record.
+func withPoolRecord(e client.RunnerPoolCatalogueEntry, p types.RunnerPool) client.RunnerPoolCatalogueEntry {
+	e.State, e.Revision, e.PoolLimits = p.State, p.Revision, p.Limits
+	return e
 }
 
 // catalogueEntry is one usable pool's row.
@@ -123,10 +133,23 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 	}
 	targets := st.own
-	if row.Pool.Scope == types.RunnerPoolOrganization && st.availability == client.RunnerPoolAvailable {
+	if st.availability == client.RunnerPoolAvailable {
 		// Only through the inspector's facts, never a lone driver's own probe.
 		if _, ok := s.targetInspector(); ok {
-			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
+			read := func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) }
+			switch {
+			case row.Pool.Scope == types.RunnerPoolOrganization:
+				targets, _ = executorTargets(row, s.configuredExecutors(), read)
+			case !slices.Contains(in.denied, types.PlacementRemote):
+				// A user pool also offers its remote-hosted members whose people policy admits the
+				// person, as launch does (poolTargets), so its barriers read the same.
+				admitted, refusal := s.admittedRemoteMembers(ctx, row)
+				if refusal != nil {
+					return client.RunnerPoolCatalogueEntry{}, refusal
+				}
+				remote, _ := executorTargets(admitted, s.configuredExecutors(), read)
+				targets = append(slices.Clone(st.own), remote...)
+			}
 		}
 	}
 	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })
@@ -167,11 +190,18 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		if refusal != nil {
 			return client.RunnerPoolCatalogueEntry{}, refusal
 		}
-		for _, id := range row.OwnRunnerIDs {
-			e.MyRunners = append(e.MyRunners, client.PoolRunner{ID: id, Name: names[id], Online: s.runnerOnline(id)})
-		}
+		e.MyRunners = s.myRunnersIn(row, names)
 	}
 	return e, nil
+}
+
+// myRunnersIn is the caller's own runners that are members of row, named from names.
+func (s *Server) myRunnersIn(row store.RunnerPoolCatalogueRow, names map[uuid.UUID]string) []client.PoolRunner {
+	var out []client.PoolRunner
+	for _, id := range row.OwnRunnerIDs {
+		out = append(out, client.PoolRunner{ID: id, Name: names[id], Online: s.runnerOnline(id)})
+	}
+	return out
 }
 
 // executorRead is one executor's facts as the list read them.
@@ -196,17 +226,27 @@ func (s *Server) ownRunnerNames(r *http.Request, in *poolListInput) (map[uuid.UU
 	if in.runnerNames != nil {
 		return in.runnerNames, nil
 	}
-	in.runnerNames = map[uuid.UUID]string{}
+	names, refusal := s.callerRunnerNames(r.Context())
+	if refusal != nil {
+		return nil, refusal
+	}
+	in.runnerNames = names
+	return names, nil
+}
+
+// callerRunnerNames reads the caller's own runners' names by id.
+func (s *Server) callerRunnerNames(ctx context.Context) (map[uuid.UUID]string, *runRefusal) {
+	names := map[uuid.UUID]string{}
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
-		runners, err := rs.ListRunnersByOwner(r.Context(), poolOwner(r.Context()))
+		runners, err := rs.ListRunnersByOwner(ctx, poolOwner(ctx))
 		if err != nil {
 			return nil, runServerError("list runners", err)
 		}
 		for _, rn := range runners {
-			in.runnerNames[rn.ID] = rn.Name
+			names[rn.ID] = rn.Name
 		}
 	}
-	return in.runnerNames, nil
+	return names, nil
 }
 
 // barrierFacts is what a pool's barriers are judged on from its candidates' own facts: the classes the

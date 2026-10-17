@@ -14,6 +14,7 @@
 |---|---|
 | `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
 | `wardyn-runner` *(dev-only)* | Data plane; the Docker driver ships as the library `internal/runner/docker` compiled into `wardynd` **[shipped]**, and the `k8s/` driver is **[shipped — alpha/experimental]** and not yet at Docker parity; see [below](#wardyn-runner-role). |
+| `wardyn-runnerd` | A registered runner (0.9): dials out to the organisation and runs the runs it places, on a laptop's Docker or in a Kubernetes cluster; see [below](#wardyn-runnerd-runner-substrates). |
 | `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection; see [below](#wardyn-proxy-role). |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
@@ -67,6 +68,26 @@ flowchart LR
   - the `k8s/` driver (`internal/runner/k8s`, `-tags k8s`) is **[shipped — alpha/experimental]**, conformance-gated on **both** the Docker and Kubernetes targets (see the "Parity rule" below),
   - but not yet at Docker parity (`local_dir` mounts, BYOI/devcontainer builds, a per-pod PIDs limit, and a ground-truth correlator are the open gaps — see [ROADMAP.md](ROADMAP.md)).
 - `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it.
+
+### `wardyn-runnerd`: runner substrates
+
+- A runner dials out to the organisation and runs what it places there. The organisation stays the only scheduler, ceiling resolver, credential broker and audit writer.
+- Its runs are placed `local`, and what they report is recorded `runner_asserted`.
+- A runner's trust class (`personal`, `managed_device`, `org_cluster`) is written by a security operator, never the runner, and picks each credential class's delivery mode.
+
+| Substrate | Who owns it | What it runs on | Install |
+|---|---|---|---|
+| Docker laptop runner (0.9) | A person, who claims it with their own session | The laptop's Docker, with the same sandbox, proxy sidecar and gatewayless network as a Docker run | `wardyn-runnerd setup` ([`deploy/runner/install.sh`](deploy/runner/install.sh)) |
+| Kubernetes organisation runner (0.9.3) | The organisation; a security operator claims it | A dedicated runs namespace, through the `internal/runner/k8s` driver, beside runnerd's own namespace | The `deploy/helm/wardyn-runnerd` chart |
+
+- **Laptop runner.** The developer is root on the host, so every control binds the agent, not the developer. The proxy reaches the organisation through runnerd's relay, with TLS ending at wardynd.
+- **Organisation runner.** Outbound-only. runnerd's NetworkPolicy admits only its runs' proxy pods, and agent pods reach only their proxy.
+  - Boot needs an enforced NetworkPolicy canary, every RBAC verb it uses, and kubelets at 1.31 or later on its architecture's schedulable nodes.
+  - Each proxy denies in-cluster names and addresses, and lapses for good if runnerd stops renewing it.
+- **Resident credentials (0.9.3).** A delivery policy may send four classes `runner_resident`: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`.
+  - The organisation hands each value to the run's runner before the create, under a delivery lease. The runner keeps it in the OS keystore, or a Secret on an organisation runner, and erases it at run end.
+  - Erasure is best effort on a host whose owner is root.
+- Boundaries B12 and B13 and residuals #69–#77, #89 and #90 in [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) state what each substrate does not protect.
 
 ### `wardyn-proxy`: role
 
@@ -216,7 +237,8 @@ stateDiagram-v2
   reason that may appear on an `authz.denied` row.
   - It is **append-only from the
     0.8.0 tag** — a removal or rename after that is a major version.
-  - [`docs/ OPERATIONS.md`](docs/OPERATIONS.md#every-denial-that-isnt-a-404)'s "Every denial that isn't a 404" table and [`docs/ AUDIT-ACTIONS.md`](docs/AUDIT-ACTIONS.md)'s `authz.denied` row are checked against it (not
+  - The "Every denial that isn't a 404" table in [`docs/operations/denials.md`](docs/operations/denials.md) is the source of record for the reasons, and
+    [`docs/AUDIT-ACTIONS.md`](docs/AUDIT-ACTIONS.md)'s `authz.denied` row points back to it. Both are checked against the registry (not
     hand-copied) by `TestAuthzDeniedReasonsAreDocumented`.
 - **`(*Server).refuse`** ([`internal/api/refusal.go`](internal/api/refusal.go)) is the one emitter: it
   looks up the registry row for a `Decision`'s reason, writes the HTTP status
@@ -224,8 +246,8 @@ stateDiagram-v2
   - and — when the registry says the reason is audited — writes
     the `authz.denied` row through `authz.Datum`,
   - so every row carries the same
-    shape (including the member-mode marker and, once the org control plane
-    lands in 0.9, the device-origin marker)
+    shape (including the `user_view` marker and, for a request that came through a
+    device channel, `device_channel`)
   - instead of each of the 18 former
     call sites building its own map.
   - An unregistered reason fails closed: 500 in
@@ -624,6 +646,7 @@ clone is decided by grant kind and host, and none can cover another's set:
   the default values and `ci/all-on-values.yaml`, plus its refusals).
 - No
   "your arbitrary K8s".
+- The `deploy/helm/wardyn-runnerd` chart is not a third stack: it installs an organisation runner into a compute cluster, which dials out to an organisation running one of the two.
 - The **desktop tier** (`deploy/desktop`, [docs/DESKTOP.md](docs/DESKTOP.md)) is a
   third packaged SHAPE and not a third stack — its `docker-compose.yaml` is an
   `include:` of [`deploy/compose/docker-compose.yaml`](deploy/compose/docker-compose.yaml) unmodified, which is the whole

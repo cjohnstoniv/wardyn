@@ -71,4 +71,18 @@ grep -q 'seq 1 330' "${SETUP_SH}" \
 grep -q 'still waiting on.*healthz' "${SETUP_SH}" \
   || fail "launch_wardynd's wait loop no longer prints a 'still waiting' progress line — a 330s wait with zero output looks hung, not busy (R-10)"
 
+# 5) local_build_needed: a built tree is left alone; a missing CLI or a Go source newer than ./bin/wardyn
+# (an old CLI lacks newer flags) asks for a rebuild; a test file or a docs change does not.
+bt="${dir}/tree"; mkdir -p "${bt}/bin" "${bt}/ui/dist" "${bt}/cmd" "${bt}/internal"
+: > "${bt}/ui/dist/index.html"; : > "${bt}/cmd/a.go"; : > "${bt}/go.mod"
+printf '#!/bin/sh\n' > "${bt}/bin/wardynd"; cp "${bt}/bin/wardynd" "${bt}/bin/wardyn"; chmod +x "${bt}/bin/wardynd" "${bt}/bin/wardyn"
+touch -d '1 hour ago' "${bt}/cmd/a.go" "${bt}/go.mod"
+(cd "${bt}" && local_build_needed) && fail "local_build_needed asked for a rebuild of an up-to-date tree"
+: > "${bt}/internal/x_test.go"
+(cd "${bt}" && local_build_needed) && fail "local_build_needed rebuilt for a _test.go file"
+: > "${bt}/internal/x.go"; touch -d 'now + 1 minute' "${bt}/internal/x.go"
+(cd "${bt}" && local_build_needed) || fail "local_build_needed missed a Go source newer than ./bin/wardyn"
+rm "${bt}/internal/x.go"; rm "${bt}/bin/wardyn"
+(cd "${bt}" && local_build_needed) || fail "local_build_needed missed a missing ./bin/wardyn"
+
 echo "test-setup-launch: self-test PASS"

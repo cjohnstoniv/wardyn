@@ -57,3 +57,44 @@ func TestMiddlewareRoleStampTTL(t *testing.T) {
 		})
 	}
 }
+
+// TestMiddlewareExpiryIsTheEarlierRoleStampDeadline: the expiry a request reads (ExpiryFromContext,
+// which /me publishes as session_expires_at) is the earlier of the cookie's expiry and its sign-in
+// time plus RoleStampTTL, since the session stops authenticating at whichever comes first. With the
+// TTL unset, or reaching past the cookie, it is the cookie's own.
+func TestMiddlewareExpiryIsTheEarlierRoleStampDeadline(t *testing.T) {
+	issued := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	expiry := time.Now().Add(8 * time.Hour).Truncate(time.Second)
+	for _, tc := range []struct {
+		name string
+		ttl  time.Duration
+		want time.Time
+	}{
+		{"off", 0, expiry},
+		{"the role deadline comes first", time.Hour, issued.Add(time.Hour)},
+		{"the cookie expiry comes first", 24 * time.Hour, expiry},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			auth := env.newAuth(t, nil)
+			writoidc.SetRoleStampTTLForTest(auth, tc.ttl)
+			cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
+				Sub: "sub-x", Email: "x@example.com", Role: writoidc.RoleAdmin, UserType: "standard",
+				Expiry: expiry, IssuedAt: issued,
+			})
+			if err != nil {
+				t.Fatalf("EncodeSessionForTest: %v", err)
+			}
+			var got time.Time
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = writoidc.ExpiryFromContext(r.Context())
+			})
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.AddCookie(cookie)
+			auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+			if !got.Equal(tc.want) {
+				t.Fatalf("ExpiryFromContext = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

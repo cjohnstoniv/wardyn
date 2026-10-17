@@ -192,3 +192,15 @@ func TestDetect_RejectsUnsafeURL(t *testing.T) {
 		t.Errorf("github = %v, want only the safe [acme/ok]", gh)
 	}
 }
+
+// A repo inside a dependency tree is not the workspace's remote, and the walk
+// does not descend there to find it; vendor/ is not on that list.
+func TestDetect_SkipsDependencyTrees(t *testing.T) {
+	root := t.TempDir()
+	writeRepo(t, filepath.Join(root, "node_modules", "dep"), "https://github.com/acme/dep.git")
+	writeRepo(t, filepath.Join(root, "vendor", "lib"), "https://github.com/acme/lib.git")
+	gh, _ := DetectGitHubRepos(root)
+	if want := []string{"acme/lib"}; !reflect.DeepEqual(gh, want) {
+		t.Errorf("github = %v, want %v", gh, want)
+	}
+}

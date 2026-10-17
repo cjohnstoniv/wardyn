@@ -4,11 +4,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -78,9 +82,10 @@ func TestResident_ErasedAtRunEndAndAudited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	report := uuid.New()
 	erase := func(runnerID, grantID uuid.UUID, outcome string) error {
 		return srv.EventFromRunner(ctx, runnerID, runnerwire.Event{Kind: runnerwire.EventResidentErase, RunID: &run.ID,
-			Data: mustJSON(runnerwire.ResidentErase{GrantID: grantID, Outcome: outcome})})
+			Data: mustJSON(runnerwire.ResidentErase{GrantID: grantID, Outcome: outcome, ReportID: report})})
 	}
 	if err := erase(rn.ID, grant.ID, runnerwire.ResidentErased); err != nil {
 		t.Fatal(err)
@@ -92,7 +97,50 @@ func TestResident_ErasedAtRunEndAndAudited(t *testing.T) {
 		t.Fatal("another runner's run was accepted")
 	}
 	rows := syncAuditRows(cfg.Audit.(*syncAudit), placement.ActionRunnerResidentErase)
-	if len(rows) != 1 || rows[0].Target != grant.ID.String() || rows[0].Outcome != "success" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
-		t.Fatalf("runner.resident.erase rows = %+v", rows)
+	if len(rows) != 1 || rows[0].Target != grant.ID.String() || rows[0].Outcome != "success" || rows[0].RunID == nil || *rows[0].RunID != run.ID ||
+		rows[0].ID != report {
+		t.Fatalf("runner.resident.erase rows = %+v, want one whose event id is the report's", rows)
+	}
+}
+
+// stubAudit answers every Record with err.
+type stubAudit struct{ err error }
+
+func (a stubAudit) Record(context.Context, types.AuditEvent) error { return a.err }
+
+// The runner's erase report is acknowledged only once its audit event was
+// accepted, stored or spooled: a recorder failure is returned so the runner
+// keeps the report and resends it, under the same ReportID, which is the
+// event's id; a report with no ReportID is refused.
+func TestResidentEraseReport_AuditFailureIsNotAcked(t *testing.T) {
+	_, cfg, rn, run, _, _ := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	grant, err := cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Delivery: types.GrantDeliveryResident,
+		Spec: types.GrantSpec{Kind: types.GrantEnvSecret, Scope: json.RawMessage(`{"name":"TOKEN","secret_name":"ci-token"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := runnerwire.Event{Kind: runnerwire.EventResidentErase, RunID: &run.ID,
+		Data: mustJSON(runnerwire.ResidentErase{GrantID: grant.ID, Outcome: runnerwire.ResidentErased, ReportID: uuid.New()})}
+	down := errors.New("audit store unreachable")
+	for name, c := range map[string]struct {
+		rec  audit.Recorder
+		want error
+	}{
+		"store write failed, nothing spooled": {stubAudit{down}, down},
+		"store write failed, spooled":         {stubAudit{fmt.Errorf("%w: %w", audit.ErrSpooled, down)}, nil},
+		"stored":                              {stubAudit{}, nil},
+		"no recorder":                         {nil, errAuditUnaccepted},
+	} {
+		c2 := cfg
+		c2.Audit = c.rec
+		if err := New(c2).EventFromRunner(ctx, rn.ID, report); !errors.Is(err, c.want) || (c.want == nil) != (err == nil) {
+			t.Errorf("%s: report = %v, want %v", name, err, c.want)
+		}
+	}
+	noID := runnerwire.Event{Kind: runnerwire.EventResidentErase, RunID: &run.ID,
+		Data: mustJSON(runnerwire.ResidentErase{GrantID: grant.ID, Outcome: runnerwire.ResidentErased})}
+	if err := New(cfg).EventFromRunner(ctx, rn.ID, noID); err == nil {
+		t.Fatal("a report with no ReportID was accepted")
 	}
 }

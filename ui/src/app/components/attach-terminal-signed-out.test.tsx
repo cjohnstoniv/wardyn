@@ -12,8 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 
+// How many terminals were built and disposed: a lapse must keep the one on screen.
+const xt = vi.hoisted(() => ({ made: 0, disposed: 0 }));
 vi.mock("@xterm/xterm", () => {
   class Terminal {
+    constructor() {
+      xt.made += 1;
+    }
     cols = 80;
     rows = 24;
     resize() {}
@@ -32,7 +37,9 @@ vi.mock("@xterm/xterm", () => {
     modes = { mouseTrackingMode: "none" };
     attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
-    dispose() {}
+    dispose() {
+      xt.disposed += 1;
+    }
   }
   return { Terminal };
 });
@@ -51,7 +58,7 @@ vi.mock("../lib/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api/core")>()),
   getToken: () => null,
 }));
-vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(async () => "ticket"), takeoverAttach: vi.fn() } }));
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -76,6 +83,7 @@ class FakeWebSocket {
 }
 
 import { AttachTerminal } from "./attach-terminal";
+import { runs } from "../lib/api/runs";
 import { ReauthContext, type Reauth, type ReauthPhase } from "../lib/reauth";
 
 function reauthAt(phase: ReauthPhase): Reauth {
@@ -102,6 +110,8 @@ const at = (phase: ReauthPhase, children: ReactNode) => (
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
+  xt.made = 0;
+  xt.disposed = 0;
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
     Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
@@ -139,6 +149,52 @@ describe("AttachTerminal — signed out mid-page (#483)", () => {
     rerender(at("none", <AttachTerminal runId="run_1" />));
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(FakeWebSocket.instances[1].closed).toBe(false);
+  });
+
+  it("keeps the same terminal, and what it shows, through a lapse and the same person's return", () => {
+    const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+    expect(xt.made).toBe(1);
+    rerender(at("dialog", <AttachTerminal runId="run_1" />));
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+    expect(xt.disposed).toBe(0);
+    rerender(at("none", <AttachTerminal runId="run_1" />));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(xt.made).toBe(1);
+    expect(xt.disposed).toBe(0);
+  });
+
+  it("does not retry a dropped socket while signed out", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+      FakeWebSocket.instances[0].onclose?.({ code: 1006, reason: "" });
+      rerender(at("dialog", <AttachTerminal runId="run_1" />));
+      vi.advanceTimersByTime(30_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      rerender(at("none", <AttachTerminal runId="run_1" />));
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a ticket mint still in flight across a sign-out and back opens no extra socket", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveMint: (t: string) => void = () => {};
+      vi.mocked(runs.attachTicket).mockImplementationOnce(() => new Promise<string>((r) => (resolveMint = r)));
+      const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+      // The direct handshake fails before opening, so the terminal asks the mint why.
+      FakeWebSocket.instances[0].onclose?.({ code: 1006, reason: "" });
+      rerender(at("dialog", <AttachTerminal runId="run_1" />));
+      rerender(at("none", <AttachTerminal runId="run_1" />));
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      resolveMint("ticket");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a live socket through a renewal from the expiry banner: nobody is signed out", () => {

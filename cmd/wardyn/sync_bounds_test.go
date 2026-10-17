@@ -55,6 +55,30 @@ func TestDialSyncGateway_SilentGatewayTimesOut(t *testing.T) {
 	}
 }
 
+// A ProxyCommand that connects and never speaks ends the handshake at the timeout too: its pipes take no deadline.
+func TestDialSyncGateway_SilentProxyCommandTimesOut(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+
+	old := syncHandshakeTimeout
+	syncHandshakeTimeout = 300 * time.Millisecond
+	defer func() { syncHandshakeTimeout = old }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := dialSyncGateway(context.Background(), sshGateway{host: "gw.example", port: "22", proxy: "sleep 30", fingerprint: "SHA256:x"}, "run", signer)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "handshake") {
+			t.Fatalf("err = %v, want a handshake error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a silent ProxyCommand outlived syncHandshakeTimeout")
+	}
+}
+
 // The gateway's stderr is read to the end so its channel drains, but only the first 64 KiB is kept.
 func TestCappedBuffer_KeepsAtMost64KiBAndDrains(t *testing.T) {
 	var b cappedBuffer

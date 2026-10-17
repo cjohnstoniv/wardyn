@@ -238,8 +238,8 @@ func TestValidateProviderEntra(t *testing.T) {
 	}
 }
 
-// TestEntraRefusalsGoThroughTheConstants pins that the refusals are the DRAFT
-// constants rather than hand-typed prose, so the canon sitting swaps one file
+// TestEntraRefusalsGoThroughTheConstants pins that the refusals are the
+// constants rather than hand-typed prose, so a wording change swaps one file
 // and no test.
 func TestEntraRefusalsGoThroughTheConstants(t *testing.T) {
 	for _, tc := range []struct {

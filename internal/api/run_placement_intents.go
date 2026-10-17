@@ -23,25 +23,56 @@ const localAWSCLIRefusal = "This run uses the AWS CLI, which a run on your own r
 // localCredentialIntents reads admitted configuration through the same provider,
 // ADO and redirect predicates dispatch reads. It never renews/mints or reads a
 // secret value: owner namespace proof is the own List, not fallback Get.
+// upstreams is the LLMUpstreams table dispatch would author for every harness's
+// provider lane (providerKeyLaneFor), so create judges it as dispatch does.
 func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, spec types.RunPolicySpec,
 	comps runComponents, workspaces []types.Workspace, sc types.SiteConfig,
-) ([]placement.CredentialIntent, *runRefusal) {
+) (_ []placement.CredentialIntent, upstreams map[string]string, _ *runRefusal) {
 	if comps.awsCLI() != nil {
-		return nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localAWSCLIRefusal)
+		return nil, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localAWSCLIRefusal)
 	}
 	_, actor := actorFromRequest(r)
 	owner := runIdentitySubject(r.Context(), actor)
 	var out []placement.CredentialIntent
-	choice, ref := s.authorizeRunModelProvider(r, req, workspaces, true)
-	if ref != nil {
-		return nil, ref
-	}
-	if choice.chosen {
+	providerLane := func(choice runProviderChoice, agent string) *runRefusal {
 		intents, ok := s.localProviderIntent(r, owner, choice.provider)
 		if !ok {
-			return nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
+			return runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
 		}
 		out = append(out, intents...)
+		if l, ok := providerKeyLaneFor(choice.provider, agent); ok && l.upstream != "" {
+			if upstreams == nil {
+				upstreams = map[string]string{}
+			}
+			upstreams[l.vendorHost] = l.upstream
+		}
+		return nil
+	}
+	choice, ref := s.authorizeRunModelProvider(r, req, workspaces, true)
+	if ref != nil {
+		return nil, nil, ref
+	}
+	if choice.chosen {
+		if ref := providerLane(choice, req.Agent); ref != nil {
+			return nil, nil, ref
+		}
+	}
+	// Every other harness's provider, picked as judgeHarnessProviders picks it. A
+	// refusal of that pick, or a sign-in that must be the primary's, is left to
+	// stepModelProvider, which owns those answers.
+	for _, h := range harnessSet(req) {
+		if h.Harness == req.Agent {
+			continue
+		}
+		hreq := req
+		hreq.Agent, hreq.ModelProvider = h.Harness, h.ModelProviderID
+		hc, ref := s.authorizeRunModelProvider(r, hreq, nil, true)
+		if ref != nil || !hc.chosen || harnessProviderNeedsPrimary(hc.provider) {
+			continue
+		}
+		if ref := providerLane(hc, h.Harness); ref != nil {
+			return nil, nil, ref
+		}
 	}
 	// The one lane dispatch would author, from the same inputs: one intent, and
 	// the exact hosts dispatch hands planArtifactRedirect. None when it is off.
@@ -50,7 +81,7 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + lane.rowID + "]", Origin: s.localADOOrigin(r.Context(), lane.owner, lane)})
 	}
 	out = append(out, s.localRedirectIntents(r, spec, sc, resolvedLaneHosts(lane, on))...)
-	return out, nil
+	return out, upstreams, nil
 }
 
 // localProviderIntent is every credential the chosen provider's dispatch arm

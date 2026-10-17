@@ -600,7 +600,7 @@ func TestApprovalPendingRefusalIsRetryableAndReEmits(t *testing.T) {
 // HOSTNAME's operator reads is composed of four separately-frozen constants, so
 // the owner's canon sitting can reword or drop one without touching the join.
 //
-// It asserts THROUGH the constants deliberately — the sentences are DRAFT and
+// It asserts THROUGH the constants deliberately — the sentences are frozen as constants and
 // the pin is the composition, not a copy of the text a second time.
 func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"priv.example.test"}})

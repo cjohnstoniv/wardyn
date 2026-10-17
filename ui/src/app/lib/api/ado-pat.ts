@@ -88,7 +88,7 @@ export const adoPat = {
   // reasons above (and ado_own_pat_token_invalid, _expiry_invalid,
   // _check_unavailable, _unknown_row, whose sentences render verbatim).
   async storeOwnToken(body: ADOOwnTokenBody): Promise<void> {
-    const res = await wfetch("/me/scm/azure-devops/token", { method: "PUT", body: JSON.stringify(body) });
+    const res = await wfetch("/me/scm/azure-devops/token", { method: "PUT", asPerson: true, body: JSON.stringify(body) });
     if (!res.ok) await asJson<never>(res);
   },
 };

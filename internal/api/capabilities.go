@@ -153,7 +153,8 @@ const (
 )
 
 // The closed value set of capFeature. canonicalGrantValue refuses any other
-// value, so a misspelt row can never sit in the table protecting nothing.
+// value, so a misspelt deny can never sit in the table protecting nothing; an
+// allow of an unknown name is stored inert (stagedFeatureAllow).
 //
 // featureCustomComponent gates DEFINING a component of one's own — inline on
 // a run, saved, or attached from one's own saved row. Narrowing, so it is ON

@@ -28,7 +28,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending).
 const (
 	// Cause-neutral on purpose (#1489): a credential that is not there looks the
 	// same whether it was never stored, was deleted when an admin changed the
@@ -387,7 +386,6 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 const mpRunSignInNotPrimary = "Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, " +
 	"so nothing was started. Launch the run again with %s first, or with another provider for it."
 
-// DRAFT (M2 canon pending).
 const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +
 	"already uses, so nothing was started. An admin gives each harness's provider its own address."
 
@@ -646,12 +644,12 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
 	}, false); err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: loggedMsg(ctx, "could not author the model provider credential injection", err)}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	rule, err := injectionRuleFromScope(scope)
 	if err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not compile the model provider credential injection: " + err.Error()}, nil)
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: loggedMsg(ctx, "could not compile the model provider credential injection", err)}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	return runner.InjectionGrant{GrantID: grantID, Rule: rule}, true

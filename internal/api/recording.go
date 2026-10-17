@@ -6,11 +6,13 @@ package api
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -76,8 +78,9 @@ func (s *Server) recordingReader(r *http.Request, run types.AgentRun) bool {
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 
 // recordingUploadReadWindow bounds how long an upload's body may take to
-// arrive once the store has admitted its save, so a slow or stalled client
-// holds a save slot for at most this long. It stays below the proxy's 130 s
+// arrive once the store starts reading it (the Postgres store first admits the
+// save; the file store reads at once), so a slow or stalled client holds a save
+// slot for at most this long. It stays below the proxy's 130 s
 // control-plane call timeout: an upload admitted within the store's 65 s
 // admission wait still answers in 65 + 60 = 125 s, before its proxy gives up.
 // 60 s carries a 32 MiB part (where wardyn-rec cuts one) at about 4.5 Mbit/s
@@ -85,8 +88,9 @@ const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 // any read error does: nothing is stored. A var so tests can shorten it.
 var recordingUploadReadWindow = 60 * time.Second
 
-// readWindow arms the connection's read deadline at the body's first Read. The
-// store reads only once it has admitted the save, so queue time is not charged.
+// readWindow arms the connection's read deadline at the body's first Read. A
+// store that queues saves reads only once it has admitted one, so queue time is
+// not charged.
 type readWindow struct {
 	io.ReadCloser
 	rc    *http.ResponseController
@@ -112,7 +116,10 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	}
 
 	// Cap the upload before masking; the reader preserves MaxBytesError so an
-	// over-cap upload remains a 413 rather than a successful truncated cast.
+	// over-cap upload remains a 413 rather than a successful truncated cast. That holds for a cast. A plain
+	// log is cut at the masked limit with the server's marker and answered 2xx, and when masking lengthens it
+	// so the masked output reaches the limit before the raw stream passes the upload cap, the raw overrun is
+	// never read and the cut log is stored all the same.
 	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
 
 	// PRIMARY masking point: read the upload body through a MaskingWriter so
@@ -198,8 +205,10 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if s.refuseUncoveredAgent(w, r, claims, "recordings.upload") {
 		return
 	}
-	var run types.AgentRun
-	if s.cfg.Store != nil {
+	// The run internalAuth's liveness gate already read (every part would otherwise read it again); a call
+	// that did not come through that gate reads it here.
+	run, ok := liveRunFromContext(r.Context())
+	if !ok && s.cfg.Store != nil {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID); err != nil {
 			writeServerError(w, r, "load run", err)
@@ -252,7 +261,8 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if len(fields) > 0 {
 		data = mustJSON(fields)
 	}
-	s.recordAudit(r.Context(), s.auditEvent(
+	// Detached: a client that hung up (HTTP/1 cancels the request context) must not cost the outcome row.
+	s.recordAudit(context.WithoutCancel(r.Context()), s.auditEvent(
 		&runIDUUID,
 		types.ActorAgent,
 		claims.SPIFFEID,
@@ -315,45 +325,114 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src, guard: guard}
-	r.masker = secretmask.NewMaskingWriter(&r.output, secretmask.NewMasker(snap))
+	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap), limit: recording.MaxCastBytes}
+	r.masker = secretmask.NewMaskingWriter(&r.output, r.mask)
 	return r
 }
 
 type recordingMaskReader struct {
 	src    io.Reader
 	output bytes.Buffer
+	mask   secretmask.Masker
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
-	err    error
-	guard  func() bool // nil, or false once the run is no longer covered
+	// held are the last bytes read, kept from the masker until the end says whether they are a log cut marker.
+	held  []byte
+	err   error
+	guard func() bool // nil, or false once the run is no longer covered
+	// limit is the most masked bytes a plain log may leave this reader. Masking can lengthen a body, so a log
+	// within the upload cap can come out past the store's. Past limit the output is cut and ends with
+	// maskCutMarker(limit) in place of the rest. The cut is of masked bytes after the masker has flushed, so it
+	// cannot split a secret. A cast is never cut here, its lines would break: the store refuses it.
+	limit int
+	sent  int    // masked bytes handed to the caller
+	head  []byte // the first bytes read, to tell a cast from a plain log
+	cut   bool
+}
+
+// maskCutMarker is the line a log cut at limit masked bytes ends with. It is not wardyn-rec's cut marker, which
+// says the sender cut the log; this one says the server did. A log wardyn-rec already cut that then passes the
+// limit ends with this marker alone: its own marker, and the original size it carried, are dropped with the rest.
+func maskCutMarker(limit int) string {
+	return fmt.Sprintf("\n[wardyn: log truncated: the masked log passed the %d byte limit; the rest was dropped]\n", limit)
+}
+
+const castHeadPrefix = `{"version"`
+
+// held back from the caller until the end or the cap is known: the room the cut marker needs.
+func (r *recordingMaskReader) holdBack() int {
+	if r.err != nil || r.cut || r.limit == 0 || strings.HasPrefix(string(r.head), castHeadPrefix) {
+		return 0
+	}
+	return len(maskCutMarker(r.limit))
+}
+
+// capOutput cuts a plain log's masked output at the limit: whatever was not yet handed on, up to the room the
+// marker needs, then the marker. The source is not read again.
+func (r *recordingMaskReader) capOutput() {
+	if r.limit == 0 || r.cut || r.sent+r.output.Len() <= r.limit || strings.HasPrefix(string(r.head), castHeadPrefix) {
+		return
+	}
+	marker := maskCutMarker(r.limit)
+	r.output.Truncate(r.limit - len(marker) - r.sent)
+	r.output.WriteString(marker)
+	r.cut, r.held = true, nil
+	if r.err == nil {
+		r.err = io.EOF
+	}
+}
+
+// finish masks the held bytes and flushes the masker. A body that ends with wardyn-rec's log cut marker
+// was cut just before it, so a secret the cut split is masked as far as it arrived.
+func (r *recordingMaskReader) finish(eof bool) error {
+	held := r.held
+	r.held = nil
+	if i := recording.LogCutAt(held); eof && i >= 0 {
+		_, err := r.masker.Write(held[:i])
+		err = cmp.Or(err, r.masker.CloseCut())
+		r.output.Write(r.mask.Mask(held[i:]))
+		return err
+	}
+	_, err := r.masker.Write(held)
+	return cmp.Or(err, r.masker.Close())
 }
 
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	for r.output.Len() == 0 && r.err == nil {
+	for r.output.Len() <= r.holdBack() && r.err == nil {
 		if r.guard != nil && !r.guard() {
 			r.err = errMaskUncovered
 			return 0, r.err
 		}
 		n, readErr := r.src.Read(r.chunk[:])
-		_, maskErr := r.masker.Write(r.chunk[:n])
+		r.held = append(r.held, r.chunk[:n]...)
+		if room := len(castHeadPrefix) - len(r.head); room > 0 {
+			r.head = append(r.head, r.chunk[:min(n, room)]...)
+		}
+		var maskErr error
+		if over := len(r.held) - recording.LogCutMarkerMax; over > 0 {
+			_, maskErr = r.masker.Write(r.held[:over])
+			r.held = append(r.held[:0], r.held[over:]...)
+		}
 		r.err = cmp.Or(maskErr, readErr)
-		if r.err != nil {
+		r.capOutput()
+		if r.err != nil && !r.cut {
 			// Flush the retained masked tail before exposing EOF or the source
 			// error, including MaxBytesError. Neither may discard buffered bytes.
-			closeErr := r.masker.Close()
+			closeErr := r.finish(r.err == io.EOF)
 			if r.err == io.EOF && closeErr != nil {
 				r.err = closeErr
 			}
+			r.capOutput()
 		}
 		if n == 0 && r.err == nil {
 			return 0, nil
 		}
 	}
-	n, _ := r.output.Read(p)
+	n, _ := r.output.Read(p[:min(len(p), r.output.Len()-r.holdBack())])
+	r.sent += n
 	if r.output.Len() > 0 {
 		return n, nil
 	}

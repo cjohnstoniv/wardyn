@@ -65,7 +65,7 @@ import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operato
 import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
-import { useAttachSession, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
+import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
 import { useSignedOut } from "../lib/use-signed-out";
 
 // Auth-mode detection
@@ -323,15 +323,18 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the CELL grid identical, and a fresh object every time would re-render
     // the panel for nothing.
     setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
-    // A pinned observer's resize frames are dropped server-side; send none.
-    if (!pin && ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+    // A pinned observer keeps the writer's grid locally but reports its REAL fit:
+    // the server records it as this observer's own size, which its promotion opens
+    // the writer exec at, and never lets it into the shared window.
+    const out = pin ? realFit(fit) : { cols: term.cols, rows: term.rows };
+    if (out && ws && ws.readyState === WebSocket.OPEN && out.cols > 0 && out.rows > 0) {
       const last = lastSentRef.current;
-      if (!force && last && last.ws === ws && last.cols === term.cols && last.rows === term.rows) return;
-      if (force && term.cols > 1) {
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
+      if (!force && last && last.ws === ws && last.cols === out.cols && last.rows === out.rows) return;
+      if (force && !pin && out.cols > 1) {
+        ws.send(JSON.stringify({ type: "resize", cols: out.cols - 1, rows: out.rows }));
       }
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-      lastSentRef.current = { ws, cols: term.cols, rows: term.rows };
+      ws.send(JSON.stringify({ type: "resize", cols: out.cols, rows: out.rows }));
+      lastSentRef.current = { ws, cols: out.cols, rows: out.rows };
     }
   }, []);
 
@@ -394,7 +397,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
   // Holder / take-over
   // Spectator: the server admitted us read-only because someone else holds the
-  // PTY. Our keystrokes and resize frames are dropped SERVER-side (attachPump),
+  // PTY. Our keystrokes are dropped SERVER-side (attachPump), as are our resize frames from the shared window,
   // so this is purely about saying so — the UI never had words for a state the
   // console has always been able to reach.
   const readOnly = mode?.readOnly === true;

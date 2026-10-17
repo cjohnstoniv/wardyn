@@ -26,7 +26,7 @@ import (
 type RunnerPoolScope string
 
 const (
-	// RunnerPoolOrganization pools hold remote-hosted runners only, and have no owner.
+	// RunnerPoolOrganization pools hold remote-hosted runners and the organization's own runners, and have no owner.
 	RunnerPoolOrganization RunnerPoolScope = "organization"
 	// RunnerPoolUser pools belong to one person.
 	RunnerPoolUser RunnerPoolScope = "user"
@@ -37,10 +37,11 @@ func (s RunnerPoolScope) Valid() bool {
 	return s == RunnerPoolOrganization || s == RunnerPoolUser
 }
 
-// Placement is the run placement a pool of this scope serves today: an
+// Placement is the run placement a pool of this scope serves by default: an
 // organization pool places on its remote-hosted runners, a user pool on its
-// owner's own self-hosted runners (a user pool's remote-hosted members are
-// listed but not yet candidates). Empty for a value outside the set.
+// owner's own self-hosted runners (placement also offers a user pool's
+// remote-hosted members, which this mapping does not say). Empty for a value
+// outside the set.
 func (s RunnerPoolScope) Placement() Placement {
 	switch s {
 	case RunnerPoolOrganization:
@@ -137,33 +138,44 @@ func ValidRemoteRunnerID(id string) bool {
 	return remoteRunnerIDRE.MatchString(id) && !remoteRunnerUUIDRE.MatchString(id)
 }
 
-// OrgPoolSelfHostedMsg refuses a self-hosted runner in an organization pool.
-const OrgPoolSelfHostedMsg = "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools."
+// OrgPoolSelfHostedMsg refuses a person's self-hosted runner in an organization pool.
+const OrgPoolSelfHostedMsg = "Organization pools take remote-hosted runners and the organization's own runners. A person's self-hosted runner can join its owner's user pools."
+
+// UserPoolOrgRunnerMsg refuses an organization's own runner in a user pool.
+const UserPoolOrgRunnerMsg = "An organization's runner joins organization pools only."
 
 // RunnerPoolMember is one runner of a pool: exactly one of RunnerID (a
 // self-hosted runner) and RemoteRunnerID (a remote-hosted runner) is set, and
-// Kind says which. A self-hosted membership is added by the runner's own owner
-// into their own user pool and never by anyone on their behalf.
+// Kind says which. A person's self-hosted membership is added by the runner's
+// own owner into their own user pool and never by anyone on their behalf; an
+// organization's own runner (RunnerOwnerOrg) is added by an administrator into
+// an organization pool.
 type RunnerPoolMember struct {
 	PoolID uuid.UUID  `json:"pool_id"`
 	Kind   RunnerKind `json:"kind"`
-	// RunnerID is a claimed self-hosted runner (user pools only).
+	// RunnerID is a claimed self-hosted runner: a person's in their user pool, or
+	// an organization's in an organization pool.
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 	// RemoteRunnerID is a remote-hosted runner (either scope).
 	RemoteRunnerID string    `json:"remote_runner_id,omitempty"`
 	AddedAt        time.Time `json:"added_at"`
 }
 
-// Validate refuses a member that names no runner, two runners, or a
-// self-hosted runner in an organization pool.
-func (m RunnerPoolMember) Validate(scope RunnerPoolScope) error {
+// Validate refuses a member that names no runner, two runners, a person's
+// self-hosted runner in an organization pool, or an organization's runner in a
+// user pool. kind is the self-hosted runner's owner kind (ignored for a
+// remote-hosted member).
+func (m RunnerPoolMember) Validate(scope RunnerPoolScope, kind RunnerOwnerKind) error {
 	hasRunner, hasRemote := m.RunnerID != nil, m.RemoteRunnerID != ""
 	switch {
 	case hasRunner == hasRemote:
 		return errors.New("a pool member names one runner")
-	case hasRunner && scope != RunnerPoolUser:
+	case hasRunner && scope == RunnerPoolOrganization && kind != RunnerOwnerOrg:
 		//lint:ignore ST1005 the sentence the refused person reads, as the pool editor shows it
 		return errors.New(OrgPoolSelfHostedMsg)
+	case hasRunner && scope == RunnerPoolUser && kind != RunnerOwnerPerson:
+		//lint:ignore ST1005 the sentence the refused person reads
+		return errors.New(UserPoolOrgRunnerMsg)
 	case hasRunner && *m.RunnerID == uuid.Nil:
 		return errors.New("runner_id is not a runner id")
 	case hasRemote && !ValidRemoteRunnerID(m.RemoteRunnerID):
@@ -189,6 +201,11 @@ type RunnerPoolDefaults struct {
 	Barrier ConfinementClass `json:"barrier,omitempty"`
 	// Recording is the organisation's alone, like Barrier: whether every run must be recorded.
 	Recording RecordingRequirement `json:"recording,omitempty"`
+	// Revision is the organisation's document alone: it starts at 1 and rises by one on every write
+	// to it. A read answers it, and a write that names it is refused (409 runner_pool_stale) when the
+	// document has moved on; a write that omits it is unconditional. A person's own document never
+	// carries one.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 // Validate checks the document's shape. Whether the pool exists, is permitted
@@ -203,6 +220,9 @@ func (d RunnerPoolDefaults) Validate() error {
 	}
 	if !d.Recording.Valid() {
 		return fmt.Errorf("recording %q is not preferred or required", d.Recording)
+	}
+	if d.Revision < 0 {
+		return errors.New("revision is the number you read")
 	}
 	return nil
 }

@@ -13,12 +13,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
+import { IDENTITY_CHECK_WAIT_MS, identityCheckSettled, SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
 import { setField } from "../test/set-field";
+import { FakeBroadcastChannel } from "../test/fake-broadcast-channel";
+import { AUTH_CHANNEL, COALESCE_MS, resetAuthSyncForTest } from "./lib/api/auth-sync";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
 
@@ -523,5 +525,156 @@ describe("App — a deliberate sign-out (#483)", () => {
     await expect(screen.findByRole("dialog", undefined, { timeout: 1000 })).rejects.toThrow();
     endLogout(json(200, {}));
     await screen.findByText("Admin token", { exact: true });
+  });
+});
+
+// DR-0020 / DR-0007: the other tabs of this browser. What they announce is only a prompt to ask /me again.
+describe("App — the other tabs of this browser (DR-0020)", () => {
+  let seq = 0;
+  const fromAnotherTab = async (kind: "changed" | "signed_out") => {
+    FakeBroadcastChannel.deliver(AUTH_CHANNEL, { v: 1, tab: "other-tab", seq: ++seq, at: Date.now(), kind });
+    await act(async () => {
+      vi.advanceTimersByTime(COALESCE_MS + 1);
+    });
+  };
+  const posted = () => FakeBroadcastChannel.posted.map((p) => (p.data as { kind: string }).kind);
+
+  beforeEach(() => {
+    vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
+    FakeBroadcastChannel.reset();
+    resetAuthSyncForTest();
+    seq = 0;
+  });
+  afterEach(() => {
+    // A write held for an identity check must not outlive the test that held it.
+    identityCheckSettled();
+    resetAuthSyncForTest();
+  });
+
+  async function mountWithDraft() {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    setField(await screen.findByLabelText("Note"), "hello");
+  }
+
+  it("signed out in another tab: this tab asks, says so, keeps the draft and sends nothing", async () => {
+    await mountWithDraft();
+    daemon.dead = true;
+    await fromAnotherTab("signed_out");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Note")).toHaveValue("hello");
+    await user.click(within(dialog).getByRole("button", { name: "Not now" }));
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  it("a sign-out heard in an earlier lapse is forgotten once that lapse ends", async () => {
+    await mountWithDraft();
+    daemon.dead = true;
+    await fromAnotherTab("signed_out");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeInTheDocument();
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // This tab's own session ends a moment later: that is not the other tab's sign-out.
+    daemon.dead = true;
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    const again = await screen.findByRole("dialog");
+    expect(within(again).queryByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeNull();
+    expect(within(again).getByText(REAUTH_DIALOG.BODY)).toBeInTheDocument();
+  });
+
+  it("a lapse that was not another tab's sign-out keeps the ordinary sentence", async () => {
+    await lapseMidPage();
+    expect(within(screen.getByRole("dialog")).queryByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeNull();
+    expect(within(screen.getByRole("dialog")).getByText(REAUTH_DIALOG.BODY)).toBeInTheDocument();
+  });
+
+  it("the same person signed back in elsewhere: the dialog closes at once, with no token typed here", async () => {
+    await lapseMidPage();
+    daemon.dead = false;
+    await fromAnotherTab("changed");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByLabelText("Note")).toHaveValue("hello");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("someone else signed in elsewhere: the read-only bar's tab reloads as them and sends nothing as them", async () => {
+    await lapseMidPage();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    Object.assign(daemon, { dead: false, me: { ...ME, principal: "someone-else" } });
+    const puts = count("PUT /api/v1/stub-save");
+    await fromAnotherTab("changed");
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(count("PUT /api/v1/stub-save")).toBe(puts);
+  });
+
+  it("a signed-in tab hearing a sign-in elsewhere as someone else reloads as them", async () => {
+    await mountWithDraft();
+    daemon.me = { ...ME, principal: "someone-else" };
+    await fromAnotherTab("changed");
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+  });
+
+  it("a Save pressed while the identity check is out sends nothing as the person who just signed in", async () => {
+    await mountWithDraft();
+    let answer!: (r: Response) => void;
+    heldMe = new Promise<Response>((r) => (answer = r));
+    daemon.me = { ...ME, principal: "someone-else" };
+    await fromAnotherTab("changed");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+    answer(json(200, daemon.me));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  it("a check that never answers refuses the Save at the bound and asks to sign in, draft kept", async () => {
+    await mountWithDraft();
+    daemon.meFails = true;
+    await fromAnotherTab("changed");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await act(async () => {
+      vi.advanceTimersByTime(IDENTITY_CHECK_WAIT_MS + 100);
+    });
+    await screen.findByRole("dialog");
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+    expect(screen.getByLabelText("Note")).toHaveValue("hello");
+  });
+
+  it("a tab on the sign-in screen enters the console when another tab signed in", async () => {
+    sessionStorage.clear();
+    daemon.dead = true;
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByText("Admin token", { exact: true });
+    daemon.dead = false;
+    await fromAnotherTab("changed");
+    expect(await screen.findByLabelText("Note")).toBeInTheDocument();
+  });
+
+  it("announces this tab's own sign-out and sign-in to the others", async () => {
+    await mountWithDraft();
+    const header = screen.getByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+    expect(posted()).toContain("signed_out");
+    setField(screen.getByLabelText("Admin token"), "good-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("Note");
+    expect(posted().at(-1)).toBe("changed");
   });
 });

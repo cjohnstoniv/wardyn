@@ -86,3 +86,36 @@ func TestSweepOrphanedSandboxes_TearsDownRefEmptyTerminalRun(t *testing.T) {
 		t.Error("a live, ref-tracked run's container must NOT be swept")
 	}
 }
+
+// orphanMinAge records the age a sweep was asked for.
+type orphanMinAge struct {
+	sandboxOrphanRunner
+	minAge time.Duration
+}
+
+func (r *orphanMinAge) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(uuid.UUID) bool) (int, error) {
+	r.minAge = minAge
+	return r.sandboxOrphanRunner.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
+}
+
+// TestRunnerOrphanSweepOnReady: a runner's READY sweeps, with no age gate, its terminal and row-less
+// runs (a create that died with runnerd), never a live run nor a ref-less run still in flight.
+func TestRunnerOrphanSweepOnReady(t *testing.T) {
+	h := newHarness(t)
+	failed, live, inflight, missing := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	st := &sandboxOrphanStore{runs: []types.AgentRun{
+		{ID: failed, State: types.RunFailed},
+		{ID: live, State: types.RunRunning, SandboxRef: "runner:x:live"},
+		{ID: inflight, State: types.RunPending},
+	}}
+	srv := New(baseTestConfig(h, st))
+	rn := &orphanMinAge{sandboxOrphanRunner: sandboxOrphanRunner{fakeRunner: &fakeRunner{}, live: []uuid.UUID{failed, live, inflight, missing}}}
+	srv.sweepRunnerOrphansOnReady(context.Background(), uuid.New(), rn)
+	swept := map[uuid.UUID]bool{}
+	for _, id := range rn.tornDown {
+		swept[id] = true
+	}
+	if rn.minAge != 0 || !swept[failed] || !swept[missing] || swept[live] || swept[inflight] {
+		t.Fatalf("minAge=%v swept=%v", rn.minAge, rn.tornDown)
+	}
+}

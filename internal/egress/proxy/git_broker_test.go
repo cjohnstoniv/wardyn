@@ -32,6 +32,7 @@ type gitBrokerUpstream struct {
 	mintCalls int
 	gitAuth   string // Authorization the upstream forge request carried
 	gitPath   string
+	gitHost   string // Host the upstream forge request carried
 	gitURI    string // request-target as received, still percent-encoded
 	gitQuery  string
 	gitProto  string
@@ -63,6 +64,7 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 		u.gitHits++
 		u.gitAuth = r.Header.Get("Authorization")
 		u.gitPath = r.URL.Path
+		u.gitHost = r.Host
 		u.gitURI = r.RequestURI
 		u.gitQuery = r.URL.RawQuery
 		u.gitProto = r.Header.Get("Git-Protocol")

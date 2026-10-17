@@ -69,3 +69,34 @@ func TestActivityUsesStartedPeerAndNeverReplaysOldMarker(t *testing.T) {
 		})
 	}
 }
+
+// A retired run is not published to or scanned for activity: it has none, and the per-second loop
+// would otherwise walk every run the runner ever held.
+func TestActivitySkipsRetiredRuns(t *testing.T) {
+	sub := &localSub{status: runner.Status{State: types.RunRunning}}
+	f := connectWireManager(t, t.TempDir(), sub, uuid.UUID.String, false)
+	m := f.manager
+	live, retired := createLocal(t, m, f.orgTime), createLocal(t, m, f.orgTime)
+	for _, id := range []uuid.UUID{live, retired} {
+		spool, err := runnerspool.Open(m.activityDir(id), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer spool.Close()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.state.Runs[retired]
+	r.Retired = true
+	m.state.Runs[retired] = r
+	m.publishActivity()
+	if runneractivity.Capture(m.activityDir(live)) == uuid.Nil {
+		t.Error("a live run was not published to")
+	}
+	if runneractivity.Capture(m.activityDir(retired)) != uuid.Nil {
+		t.Error("a retired run was published to")
+	}
+	if ids := m.liveRunIDs(); len(ids) != 1 || ids[0] != live {
+		t.Errorf("liveRunIDs = %v, want only %v", ids, live)
+	}
+}

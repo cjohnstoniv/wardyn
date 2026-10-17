@@ -162,9 +162,9 @@ func readRunnerExecution(ctx context.Context, tx pgx.Tx, runID uuid.UUID) (Runne
 }
 
 func runnerExecutionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (types.AgentRun, error) {
-	var owner, state string
+	var kind, owner, state string
 	var revoked *time.Time
-	err := tx.QueryRow(ctx, `SELECT owner,state,revoked_at FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&owner, &state, &revoked)
+	err := tx.QueryRow(ctx, `SELECT owner_kind,owner,state,revoked_at FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&kind, &owner, &state, &revoked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrRunnerExecutionRefused
 	}
@@ -178,7 +178,7 @@ func runnerExecutionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUI
 	if err != nil {
 		return run, err
 	}
-	if run.RunnerID == nil || *run.RunnerID != runnerID || run.CreatedBy != owner || run.Placement != types.PlacementLocal {
+	if run.RunnerID == nil || *run.RunnerID != runnerID || !runnerReportsOn(kind, owner, run.CreatedBy) || run.Placement != types.PlacementLocal {
 		return run, ErrRunnerExecutionRefused
 	}
 	return run, nil

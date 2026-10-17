@@ -353,11 +353,12 @@ That has two consequences worth knowing before you hit them:
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
 | `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat`, `bearer` | Refused (`placement_credential`), opted in to `runner_resident` or not: 0.9.0 delivers no resident value | The organisation mints or holds the token |
+| `minted_pat`, `bearer` | Refused, opted in to `runner_resident` or not: `runner_posture_unmet` when the run's confinement floor or the runner's posture is not met, otherwise `placement_credential`; a runner holds no Azure DevOps token | The organisation mints or holds the token |
 
 - A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
-- The opt-in and `entra.runner_resident_sandbox` (which requires it) are stored and audited, but they change no run in 0.9.0: placement refuses the token at delivery, "runner_resident delivery of this credential is not built yet".
-- `runner_resident` values are not yet delivered to runners in 0.9.0, so a run that needs such a token is still refused (`placement_credential`).
+- The opt-in and `entra.runner_resident_sandbox` (which requires it) are stored and audited, but they change no run yet: placement refuses the token at delivery, "runner_resident delivery of this credential is not built yet".
+- `runner_resident` delivery covers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` only, so a run that needs an Azure DevOps token resident is still refused (`runner_posture_unmet` when the confinement floor or the runner's posture is not met, otherwise `placement_credential`).
+- A stored git token for an Azure DevOps host is never `runner_resident` either, even though `git_pat_helper` is (`placement_credential`).
 - `TestLocalEligibility_ADOResidentIsOffByDefault` in [`internal/placement/resident_test.go`](../internal/placement/resident_test.go) pins both: refused without the opt-in, and held at delivery with it.
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).

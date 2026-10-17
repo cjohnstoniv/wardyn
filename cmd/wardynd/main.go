@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"os/user"
@@ -302,7 +303,7 @@ func run() error {
 	// otherwise github_token grants fail closed at mint with a clear error.
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
-	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg)
+	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg).WithTrustDomain(*f.trustDomain)
 	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
 	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
 	// double-writing the primary store. Guarded: a typed-nil Fanout would be a
@@ -429,6 +430,7 @@ func run() error {
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
+		TrustedProxies:      knobs.trustedProxies,
 		ProxyImage:          *f.proxyImage,
 		ProxyImageByArch:    proxyImageByArch,
 		UIDir:               *f.uiDir,
@@ -460,6 +462,7 @@ func run() error {
 		AWSSSOEndpointOverride:   awsSSOEndpointOverride,
 		AllowTestEndpoints:       *f.allowTestEndpoints,
 		AWSSSOProxyInject:        api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		AWSSSORefresh:            f.ssoRefresh.tuning(),
 		HarnessLoginCPUMillis:    *f.harnessLoginCPUMillis,
 		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
 		ProxyURL:                 *f.proxyURL,
@@ -489,6 +492,7 @@ func run() error {
 		AzureCLIEntra:            azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
+		RecordingSelection:       *f.recordingSel,
 		ScanAIAdvisor:            feats.scanAdvisor,
 		RequireOperatorSetEgress: *f.requireOpSetEgress,
 		// "off" is the only value that disables it: a typo must not silently
@@ -500,6 +504,7 @@ func run() error {
 		SecretStoreExternal:       storesExternally(secrets),
 		SecretKeyService:          keyService(secrets),
 		SecretKeyServiceStaticKey: keyServiceStaticKey(secrets),
+		SecretKeyServiceNodeRole:  keyServiceNodeRole(secrets),
 		KEKRequired:               *f.vault.kekRequired,
 		SecretLocalRows:           localRowsCounter(secrets),
 		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
@@ -866,12 +871,13 @@ type serveKnobs struct {
 	siteConfigSeed        *api.SiteConfigSeed
 	demoVideoBaseURL      string
 	governAdminRunsExempt []string
+	trustedProxies        []netip.Prefix
 }
 
 // parseServeKnobs reads, once at boot and failing closed on a malformed value, the two
 // files the Server is given (WARDYN_DEFAULT_POLICY and WARDYN_SITE_CONFIG_SEED_FILE) and
-// the two free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL and
-// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT.
+// the free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL,
+// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
 func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 	if k.defaultPolicy, err = api.LoadPolicySpec(*f.policyPath); err != nil {
 		return serveKnobs{}, err
@@ -880,6 +886,9 @@ func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 		return serveKnobs{}, err
 	}
 	if k.demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return serveKnobs{}, err
+	}
+	if k.trustedProxies, err = api.ParseTrustedProxies(*f.trustedProxies); err != nil {
 		return serveKnobs{}, err
 	}
 	k.governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)

@@ -41,7 +41,7 @@ describe("PUSH copy (#181)", () => {
   });
 });
 
-// The canon doc's PUSH rows (frozen and DRAFT), parsed back and compared row
+// The canon doc's PUSH rows (frozen), parsed back and compared row
 // for row: a reworded clause, a swapped dash or a row added on one side only
 // fails here. A key's argument names are the doc's own placeholders, so
 // `PUSH.WHAT(repo, person)` is checked as PUSH.WHAT("{repo}", "{person}").

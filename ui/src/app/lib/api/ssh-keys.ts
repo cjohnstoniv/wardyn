@@ -20,7 +20,7 @@ export const sshKeys = {
   // unparseable is refused, 422).
   async addKey(name: string, publicKey: string): Promise<SSHPublicKey> {
     const res = await wfetch("/me/ssh-keys", {
-      method: "POST",
+      method: "POST", asPerson: true,
       body: JSON.stringify({ name, public_key: publicKey }),
     });
     return asJson<SSHPublicKey>(res);
