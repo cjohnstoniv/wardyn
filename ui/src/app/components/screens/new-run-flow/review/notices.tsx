@@ -53,7 +53,7 @@ export interface NoticesProps {
   askedByYou: boolean;
   /** The preflight's `warnings`, the server's sentences, shown as they came. */
   warnings?: readonly string[];
-  /** The main drive was cut by a limit: that cut is folded into the shared "resources capped" warning too. */
+  /** The main drive was cut by a limit: that cut is folded into the shared "resources capped" warning too, as is a PIDs cut (applied.pids_limit). */
   diskCut?: boolean;
 }
 
@@ -63,7 +63,7 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, diskCu
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
     : [];
   const distinct = found.filter((n, i) => found.findIndex((m) => m.key === n.key) === i);
-  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut));
+  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped));
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">

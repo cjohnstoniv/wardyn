@@ -87,6 +87,19 @@ describe("Review notices", () => {
       expect(screen.queryByText(line)).toBeNull();
     });
 
+    it("stays beside the narrowed notice when the process limit was cut too (CPU + PIDs)", () => {
+      const withPids: AppliedResources = { ...cpuOnly, pids_limit: { requested: 4096, applied: 256, capped: true, source: "governance", source_name: "Platform team" } };
+      render(<Notices poolName="General" applied={withPids} askedByYou={false} warnings={[line]} />);
+      expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
+      expect(screen.getByText(line)).toBeInTheDocument();
+    });
+
+    it("is not kept by a process limit that was not cut", () => {
+      const uncut: AppliedResources = { ...cpuOnly, pids_limit: { requested: 64, applied: 64 } };
+      render(<Notices poolName="General" applied={uncut} askedByYou={false} warnings={[line]} />);
+      expect(screen.queryByText(line)).toBeNull();
+    });
+
     it("stays beside the narrowed notice when the main drive was cut too (CPU + disk)", () => {
       render(<Notices poolName="General" applied={cpuOnly} askedByYou={false} warnings={[line]} diskCut />);
       expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();

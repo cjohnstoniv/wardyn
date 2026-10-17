@@ -305,6 +305,25 @@ test.describe("New Run, Review: what the summaries say the server will do", () =
     await expect(page.getByText(line, { exact: true })).toBeVisible();
   });
 
+  test("a CPU cut and a PIDs cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
+    const line = "resources capped to operator maximum";
+    const cut = { source: "governance", source_name: "Platform team", capped: true };
+    await stub(page, {
+      preflight: {
+        ...CLEAR,
+        warnings: [line],
+        resources_applied: {
+          cpu_millis: { requested: 16000, applied: 8000, ...cut },
+          memory_mib: { requested: 4096, applied: 4096 },
+          pids_limit: { requested: 4096, applied: 256, ...cut },
+        },
+      } as never,
+    });
+    await openReviewWith(page, ENV);
+    await expect(page.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeVisible();
+    await expect(page.getByText(line, { exact: true })).toBeVisible();
+  });
+
   test("the lifetime is the one the server resolves: held to its cap, or No end when asked for and allowed (DR-0245)", async ({ page }) => {
     await stub(page, { preflight: { ...CLEAR, limits: SAVED_LIMITS } as never });
     await openReviewWith(page, [...ENV, "ends_after_sec: 36000"]);
