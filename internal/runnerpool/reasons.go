@@ -115,7 +115,7 @@ func DefaultUnavailablePersonalMsg() string {
 }
 
 func DefaultUnavailableOrgMsg() string {
-	return "Your organisation's default pool is no longer available. Choose a pool to continue."
+	return "Your organization's default pool is no longer available. Choose a pool to continue."
 }
 
 func StaleMsg(name string) string {
