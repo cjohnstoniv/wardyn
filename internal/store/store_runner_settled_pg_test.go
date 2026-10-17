@@ -197,7 +197,7 @@ func TestPG_RunnerSpoolAfterAcceptedExitIsAuditedHistory(t *testing.T) {
 }
 
 // An agent exit for a run the org already settled is acknowledged with no
-// receipt and no transition, so nothing is left for the exit sweeper.
+// transition, and nothing is left for the exit sweeper.
 func TestPG_RunnerExitAfterSettlementAcknowledgedWithoutTransition(t *testing.T) {
 	for _, scenario := range []string{"lease-ended", "killed", "completed", "stopped"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -226,8 +226,17 @@ func TestPG_RunnerExitAfterSettlementAcknowledgedWithoutTransition(t *testing.T)
 			if after := f.runJSON(t); after != before {
 				t.Fatalf("exit changed the settled run:\nbefore%s\nafter%s", before, after)
 			}
-			if n := f.count(t, stagedExitsSQL); n != 0 {
-				t.Fatalf("settled exit left %d receipts", n)
+			// A terminal run keeps the exit as a receipt-only row (its
+			// retirement receipt names it); it is never work or accepted.
+			want := 1
+			if scenario == "lease-ended" {
+				want = 0
+			}
+			if n := f.count(t, stagedExitsSQL+` AND receipt_only AND accepted_at IS NULL`); n != want || f.count(t, stagedExitsSQL) != want {
+				t.Fatalf("settled exit left %d receipt-only rows, want %d", n, want)
+			}
+			if work, err := f.st.ListRunnerExitWork(ctx, uuid.Nil); err != nil || len(work) != 0 {
+				t.Fatalf("settled exit became exit work: %+v %v", work, err)
 			}
 			if n := f.count(t, `SELECT count(*) FROM audit_events WHERE run_id=$1`); n != 0 {
 				t.Fatalf("settled exit authored %d audit rows", n)

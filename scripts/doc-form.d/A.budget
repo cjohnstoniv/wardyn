@@ -135,7 +135,8 @@
 # docs/AUDIT-ACTIONS.md 46379 adds 175 over 46204 (0.9.1 L8), measured: 36 for the run.create placement and pool fields (L7), the rest the AWS SSO refusal fields code and description, the refused reauth reason and the me.runners.tokens target.
 # docs/AUDIT-ACTIONS.md 46398 adds 9 over 46389, measured (0.9.3 RV2 r2): an Entra token redeemed for a branch listing is recorded as ado-refresh.
 # docs/AUDIT-ACTIONS.md 46561 adds 25 over 46536, measured at the merge of lane/093-RV2 into RR-K10: RV2's branch-list purpose next to RR-b's runner-resident text.
-docs/AUDIT-ACTIONS.md=46561 share=8
+# docs/AUDIT-ACTIONS.md 46634 adds 73 over 46561, measured (0.9.3 RR-K10): the runner.retire row.
+docs/AUDIT-ACTIONS.md=46634 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

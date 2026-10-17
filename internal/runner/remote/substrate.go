@@ -63,6 +63,10 @@ type Options struct {
 	// session's authenticated runner id. It runs on the peer read loop, so it
 	// must not block; an error refuses the stream. Nil refuses every relay.
 	Relay func(runnerID string, conn net.Conn) error
+	// OutputAccepted, when set, durably records that the org accepted run's
+	// output up to accepted (an absolute end that only grows) before the
+	// runner is told. It must be idempotent: a resent prefix repeats it.
+	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)

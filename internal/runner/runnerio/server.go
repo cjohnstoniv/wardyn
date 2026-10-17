@@ -280,32 +280,37 @@ func (s *Server) ForgetOutput(id uuid.UUID) error {
 		return nil
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.stopped = io.ErrClosedPipe
 	b.notify()
-	return s.discardOutputDir(b.dir)
+	tomb, err := s.entombOutputDir(b.dir)
+	b.mu.Unlock()
+	if err != nil || tomb == "" {
+		return err
+	}
+	return removeAll(tomb)
 }
 
 // releasedPrefix hides a released run's output while it is deleted, so an
 // interrupted delete never leaves a partial run directory for New to refuse.
 const releasedPrefix = ".released-"
 
-// discardOutputDir deletes a run's output directory through the hidden
-// tombstone name, so a delete interrupted partway leaves only a name New
-// removes, never a partial run directory it refuses. Output already gone is
-// success.
-func (s *Server) discardOutputDir(dir string) error {
-	tomb := filepath.Join(s.dir, releasedPrefix+filepath.Base(dir))
-	if err := os.RemoveAll(tomb); err != nil { // left by an earlier delete that failed partway
-		return err
-	}
+// removeAll is os.RemoveAll; tests replace it to interrupt or hold a delete.
+var removeAll = os.RemoveAll
+
+// entombOutputDir renames a run's output directory to a hidden tomb name
+// unique to this delete, so two deletes of one run never meet on one name and
+// a delete interrupted partway leaves only a name New removes, never a partial
+// run directory it refuses. The caller deletes the tomb after releasing its
+// locks. Output already gone returns "".
+func (s *Server) entombOutputDir(dir string) (string, error) {
+	tomb := filepath.Join(s.dir, releasedPrefix+filepath.Base(dir)+"-"+uuid.NewString())
 	if err := os.Rename(dir, tomb); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+			return "", nil
 		}
-		return err
+		return "", err
 	}
-	return os.RemoveAll(tomb)
+	return tomb, nil
 }
 
 // ReleaseOutput deletes a run's retained output once OutputSettled holds for
@@ -323,8 +328,8 @@ func (s *Server) ReleaseOutput(id uuid.UUID, ref string) error {
 		s.mu.Unlock()
 		return errors.New("runnerio: only settled output can be released")
 	}
-	tomb := filepath.Join(s.dir, releasedPrefix+id.String())
-	if err := os.Rename(b.dir, tomb); err != nil {
+	tomb, err := s.entombOutputDir(b.dir)
+	if err != nil {
 		b.mu.Unlock()
 		s.mu.Unlock()
 		return err
@@ -334,5 +339,8 @@ func (s *Server) ReleaseOutput(id uuid.UUID, ref string) error {
 	b.notify()
 	b.mu.Unlock()
 	s.mu.Unlock()
-	return os.RemoveAll(tomb)
+	if tomb == "" {
+		return nil
+	}
+	return removeAll(tomb)
 }

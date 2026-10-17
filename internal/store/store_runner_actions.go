@@ -344,9 +344,16 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return a, false, tx.Commit(ctx)
 	}
 	// A refusal changed nothing on the runner, so it closes the action even
-	// when the run has since moved on.
+	// when the run has since moved on. A retirement's kill or retire_run is
+	// held instead to the binding snapshot its run's cleared ref left.
 	if outcome != types.RunnerActionRefused && (run.SandboxRef != a.Ref || generation != a.Generation) {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		bound, err := retirementBindsResultTx(ctx, tx, a)
+		if err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
+		if !bound {
+			return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		}
 	}
 	a, err = scanAction(tx.QueryRow(ctx, `UPDATE runner_pending_actions SET applied_at = clock_timestamp(), outcome = $2, observed_at = $3
 		WHERE id = $1 AND applied_at IS NULL RETURNING `+actionCols, actionID, outcome, observedAt))
@@ -357,6 +364,9 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
 			return types.RunnerPendingAction{}, false, err
 		}
+	}
+	if err := settleRetirementResultTx(ctx, tx, a, outcome); err != nil {
+		return types.RunnerPendingAction{}, false, err
 	}
 	// A run that has since left the kept loss (killed, ended) has its own
 	// teardown record; the receipt still settles this exact action.

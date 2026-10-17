@@ -136,12 +136,16 @@ func TestForgetAndEraseOutputDiscardThroughATombstone(t *testing.T) {
 			if err := discard(s, id); err != nil {
 				t.Fatal(err)
 			}
+			// Each delete has its own tomb, so the earlier one is left for New.
 			entries, err := os.ReadDir(filepath.Join(dir, "output"))
-			if err != nil || len(entries) != 0 {
-				t.Fatalf("output directory holds %v %v after the delete, want nothing", entries, err)
+			if err != nil || len(entries) != 1 || entries[0].Name() != releasedPrefix+id.String() {
+				t.Fatalf("output directory holds %v %v after the delete, want only the earlier tomb", entries, err)
 			}
 			if _, err := New(runnertest.NewFake(), uuid.NewString(), dir); err != nil {
 				t.Fatalf("restart after the delete: %v", err)
+			}
+			if entries, err := os.ReadDir(filepath.Join(dir, "output")); err != nil || len(entries) != 0 {
+				t.Fatalf("output directory holds %v %v after the restart, want nothing", entries, err)
 			}
 		})
 	}

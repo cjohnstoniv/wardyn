@@ -67,10 +67,16 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	}
 	local := r.Ref
 	if a.Kind == types.RunnerActionRetire {
-		return m.retireRun(ctx, a, r)
+		res, err := m.retireRun(ctx, a, r)
+		if refused := (actionRefusal{}); errors.As(err, &refused) {
+			return m.refuseAction(ctx, a, err)
+		}
+		return res, err
 	}
 	if a.Retirement != nil || r.Retired {
-		return runnerwire.ActionResult{}, errors.New("unexpected retirement proof or retired identity")
+		// Refused, not failed: a plain error would fail Pending on every
+		// fresh session and keep the runner from READY.
+		return m.refuseAction(ctx, a, refusal(errors.New("unexpected retirement proof or retired identity")))
 	}
 	if a.Kind == types.RunnerActionQuarantine {
 		return m.quarantineRun(ctx, a, r)

@@ -6,7 +6,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -49,7 +52,57 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.
 	if teardownOK && s.cfg.Store != nil {
-		errs = append(errs, s.cfg.Store.SetSandboxRef(ctx, runID, ""))
+		errs = append(errs, s.clearSandboxRef(ctx, runID))
 	}
 	return errors.Join(append(errs, ctx.Err())...)
+}
+
+// clearSandboxRef clears a terminal run's ref. On Postgres a runner run's
+// binding is snapshotted first, in the same transaction, so its retirement
+// can still bind the runner's kill and retire_run results to it.
+func (s *Server) clearSandboxRef(ctx context.Context, runID uuid.UUID) error {
+	if st, ok := s.cfg.Store.(store.PG); ok {
+		return st.ClearSandboxRefRetaining(ctx, runID)
+	}
+	return s.cfg.Store.SetSandboxRef(ctx, runID, "")
+}
+
+// recordRunnerOutputWatermark records, before a runner run's create, whether
+// the create asks the runner to keep its output. A failed write leaves the run
+// with no row, which only means it is never retired (its runner keeps its
+// output and spool, as before retirement existed).
+func (s *Server) recordRunnerOutputWatermark(ctx context.Context, run types.AgentRun, capture bool) {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok || run.RunnerID == nil {
+		return
+	}
+	if err := st.InsertRunnerOutputWatermark(ctx, run.ID, capture); err != nil {
+		slog.WarnContext(ctx, "wardynd: runner run output watermark not recorded; the run will not be retired",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
+}
+
+// produceRunnerRetirements is the run watcher's retirement pass: it abandons
+// the open retirements of revoked runners, then takes one step of each
+// eligible terminal runner run's retirement (store.AdvanceRunnerRetirement).
+// The runner receives what it queues at its next fresh session.
+func (s *Server) produceRunnerRetirements(ctx context.Context) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok || s.cfg.RunnerAuditPrepare == nil {
+		return nil
+	}
+	if _, err := st.AbandonRevokedRunnerRetirements(ctx, s.cfg.RunnerAuditPrepare); err != nil {
+		return err
+	}
+	ids, err := st.RunnerRetirementCandidates(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if _, err := st.AdvanceRunnerRetirement(ctx, id, s.cfg.RunnerAuditPrepare); err != nil && !errors.Is(err, store.ErrNotFound) {
+			errs = append(errs, fmt.Errorf("run %s: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
 }

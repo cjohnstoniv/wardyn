@@ -41,8 +41,14 @@ func (h *refusalWatch) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) erro
 // writing any, so the test drives the bytes.
 func orgProcess(t *testing.T, server *Server) (*remote.Substrate, *refusalWatch) {
 	t.Helper()
+	return orgProcessWith(t, server, remote.Options{})
+}
+
+// orgProcessWith is orgProcess with the org Substrate's options.
+func orgProcessWith(t *testing.T, server *Server, opts remote.Options) (*remote.Substrate, *refusalWatch) {
+	t.Helper()
 	link := &remote.Link{}
-	sub := remote.New("laptop", link, remote.Options{})
+	sub := remote.New("laptop", link, opts)
 	watch := &refusalWatch{sub: sub, refused: make(chan struct{}, 16)}
 	link.SetHandler(watch)
 	caps, _ := json.Marshal(runnerwire.Caps{Support: runnertest.NewFake().Support})

@@ -348,6 +348,9 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
+	// The dispatcher binds the output writer before Created, so a run whose
+	// create captured output says so here, before its sandbox is used.
+	r.OutputCapture = spec.ExecOutput != nil
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()

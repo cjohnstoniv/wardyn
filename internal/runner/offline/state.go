@@ -36,6 +36,9 @@ type localRun struct {
 	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
 	Exit            *runnerwire.AgentExit        `json:"exit,omitempty"`
 	ExitAcked       bool                         `json:"exit_acked,omitempty"`
+	// OutputCapture records that the create handed the sandbox an output
+	// writer; a retirement that says the run had no output is refused when set.
+	OutputCapture bool `json:"output_capture,omitempty"`
 }
 type localState struct {
 	RunnerID uuid.UUID                   `json:"runner_id"`
