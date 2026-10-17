@@ -24,7 +24,7 @@ import { providerControlId, setModelProvider, startsWithRun, type HarnessNames }
 import { useNewRunDispatch } from "../../new-run-route";
 import { useAnnounce } from "../step-shell";
 import { EffectChoice } from "./effect-choice";
-import { addToolRule, personalRules, removeToolRule, setDefaultEffect, setMcpHarnesses, type McpComponentRef } from "./harness-edits";
+import { addToolRule, personalRules, removeToolRule, setDefaultEffect, mcpComponentIndex, setMcpHarnesses, type McpComponentRef } from "./harness-edits";
 import { McpToggles } from "./mcp-toggles";
 import { defaultChoices, reasonText } from "./tool-facts";
 import { ToolRules } from "./tool-rules";
@@ -131,11 +131,11 @@ function HarnessCard({ fact, access, harnessSet, intent, name, answered, status,
   const componentId = (server: AccessRow) => server.source.id ?? server.id;
   // The person's own choice for the server stands until the server's next answer; before one, the server's fact does.
   const harnessesOf = (server: AccessRow): string[] =>
-    ((intent.components ?? []) as McpComponentRef[]).find((c) => c.id === componentId(server))?.mcp_harnesses ?? server.mcp?.harnesses ?? [];
+    ((intent.components ?? []) as McpComponentRef[])[mcpComponentIndex(intent, componentId(server), server.name)]?.mcp_harnesses ?? server.mcp?.harnesses ?? [];
   const toggle = (server: AccessRow, on: boolean) => {
     const now = harnessesOf(server);
     const next = on ? [...new Set([...now, fact.harness])] : now.filter((h) => h !== fact.harness);
-    edit((i) => setMcpHarnesses(i, componentId(server), next));
+    edit((i) => setMcpHarnesses(i, componentId(server), server.name, next));
   };
 
   return (

@@ -305,6 +305,36 @@ describe("HarnessSetup", () => {
       expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: ["codex-cli"] }]);
     });
 
+    describe("an inline server (DR-0250)", () => {
+      const INLINE_ROW = { ...MCP_DOCS, id: "component:inline:1", source: { kind: "component", id: "inline:1", name: "Docs" } } as typeof MCP_DOCS;
+      const inline = { name: "Docs", inline: { hosts: ["docs.example.com"], mcp: { url: "https://docs.example.com/mcp", transport: "http" } } };
+      const TWO = [{ id: "claude-code", kind: "harness" as const }, { id: "codex-cli", kind: "harness" as const }];
+
+      it("writes the harnesses to the inline reference at the server's place, and leaves the others alone", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, inline] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Codex CLI").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components).toEqual([{ id: "other" }, { ...inline, mcp_harnesses: ["claude-code", "codex-cli"] }]);
+        await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components[1]).toMatchObject({ mcp_harnesses: ["codex-cli"] });
+      });
+
+      it("keeps an explicit empty binding", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, inline] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components[1]).toMatchObject({ mcp_harnesses: [] });
+        expect(card("Claude Code").getByRole("checkbox", { name: "Docs" }).getAttribute("aria-checked")).toBe("false");
+      });
+
+      it("changes nothing when the server's place no longer holds that component", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, { ...inline, name: "Renamed" }] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Codex CLI").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components).toEqual(intent.components);
+      });
+    });
+
     it("disables the toggle for a harness Wardyn cannot configure, with the reason", () => {
       show([CUSTOM], { tools: [{ id: "custom", kind: "harness" }] });
       const box = card("Your own tools").getByRole("checkbox", { name: "Docs" });
