@@ -189,7 +189,7 @@ describe("runnersBiggest", () => {
   });
 });
 
-// An edit sends the pool's limits whole, and the form shows durations in whole minutes, hours or days with
+// An edit sends the pool's limits whole, and the form shows durations exactly, in seconds, minutes, hours or days, with
 // an unset default as 1 hour. A duration the person did not touch goes back as it was read.
 describe("an edit keeps the durations it did not touch", () => {
   const ODD: RunnerPoolLimits = {
@@ -236,12 +236,14 @@ describe("an edit validates and sends what it will send, field by field", () => 
     expect(e["bg.life"]).toBe("Background tasks, lifetime: the default (1 minute) can't be longer than the maximum (20 seconds).");
   });
 
-  it("FR-0151: a default typed to match the maximum as shown is accepted, and the maximum goes as shown", () => {
+  it("FUG-L452: a duration that is not a whole minute shows in seconds, exact, so a default typed to match it is accepted", () => {
     const v = fromPool({ name: "odd", limits: ODD });
-    expect(v.bg.lifeMn).toBe("3");
-    const edited = { ...v, bg: { ...v.bg, lifeDn: "3", lifeDu: "minutes" as const } };
+    expect(v.bg).toMatchObject({ lifeDn: "90", lifeDu: "seconds", lifeMn: "150", lifeMu: "seconds" });
+    const edited = { ...v, bg: { ...v.bg, lifeDn: "150" } };
     expect(validate(edited, ODD)).toEqual({});
-    expect(toLimits(edited, ODD).background?.lifetime).toEqual({ default_sec: 180, max_sec: 180 });
+    expect(toLimits(edited, ODD).background?.lifetime).toEqual({ default_sec: 150, max_sec: 150 });
+    const over = validate({ ...v, bg: { ...v.bg, lifeDn: "3", lifeDu: "minutes" as const } }, ODD);
+    expect(over["bg.life"]).toBeTruthy();
   });
 
   it("FR-0117: a Maximum refusal marks the Maximum, a Default refusal the Default", () => {

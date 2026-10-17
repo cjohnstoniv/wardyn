@@ -137,7 +137,7 @@ describe("edit", () => {
     expect(await screen.findByText("account page")).toBeInTheDocument();
   });
 
-  // The form shows durations in whole minutes and an unset default as 1 hour; a rename sends the pool's
+  // The form shows durations exactly (seconds, minutes, hours or days) and an unset default as 1 hour; a rename sends the pool's
   // durations as they were read.
   it("a rename sends 90 s and an idle stop that never stops by default exactly as read", async () => {
     const limits = {
