@@ -252,6 +252,11 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 			return nil, err
 		}
 		defer func() { err = d.finishMutation(ctx, method, ref, uuid.Nil, generation, err) }()
+		if method == runnerwire.MethodExec || method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+			// An attempted Exec generation can no longer admit the selftest, and a
+			// killed or ended sandbox has none to run.
+			d.selftests.Delete(ref)
+		}
 	}
 	result, err = d.dispatchRef(ctx, method, ref, a)
 	if err != nil || !changing {

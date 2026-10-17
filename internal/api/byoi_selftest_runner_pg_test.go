@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -174,8 +175,14 @@ func TestPG_RunnerBYOI_OldRunnerFailsClosed(t *testing.T) {
 	f.oldRunner.Store(true)
 	f.disconnect()
 	f.disconnect = f.connect(t)
-	if c, _ := f.srv.runnerEndpoint(f.rn.ID).sub.Caps(); c.BYOISelftest {
-		t.Fatal("the old runner advertises the selftest")
+	// connect returns while the first session's caps are still in place; wait for the new session's.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if c, _ := f.srv.runnerEndpoint(f.rn.ID).sub.Caps(); !c.BYOISelftest {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the old runner advertises the selftest")
+		}
 	}
 	run, e := f.placedBYOI(t)
 

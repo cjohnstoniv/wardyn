@@ -136,6 +136,13 @@ func remoteRun(t *testing.T, sub *execPerDrain, image string) (*remote.Substrate
 // caps advertise the selftest (false: a runner from before it).
 func remoteRunWith(t *testing.T, sub *execPerDrain, image string, check func(context.Context, string, uuid.UUID) error, advertise bool) (*remote.Substrate, string, *sealedOutput) {
 	t.Helper()
+	org, _, ref, out := remoteRunD(t, sub, image, check, advertise)
+	return org, ref, out
+}
+
+// remoteRunD is remoteRunWith that also returns the runner's dispatcher.
+func remoteRunD(t *testing.T, sub *execPerDrain, image string, check func(context.Context, string, uuid.UUID) error, advertise bool) (*remote.Substrate, *Dispatcher, string, *sealedOutput) {
+	t.Helper()
 	id := uuid.NewString()
 	server, err := runnerio.New(sub, id, t.TempDir())
 	if err != nil {
@@ -173,7 +180,7 @@ func remoteRunWith(t *testing.T, sub *execPerDrain, image string, check func(con
 	if err != nil {
 		t.Fatal(err)
 	}
-	return org, sb.Ref, out
+	return org, d, sb.Ref, out
 }
 
 // execAndWait is the org's dispatch of one exec: Exec, then Wait for its exit.
@@ -387,5 +394,32 @@ func TestSelftestLogKeepsABoundedTail(t *testing.T) {
 	}
 	if len(l.tail) != selftestLogMax || !bytes.HasSuffix(l.tail, []byte("end")) {
 		t.Fatalf("kept %d bytes ending %q", len(l.tail), l.tail[len(l.tail)-3:])
+	}
+}
+
+func owedSelftests(d *Dispatcher) (n int) {
+	d.selftests.Range(func(any, any) bool { n++; return true })
+	return n
+}
+
+// A sandbox's owed selftest is dropped once the task's Exec has attempted its
+// generation (the selftest could no longer be admitted) or the sandbox is
+// killed, so the runner's table does not grow with every BYOI create.
+func TestBYOISelftestOwedEntriesDoNotAccumulate(t *testing.T) {
+	image := "wardyn-byoi/" + uuid.NewString() + ":latest"
+	for _, end := range []string{"exec", "kill"} {
+		sub := newExecPerDrain()
+		org, d, ref, _ := remoteRunD(t, sub, image, admitTaskGeneration, true)
+		if got := owedSelftests(d); got != 1 {
+			t.Fatalf("owed selftests after create = %d, want 1", got)
+		}
+		if end == "exec" {
+			execAndWait(t, org, ref, []string{"/usr/local/bin/agent-run", "do the thing"})
+		} else if err := org.KillSandbox(t.Context(), ref); err != nil {
+			t.Fatal(err)
+		}
+		if got := owedSelftests(d); got != 0 {
+			t.Fatalf("owed selftests after %s = %d, want 0", end, got)
+		}
 	}
 }
