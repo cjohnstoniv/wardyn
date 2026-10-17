@@ -175,6 +175,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
+	// The run's runner_resident values, each read where its placeholder is
+	// authored; deliverResident hands them to the runner before the create.
+	var resident []residentValue
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -674,6 +677,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	execution, err := s.leaseRunOnRunner(ctx, run)
 	var sb runner.Sandbox
 	if err == nil {
+		// Its runner_resident values go to the runner after the lease and before
+		// the create that names them; a refusal has already failed the run.
+		if !s.deliverResident(createCtx, run, spec.ProxyConfig.Policy, resident) {
+			endStartWait()
+			stopCreateLease()
+			return
+		}
 		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
 	}
 	endStartWait()

@@ -422,8 +422,14 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 
 // DeliverResident hands one runner_resident value to the runner's keystore,
 // after claim and before CreateSandbox. It is the only way the value travels:
-// never /internal/*, never inside CreateSandbox.
+// never /internal/*, never inside CreateSandbox. The Dispatch gate is read
+// first, as for CreateSandbox: with runners turned off nothing is sent.
 func (s *Substrate) DeliverResident(ctx context.Context, a runnerwire.DeliverResidentArgs) error {
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.call(ctx, runnerwire.MethodDeliverResident, a, nil); err != nil {
 		return err
 	}

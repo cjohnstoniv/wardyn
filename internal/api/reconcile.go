@@ -599,6 +599,9 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
 	// Unclaimed runners that outlived their 24h wait.
 	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
+	// Ended runs' runner_resident values, erased by the runners this replica
+	// holds; on every replica, after the passes above that end runs.
+	pass("runner resident erase sweep", s.sweepResidentErase(ctx))
 	return first
 }
 

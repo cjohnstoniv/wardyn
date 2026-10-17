@@ -35,6 +35,11 @@ const (
 	PurposeADORefresh   Purpose = "ado-refresh"
 	PurposeStatus       Purpose = "status"
 
+	// PurposeRunnerResident names a dispatch read of a runner_resident value,
+	// handed to the run's runner. Its site records the secret.read itself
+	// (SiteAudited), with the grant, the runner and its posture.
+	PurposeRunnerResident Purpose = "runner-resident"
+
 	// PurposeUnmarked is recorded, as a failure, for a Get whose caller set no
 	// purpose: Audited refuses it before the store is read.
 	PurposeUnmarked Purpose = "unmarked"
