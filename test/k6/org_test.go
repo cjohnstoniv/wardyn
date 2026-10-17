@@ -182,6 +182,12 @@ type orgRun struct {
 // runner and returns its id; extra fields join the request.
 func (o *orgEnv) launch(t *testing.T, task string, extra map[string]any) string {
 	t.Helper()
+	return o.launchUntil(t, t, task, extra)
+}
+
+// launchUntil is launch with the run killed when owner ends.
+func (o *orgEnv) launchUntil(t, owner *testing.T, task string, extra map[string]any) string {
+	t.Helper()
 	body := map[string]any{"agent": "claude-code", "task": task, "placement": "local", "runner_pool_id": o.pool(t), "inline_policy": orgPolicy(nil)}
 	for k, v := range extra {
 		body[k] = v
@@ -191,7 +197,7 @@ func (o *orgEnv) launch(t *testing.T, task string, extra map[string]any) string 
 	if code != http.StatusCreated && code != http.StatusAccepted && code != http.StatusOK {
 		t.Fatalf("POST /runs = %d %s", code, raw)
 	}
-	t.Cleanup(func() { o.api(t, o.secToken, http.MethodPost, "/api/v1/runs/"+r.ID+"/kill", nil, nil) })
+	owner.Cleanup(func() { o.api(owner, o.secToken, http.MethodPost, "/api/v1/runs/"+r.ID+"/kill", nil, nil) })
 	return r.ID
 }
 
@@ -226,7 +232,14 @@ func (o *orgEnv) waitState(t *testing.T, id string, within time.Duration, states
 // live launches a long-running run and waits for its proxy and agent pods to run.
 func (o *orgEnv) live(t *testing.T, extra map[string]any) string {
 	t.Helper()
-	id := o.launch(t, "sleep 3000", extra)
+	return o.liveUntil(t, t, extra)
+}
+
+// liveUntil is live with the run's kill tied to owner's end instead of t's, for a run a later case
+// continues from.
+func (o *orgEnv) liveUntil(t, owner *testing.T, extra map[string]any) string {
+	t.Helper()
+	id := o.launchUntil(t, owner, "sleep 3000", extra)
 	o.waitState(t, id, 4*time.Minute, "RUNNING")
 	for _, pod := range []string{"wardyn-proxy-" + id, "wardyn-agent-" + id} {
 		o.kubectl(t, "-n", o.runsNS, "wait", "--for=condition=Ready", "pod/"+pod, "--timeout=180s")
@@ -543,9 +556,13 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 	}
 	kubelet(t, nodeName, false) // restarted by restart-fence-replay-reregister-sinks, or at the suite's end
 	killed := time.Now()
-	if code, raw := o.api(t, o.secToken, http.MethodPost, "/api/v1/runs/"+id+"/kill", nil, nil); code >= 300 {
+	// The kill marks the run KILLED; with the node's kubelet stopped, its teardown cannot be proven and
+	// the org says so (500, "may not be fully contained"). The fence, not the teardown, is under test.
+	code, raw := o.api(t, o.secToken, http.MethodPost, "/api/v1/runs/"+id+"/kill", nil, nil)
+	if code >= 300 && !(code == http.StatusInternalServerError && strings.Contains(raw, `"state":"KILLED"`)) {
 		t.Fatalf("kill = %d %s", code, raw)
 	}
+	note(t, "kill answered %d", code)
 	cut := next(t, ch, "cut after", 90*time.Second)
 	after := time.Since(killed).Round(time.Second)
 	redial := next(t, ch, "redial", 20*time.Second)
@@ -665,9 +682,12 @@ func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
 // refused permanently.
 func (o *orgEnv) lapseSetup(t *testing.T) {
 	o.lapse = &lapseRun{}
+	parent := t
 	ok := t.Run("self-lapse-setup", func(t *testing.T) {
 		o.sched(t, o.workers(t)[len(o.workers(t))-1])
-		id := o.live(t, nil)
+		// Killed only at the suite's end: a kill when this setup ends would tear the sandbox down
+		// before its next renew could be refused.
+		id := o.liveUntil(t, parent, nil)
 		o.lapse.id = id
 		o.waitAudit(t, id, 2*time.Minute, "a successful renew", func(r auditRow) bool { return r.Action == "identity.renew" && r.Outcome == "success" })
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",

@@ -2,8 +2,8 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# scripts/k6-kind-conformance.sh — lane K6's kind conformance harness for the Kubernetes runner
-# (design K1 §8). For each kubelet version (the 1.31 floor and the latest kind node image) it:
+# scripts/k6-kind-conformance.sh — the kind conformance harness for the Kubernetes runner. For
+# each kubelet version (the 1.31 floor and the latest kind node image) it:
 #   - creates its own cluster, wardyn-k6-<pid>, one control plane and two workers, on Calico
 #     (a CNI that enforces NetworkPolicy);
 #   - builds and loads the wardynd, runnerd and proxy images and the harness's agent image
