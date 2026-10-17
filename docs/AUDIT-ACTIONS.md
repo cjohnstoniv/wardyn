@@ -727,7 +727,7 @@ A [service identity](operations/api-tokens.md#service-identities) is its own act
   - The sponsor enters a service's run only with the `service_attach` grant ([Capabilities](operations/capabilities.md#service_attach)).
   - Their `session.attach` rows and every UI-gateway row of the session (`ui.authorize` on success, `ui.start`, `ui.open`, `ui.close` and a re-check's `ui.authorize` denial) keep the sponsor as the `human` actor and add `service_identity` and `entry` `sponsor`.
   - A `ui.authorize` denial of a refused redemption is written before the session exists, so it names the refused principal and the reason only.
-  - A refused ticket mint is the foreign-run `404` with an `authz.denied` row: reason `capability_feature` without the grant, or `attach_ticket_foreign_run` when the caller is no longer the sponsor.
+  - A refused ticket mint is the foreign-run `404` with an `authz.denied` row: reason `capability_feature` without the grant, or `sponsor_not_entitled` when the caller's sponsorship is not, or no longer, in effect.
   - SSH never admits a sponsor: the failure row carries only `reason` `run_owner_only`.
 
 ## Delegation (portals)
