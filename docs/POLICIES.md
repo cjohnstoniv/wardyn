@@ -1105,7 +1105,7 @@ So an entry a pattern matches is judged one of two ways:
 | `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above; each entry is at most **256 bytes** and the list has no count cap. See [`deny_paths`](#deny_paths). |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
-| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..1024** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
+| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
 | `deny_new_executables` | `bool` | `false` | **Not supported yet:** a policy that sets it `true` is refused (`400`) at write time, because the broker cannot yet tell a newly added executable from an edit to an existing one. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
@@ -1138,7 +1138,7 @@ So an entry a pattern matches is judged one of two ways:
 
 - Refuses a push that introduces a file larger than this many MiB.
 - `0`/absent is **off**.
-- Bounded at write time to **0..1024**.
+- Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
   - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,
