@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,22 +137,7 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 			}
 			continue
 		}
-		var err error
-		switch {
-		case ref.self != nil && add:
-			_, err = c.AddMyRunnerToPool(ctx, pool.ID, *ref.self)
-		case ref.self != nil:
-			err = c.RemoveMyRunnerFromPool(ctx, pool.ID, *ref.self)
-		case add && mine:
-			_, err = c.AddMyPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		case add:
-			_, err = c.AddRunnerPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		case mine:
-			err = c.RemoveMyPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		default:
-			err = c.RemoveRunnerPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		}
-		held, err := heldForApproval(cmd, err)
+		held, err := heldForApproval(cmd, writePoolMember(ctx, c, pool.ID, ref, add, mine))
 		if err != nil && len(refs) == 1 {
 			return err
 		}
@@ -168,19 +154,8 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		}
 		done = append(done, label)
 	}
-	if len(done) > 0 {
-		var err error
-		switch {
-		case add:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool.Name)
-		case len(done) > 1:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s are no longer in %s\n", joinAnd(done), pool.Name)
-		default:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer in %s\n", done[0], pool.Name)
-		}
-		if err != nil {
-			return err
-		}
+	if err := reportPoolMembers(cmd, pool.Name, done, add); err != nil {
+		return err
 	}
 	for _, line := range failed {
 		if _, err := fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {
@@ -191,6 +166,42 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		return fmt.Errorf("%d of %d runners failed; the lines above say which", len(failed), len(refs))
 	}
 	return nil
+}
+
+// writePoolMember adds ref to pool or takes it out, through your own routes for a pool of yours or
+// one of your runners, and through the organization's otherwise.
+func writePoolMember(ctx context.Context, c *sdk.Client, poolID uuid.UUID, ref runnerRef, add, mine bool) error {
+	var err error
+	switch {
+	case ref.self != nil && add:
+		_, err = c.AddMyRunnerToPool(ctx, poolID, *ref.self)
+	case ref.self != nil:
+		err = c.RemoveMyRunnerFromPool(ctx, poolID, *ref.self)
+	case add && mine:
+		_, err = c.AddMyPoolRemoteRunner(ctx, poolID, ref.remote)
+	case add:
+		_, err = c.AddRunnerPoolRemoteRunner(ctx, poolID, ref.remote)
+	case mine:
+		err = c.RemoveMyPoolRemoteRunner(ctx, poolID, ref.remote)
+	default:
+		err = c.RemoveRunnerPoolRemoteRunner(ctx, poolID, ref.remote)
+	}
+	return err
+}
+
+// reportPoolMembers says which runners went in or came out of pool; it says nothing when none did.
+func reportPoolMembers(cmd *cobra.Command, pool string, done []string, add bool) error {
+	var err error
+	switch {
+	case len(done) == 0:
+	case add:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool)
+	case len(done) > 1:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s are no longer in %s\n", joinAnd(done), pool)
+	default:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer in %s\n", done[0], pool)
+	}
+	return err
 }
 
 // poolMemberFailure is the line for one runner the server refused, with the server's own words.
