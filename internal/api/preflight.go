@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -188,10 +191,11 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 // resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
 // image/devcontainer_repo XOR violation surfaced by a workspace's base_image,
 // target collision), the onboarded-workspace gate, the workspace
-// credential-binding fold, and the confinement floor check below. Not
+// credential-binding fold, the agent-required, reserved-task and
+// interactive-hold 400s, and the confinement floor check below. Not
 // reproduced (unreachable via the wizard body this endpoint serves): the
-// agent-required 400, the BYOI image/devcontainer 400s, and the cloud_sts
-// identity-provider 422 — launch still enforces all of them.
+// BYOI image/devcontainer 400s and the cloud_sts identity-provider 422 —
+// launch still enforces both.
 // TestPreflightMirrorsLaunchGates now scans THROUGH decodeAndValidateCreateRun
 // rather than excepting the whole wrapper, so this inventory is executable gate
 // by gate instead of wrapper by wrapper.
@@ -228,11 +232,19 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Surfaced by narrowing this pair's parity exception rather than by a
 	// second field report. With no AgentProviders block agentRosterRefusal
 	// short-circuits to "" and Review is byte-for-byte what it was.
+	if msg := agentRequirementError(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonAgentRequired, msg)
+		return
+	}
 	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
 		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
+		return
+	}
+	if reservedRunTasks[req.Task] {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -273,6 +285,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Review never previews a request launch refuses.
 	if req.IntegrationID != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
+		return
+	}
+	// Create's no-task coercion, then its interactive/hold conflict, before the derivation below.
+	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
+		req.Interactive = true
+	}
+	if msg := interactiveToolApprovalsError(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
 		return
 	}
 	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
@@ -355,6 +375,18 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
 	// The autonomy gate's own sentences, as create carries them (runs.go), so Review shows a derived hold.
 	warnings = append(warnings, f.autonomyWarns...)
+	// …and create's managed-settings sentence. A pooled run is read as the queued path reads it, against
+	// every runner it could take; otherwise against the runner create would bind: the named one, or the
+	// deployment's executor.
+	var bound *types.AgentRun
+	if !f.place.pooled {
+		bound = &types.AgentRun{}
+		if id := requestRunnerID(req); id != uuid.Nil {
+			bound.RunnerID = &id
+		}
+	}
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a

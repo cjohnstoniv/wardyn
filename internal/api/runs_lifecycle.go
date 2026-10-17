@@ -66,13 +66,8 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// Runner completion is generation-bound durable evidence. The receipt
 		// worker owns the transition; Wait/reconcile must not race its CAS.
 		if s.cfg.Store != nil {
-			// A read error does not prove the run is runner-placed, so it watches on:
-			// returning here would abandon the run to the sweep on one transient error.
 			run, err := s.cfg.Store.GetRun(base, runID)
-			if err != nil {
-				slog.WarnContext(base, "wardynd: completion watcher could not read the run; watching anyway",
-					slog.String("run_id", runID.String()), slog.Any("err", err))
-			} else if run.Placement == types.PlacementLocal && run.RunnerID != nil {
+			if err != nil || (run.Placement == types.PlacementLocal && run.RunnerID != nil) {
 				return
 			}
 		}

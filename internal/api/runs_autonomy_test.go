@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -1012,6 +1013,41 @@ func TestAutonomyWarningsOnPreflight(t *testing.T) {
 			}
 			if got := strings.Contains(w.Body.String(), "tool_approvals was set to hold"); got != tc.want {
 				t.Errorf("Review says the derived hold = %v, want %v: %s", got, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+// A hold run on a runner that cannot deliver managed files is told so in Review, in create's words.
+func TestManagedSettingsUndeliveredWarningOnPreflight(t *testing.T) {
+	srv, _, _ := govEscapeFixture(t, autonomyCapStore(govProfile("autonomy-warnings")))
+	srv.cfg.Runner = &fakeRunner{noManagedFiles: true}
+	body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", govSession(t, "sub-autonomy", []string{"eng"}, false), body)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "claude-code's managed settings for tool approvals on hold are not delivered") {
+		t.Fatalf("preflight = %d, want 200 with the undelivered sentence: %s", w.Code, w.Body.String())
+	}
+}
+
+// Review answers the 400s create answers for a request create would refuse.
+func TestPreflightAnswersCreatesRequestRefusals(t *testing.T) {
+	for _, tc := range []struct{ name, body, reason string }{
+		{"no agent", `{"task":"t","confinement_class":"CC2"}`, reasonAgentRequired},
+		{"a server-reserved task", `{"agent":"claude-code","task":"workspace record","confinement_class":"CC2"}`, reasonRunTaskReserved},
+		{"hold on an interactive run", `{"agent":"claude-code","task":"t","interactive":true,"confinement_class":"CC2","tool_approvals":"hold"}`, reasonToolApprovalsHoldInteractiveConflict},
+		{"hold on a run with no task", `{"agent":"claude-code","confinement_class":"CC2","tool_approvals":"hold"}`, reasonToolApprovalsHoldInteractiveConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("autonomy-warnings")
+			p.Limits = types.GovernanceLimits{} // govProfile denies interactive runs, a 403 that comes before these 400s
+			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			cookie := govSession(t, "sub-autonomy", []string{"eng"}, false)
+			pre := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", cookie, tc.body)
+			create := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, tc.body)
+			for name, w := range map[string]*httptest.ResponseRecorder{"preflight": pre, "create": create} {
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.reason) {
+					t.Errorf("%s = %d %s, want 400 %s", name, w.Code, w.Body.String(), tc.reason)
+				}
 			}
 		})
 	}
