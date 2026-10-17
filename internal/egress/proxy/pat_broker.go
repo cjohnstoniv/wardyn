@@ -218,7 +218,8 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// Build the upstream URL from the MATCHED allowlist key + the validated
 	// rest and let net/url do the escaping — never a raw concatenation of the
 	// decoded path (git_broker.go: "never the raw request path").
-	upstream := (&url.URL{Scheme: "https", Host: host, Path: rest, RawQuery: r.URL.RawQuery}).String()
+	hostHeader := upstreamURLHost(host, 443, 443) // an IPv6 literal is bracketed in a URL host and in a Host header
+	upstream := (&url.URL{Scheme: "https", Host: hostHeader, Path: rest, RawQuery: r.URL.RawQuery}).String()
 	// Vet the destination through the SAME guard every other egress takes: the
 	// broker is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)
@@ -245,7 +246,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// Api-Key, X-Auth-Token and Cookie for the forge to choose between.
 	stripSandboxCredentials(outReq.Header, "")
 	authorize(outReq)
-	outReq.Host = host
+	outReq.Host = hostHeader
 	outReq.Header.Del("Host")
 
 	// roundTripUpstream, not the transport directly: the same HTTP/2 fallback
