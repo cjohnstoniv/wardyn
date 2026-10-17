@@ -12,11 +12,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clienttesting "k8s.io/client-go/testing"
@@ -142,5 +144,70 @@ func TestRunnerRelayProbeWaitsForThePodIP(t *testing.T) {
 	}
 	if err := h.d.ProbeRelaySource(context.Background(), "10.96.0.9", 8443, observed); err != nil {
 		t.Fatalf("ProbeRelaySource with the pod's IP posted after the connection: %v", err)
+	}
+}
+
+// probeGets answers every Get of the relay probe pod with fn's pod or error, and reports the observed
+// connection from src.
+func probeGets(h *runnerHarness, fn func() (*corev1.Pod, error)) {
+	h.cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if !strings.HasPrefix(a.(clienttesting.GetAction).GetName(), "wardyn-relay-probe-") {
+			return false, nil, nil
+		}
+		pod, err := fn()
+		return true, pod, err
+	})
+}
+
+func shortProbeWait(t *testing.T, d time.Duration) {
+	old := probeIPWait
+	probeIPWait = d
+	t.Cleanup(func() { probeIPWait = old })
+}
+
+var probeSource = func(context.Context) (netip.Addr, error) { return netip.MustParseAddr("10.244.1.7"), nil }
+
+// TestRunnerRelayProbeEndsTheWaitWhenThePodIsGone: a probe pod deleted while the verdict waits for its
+// IP ends the wait at once with the inconclusive "vanished" verdict, not after probeIPWait.
+func TestRunnerRelayProbeEndsTheWaitWhenThePodIsGone(t *testing.T) {
+	h := newRunnerHarness(t)
+	shortProbeWait(t, 20*time.Second)
+	probeGets(h, func() (*corev1.Pod, error) {
+		return nil, apierrors.NewNotFound(corev1.Resource("pods"), "wardyn-relay-probe")
+	})
+	start := time.Now()
+	err := h.d.ProbeRelaySource(context.Background(), "10.96.0.9", 8443, probeSource)
+	if !errors.Is(err, errRelayProbeInconclusive) || !strings.Contains(err.Error(), "vanished") {
+		t.Fatalf("verdict %v, want inconclusive: probe pod vanished", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the verdict took %s: a gone pod must end the wait at once", took)
+	}
+}
+
+// TestRunnerRelayProbeWaitIsBounded: a pod that never posts an IP refuses inconclusive once probeIPWait
+// passes, and a cancelled boot ends the wait as soon as the context does.
+func TestRunnerRelayProbeWaitIsBounded(t *testing.T) {
+	h := newRunnerHarness(t)
+	shortProbeWait(t, 300*time.Millisecond)
+	probeGets(h, func() (*corev1.Pod, error) {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "wardyn-relay-probe", Namespace: testNamespace}}, nil
+	})
+	start := time.Now()
+	err := h.d.ProbeRelaySource(context.Background(), "10.96.0.9", 8443, probeSource)
+	if took := time.Since(start); !errors.Is(err, errRelayProbeInconclusive) || took < 300*time.Millisecond || took > 5*time.Second {
+		t.Fatalf("verdict %v after %s, want inconclusive after the 300ms bound", err, took)
+	}
+
+	shortProbeWait(t, 20*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	connected := func(context.Context) (netip.Addr, error) {
+		time.AfterFunc(100*time.Millisecond, cancel)
+		return probeSource(ctx)
+	}
+	start = time.Now()
+	err = h.d.ProbeRelaySource(ctx, "10.96.0.9", 8443, connected)
+	if took := time.Since(start); !errors.Is(err, errRelayProbeInconclusive) || took > 5*time.Second {
+		t.Fatalf("verdict %v after %s, want inconclusive soon after the cancel", err, took)
 	}
 }

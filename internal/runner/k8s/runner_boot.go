@@ -289,21 +289,27 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 	return relaySourceVerdict(got.Status.PodIP, src)
 }
 
-// probeIPPoll is how often watchProbeIP reads the probe pod, and probeIPWait how long the verdict waits
-// for the IP after the relay saw the connection.
-const (
-	probeIPPoll = 100 * time.Millisecond
-	probeIPWait = 30 * time.Second
-)
+// probeIPPoll is how often watchProbeIP reads the probe pod.
+const probeIPPoll = 100 * time.Millisecond
 
-// watchProbeIP sends the probe pod's IP on seen the first time a read shows one, then returns; it
+// probeIPWait is how long the verdict waits for the IP after the relay saw the connection (a
+// variable so a test can bound it short).
+var probeIPWait = 30 * time.Second
+
+// watchProbeIP sends the probe pod's IP on seen the first time a read shows one, then returns. A pod
+// that is gone sends "" at once, so the verdict falls through without waiting out probeIPWait. It
 // also returns when ctx ends.
 func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- string) {
 	t := time.NewTicker(probeIPPoll)
 	defer t.Stop()
 	for {
-		if got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{}); err == nil && got.Status.PodIP != "" {
+		got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case err == nil && got.Status.PodIP != "":
 			seen <- got.Status.PodIP
+			return
+		case apierrors.IsNotFound(err):
+			seen <- ""
 			return
 		}
 		select {
