@@ -265,7 +265,7 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 		b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
 		runID := uuid.New()
 		gid := seedGrant(db, runID, gitPATSpec("dev.azure.com", "shared-pat", ""))
-		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: "alice"}
+		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(defaultTrustDomain, runID), Sub: "alice"}
 
 		minted, err := b.MintForGrant(context.Background(), caller, gid)
 		if err != nil {
@@ -286,7 +286,7 @@ func TestBrokerMint_GitPATAndSSHKey_OwnerScoped(t *testing.T) {
 		b := New(db, secrets, &fakeAudit{}, nil, &FakeGitHubMinter{})
 		runID := uuid.New()
 		gid := seedGrant(db, runID, sshKeySpec("github.com", "shared-ssh-key", "", ""))
-		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: "alice"}
+		caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(defaultTrustDomain, runID), Sub: "alice"}
 
 		minted, err := b.MintForGrant(context.Background(), caller, gid)
 		if err != nil {
