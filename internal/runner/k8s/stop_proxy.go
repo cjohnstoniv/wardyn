@@ -611,8 +611,7 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 // A, B and C one human whatever their order.
 func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) {
 	parent := map[string]string{}
-	var find func(string) string
-	find = func(x string) string {
+	find := func(x string) string {
 		for parent[x] != x {
 			parent[x] = parent[parent[x]]
 			x = parent[x]

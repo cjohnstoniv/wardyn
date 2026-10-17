@@ -1,3 +1,8 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // Every PUT, POST and PATCH in lib/api that carries something a person composed names the person it
 // was composed under (`asPerson: true`), so a cookie another tab switched to someone else refuses the
 // save instead of landing it on the wrong account. wfetch strips the option before sending, so the call
