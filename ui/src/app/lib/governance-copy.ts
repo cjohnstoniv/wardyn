@@ -403,6 +403,7 @@ export const CHANGES = {
     runner_pool_use_policy: "Runner pool use policy",
     remote_runner_people_policy: "Available to people's pools",
     service_identity: "Service identity",
+    runner_trust: "Runner trust class",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.

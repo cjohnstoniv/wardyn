@@ -263,6 +263,16 @@ func TestPG_RunnerTrustWriteFourEyes(t *testing.T) {
 	if ch.TargetKind != govKindRunnerTrust || e.runnerRow(id).TrustClass != types.RunnerTrustPersonal {
 		t.Fatalf("a held trust change = %+v, or it was applied before approval", ch)
 	}
+	var diff struct {
+		Before  runnerTrustDiffView `json:"before"`
+		After   runnerTrustDiffView `json:"after"`
+		Changed []string            `json:"changed"`
+	}
+	if err := json.Unmarshal(ch.Diff, &diff); err != nil || diff.Before.Name != "laptop" || diff.After.Name != "laptop" ||
+		diff.Before.TrustClass != types.RunnerTrustPersonal || diff.After.TrustClass != types.RunnerTrustManagedDevice ||
+		len(diff.Changed) != 1 || diff.Changed[0] != "trust_class" {
+		t.Fatalf("a held trust change's diff = %s, want the runner name on both sides and only trust_class changed", ch.Diff)
+	}
 	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/changes/"+ch.ID.String()+"/approve", ""); w.Code != http.StatusForbidden {
 		t.Fatalf("the proposer approved their own trust change: %d %s", w.Code, w.Body)
 	}

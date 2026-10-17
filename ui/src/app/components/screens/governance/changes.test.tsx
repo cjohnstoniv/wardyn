@@ -101,6 +101,31 @@ describe("the Changes tab", () => {
     expect(screen.queryByText("7b1f0c52-0000-4000-8000-000000000001")).toBeNull();
   });
 
+  // Q6: a runner trust change's key is the runner's id; the server's diff carries its name on both sides.
+  it("lists a runner trust change as Runner trust class · Edit over the runner's name, not its id", async () => {
+    const id = "3f9c1c2e-7a41-4d0b-9e6a-5b2f0d8c1a77";
+    renderTab([
+      change({
+        target_kind: "runner_trust",
+        target_key: id,
+        diff: { before: { name: "dana-laptop", trust_class: "personal" }, after: { name: "dana-laptop", trust_class: "managed_device" }, changed: ["trust_class"] },
+      }),
+    ]);
+    expect(screen.getByRole("button", { name: "Runner trust class · Edit" })).toBeInTheDocument();
+    expect(screen.getByText("dana-laptop")).toBeInTheDocument();
+    expect(screen.queryByText(id)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Runner trust class · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("trust_class")).toBeInTheDocument();
+    expect(within(dialog).getByText("personal")).toBeInTheDocument();
+    expect(within(dialog).getByText("managed_device")).toBeInTheDocument();
+  });
+
+  it("falls back to the runner trust change's key when the diff carries no name", () => {
+    renderTab([change({ target_kind: "runner_trust", target_key: "r-old", diff: { after: { trust_class: "managed_device" }, changed: ["trust_class"] } })]);
+    expect(screen.getByText("r-old")).toBeInTheDocument();
+  });
+
   it("keeps the key as the target for a kind whose key is already natural", () => {
     renderTab([change({ target_kind: "governance_assignment", op: "upsert", target_key: "group:eng", diff: { changed: [] } })]);
     expect(screen.getByText("group:eng")).toBeInTheDocument();
