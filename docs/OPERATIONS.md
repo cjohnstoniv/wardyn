@@ -237,6 +237,7 @@ copy is permanent.
       - An exec agent's terminal is a hijacked stream that dockerd does not log and that cannot be re-attached after
         the process that held it died, so the run ends with a `capture_gap` row.
   - A sandbox that is already gone, and a runner that cannot read output back, also give a `capture_gap` row.
+  - A runner that already discarded the start of the output gives the rest: the row opens with a line naming the missing bytes and is incomplete.
   - **A run with no complete masking manifest gets a capture gap, and nothing is read.**
     - That is every run with no manifest (a run dispatched before 0.8.6, including runs that are alive across the
       upgrade) and any whose manifest is incomplete.

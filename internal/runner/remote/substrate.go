@@ -431,8 +431,13 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		}
 		s.mu.Unlock()
 	}
+	gapper, canGap := w.(runner.OutputGapMarker)
 	var res runnerwire.RecoverResult
-	if err := s.refCall(ctx, runnerwire.MethodRecoverOutput, ref, &res); err != nil {
+	if err := s.own(ref); err != nil {
+		drop()
+		return err
+	}
+	if err := s.call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RecoverOutputArgs{Ref: ref, Gap: canGap}, &res); err != nil {
 		drop()
 		return err
 	}
@@ -445,9 +450,20 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		drop()
 		return err
 	}
+	if res.Gap < 0 || (res.Gap > 0 && !canGap) {
+		_ = st.Close()
+		drop()
+		return runner.ErrOutputUnrecoverable
+	}
+	if res.Gap > 0 {
+		gapper.OutputGap(res.Gap)
+	}
 	if adopted != nil {
 		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
-		return s.receiveOutput(id, adopted, st, 0)
+		adopted.mu.Lock()
+		adopted.offset = res.Gap
+		adopted.mu.Unlock()
+		return s.receiveOutput(id, adopted, st, res.Gap)
 	}
 	defer st.Close()
 	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this

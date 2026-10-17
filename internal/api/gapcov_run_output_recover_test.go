@@ -184,3 +184,26 @@ func TestGapCovResumeRunOutputAdoptsACoverableRun(t *testing.T) {
 		t.Fatalf("tail holds %q (kept %v), want %q", v.out, kept, rr.log)
 	}
 }
+
+// A recovered copy that starts after bytes the runner had already discarded says so in place, and the
+// capture is marked as missing bytes, so its row is incomplete.
+func TestResumeRunOutputMarksTheGapARunnerLeft(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.log, rr.gap = "later output\n", 42
+	f, _ := gapCovRecoveryFixture(t, rr, false)
+
+	f.srv.resumeRunOutput(t.Context(), f.run.ID, "sbx-out")
+	f.srv.WaitBackground()
+
+	want := "[Wardyn: the first 42 bytes of this run's output are missing. The runner had already discarded them when this server picked the run up.]\n" + rr.log
+	if v, kept := f.srv.readExecOutput(f.run.ID, 1<<20, false); !kept || string(v.out) != want {
+		t.Fatalf("tail holds %q (kept %v), want %q", v.out, kept, want)
+	}
+	tail := f.srv.tailFor(f.run.ID)
+	tail.mw.mu.Lock()
+	dropped := tail.mw.capture.dropped
+	tail.mw.mu.Unlock()
+	if !dropped {
+		t.Fatal("the capture is not marked as missing bytes")
+	}
+}

@@ -66,6 +66,14 @@ type OutputRecoverer interface {
 	RecoverOutput(ctx context.Context, ref string, w io.Writer) error
 }
 
+// OutputGapMarker is an OPTIONAL capability of RecoverOutput's w: it takes a copy whose first skipped
+// bytes are gone (a runner had already discarded them when this process picked the run up). OutputGap
+// is called once, before the first byte of the copy; w marks the gap in place and in the capture's
+// record. A w without it is never handed a gapped copy: the read is ErrOutputUnrecoverable, as before.
+type OutputGapMarker interface {
+	OutputGap(skipped int64)
+}
+
 type outputRunKey struct{}
 
 // WithOutputRun names the run a RecoverOutput resumes. A substrate whose output
