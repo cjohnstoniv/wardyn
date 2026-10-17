@@ -185,4 +185,19 @@ func TestStoredMaxFileSizeAboveTheBoundIsLoweredOnRead(t *testing.T) {
 			t.Errorf("the lowered spec does not validate: %v", err)
 		}
 	})
+	t.Run("a governance profile ceiling at launch", func(t *testing.T) {
+		ceiling := governanceCeiling{Spec: types.RunPolicySpec{
+			MinConfinementClass: types.CC2, PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 500, HoldSeconds: 5}}}
+		h := newHarness(t)
+		spec, _, _, err := h.srv.resolvePolicy(context.Background(), nil, ceiling)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := spec.PushRules.MaxFileSizeMiB; got != maxPushRulesFileSizeMiB || spec.PushRules.HoldSeconds != 5 {
+			t.Errorf("push_rules = %+v, want max_file_size_mib %d and the rest kept", *spec.PushRules, maxPushRulesFileSizeMiB)
+		}
+		if ceiling.Spec.PushRules.MaxFileSizeMiB != 500 {
+			t.Errorf("the ceiling was edited in place: %d", ceiling.Spec.PushRules.MaxFileSizeMiB)
+		}
+	})
 }
