@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -57,7 +58,21 @@ func newRegisterCommand() *cobra.Command {
 				return nil
 			}
 		}
-		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile})
+		args := registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, reuseKey: ifUnregistered}
+		done, err := registerRunner(cmd, args)
+		// The chart's init container: a registration that could not reach the organisation is retried
+		// with the same key a bounded number of times, each failure logged, before the pod restarts
+		// it (and the restart retries with that key too, never failing on the key file).
+		for attempt := 1; ifUnregistered && err != nil && registrationTransient(err) && attempt < registerAttempts; attempt++ {
+			wait := registerBackoff << (attempt - 1)
+			fmt.Fprintf(cmd.ErrOrStderr(), "registration attempt %d of %d failed: %v\nretrying in %s\n", attempt, registerAttempts, err, wait)
+			select {
+			case <-cmd.Context().Done():
+				return cmd.Context().Err()
+			case <-time.After(wait):
+			}
+			done, err = registerRunner(cmd, args)
+		}
 		if err != nil {
 			return err
 		}
@@ -114,6 +129,24 @@ func registrationFailure(err error) error {
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }
 
+// registerAttempts and registerBackoff bound the init container's retry of a registration that
+// could not reach the organisation: 2, 4, 8 and 16 s apart. Vars only so a test can shorten them.
+var (
+	registerAttempts = 5
+	registerBackoff  = 2 * time.Second
+)
+
+// registrationTransient reports a failure that says nothing about the token: the organisation was not
+// reached, or answered a 5xx with no reason of its own. A retry with the same key and token either
+// succeeds or gets the organisation's own refusal.
+func registrationTransient(err error) bool {
+	var apiErr *sdk.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status >= http.StatusInternalServerError && apiErr.Reason == ""
+	}
+	return errors.As(err, new(*url.Error))
+}
+
 // registerArgs are register's inputs: setup passes the same ones from its own flags.
 type registerArgs struct {
 	org, tokenFile, stateDir, name string
@@ -126,6 +159,9 @@ type registerArgs struct {
 	arch string
 	// trustedCAFile is --trusted-ca-file: extra roots the registration call trusts beside the system's.
 	trustedCAFile string
+	// reuseKey (--if-unregistered) submits the key an earlier, incomplete registration left in the
+	// state directory instead of refusing on it.
+	reuseKey bool
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -194,9 +230,16 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 			return registeredRunner{}, err
 		}
 	}
-	key, err := runneridentity.Generate(stateDir)
-	if err != nil {
-		return registeredRunner{}, err
+	var key ed25519.PrivateKey
+	if a.reuseKey {
+		if key, err = runneridentity.PendingKey(stateDir); err != nil {
+			return registeredRunner{}, err
+		}
+	}
+	if key == nil {
+		if key, err = runneridentity.Generate(stateDir); err != nil {
+			return registeredRunner{}, err
+		}
 	}
 	client := sdk.New(strings.TrimSpace(org), "")
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
