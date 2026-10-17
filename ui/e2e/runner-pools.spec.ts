@@ -4,7 +4,7 @@
  */
 
 import { test, expect, gotoConsole, navTo } from "./fixtures";
-import { MY_POOLS, POOLS, RUNNER_V6 } from "../src/app/components/wardyn/copy/runner-pools";
+import { POOLS, RUNNER_V6 } from "../src/app/components/wardyn/copy/runner-pools";
 import { RUNNERS } from "../src/app/components/wardyn/copy/runners";
 
 // Admin -> Runners against the real server (mock M-POOLS v6). The harness has no container runtime, so
@@ -56,6 +56,6 @@ test("Your account: My pools says administrators can see the pools and the cap i
   await gotoConsole(page, "user");
   await navTo(page, "Your account");
   await page.getByRole("button", { name: /^My runner/ }).click();
-  await expect(page.getByText(MY_POOLS.ONLY_YOU, { exact: true })).toBeVisible();
-  await expect(page.getByText(MY_POOLS.LEDE, { exact: true })).toBeVisible();
+  await expect(page.getByText("Only you can change these. Administrators can see them.", { exact: true })).toBeVisible();
+  await expect(page.getByText("You can have up to 10 pools, for example Laptop and Home server.")).toBeVisible();
 });

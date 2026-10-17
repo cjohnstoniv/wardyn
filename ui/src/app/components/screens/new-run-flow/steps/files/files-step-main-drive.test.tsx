@@ -312,9 +312,10 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(1000));
     expect(drawn().resources).toEqual({ disk_mib: 1000 });
     // The summary and the mount map read it as the field does, never rounded up past the cap.
-    expect(document.body).toHaveTextContent(NR_FILES.SUMMARY_MAIN("0.9 GiB"));
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("0.9 GiB"))).toBeInTheDocument();
+    expect(screen.queryByText(NR_FILES.MOUNT_MAIN("1 GiB"))).toBeNull();
+    await waitFor(() => expect(document.body).toHaveTextContent(NR_FILES.SUMMARY_MAIN("0.9 GiB")));
     expect(document.body).not.toHaveTextContent(NR_FILES.SUMMARY_MAIN("1 GiB"));
-    expect(document.body).not.toHaveTextContent(NR_FILES.MOUNT_MAIN("1 GiB"));
 
     // The unedited second commit: re-reading "0.9" would store 922 MiB and drop the note.
     await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));

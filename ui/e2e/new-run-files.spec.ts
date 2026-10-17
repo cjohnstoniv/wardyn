@@ -216,8 +216,8 @@ test.describe("New Run, Files: the main drive", () => {
     await expect(sizeInput(page)).toHaveValue("0.9");
     await expect(page.getByText(NR_FILES.CLAMP_POOL("0.9 GiB", POOL.name))).toBeVisible();
     await expect(page.getByText(NR_FILES.SIZE_EXACT(1000))).toBeVisible();
-    // The summary reads it as the field does, not rounded up past the cap.
-    await expect(page.getByText(NR_FILES.SUMMARY_MAIN("0.9 GiB"))).toBeVisible();
+    // The mount map reads it as the field does, not rounded up past the cap.
+    await expect(page.getByText(NR_FILES.MOUNT_MAIN("0.9 GiB"), { exact: true })).toBeVisible();
 
     // Continue does not read the rounded 0.9 back as 922 MiB.
     await noExtra(page).check();

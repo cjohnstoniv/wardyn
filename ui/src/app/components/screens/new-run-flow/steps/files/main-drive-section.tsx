@@ -95,6 +95,8 @@ export function useMainDriveSize(view: MainDriveView) {
   const filled = React.useRef(false);
   // A prefill is shown, never sent: only a size the person typed becomes the request.
   const edited = React.useRef(false);
+  // The text and clamp note the field had before it was edited: an emptied field gets them back on blur.
+  const before = React.useRef<{ text: string; note?: string }>({ text: "" });
   // `dirty` is the same fact as `edited`, for rendering: true from a keystroke until the next commit stores it.
   // A fill the person never changed follows the pool: another pool's default replaces it.
   const fill = draft.guided.mainDriveFill;
@@ -118,6 +120,7 @@ export function useMainDriveSize(view: MainDriveView) {
     if (text === "" && committed !== undefined) {
       edited.current = false;
       setDirty(false);
+      dispatch({ type: "guided", patch: { mainDriveText: before.current.text, mainDriveClampNote: before.current.note } });
       return;
     }
     const { mib, clamped } = commitSize(text, view.capMib, unit);
@@ -150,6 +153,7 @@ export function useMainDriveSize(view: MainDriveView) {
     exact: !dirty && committed !== undefined && parseSize(text, unit) !== committed ? committed : undefined,
     setText: (next: string) => {
       filled.current = true;
+      if (!edited.current) before.current = { text: typed, note: draft.guided.mainDriveClampNote };
       edited.current = true;
       setDirty(true);
       // Emptying a stored size keeps its clamp note: blur restores the size, and the note describes it.
