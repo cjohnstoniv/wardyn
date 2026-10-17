@@ -661,7 +661,7 @@ type racingDefaultsWrite struct {
 	before func()
 }
 
-func (r *racingDefaultsWrite) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (types.RunnerPoolDefaults, error) {
+func (r *racingDefaultsWrite) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before, after types.RunnerPoolDefaults, err error) {
 	r.before()
 	return r.PG.PutRunnerPoolOrgDefaults(ctx, d, by)
 }

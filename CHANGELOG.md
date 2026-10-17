@@ -8,6 +8,41 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.3-rc.2] — 2026-10-17
+
+Laptop runners, second candidate: session recordings follow the organisation, an Azure DevOps credential follows the
+run's own repository, and a dropped runner link no longer stops a run's egress.
+
+### Before you upgrade
+
+- Migration `0180_run_recording` adds `recording` to `runner_pools` and `runner_pool_org_defaults`, and
+  `not_recorded` to `agent_runs`. On a split-role install, grant the runtime role what docs/OPERATIONS.md lists.
+- A laptop runner now records a run only when its organisation asks. With the organisation's recording store off,
+  the run is marked `org_off` and nothing is uploaded, where before the runner recorded anyway and its upload failed
+  (`relay_route_refused`). `wardyn-runnerd serve --recording-store off` stays the runner's ceiling. A runner older
+  than 0.9.3 keeps recording by its own setting.
+- An upload for a run marked `runner_declined` is refused `409` `recording_off` unless it comes from a recording
+  runner older than 0.9.3.
+
+### Added
+
+- An organisation or a runner pool can set `recording: required` (default `preferred`). A run that only a
+  non-recording runner could take is then refused `runner_recording_off` (422). A run that is not recorded says why
+  on its page (`org_off` or `runner_declined`). Console and SSH sessions opened through the organisation are still
+  recorded while it keeps a recording store. See docs/operations/hybrid-laptops.md.
+- A run that names an Azure DevOps repository but gets no per-person Azure DevOps credential says why: an audit row
+  `run.ado_lane.skip` with a closed reason, `WARDYN_ADO_LANE_DECLINED` in the sandbox (printed by a failed clone),
+  the console Credentials widget, and `wardyn run get`. Preview reports the same reason.
+
+### Fixed
+
+- A run's own `repo` now gets the per-person Azure DevOps credential, as a workspace repository does. Before, only
+  workspace repositories were considered, and a run that named its repository directly got none, silently.
+- A dropped link between a laptop runner and its organisation no longer stops the run's egress while the local
+  audit spool has room. A full spool holds a request up to 10 s, then refuses it with a retryable `503`
+  (`Retry-After: 1`) that names the link when it is down.
+- A defaults write that leaves `recording` out keeps the stored setting.
+
 ## [0.9.3-rc.1] — 2026-10-16
 
 Laptop runners in a locked-down enterprise: a corporate CA, errors an SDK can read, disk on VM engines, and images for

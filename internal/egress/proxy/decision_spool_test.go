@@ -166,7 +166,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 }
 
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
-	// Every refusal is counted, a full spool's and one that timed out waiting behind the others' fsyncs.
+	// Every refusal of a spool held full by the admitted reservations is counted.
 	ctx := context.Background()
 	id := uuid.New()
 	dir := filepath.Join(t.TempDir(), "spool")
@@ -283,7 +283,9 @@ func TestLocalSpoolCountsOnlyAFullSpoolsRefusal(t *testing.T) {
 	s.heldBytes = runnerspool.MaxBytes
 	s.mu.Unlock()
 	w = httptest.NewRecorder()
-	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil), ""); admitted != nil || w.Code != 503 {
+	short, cancelShort := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelShort()
+	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(short), ""); admitted != nil || w.Code != 503 {
 		t.Fatalf("full spool: admitted %v, status %d, want a 503 refusal", admitted != nil, w.Code)
 	}
 	if d := drops(); d != 1 {

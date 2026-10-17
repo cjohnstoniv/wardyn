@@ -149,7 +149,9 @@
 # docs/AUDIT-ACTIONS.md 46526 adds 137 over 46389, measured (0.9.3 K3a): the runner.trust.write row and the org fields on runner.token.create, runner.enrol and runner.claim.
 # docs/AUDIT-ACTIONS.md 46535 adds 9 over 46526, measured (0.9.3 K3-rest): runner.update names the security operator's org runner limits write.
 # docs/AUDIT-ACTIONS.md 46899 = 46750 + 149 (K3a), measured at the wave-A merge.
-docs/AUDIT-ACTIONS.md=46899 share=8
+# docs/AUDIT-ACTIONS.md 46558 adds 26 (0.9.3 C2), measured: recording.upload refuses recording_off for a runner_declined run.
+# docs/AUDIT-ACTIONS.md 46925 = 46899 + 26 (C2), measured at the rc.2 into final merge.
+docs/AUDIT-ACTIONS.md=46925 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

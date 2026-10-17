@@ -404,7 +404,12 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 		return
 	}
 	var d types.RunnerPoolDefaults
-	if !decodeStrict(w, r, &d) {
+	present, msg := decodeStrictKeys(w, r, &d)
+	if present == nil && msg == "" {
+		return
+	}
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	if err := d.Validate(); err != nil {
@@ -418,7 +423,13 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	if !ok || !checkDefaultPool(w, d, rows, true) {
 		return
 	}
-	before, err := ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	// A body that leaves recording out keeps the stored setting (the store writes an empty one as a
+	// keep): a writer that edits only the pool or the barrier (the console's Pools tab, a CLI older
+	// than recording) never lowers required. One that names it empty lowers it, as preferred.
+	if present["recording"] && d.Recording == "" {
+		d.Recording = types.RecordingPreferred
+	}
+	before, d, err := ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
 	if errors.Is(err, store.ErrNotFound) {
 		writePoolNotFound(w)
 		return
