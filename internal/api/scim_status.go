@@ -238,9 +238,16 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label fu
 		if err != nil {
 			return nil, err
 		}
+		// A drive may have been granted under any form the person is known by (an object-id principal, an
+		// alias address), so a reclaim under any of them frees it.
+		forms, err := s.leaverForms(ctx, st, ident)
+		if err != nil {
+			return nil, err
+		}
+		subjects := nonEmptyForms(slices.Concat([]string{ident.EmailLower, ident.Principal}, forms.targets)...)
 		var listed []string
 		for _, name := range granted {
-			if !scimReclaimedSince(reclaims, ev.Time, name, ident) {
+			if !scimReclaimedSince(reclaims, ev.Time, name, subjects) {
 				listed = append(listed, name)
 				out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 			}
@@ -271,9 +278,9 @@ func scimLiveDrives(live []types.UserDriveListItem, grantedNames, memberIDs []st
 	return granted, created
 }
 
-// scimReclaimedSince reports whether a successful drive.reclaim of drive for ident's user grant is
-// recorded after since.
-func scimReclaimedSince(reclaims []types.AuditEvent, since time.Time, drive string, ident store.PrincipalIdentity) bool {
+// scimReclaimedSince reports whether a successful drive.reclaim of drive for a user grant under one of the
+// person's subjects is recorded after since.
+func scimReclaimedSince(reclaims []types.AuditEvent, since time.Time, drive string, subjects []string) bool {
 	return slices.ContainsFunc(reclaims, func(ev types.AuditEvent) bool {
 		var d struct {
 			Drive       string `json:"drive"`
@@ -284,6 +291,6 @@ func scimReclaimedSince(reclaims []types.AuditEvent, since time.Time, drive stri
 			return false
 		}
 		return d.SubjectType == "user" && d.Drive == drive && d.Subject != "" &&
-			(strings.EqualFold(d.Subject, ident.EmailLower) || strings.EqualFold(d.Subject, ident.Principal))
+			slices.ContainsFunc(subjects, func(sub string) bool { return strings.EqualFold(d.Subject, sub) })
 	})
 }

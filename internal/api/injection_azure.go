@@ -182,9 +182,8 @@ func (s *Server) resolveAzureFoundryInjection(w http.ResponseWriter, r *http.Req
 	}
 	// The ONE wire shape, forced whatever the grant authored.
 	value := formatInjectionValue("Bearer %s", []byte(access.AccessToken))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(access.AccessToken))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(map[string]any{

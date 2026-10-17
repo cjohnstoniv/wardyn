@@ -27,7 +27,7 @@ var operatorNamespaceWriters = map[string]bool{
 // writer that called Put directly would not be refused after an erase.
 func TestCredentialWritersRouteThroughPutOwned(t *testing.T) {
 	root := filepath.Join("..", "..")
-	var direct []string
+	var direct, unfenced []string
 	routed := 0
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
@@ -52,6 +52,7 @@ func TestCredentialWritersRouteThroughPutOwned(t *testing.T) {
 					for _, a := range call.Args {
 						if lit, ok := a.(*ast.FuncLit); ok {
 							inside += countStorePuts(lit)
+							unfenced = append(unfenced, putsOffCallbackContext(lit, rel)...)
 						}
 					}
 				}
@@ -70,6 +71,9 @@ func TestCredentialWritersRouteThroughPutOwned(t *testing.T) {
 	}
 	for _, rel := range direct {
 		t.Errorf("%s writes a secret with Put outside putOwned: route it through putOwned so an erase of its owner refuses it (secretstore.BeginWrite)", rel)
+	}
+	for _, at := range unfenced {
+		t.Errorf("%s: a Put inside putOwned must take the callback's own context, the one fenced to the erase generation", at)
 	}
 	if routed == 0 {
 		t.Fatal("found no Put inside putOwned: the guard is not looking at the writers")
@@ -94,4 +98,25 @@ func countStorePuts(n ast.Node) int {
 		return true
 	})
 	return c
+}
+
+// putsOffCallbackContext names each Put in a putOwned callback whose first argument is not the callback's
+// own context parameter: any other context carries no fence.
+func putsOffCallbackContext(lit *ast.FuncLit, rel string) []string {
+	if len(lit.Type.Params.List) == 0 || len(lit.Type.Params.List[0].Names) == 0 {
+		return []string{rel + " (a callback with no context parameter)"}
+	}
+	ctxName := lit.Type.Params.List[0].Names[0].Name
+	var off []string
+	ast.Inspect(lit, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && len(call.Args) == 3 {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Put" {
+				if id, ok := call.Args[0].(*ast.Ident); !ok || id.Name != ctxName {
+					off = append(off, rel)
+				}
+			}
+		}
+		return true
+	})
+	return off
 }

@@ -758,7 +758,7 @@ var setupCheckBlockingStatus = map[string]string{
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
 	"key_domains": true, "principal_keys": true, "key_domain_changes": true,
-	"kek_service": true, "kek_local": true, "kek_local_rows": true,
+	"kek_service": true, "kek_service_static_key": true, "kek_local": true, "kek_local_rows": true,
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
@@ -847,6 +847,11 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
+	if chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("staticKeyServiceCheck absent")
+	}
 	for _, chks := range [][]SetupCheck{
 		secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false),
 		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false),

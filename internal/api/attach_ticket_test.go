@@ -263,6 +263,28 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	}
 }
 
+// TestAttachWS_AttributedRefusalsDropCounted: a ticket that names a principal but is revoked past the
+// burst is dropped from the trail and counted, as an invalid one is.
+func TestAttachWS_AttributedRefusalsDropCounted(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, newAuthzStore())
+	frozen := time.Now()
+	cfg.Now = func() time.Time { return frozen }
+	srv := New(cfg)
+	run := uuid.New()
+	const probes = 20
+	for range probes {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket=x", nil)
+		srv.refuseAttachTicket(httptest.NewRecorder(), r, run, ticketActor{principal: "mallory"}, verdictRevoked)
+	}
+	srv.metrics.mu.Lock()
+	suppressed := srv.metrics.authFailedSuppressed
+	srv.metrics.mu.Unlock()
+	if want := int64(probes - int(authFailedBurst)); suppressed != want {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+	}
+}
+
 // TestAttach_RefusesAKeptRun: a run the lease ended is RUNNING with its agent
 // stopped, so both attach gates refuse it with a plain 409, rather than minting
 // a ticket or upgrading a WebSocket that dies on its first exec.

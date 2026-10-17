@@ -1796,6 +1796,8 @@ func TestDecide_MemberKindRestriction(t *testing.T) {
 type authzStore struct {
 	mu   sync.Mutex
 	runs map[uuid.UUID]types.AgentRun
+	// sponsoredAsked is the WithSponsored the last ListRunsFiltered carried (fakeRunsFilteredStore).
+	sponsoredAsked bool
 	// workspaces is real rather than a hard-wired ErrNotFound because `always`
 	// — the one decision scope that writes durable config — is otherwise
 	// unreachable: decide()'s rule 7 loads the workspace and the write-back

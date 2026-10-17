@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -386,6 +387,27 @@ func TestAzureSink_RedeemsTheSnapshotAudience(t *testing.T) {
 				t.Errorf("secret.read rows = %+v, want a success naming the granted scope and never the token", rows)
 			}
 		})
+	}
+}
+
+// The Foundry resolve door hands out its bearer token only once the run's masking has it on record: a
+// backend that cannot commit the value gets a 503 mask_state_unavailable, no token and no success row.
+func TestAzureSink_RefusesATokenMaskingCouldNotRecord(t *testing.T) {
+	f := newAzA3Fixture(t)
+	f.signIn(t, azUIDAnthropic)
+	plan, _, _, _ := f.dispatch(t, "claude-code", "foundry-claude")
+	var token string
+	f.fake.OnIssue(func(it entrafake.IssuedToken) { token = it.AccessToken })
+	f.srv.cfg.MaskRegistry.SetBackend(&gapCovMaskBackend{putRunErr: errors.New("gapcov: commit refused")})
+	w := f.resolve(t, plan, "")
+	if w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != string(authz.ReasonMaskStateUnavailable) {
+		t.Fatalf("answer = %d %s, want 503 %s", w.Code, w.Body.String(), authz.ReasonMaskStateUnavailable)
+	}
+	if token == "" || strings.Contains(w.Body.String(), token) || strings.Contains(w.Body.String(), "Bearer") {
+		t.Errorf("the refusal carries the token (%q): %s", token, w.Body.String())
+	}
+	if rows := f.audit.find("secret.read"); len(rows) != 0 {
+		t.Errorf("secret.read rows = %+v, want none for a credential never handed out", rows)
 	}
 }
 
