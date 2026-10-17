@@ -18,7 +18,7 @@
 //
 // Each case prints one line, `K6-CASE <name> <status> <detail>`, which the script tabulates.
 // Statuses: PASS, FAIL, INCONCLUSIVE (the cluster did not produce the condition the case needs;
-// never a pass), and BLOCKED-ON-<lane> rows for items that need org-side behaviour not built yet.
+// never a pass), and BLOCKED for an item the product cannot yet put in front of a cluster.
 package k6_test
 
 import (
@@ -183,24 +183,9 @@ func TestK6(t *testing.T) {
 	kase("hard-deny-in-proxy-config", caseHardDenyConfig)
 	kase("retained-policy-probe", caseRetainedPolicy)
 	kase("node-name-reuse-tick", caseNodeReuse) // last: it restarts a kind node
-	for _, b := range blockedCases {
-		results = append(results, fmt.Sprintf("K6-CASE\t%s\t%s\t%s", b[0], b[1], b[2]))
-	}
 	for _, r := range results {
 		fmt.Println(r)
 	}
-}
-
-// blockedCases are §8 / Fable items that need org-side behaviour no lane has built yet.
-var blockedCases = [][3]string{
-	{"fence-live-http2", "BLOCKED-ON-K3", "a renew and an activity report ride the relay to the org over a hub org session; the fake org has no hub"},
-	{"self-lapse-end-to-end", "BLOCKED-ON-K3", "the lapse needs a renew refused through the relay (org session) and the lapsed frame on runnerd's real sink, which only runs for org-leased runs"},
-	{"hard-deny-from-agent", "BLOCKED-ON-K3", "the proxy stays closed until its first renew through the org, so an agent request cannot reach the hard-deny check; the config half is hard-deny-in-proxy-config"},
-	{"restart-fence-replay-reregister-sinks", "BLOCKED-ON-K3", "needs runnerd's own sink and relay holding a live proxy, i.e. an org-leased run"},
-	{"org-triggered-sweep-rollback", "BLOCKED-ON-K3", "the sweep is dispatched by the org over the hub"},
-	{"keystore-deleted-on-revoke", "BLOCKED-ON-K3", "revoke is an org message; keystore-under-role covers Set/Get/Delete under the Role"},
-	{"mitm-inner-request-drain", "BLOCKED-ON-K3", "K9's open item (a closed client ends an in-flight MITM inner request inside the 3 s drain) needs a proxy serving agent traffic, which needs its first renew through an org session"},
-	{"walk-trust-placement", "BLOCKED-ON-K4", "by_trust.org_cluster placement and the personal-runner refusal are K4's (needs RR)"},
 }
 
 // --- notes and statuses ------------------------------------------------------------------------
