@@ -109,6 +109,7 @@ import { HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import { ATTACH_CAP_REASON } from "../lib/run-entry";
 import { aheadByHours } from "../lib/test-clock";
+import { noteSessionExpiry } from "../lib/api/session-activity";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on every
 // connect (internal/api/attach_holder.go).
@@ -301,6 +302,29 @@ describe("AttachTerminal — close codes", () => {
     await act(() => vi.advanceTimersByTimeAsync(30000));
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("a 4401 close reconnects once when the session was renewed past the expiry the socket opened under", async () => {
+    noteSessionExpiry(new Date(Date.now() + 10 * 60_000).toISOString());
+    try {
+      render(<AttachTerminal runId="run_1" />);
+      const ws = FakeWebSocket.instances[0];
+      act(() => ws.open());
+      // Renewed by the console's other requests; the socket still ends at the expiry it opened under.
+      noteSessionExpiry(new Date(Date.now() + 60 * 60_000).toISOString());
+      act(() => ws.drop(4401, "session ended"));
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+      expect(FakeWebSocket.instances).toHaveLength(2);
+
+      // The reopened socket ending with no renewal since is final, as before.
+      const again = FakeWebSocket.instances[1];
+      act(() => again.open());
+      act(() => again.drop(4401, "session ended"));
+      await act(() => vi.advanceTimersByTimeAsync(30000));
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      noteSessionExpiry(new Date(0).toISOString()); // an expiry in the past: no renewal left for later tests
+    }
   });
 
   it("a 1006 close DOES reconnect, and drops mode first", async () => {

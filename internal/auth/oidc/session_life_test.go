@@ -42,10 +42,22 @@ func lifeCookie(t *testing.T, auth *writoidc.Authenticator, issuedAgo, expiresIn
 
 // lifeRequest sends one request through Middleware. site is the browser's Sec-Fetch-Site ("" sends none).
 func lifeRequest(auth *writoidc.Authenticator, c *http.Cookie, method, site string) (w *httptest.ResponseRecorder, live bool, reason string) {
+	return lifeServe(auth, c, method, site, false)
+}
+
+// activeRequest is lifeRequest carrying the console's activity header.
+func activeRequest(auth *writoidc.Authenticator, c *http.Cookie, method, site string) (w *httptest.ResponseRecorder, live bool, reason string) {
+	return lifeServe(auth, c, method, site, true)
+}
+
+func lifeServe(auth *writoidc.Authenticator, c *http.Cookie, method, site string, active bool) (w *httptest.ResponseRecorder, live bool, reason string) {
 	r := httptest.NewRequest(method, "/api/v1/runs", nil)
 	r.AddCookie(c)
 	if site != "" {
 		r.Header.Set("Sec-Fetch-Site", site)
+	}
+	if active {
+		r.Header.Set("X-Wardyn-Activity", "1")
 	}
 	w = httptest.NewRecorder()
 	auth.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -95,14 +107,19 @@ func signIn(t *testing.T, env *idpEnv, auth *writoidc.Authenticator) map[string]
 	return got
 }
 
-// With every behaviour off, nothing new reaches the wire: activity re-mints no cookie, an idle-old
+// With every behaviour off, nothing new reaches the wire: activity (a write, or a read carrying the
+// console's activity header) re-mints no cookie and names no expiry, an idle-old
 // session stays live, the login asks with neither prompt nor login_hint even when the markers are
 // present, a sign-in sets no marker, and the session cookie keeps its Expires.
 func TestSessionLifeOffChangesNothing(t *testing.T) {
 	env, auth := lifeAuth(t, nil)
-	w, live, _ := lifeRequest(auth, lifeCookie(t, auth, 50*time.Minute, 5*time.Minute, 0), http.MethodPost, "same-origin")
-	if !live || len(w.Result().Cookies()) != 0 {
-		t.Fatalf("off: live=%v, Set-Cookie=%v", live, w.Result().Header.Values("Set-Cookie"))
+	for _, send := range []func(*writoidc.Authenticator, *http.Cookie, string, string) (*httptest.ResponseRecorder, bool, string){lifeRequest, activeRequest} {
+		for _, method := range []string{http.MethodPost, http.MethodGet} {
+			w, live, _ := send(auth, lifeCookie(t, auth, 50*time.Minute, 5*time.Minute, 0), method, "same-origin")
+			if !live || len(w.Result().Cookies()) != 0 || w.Header().Get("X-Wardyn-Session-Expires") != "" {
+				t.Fatalf("off: %s live=%v, Set-Cookie=%v, expiry header %q", method, live, w.Result().Header.Values("Set-Cookie"), w.Header().Get("X-Wardyn-Session-Expires"))
+			}
+		}
 	}
 	q, set := loginQuery(t, auth, &http.Cookie{Name: "wardyn_oidc_reauth", Value: "1"},
 		&http.Cookie{Name: "wardyn_oidc_hint", Value: base64.RawURLEncoding.EncodeToString([]byte("x@example.com"))})

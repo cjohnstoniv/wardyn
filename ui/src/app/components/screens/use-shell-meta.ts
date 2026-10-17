@@ -6,6 +6,7 @@
 import * as React from "react";
 import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
 import { getAuthGeneration } from "../../lib/api/core";
+import { onSessionExpiry, sessionExpiry } from "../../lib/api/session-activity";
 import type { Role, UserTypeMeta } from "../wardyn/operator-context";
 import type { ViewUserType } from "../wardyn/view-switch";
 
@@ -232,6 +233,16 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
       alive = false;
     };
   }, [attempt]);
+  // While the server renews sessions it names the expiry on every answer: follow it, so a renewal
+  // moves the expiry banner's deadline instead of the banner warning about a session still live.
+  React.useEffect(
+    () =>
+      onSessionExpiry(() => {
+        const at = sessionExpiry();
+        if (at !== null) setMeta((m) => ({ ...m, sessionExpiresAt: new Date(at) }));
+      }),
+    [],
+  );
   // The same person signed back in over the page: take the whole identity
   // from the /me the dialog read, rather than re-asking — a failed re-ask
   // would settle as an unknown identity and blank the page it just kept.

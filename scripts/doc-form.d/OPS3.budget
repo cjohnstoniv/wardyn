@@ -30,7 +30,8 @@
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
 # docs/operations/who-gets-in.md 1454 adds 1 over 1453 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/who-gets-in.md 1507 adds 53 over 1454 (0.9.3 RV5), measured: reserved-subject bullet and user type wording.
-docs/operations/who-gets-in.md=1507 share=35
+# docs/operations/who-gets-in.md 1752 adds 245 over 1507, measured: the "How long a console session lasts" section comparing the three session shapes (0.9.3 console session lifetime).
+docs/operations/who-gets-in.md=1752 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.

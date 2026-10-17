@@ -1993,6 +1993,10 @@ hiding them would repeat the failure mode we are designed to avoid.
       - So offboarding — or any change that must take effect before that human's next login — must revoke explicitly ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md#per-user-api-tokens-stop-sharing-the-admin-token), "Per-user API tokens").
       - The TTL bounds the stamp's age, not its freshness.
       - A demotion made only at the IdP still waits for the TTL or the next sign-in, and Wardyn holds no IdP credential to re-derive a role sooner.
+      - The console session has the same shape: a signed cookie that never re-contacts the IdP, ending at the ID token's expiry or `WARDYN_OIDC_SESSION_TTL` after sign-in.
+        - With `WARDYN_OIDC_SESSION_RENEW_CAP` set, console use extends it up to that cap after sign-in; boot refuses either above 24 hours.
+        - Renewal never moves the sign-in time revocation and `WARDYN_ROLE_STAMP_TTL` are measured from.
+        - A holder of a copied cookie can keep it in use up to the cap; `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` bounds an unattended browser, not that.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so a shrink-the-claim workaround loses grants silently.**
     - Wardyn marks a group snapshot partial in exactly two cases: entries dropped at the cookie byte cap, and the IdP's overage pointer (`_claim_names`, the claim withheld entirely) — `sessionGroups`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go).

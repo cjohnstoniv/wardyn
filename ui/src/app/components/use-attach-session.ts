@@ -24,6 +24,7 @@ import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type Gate
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { HttpError } from "../lib/api/core";
+import { sessionExpiry } from "../lib/api/session-activity";
 import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
@@ -70,7 +71,9 @@ const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 // whose sign-in stopped authorizing it (signed out, revoked, expired, or a
 // check that could not be answered) is closed with 4401 and the reason
 // "session ended". Reconnecting would only fail the same check, so like a
-// take-over it is final: no retry.
+// take-over it is final: no retry. The one exception is a session renewed
+// since the socket opened: the socket keeps the expiry its handshake saw, so
+// it ends at that while the session lives on, and a fresh ticket opens it again.
 const AUTH_ENDED_CLOSE_CODE = 4401;
 const AUTH_ENDED_REASON = "session ended";
 
@@ -391,6 +394,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     const openSocket = (url: string, direct = false) => {
       if (disposed || suspended) return;
       let opened = false;
+      const openedUnder = sessionExpiry();
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -548,6 +552,11 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           return;
         }
         if (ev.code === AUTH_ENDED_CLOSE_CODE || reason === AUTH_ENDED_REASON) {
+          const renewedTo = sessionExpiry();
+          if (renewedTo !== null && renewedTo > Date.now() && (openedUnder === null || renewedTo > openedUnder)) {
+            retry();
+            return;
+          }
           setMode(null);
           setConnState("closed");
           term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");

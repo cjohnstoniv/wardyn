@@ -7,6 +7,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { health, type Me } from "../../lib/api/health";
 import { getAuthGeneration, notifyAuthChange } from "../../lib/api/core";
+import { noteSessionExpiry } from "../../lib/api/session-activity";
 import { useMeta } from "./use-shell-meta";
 
 const me = { principal: "alice", operator: false, security_operator: false, role: "user" } as Me;
@@ -77,4 +78,13 @@ it("an adopted answer keeps the generation it confirmed across a batched auth ch
   expect(result.current[0].authGeneration).not.toBe(getAuthGeneration());
   await act(async () => next.resolve(me));
   expect(result.current[0].authGeneration).toBe(getAuthGeneration());
+});
+
+it("follows the session expiry the server names, so a renewal moves the banner's deadline", async () => {
+  vi.mocked(health.whoami).mockResolvedValue({ ...me, session_expires_at: new Date(Date.now() + 600_000).toISOString() });
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
+  const renewed = new Date(Date.now() + 3_600_000);
+  act(() => noteSessionExpiry(renewed.toISOString()));
+  expect(result.current[0].sessionExpiresAt?.getTime()).toBe(renewed.getTime());
 });

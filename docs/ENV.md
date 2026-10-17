@@ -288,7 +288,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
-| `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
+| `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry, about an hour on Entra ID. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
 | `WARDYN_OIDC_SESSION_RENEW_CAP` | duration | (unset = off) | renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`). Unset or `0` changes nothing. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_renew_cap) |
 | `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` | duration | (unset = off) | ends a console session after this long with no console activity (flag `-oidc-session-idle-timeout`). Unset or `0` changes nothing. [Details](#wardyn_oidc_session_idle_timeout) |
 | `WARDYN_OIDC_SILENT_REAUTH` | bool | `false` | a browser that signed in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`). `false` changes nothing. [Details](#wardyn_oidc_silent_reauth) |
@@ -1561,17 +1561,22 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - How long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`).
 - Unset or `0`, a session ends at the identity provider's ID token expiry (one hour when the token carries none), as before.
+  - On Entra ID that is about an hour, so a person working in the console signs in again hourly.
+  - That is the identity provider's lifetime, not one Wardyn chose; set this for a session Wardyn owns.
 - Set, the session cookie and `/me`'s `session_expires_at` end that long after sign-in, whether the ID token expires sooner or later.
 - Boot refuses a negative value or one above `24h`.
 - The ID token's expiry is today the only identity-provider-driven bound on a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default.
 - Pair a longer session with a role-stamp TTL, or a person disabled only at the identity provider keeps the console until this TTL runs out.
 - Attach tickets, the per-identity gate and sign-out are unaffected.
+- For a session that lasts while it is used, set `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` instead; [who-gets-in.md](operations/who-gets-in.md#how-long-a-console-session-lasts) compares the three shapes.
 
 ### `WARDYN_OIDC_SESSION_RENEW_CAP`
 
 - Renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`).
 - Off by default; the owner chooses a default after measuring real Entra sessions.
-- Console activity is a write (any method but `GET`, `HEAD` and `OPTIONS`) the browser marks `Sec-Fetch-Site: same-origin`; background reads never count.
+- Console activity is a request the browser marks `Sec-Fetch-Site: same-origin` that is a write (any method but `GET`, `HEAD` and `OPTIONS`) or carries `X-Wardyn-Activity: 1`.
+  - The console sends that header only within a minute of the person's own keyboard, pointer or wheel input, so reading and typing in a terminal count, and background polls never do.
+- While it is on, every answer to a live session names its expiry in `X-Wardyn-Session-Expires`, so the console's expiry warning and open terminals follow a renewal.
 - A session past half its length is extended by that length, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
 - Renewal moves only the expiry: revocation, suspension and sign-out end a renewed cookie exactly as before.
 - Boot refuses a negative value or one above `24h`.
@@ -1582,8 +1587,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Off by default; the owner chooses a default after measuring real Entra sessions.
 - The server refuses the idle session as expired (`auth.fail` reason `expired_session`), so the person signs in again.
 - It bounds a browser left unattended, not a copied cookie, which its holder can keep active up to the session's end.
-- A person who only reads, or only types in a terminal, meets it; a session can end up to a tenth of it early.
-- Turning it on ends, at their next request, sessions signed in more than the timeout ago with no write since: their cookies carry no activity stamp.
+- A tab left open with no input meets it; a session can end up to a tenth of it early.
+- On its own it only shortens a session; pair it with `WARDYN_OIDC_SESSION_RENEW_CAP` so use also extends one.
+- Turning it on ends, at their next request, sessions signed in more than the timeout ago with no activity since: their cookies carry no activity stamp.
 - During a mixed-version rollout an older replica neither renews nor enforces it, and a cookie it re-signs (a view switch) loses its activity stamp.
 
 ### `WARDYN_OIDC_SILENT_REAUTH`
