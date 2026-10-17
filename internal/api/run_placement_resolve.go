@@ -219,7 +219,7 @@ func probeFailure(kinds map[types.Placement][]poolTarget) error {
 	for _, kind := range kindOrder {
 		for _, t := range kinds[kind] {
 			if t.facts.ProbeErr != nil {
-				return fmt.Errorf("executor %s: %w", t.executor, t.facts.ProbeErr)
+				return fmt.Errorf("runner %s: %w", t.executor, t.facts.ProbeErr)
 			}
 		}
 	}

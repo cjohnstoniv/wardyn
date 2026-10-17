@@ -15,12 +15,12 @@
 //      keeps rule 1 true without inventing a modal,
 //   3. delete is TWO refusals: a pre-filled, count-bearing one the client can
 //      see, and a COUNT-FREE 409 for the race it cannot,
-//   4. no component in this directory renders a product string of its own.
+//   4. no component in this directory renders a product string of its own
+//      (governance-no-own-copy.test.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 // The SafetyMeter (one per profile row, plus the editor's) debounces a
 // POST /policies/grade. Stub it so no test touches the network.
@@ -587,24 +587,6 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 // Postgres, every case asserted equal to a direct ResolveGovernanceProfile
 // call, plus the store's own governance_pg_test.go. Re-adding a client-side
 // table here would re-create exactly that second matcher.
-
-// THE canon pin: a component in this directory may render copy, never author
-// it. Anything a reader sees comes from governance-copy.ts (frozen §7) or the
-// modules §7.1 defers to — so a quoted or bare prose string in this source is a
-// canon break, not a style question.
-describe("Governance components render no copy of their own", () => {
-  // The vitest project root (ui/) is the resolve base: vite rewrites
-  // import.meta.url to a root-relative URL.
-  expectNoOwnCopy("src/app/components/screens/governance", [
-    "governance-screen.tsx",
-    "profile-editor.tsx",
-    "profile-rubric.tsx",
-    "profile-overlay.tsx",
-    "assignments.tsx",
-    "display.tsx",
-    "runner-credentials.tsx",
-  ]);
-});
 
 describe("GovernanceScreen — composed profiles", () => {
   const BASE = profile({ id: "pb", name: "Baseline" });

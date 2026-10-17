@@ -364,7 +364,7 @@ func (s *Server) auditBranchList(r *http.Request, workspaceID, repo string, out 
 		outcome = "failure"
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "workspace.branches.list", workspaceID, outcome, mustJSON(map[string]any{
-		"repo": repoRecordURL(repo), "credential": out.Credential, "listing": out.Listing, "reason": out.Reason,
+		"repo": redactRepoURL(repo), "credential": out.Credential, "listing": out.Listing, "reason": out.Reason,
 		"count": len(out.Branches), "truncated": out.Truncated,
 	})))
 }

@@ -465,6 +465,11 @@
     "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
   },
   {
+    "reason": "second_human_required",
+    "target": "r.URL.Path",
+    "sentence": "envGovernanceSecondHuman + \" is set: you minted this organization runner's token, so someone else claims it\""
+  },
+  {
     "reason": "security_admin_surface",
     "target": "ap.ID.String()",
     "sentence": "\"decision_scope always is operator-only\""
