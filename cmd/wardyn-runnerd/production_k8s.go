@@ -13,13 +13,11 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
@@ -34,24 +32,6 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 
 // errRelayServiceIPs: the relay Service must resolve to exactly one ClusterIP (§3.4 item 4).
 var errRelayServiceIPs = errors.New("relay_service_not_one_ip")
-
-// evidenceForwarder breaks the construction cycle: the driver needs the manager's evidence store,
-// and the manager needs the driver. The driver reads no evidence before the manager exists.
-type evidenceForwarder struct{ m *offline.Manager }
-
-func (e *evidenceForwarder) LoadEvidence(id uuid.UUID) ([]byte, error) {
-	if e.m == nil {
-		return nil, errors.New("evidence store not ready")
-	}
-	return e.m.LoadEvidence(id)
-}
-
-func (e *evidenceForwarder) SaveEvidence(id uuid.UUID, b []byte) error {
-	if e.m == nil {
-		return errors.New("evidence store not ready")
-	}
-	return e.m.SaveEvidence(id, b)
-}
 
 // k8sRunnerHooks builds the k8s runner (design K1 §3): the driver in runner mode over the runs
 // namespace, the pod-IP relay with its fence, the own-namespace keystore and the self-lapse
@@ -134,7 +114,8 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		c.Unfence = relay.Unfence
 		c.IPFenced = relay.IPFenced
 		c.HardDeny = hardDeny
-		c.Sink = sinkAdapter{s: sink, url: fmt.Sprintf("tls://%s", net.JoinHostPort(clusterIP, fmt.Sprint(env.sink)))}
+		sinkURL := fmt.Sprintf("tls://%s", net.JoinHostPort(clusterIP, fmt.Sprint(env.sink)))
+		c.Sink = sinkAdapter{s: sink, url: func() string { return sinkURL }}
 	})
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, relay.Close(), sink.Close())
@@ -190,21 +171,16 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	return rt, nil
 }
 
-// startDecisionSink loads the sink's key (stable across restarts, so its pin is), and serves the
-// sink on the pod IP at the sink port.
+// startDecisionSink serves the state directory's sink (stateDirSink) on the pod IP at the sink port.
 func startDecisionSink(ctx context.Context, stateDir string, env k8sEnv, clusterIP string, opts spoolSinkOptions) (*spoolSink, error) {
-	cert, _, err := loadOrCreateSinkCert(filepath.Join(stateDir, "decision-sink.key"))
+	s, err := stateDirSink(stateDir, opts)
 	if err != nil {
 		return nil, err
 	}
-	opts.Cert = cert
-	opts.SpoolDir = func(id uuid.UUID) string { return filepath.Join(stateDir, "spools", id.String()) }
-	opts.ActivityDir = opts.SpoolDir
 	ln, err := net.Listen("tcp", netip.AddrPortFrom(env.podIP, uint16(env.sink)).String())
 	if err != nil {
 		return nil, fmt.Errorf("decision sink: %w", err)
 	}
-	s := newSpoolSink(opts)
 	go func() {
 		if err := s.Serve(ln); err != nil {
 			slog.ErrorContext(ctx, "decision sink stopped", "error", err)
@@ -215,31 +191,3 @@ func startDecisionSink(ctx context.Context, stateDir string, env k8sEnv, cluster
 
 // unknownCapacity: a k8s runner advertises no engine capacity; its limits are the registered ones.
 func unknownCapacity(context.Context) placement.Capacity { return placement.Capacity{} }
-
-// sinkAdapter is the decision sink as the k8s driver drives it (k8s.DecisionSink): the per-run key,
-// Register, the proxy's decision_sink value, Drain and ProducerGone (lane K9's contract).
-type sinkAdapter struct {
-	s   *spoolSink
-	url string // tls://<relay ClusterIP>:<sink port>
-}
-
-func (a sinkAdapter) NewKey() (string, [32]byte, error) { return newSinkKey() }
-
-func (a sinkAdapter) Register(id uuid.UUID, hash [32]byte) error { return a.s.Register(id, hash) }
-
-func (a sinkAdapter) ProxyConfig(key string) any {
-	return proxy.DecisionSinkConfig{URL: a.url, SPKISHA256: a.s.SPKIPin(), Key: key}
-}
-
-// Drain answers whatever the proxy did; its reply is the sink's own record (runnerspool.Drained).
-// The proxy closes no open tunnel on drain (K9 design question 3): those end with the pod, which
-// is why the caller deletes it right after and never treats a drain as evidence.
-func (a sinkAdapter) Drain(ctx context.Context, id uuid.UUID) error {
-	_, err := a.s.Drain(ctx, id)
-	return err
-}
-
-func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
-	_, err := a.s.ProducerGone(ctx, id)
-	return err
-}

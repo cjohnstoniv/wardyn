@@ -13,12 +13,16 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
@@ -59,24 +63,31 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, err
 	}
 	relay := newLocalRelay(ctx)
-	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy})
+	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
+	// still running delivers what it holds while it stops only if the sink already listens.
+	sink, err := newDockerSink(ctx, stateDir)
 	if err != nil {
-		return runnerRuntime{}, err
+		return runnerRuntime{}, fmt.Errorf("decision sink did not start: %w", err)
+	}
+	ev := &evidenceForwarder{}
+	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
+		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
+		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev})
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
-	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
+	rt, err := runnerRuntimeWith(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, sink.extras(sub, ev))
 	if err != nil {
-		return runnerRuntime{}, err
+		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	rt.hooks.ProxyImage = followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage)
 	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}
-	// After chooseRelay, which made the proxy image present: the check's container uses it.
-	if err := sub.CheckStateDir(ctx); err != nil {
-		return runnerRuntime{}, errors.Join(err, rt.close())
+	if err := sink.use(pair.bind); err != nil {
+		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink: %w", err), rt.close())
 	}
 	relay.use(pair)
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
@@ -299,7 +310,8 @@ type runRelay interface {
 	Close() error
 }
 
-// runtimeExtras are the substrate-specific parts of a runtime. The zero value is the Docker runtime.
+// runtimeExtras are the substrate-specific parts of a runtime. Each zero field takes the default its
+// comment names.
 type runtimeExtras struct {
 	// keystore holds runner_resident values; zero is the OS keyring.
 	keystore runneragent.Keystore
@@ -311,12 +323,8 @@ type runtimeExtras struct {
 	// the startup containment pass (the k8s runner's fence replay and first proxy list).
 	options offline.Options
 	started func(context.Context, *offline.Manager) error
-	// closeAlso runs when the runtime closes (the k8s decision sink).
+	// closeAlso runs when the runtime closes (the decision sink).
 	closeAlso func() error
-}
-
-func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (runnerRuntime, error) {
-	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, runtimeExtras{})
 }
 
 func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
@@ -446,4 +454,180 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}
 		return err
 	}}, nil
+}
+
+// evidenceForwarder breaks the construction cycle: the driver needs the manager's evidence store,
+// and the manager needs the driver. The driver reads no evidence before the manager exists.
+type evidenceForwarder struct{ m *offline.Manager }
+
+func (e *evidenceForwarder) LoadEvidence(id uuid.UUID) ([]byte, error) {
+	if e.m == nil {
+		return nil, errors.New("evidence store not ready")
+	}
+	return e.m.LoadEvidence(id)
+}
+
+func (e *evidenceForwarder) SaveEvidence(id uuid.UUID, b []byte) error {
+	if e.m == nil {
+		return errors.New("evidence store not ready")
+	}
+	return e.m.SaveEvidence(id, b)
+}
+
+// stateDirSink is the decision sink over the runner's state directory: its key there (stable across
+// restarts, so its pin is) and each run's spool there.
+func stateDirSink(stateDir string, opts spoolSinkOptions) (*spoolSink, error) {
+	cert, _, err := loadOrCreateSinkCert(filepath.Join(stateDir, "decision-sink.key"))
+	if err != nil {
+		return nil, err
+	}
+	opts.Cert = cert
+	opts.SpoolDir = func(id uuid.UUID) string { return filepath.Join(stateDir, "spools", id.String()) }
+	opts.ActivityDir = opts.SpoolDir
+	return newSpoolSink(opts), nil
+}
+
+// sinkAdapter is the decision sink as a driver drives it (k8s.DecisionSink, docker.DecisionSink): the
+// per-run key, Register, Succeed (Docker), the proxy's decision_sink value, Drain and ProducerGone.
+type sinkAdapter struct {
+	s   *spoolSink
+	url func() string // tls://host:port, as a run's proxy dials the sink
+}
+
+func (a sinkAdapter) NewKey() (string, [32]byte, error) { return newSinkKey() }
+
+func (a sinkAdapter) Register(id uuid.UUID, hash [32]byte) error { return a.s.Register(id, hash) }
+
+func (a sinkAdapter) Succeed(id uuid.UUID, hash [32]byte) error { return a.s.Succeed(id, hash) }
+
+func (a sinkAdapter) ProxyConfig(key string) any {
+	return proxy.DecisionSinkConfig{URL: a.url(), SPKISHA256: a.s.SPKIPin(), Key: key}
+}
+
+// Drain answers whatever the proxy did; its reply is the sink's own record (runnerspool.Drained).
+// The proxy closes no open tunnel on drain (K9 design question 3): those end with the pod or
+// container, which is why the caller removes it right after and never treats a drain as evidence.
+func (a sinkAdapter) Drain(ctx context.Context, id uuid.UUID) error {
+	_, err := a.s.Drain(ctx, id)
+	return err
+}
+
+func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
+	_, err := a.s.ProducerGone(ctx, id)
+	return err
+}
+
+// sinkAddrFile keeps where a Docker runner's decision sink last listened (bind:port), so a restart
+// listens there again before its startup containment stops the runs' proxies: one still running
+// reconnects and delivers what it holds while it stops, instead of losing it.
+const sinkAddrFile = "decision-sink.addr"
+
+// dockerSink is a Docker runner's decision sink, the one Kubernetes runners use, served on the relay's
+// bind address. A run's proxy reaches it at host.docker.internal, which its hosts map to the relay's
+// target, so runnerd is the spool's only writer on every Docker engine.
+type dockerSink struct {
+	*spoolSink
+	ctx      context.Context
+	stateDir string
+
+	addrMu sync.Mutex
+	bound  map[netip.Addr]uint16 // where it listens: address and port
+	lns    []net.Listener
+	url    string // decision_sink.url for new proxies; "" until use
+}
+
+// newDockerSink starts the sink, listening at once where it listened before a restart when that
+// address is still free.
+func newDockerSink(ctx context.Context, stateDir string) (*dockerSink, error) {
+	s, err := stateDirSink(stateDir, spoolSinkOptions{})
+	if err != nil {
+		return nil, err
+	}
+	d := &dockerSink{spoolSink: s, ctx: ctx, stateDir: stateDir, bound: map[netip.Addr]uint16{}}
+	b, err := os.ReadFile(filepath.Join(stateDir, sinkAddrFile))
+	if err != nil {
+		return d, nil
+	}
+	if ap, perr := netip.ParseAddrPort(strings.TrimSpace(string(b))); perr == nil {
+		if _, lerr := d.listen(ap); lerr != nil {
+			slog.WarnContext(ctx, "decision sink: cannot listen where it did before this restart, so a run's proxy from before it cannot deliver what it holds; its decisions are counted as lost", "address", ap.String(), "error", lerr)
+		}
+	}
+	return d, nil
+}
+
+func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
+	ln, err := net.Listen("tcp", ap.String())
+	if err != nil {
+		return 0, err
+	}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	d.addrMu.Lock()
+	d.bound[ap.Addr()] = port
+	d.lns = append(d.lns, ln)
+	d.addrMu.Unlock()
+	go func() {
+		if err := d.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
+			slog.ErrorContext(d.ctx, "decision sink stopped", "error", err)
+		}
+	}()
+	return port, nil
+}
+
+// Close closes the sink and every listener it opened, one whose Serve has not started included, so
+// its port is free once Close returns.
+func (d *dockerSink) Close() error {
+	err := d.spoolSink.Close()
+	d.addrMu.Lock()
+	lns := d.lns
+	d.lns = nil
+	d.addrMu.Unlock()
+	for _, ln := range lns {
+		if cerr := ln.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
+			err = errors.Join(err, cerr)
+		}
+	}
+	return err
+}
+
+// use points new proxies at the sink on bind, the relay's address, listening there first unless it
+// already does (at the port it had before a restart); a new address is kept in the state directory.
+func (d *dockerSink) use(bind netip.Addr) error {
+	d.addrMu.Lock()
+	port, ok := d.bound[bind]
+	d.addrMu.Unlock()
+	if !ok {
+		var err error
+		if port, err = d.listen(netip.AddrPortFrom(bind, 0)); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(d.stateDir, sinkAddrFile), []byte(netip.AddrPortFrom(bind, port).String()+"\n"), 0o600); err != nil {
+			return err
+		}
+	}
+	d.addrMu.Lock()
+	d.url = fmt.Sprintf("tls://host.docker.internal:%d", port)
+	d.addrMu.Unlock()
+	return nil
+}
+
+// proxyURL is decision_sink.url for a new proxy.
+func (d *dockerSink) proxyURL() string {
+	d.addrMu.Lock()
+	defer d.addrMu.Unlock()
+	return d.url
+}
+
+// extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and
+// retries loss rows, and at startup, before the containment pass, the driver's record store becomes
+// the manager's and every run's sink key is registered again.
+func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
+	return runtimeExtras{
+		options: offline.Options{Tick: d.Tick},
+		started: func(_ context.Context, m *offline.Manager) error {
+			ev.m = m
+			return sub.ReregisterSinks(m.SinkRunIDs())
+		},
+		closeAlso: d.Close,
+	}
 }

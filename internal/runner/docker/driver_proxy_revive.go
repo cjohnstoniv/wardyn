@@ -141,7 +141,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
 		return "", err
 	}
-	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
+	cfgJSON, err = d.runnerSinkConfig(runID, cfgJSON)
 	if err != nil {
 		return "", err
 	}
@@ -348,11 +348,13 @@ func (d *Driver) CanReplaceProxy(context.Context, string) error { return nil }
 
 // ReplaceProxy swaps the agent ref's proxy sidecar, if it still has one, for
 // a new one running cfgJSON on the current proxy image (runner.ProxyReviver).
-// The old sidecar is removed first: it holds the name, and its address is the
-// one the agent pins. The new one takes that address, read from the agent's
-// own hosts entry (immutable, still there after the old proxy gave its
-// address back), carries the agent's labels as a proxy, and re-joins the
-// control-plane-facing network as at create. Every check that can fail
+// The old sidecar is drained and removed first: it holds the name, and its
+// address is the one the agent pins. On a runner its decisions are settled
+// once it is gone, and the new one gets a sink key of its own (startProxy).
+// The new one takes that address, read from the agent's own hosts entry
+// (immutable, still there after the old proxy gave its address back), carries
+// the agent's labels as a proxy, and re-joins the control-plane-facing network
+// as at create. Every check that can fail
 // without touching the old sidecar runs before the remove. Nothing is put
 // back when the new one doesn't start: the config is the control plane's,
 // not the container's, so a later revive rebuilds from it.
@@ -392,9 +394,10 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if err := d.ensureImage(ctx, d.proxyImage(), "", func() {}); err != nil {
 		return err
 	}
+	d.drainSink(ctx, id)
 	// A failed remove may still have removed it.
-	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("%w: docker: remove proxy: %w", runner.ErrProxyReplaceFailed, err)
+	if err := d.removeProxy(ctx, id); err != nil {
+		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
 	if _, err := d.startProxy(ctx, id, wardynLabels(id, componentProxy, agentLabels),
 		proxyEnvFromJSON(id, cp.ControlPlaneURL), cfgJSON, ip); err != nil {
