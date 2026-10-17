@@ -53,7 +53,7 @@ func TestEndQueuedRunsPinnedTo_AFailedReadDoesNotStopTheRest(t *testing.T) {
 	st := &revokeQueueStore{entries: []store.RunQueueEntry{unreadable, other, later}, failRead: map[uuid.UUID]bool{unreadable.RunID: true}}
 	srv := New(Config{Store: st, Audit: &recRecorder{}})
 
-	n, err := srv.endQueuedRunsPinnedTo(context.Background(), "owner", runner)
+	n, err := srv.endQueuedRunsPinnedTo(context.Background(), types.Runner{Owner: "owner"}, runner)
 	if err == nil || n != 0 {
 		t.Fatalf("ended %d with error %v, want 0 and the unreadable run's error", n, err)
 	}

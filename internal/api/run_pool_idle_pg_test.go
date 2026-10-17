@@ -32,7 +32,7 @@ func TestPG_PoolIdleStopBoundsAnInteractiveRun(t *testing.T) {
 				Interactive: &types.RunnerPoolInteractiveLimits{Idle: &types.RunnerPoolDuration{DefaultSec: 300, MaxSec: 600}},
 				Barriers:    []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 			}
-			if _, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits); err != nil {
+			if _, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil); err != nil {
 				t.Fatalf("set pool limits: %v", err)
 			}
 			created := e.create(`{` + interactive + `,"runner_pool_id":"` + p.ID.String() + `"}`)

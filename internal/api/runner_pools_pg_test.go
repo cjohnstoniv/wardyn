@@ -638,7 +638,7 @@ func TestPG_RunnerPoolUpdateLosingTheRaceToTheStoreIsStale(t *testing.T) {
 	pool := e.createPool("Provided", types.RunnerPoolOrganization)
 	other := "Other"
 	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
-		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &other, nil, nil); err != nil {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &other, nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	}}

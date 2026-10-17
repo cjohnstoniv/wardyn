@@ -986,6 +986,7 @@ func TestSetupSaysWhenTheEngineHasNoDiskCap(t *testing.T) {
 		}
 	}
 }
+
 // --no-service registers and installs the binary, writes the environment file and prints the command
 // that runs the runner, and installs nothing a login would start: no unit, no plist, no service
 // command, and no check that a systemd user manager would find a unit.
