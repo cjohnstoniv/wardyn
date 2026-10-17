@@ -146,6 +146,7 @@ while IFS= read -r t; do
   if [ -z "$FROM_KEY" ] || [[ "$k" > "$FROM_KEY" ]]; then FROM="${t#v}"; FROM_KEY="$k"; fi
 done < <(git tag -l "v$XY.*" --merged "$FROM_BASE")
 [ -n "$FROM" ] || die "no v$XY.* tag is reachable from $FROM_BASE"
+say "FROM=$FROM (the newest v$XY.* tag merged into $FROM_BASE)"
 
 # A tag vV may exist only as this candidate's own, resumed release.
 if git rev-parse --verify -q "refs/tags/v$V" >/dev/null; then
