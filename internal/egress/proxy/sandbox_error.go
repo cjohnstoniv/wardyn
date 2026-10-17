@@ -6,7 +6,6 @@ package proxy
 import (
 	"crypto/x509"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -200,8 +199,10 @@ func dialStage(err error) string {
 	case strings.Contains(msg, "tls:"), strings.Contains(msg, "x509:"), strings.Contains(msg, "remote error:"):
 		return "tls handshake"
 	}
-	// A connection that opened and then failed (a reset or close while the
-	// answer was awaited) is classifyUpstreamErr's upstream_error, never a dial.
+	// Only a dial, or a failure handshakeOver marks as connecting, is before
+	// the connection opened. Anything else broke an open connection (a reset,
+	// an idle close, an HTTP/2 GOAWAY or stream reset while the answer was
+	// awaited), which classifyUpstreamErr calls upstream_error.
 	var opErr *net.OpError
 	var connecting *connectStageError
 	switch {
@@ -209,10 +210,8 @@ func dialStage(err error) string {
 		return "tcp dial"
 	case errors.As(err, &connecting):
 		return "dial"
-	case opErr != nil && (opErr.Op == "read" || opErr.Op == "write"), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-		return "after connect"
 	}
-	return "dial"
+	return "after connect"
 }
 
 // causeSentence builds the stage-prefixed, masked, topology-redacted sentence
