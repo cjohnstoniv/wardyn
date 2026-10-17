@@ -257,6 +257,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		GitGrants:            cfg.GitGrants,
 		PATGrants:            cfg.PATGrants,
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
+		ResidentMints:        cfg.ResidentMints,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
 		GitHubAPI:            cfg.GitHubAPI,

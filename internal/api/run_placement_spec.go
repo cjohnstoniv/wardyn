@@ -239,6 +239,13 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 			stamp(placementCredentialIndex("ProxyConfig.BrokeredPATGrantIDs", i), row)
 		}
 	}
+	// A runner_resident ssh_key or git_pat answered by the runner's proxy: its
+	// stored grant, recorded runner_resident, of the kind the entry names.
+	for i, m := range spec.ProxyConfig.ResidentMints {
+		if row, found := byID[m.GrantID]; found && row.Delivery == types.GrantDeliveryResident && row.Spec.Kind == m.Kind {
+			stamp(placementCredentialIndex("ProxyConfig.ResidentMints", i), row)
+		}
+	}
 }
 
 // localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity

@@ -112,6 +112,12 @@ type Config struct {
 	// An older proxy image refuses this key at start (strict decode), so the
 	// proxy image is upgraded with wardynd.
 	BrokeredPATGrantIDs []uuid.UUID `json:"brokered_pat_grant_ids,omitempty"`
+	// ResidentMints are the run's runner_resident ssh_key and git_pat grants,
+	// set only on a runner's own proxy (design 0.9 §7.4). handleBrokerMint answers
+	// a mint of one locally, after its brokered refusals and before the relay, and
+	// never at or past its ExpiresAt. The org's stored copy holds each Token's
+	// placeholder; the runner fills its own copy from its keystore.
+	ResidentMints []ResidentMint `json:"resident_mints,omitempty"`
 	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
 	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
 	// per sidecar: the gate is keyed by host, and every organisation shares
@@ -361,6 +367,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
+		return nil, err
+	}
+	if err := validResidentMints(c.ResidentMints); err != nil {
 		return nil, err
 	}
 	for _, r := range c.ViaOrgRoutes {

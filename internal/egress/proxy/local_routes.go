@@ -149,6 +149,12 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 			http.StatusForbidden)
 		return
 	}
+	// A runner_resident grant is answered here, after both brokered refusals
+	// and never relayed: its value is the runner's, not the control plane's.
+	if m, ok := p.residentMint(body); ok {
+		p.answerResidentMint(w, r, m)
+		return
+	}
 	// The 409 body carries the approval id; a 200 mint body is not parsed for one.
 	p.relayControlPlane(w, r, http.MethodPost, "/api/v1/internal/credentials/mint",
 		body, r.Header.Get("Content-Type"), ruleSourceMint, approvalIDOn409)

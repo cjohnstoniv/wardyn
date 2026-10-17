@@ -123,6 +123,8 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows per_user PATGrants", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "BrokeredPATGrantIDs", Variant: "follows shared PATGrants", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "ResidentMints", Variant: "runner_resident ssh_key, its Token a placeholder", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassSSHKey, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "ResidentMints", Variant: "runner_resident git_pat with the PAT broker off, its Token a placeholder", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATHelper, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "minted PAT or bearer from a captured Entra sign-in; runner_resident only on a connection that opted in", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "ADOGrant", Variant: "own_pat token mode", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "AzureGates", Variant: "Azure Foundry, the person's own Entra sign-in", Class: ClassOwn, Rule: RuleAllow},
