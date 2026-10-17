@@ -30,15 +30,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Setup status warns admins when `self_host_runner` is restricted, runners are claimed and no permission names it, so
   only admins can mint runner tokens; it gives the grant to write.
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
+- `wardyn runner pool add` and `remove` put an organization runner in an organization pool and take it out, by name or id (an admin; a runner serves one pool).
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
 
 ### Fixed
 
+- The Kubernetes proxy's NetworkPolicy DNS rule also admits the cluster DNS pods (`k8s-app=kube-dns` in `kube-system`),
+  so a network plugin that selects pods by identity can match it. The address range and the cloud-metadata exclusion
+  are unchanged.
+- The `run.ceiling.reassert` audit row carries its `note` only when it added a denied host or withheld a credential lane
+  or injection host; a row that did none of those no longer reads as a report of action taken.
 - A run with a GitHub CLI row is refused when your organisation's profile blocks GitHub, the way the built-in GitHub
   component already was; it used to start and lose the CLI without a word.
 - A terminal refused at the per-person session cap on an operator-owned or service identity's run now names that cap
   (seven per person) instead of the run's eight.
+- An organization pool's member list (`GET /runner-pools/{id}/members`, the console's pool sheet) now shows the
+  organization runners it holds, which it left out.
 - The Kubernetes chart keeps runnerd's state in a directory below its volume, which runnerd accepts as private; the
   volume's own root was refused as not mode 0700.
 - A proxy whose `upstream_proxy_url` is an address inside `hard_deny` is refused at boot.

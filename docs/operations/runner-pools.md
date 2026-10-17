@@ -12,7 +12,7 @@
 |---|---|---|
 | Self-hosted runner | A person's own registered computer. It takes only its owner's runs. | Its owner |
 | Remote-hosted runner | The server's own Docker host or Kubernetes cluster. | Admins |
-| Organization pool | Remote-hosted runners only. Everyone who may launch remote runs may use it until a use policy narrows it. | Admins |
+| Organization pool | Remote-hosted runners and the organization's own runners. Everyone who may launch remote runs may use it until a use policy narrows it. | Admins |
 | User pool | One person's pool: their own runners, and the remote-hosted runners made available to them. Only its owner uses it. | Its owner, up to `10` pools |
 
 - A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_fold_steps.go`](../../internal/api/run_fold_steps.go)).
@@ -24,7 +24,7 @@
 |---|---|
 | List the pools you may use | `wardyn runner pool list`; BARRIERS marks the default barrier with `*` |
 | Create a pool | `wardyn runner pool create --name <name>`; an admin adds `--scope organization` |
-| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; each runner the server refuses gets its own line and the command exits non-zero |
+| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; an admin may add organization runners; each refused runner gets its own line and the command exits non-zero |
 | Rename, switch off or re-limit a pool | `wardyn runner pool update <pool>` with `--name`, `--switch on\|off` or the limit flags |
 | Delete a pool | `wardyn runner pool delete <pool> --yes`: its runners leave it and runs waiting for it end; running runs are not touched |
 

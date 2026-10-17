@@ -54,6 +54,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -250,6 +251,9 @@ func TestProxyNetPolIngressIsAgentOnlyAndEgressExcludesMetadata(t *testing.T) {
 			continue
 		}
 		for _, peer := range r.To {
+			if isDNSRulePeer(r, peer) {
+				continue // the cluster-DNS pod peer; pinned by TestProxyNetPolDNSRuleAddsClusterDNSPeer
+			}
 			if peer.IPBlock == nil {
 				t.Errorf("proxy netpol egress rule %d peer is not an ipBlock (podSelector/namespaceSelector peers carry no metadata carve-out): %+v", i, peer)
 				continue
@@ -481,5 +485,80 @@ func TestAgentEnvSecretsReachTheAgentOnlyByReference(t *testing.T) {
 	}
 	if string(sec.Data[proxyConfigSecretKey]) == "" {
 		t.Error("run Secret lost its proxy config: the agent env entries must not displace it")
+	}
+}
+
+// isDNSRulePeer reports whether peer is the cluster-DNS pod peer inside a rule
+// whose every port is 53: the only non-ipBlock peer the proxy policy may carry.
+// A rule that also opens another port to that peer does not qualify.
+func isDNSRulePeer(r networkingv1.NetworkPolicyEgressRule, peer networkingv1.NetworkPolicyPeer) bool {
+	if len(r.Ports) == 0 {
+		return false
+	}
+	for _, p := range r.Ports {
+		if p.Port == nil || p.Port.IntVal != 53 {
+			return false
+		}
+	}
+	return peer.IPBlock == nil &&
+		peer.NamespaceSelector != nil && maps.Equal(peer.NamespaceSelector.MatchLabels, map[string]string{"kubernetes.io/metadata.name": "kube-system"}) &&
+		peer.PodSelector != nil && maps.Equal(peer.PodSelector.MatchLabels, map[string]string{"k8s-app": "kube-dns"})
+}
+
+// TestIsDNSRulePeerRequiresEveryPortToBe53 pins that the invariant's exemption
+// for the cluster-DNS peer does not cover a rule that also opens another port.
+func TestIsDNSRulePeerRequiresEveryPortToBe53(t *testing.T) {
+	testfloor.Mark(t, "k8s")
+	peer := clusterDNSPeer()
+	port := func(p int32) networkingv1.NetworkPolicyPort {
+		return networkingv1.NetworkPolicyPort{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(p))}
+	}
+	if !isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{port(53)}}, peer) {
+		t.Error("a port-53-only rule must exempt the cluster-DNS peer")
+	}
+	if isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{port(53), port(443)}}, peer) {
+		t.Error("a rule mixing 53 and 443 must not exempt the cluster-DNS peer: it would reach 443 on the DNS pods")
+	}
+	if isDNSRulePeer(networkingv1.NetworkPolicyEgressRule{}, peer) {
+		t.Error("a rule with no ports must not exempt the cluster-DNS peer")
+	}
+}
+
+// TestProxyNetPolDNSRuleAddsClusterDNSPeer pins that the proxy's DNS egress
+// rule reaches the cluster DNS pods (kube-system, k8s-app=kube-dns) as well as
+// the metadata-excluding ipBlock, which is unchanged: a CNI that selects pods by
+// identity does not match cluster DNS against a CIDR-only peer.
+func TestProxyNetPolDNSRuleAddsClusterDNSPeer(t *testing.T) {
+	testfloor.Mark(t, "k8s")
+	_, cs, spec, _ := probeCreate(t, nil)
+	np := probeGetNetPol(t, cs, proxyNetPolName(spec.RunID))
+	var dns []networkingv1.NetworkPolicyEgressRule
+	for _, r := range np.Spec.Egress {
+		for _, p := range r.Ports {
+			if p.Port != nil && p.Port.IntVal == 53 {
+				dns = append(dns, r)
+				break
+			}
+		}
+	}
+	if len(dns) != 1 {
+		t.Fatalf("proxy netpol has %d DNS rules, want 1: %+v", len(dns), np.Spec.Egress)
+	}
+	var ipBlocks, dnsPeers int
+	for _, peer := range dns[0].To {
+		switch {
+		case peer.IPBlock != nil:
+			ipBlocks++
+			if peer.IPBlock.CIDR != "0.0.0.0/0" || len(peer.IPBlock.Except) != 1 || peer.IPBlock.Except[0] != cloudMetadataAddr {
+				t.Errorf("DNS rule ipBlock = %+v, want 0.0.0.0/0 except %s", peer.IPBlock, cloudMetadataAddr)
+			}
+		case isDNSRulePeer(dns[0], peer):
+			dnsPeers++
+		default:
+			t.Errorf("DNS rule carries an unexpected peer: %+v", peer)
+		}
+	}
+	if ipBlocks != 1 || dnsPeers != 1 {
+		t.Errorf("DNS rule peers: %d ipBlock, %d cluster-DNS pod peer; want 1 each: %+v", ipBlocks, dnsPeers, dns[0].To)
 	}
 }

@@ -294,6 +294,27 @@ func TestGitHubCLI_FamilyDenyRefusesTheRow(t *testing.T) {
 	}
 }
 
+// A person's own inline GitHub CLI row never reaches the family-deny check: only an organisation
+// row can carry a CLI credential, so every door refuses it as a definition first, deny or not.
+func TestGitHubCLI_InlineRowIsRefusedBeforeTheFamilyDeny(t *testing.T) {
+	f, _ := githubCLIFixture(t)
+	f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: []string{"github.com"}}}
+	inline := map[string]any{"inline": map[string]any{"cli": map[string]any{"kind": types.CLIKindGitHub,
+		"github": map[string]any{"capabilities": []ghscope.Capability{ghscope.CapIssuesRead}}}}}
+	body := componentBody(inline)
+	body["repo"] = "acme/app"
+	for _, door := range componentDoors {
+		w := f.ask(t, door, body)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s = %d %s, want 422", door, w.Code, w.Body)
+		}
+		want := "components[0]: inline.cli: only an organisation component can carry a CLI credential"
+		if got := decodeErrorBody(t, w); got.Reason != reasonComponentDefinitionInvalid || got.Error != want {
+			t.Errorf("%s = %q %q, want %q %q", door, got.Reason, got.Error, reasonComponentDefinitionInvalid, want)
+		}
+	}
+}
+
 // The dispatch backstop: were a GitHub CLI door to reach dispatch under a family deny, it is
 // withheld. The sandbox keeps no inert token for it, the proxy gets no grant, and api.github.com is
 // closed again; a deny of something else leaves it.
