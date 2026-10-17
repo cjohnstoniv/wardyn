@@ -215,14 +215,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			}},
 			// SECURITY: both rules share the metadata-excluding peer — a
 			// peer-less DNS rule would permit port 53 to the metadata address,
-			// voiding the Except on the rule beside it.
+			// voiding the Except on the rule beside it. The DNS rule adds the
+			// cluster DNS pods as a second peer (peers are OR'd, so the
+			// ipBlock and its Except are unchanged): a CNI that selects pods by
+			// identity does not match a pod IP against an ipBlock.
 			Egress: append([]networkingv1.NetworkPolicyEgressRule{
 				{ // DNS
 					Ports: []networkingv1.NetworkPolicyPort{
 						{Protocol: protoPtr(corev1.ProtocolTCP), Port: intOrStrPtr(intstr.FromInt32(53))},
 						{Protocol: protoPtr(corev1.ProtocolUDP), Port: intOrStrPtr(intstr.FromInt32(53))},
 					},
-					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
+					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}, clusterDNSPeer()},
 				},
 				{ // everything except the cloud-metadata address
 					To: []networkingv1.NetworkPolicyPeer{{IPBlock: notMetadataIPBlock()}},
@@ -699,6 +702,17 @@ const cloudMetadataAddr = "169.254.169.254/32"
 // apart. IPv4-only.
 func notMetadataIPBlock() *networkingv1.IPBlock {
 	return &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: []string{cloudMetadataAddr}}
+}
+
+// clusterDNSPeer selects the cluster DNS pods: CoreDNS in kube-system, which
+// carries k8s-app=kube-dns on kind, EKS, GKE and AKS. The two labels are fixed
+// here because the driver config has no DNS namespace or label setting; a
+// cluster that runs DNS elsewhere is not covered by this peer.
+func clusterDNSPeer() networkingv1.NetworkPolicyPeer {
+	return networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+	}
 }
 
 // isNotFound reports whether err is a k8s "not found" API error, so
