@@ -14,13 +14,14 @@ import (
 
 // runArch is the CPU architecture of the runner a run is bound to ("amd64" or "arm64"), or "" when the
 // run is not bound to a runner (it goes to the organisation's own substrate or a remote-hosted runner,
-// neither of which reports one), the runner has not reported one (a runner older than 0.9.1) or the row
-// cannot be read. "" means "use the plain image ref".
+// neither of which reports one), the runner has not reported one (a runner older than 0.9.1), the row
+// cannot be read or no image has an `@arch` entry. "" means "use the plain image ref".
 func (s *Server) runArch(ctx context.Context, run types.AgentRun) string {
 	st, ok := s.cfg.Store.(interface {
 		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
 	})
-	if !ok || run.RunnerID == nil {
+	// With no `<key>@<arch>` entries the architecture cannot change the image, so the runner row is not read.
+	if !ok || run.RunnerID == nil || len(s.cfg.AgentImageVariants) == 0 {
 		return ""
 	}
 	rn, err := st.GetRunner(ctx, *run.RunnerID)

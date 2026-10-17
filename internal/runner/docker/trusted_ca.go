@@ -17,7 +17,19 @@ import (
 // whatever is there: the organisation's roots stay off a runner's proxy. An
 // empty bundle leaves b untouched.
 func withTrustedCA(b []byte, pemBundle string) ([]byte, error) {
-	if pemBundle == "" {
+	return withConfigString(b, "trusted_ca_pem", pemBundle)
+}
+
+// withUpstreamProxy returns the proxy config b with upstream_proxy_url set to the runner's own
+// corporate upstream proxy (Config.UpstreamProxyURL), on create and on revive alike for the same
+// reason as withTrustedCA. It replaces whatever is there and leaves b untouched when u is empty.
+func withUpstreamProxy(b []byte, u string) ([]byte, error) {
+	return withConfigString(b, "upstream_proxy_url", u)
+}
+
+// withConfigString sets the string key of the proxy config b to value; an empty value leaves b alone.
+func withConfigString(b []byte, key, value string) ([]byte, error) {
+	if value == "" {
 		return b, nil
 	}
 	var data map[string]json.RawMessage
@@ -27,10 +39,10 @@ func withTrustedCA(b []byte, pemBundle string) ([]byte, error) {
 	if data == nil {
 		return nil, errors.New("proxy config is empty")
 	}
-	v, err := json.Marshal(pemBundle)
+	v, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	data["trusted_ca_pem"] = v
+	data[key] = v
 	return json.Marshal(data)
 }

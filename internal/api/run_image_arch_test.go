@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,10 +20,20 @@ type archImageStore struct {
 	*buildEventStore
 	runners map[uuid.UUID]types.Runner
 	image   string
+	reads   int
 }
 
 func (s *archImageStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	s.reads++
 	return s.runners[id], nil
+}
+
+func (s *archImageStore) RunnerArchCounts(context.Context) (map[string]int, error) {
+	counts := map[string]int{}
+	for _, rn := range s.runners {
+		counts[rn.Arch]++
+	}
+	return counts, nil
 }
 
 func (s *archImageStore) SetRunImage(_ context.Context, _ uuid.UUID, image string) error {
@@ -140,5 +151,35 @@ func TestRunArch_FollowsTheBoundRunner(t *testing.T) {
 	img, failed := srv.resolveCreateRunImage(context.Background(), createRunRequest{Agent: "claude-code"}, run, nil)
 	if failed || img != "m/cc:1-arm64" {
 		t.Errorf("image = %q (failed %v), want the arm64 variant", img, failed)
+	}
+}
+
+// TestFinishCreateRunLaunch_BoundArchRunnerWiring drives the launch itself: a run bound to a runner of
+// the architecture wardynd is not takes that architecture's `@arch` image, persisted on the run row, and
+// the setup status names the keys that architecture still has no image for.
+func TestFinishCreateRunLaunch_BoundArchRunnerWiring(t *testing.T) {
+	foreign := "arm64"
+	if runtime.GOARCH == "arm64" {
+		foreign = "amd64"
+	}
+	srv, st, run := archImageServer(t, foreign)
+	srv.cfg.Runner = nil // the launch resolves and persists the image; nothing dispatches
+	srv.cfg.AgentImageVariants = map[string]map[string]string{foreign: {"claude-code": "m/cc:1-" + foreign}}
+	srv.finishCreateRunLaunch(context.Background(), createRunLaunch{req: createRunRequest{Agent: "claude-code"}, created: run})
+	if want := "m/cc:1-" + foreign; st.image != want {
+		t.Fatalf("persisted image = %q, want %q", st.image, want)
+	}
+	chk, ok := srv.runnerArchImagesRow(context.Background())
+	if !ok || chk.ID != "runner_arch_images" || !strings.Contains(chk.Detail, "no "+foreign+" image: base, claude-code+codex-cli.") {
+		t.Fatalf("setup row = %+v, %v; want the keys with no %s image (claude-code is covered)", chk, ok, foreign)
+	}
+}
+
+// With no `@arch` entries at all the runner row is never read.
+func TestRunArch_NoVariantsReadsNoRunner(t *testing.T) {
+	srv, st, run := archImageServer(t, "arm64")
+	srv.cfg.AgentImageVariants = nil
+	if got := srv.runArch(context.Background(), run); got != "" || st.reads != 0 {
+		t.Fatalf("runArch = %q after %d runner reads, want \"\" and none", got, st.reads)
 	}
 }

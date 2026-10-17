@@ -7,11 +7,14 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -29,6 +32,12 @@ type serveOptions struct {
 	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
 	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
 	trustedCAFile, trustedCA, trustedCAPath string
+	// proxyImagePinned is whether proxyImage was named on purpose (proxyImagePinned), so the
+	// organisation's answer at connect does not replace it.
+	proxyImagePinned bool
+	// upstreamProxy is --upstream-proxy: this runner's own corporate upstream proxy URL, validated at
+	// startup and handed to every run's proxy. It is never sent to the organisation.
+	upstreamProxy string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -65,11 +74,21 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		// The flag (whose default is the environment) outranks the image the organisation named at
-		// registration, which outranks this binary's release image.
-		opts.proxyImage = cmp.Or(opts.proxyImage, identity.ProxyImage, releaseProxyImage())
+		// A pinned image (the flag, whose default is the environment) outranks everything. Otherwise
+		// the organisation's answer at each connect wins; until the first connect, the image it named
+		// at registration, else this binary's release image, else an unmarked image an earlier setup left.
+		opts.proxyImagePinned = proxyImagePinned(opts.proxyImage, identity.ProxyImage, cmd.Flags().Changed("proxy-image"), os.Getenv)
+		if !opts.proxyImagePinned {
+			opts.proxyImage = cmp.Or(identity.ProxyImage, releaseProxyImage(), opts.proxyImage)
+		}
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
+		}
+		// The variable is read here, not as the flag's default: pflag prints a default in --help, which would
+		// show a credential.
+		opts.upstreamProxy = strings.TrimSpace(cmp.Or(opts.upstreamProxy, os.Getenv("WARDYN_UPSTREAM_PROXY")))
+		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
+			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY: %w (the URL is not repeated here: it may hold a credential)", err)
 		}
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
@@ -97,6 +116,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
 	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
+	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd

@@ -50,4 +50,7 @@
 # docs/ENV.md 37370 adds 40 over 37330, measured (0.9.3 ADO): the WARDYN_ADO_LANE_DECLINED row.
 # docs/ENV.md 37156 adds 37 over 37119 (0.9.3 E), measured: the WARDYN_TRUSTED_PROXIES row, which the env-doc guard requires.
 # docs/ENV.md 37406 = 37370 + 36 (E), measured at the wave-A merge.
-docs/ENV.md=37406 share=5
+# docs/ENV.md 37505 adds 175 over 37330 (0.9.3 Fr), measured: the WARDYN_UPSTREAM_PROXY row and details section, and the WARDYN_PROXY_IMAGE_PINNED row now read by serve.
+# docs/ENV.md 37533 adds 28 over 37505 (0.9.3 Fr fix round 1), measured: the PINNED row names the unmarked-image rule, and the plist-credential warning.
+# docs/ENV.md 37609 = 37406 + 203 (Fr), measured at the wave-A merge.
+docs/ENV.md=37609 share=5

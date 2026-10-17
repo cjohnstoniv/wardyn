@@ -106,6 +106,38 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - An organisation or pool can set `recording: required` (default `preferred`). A run only a non-recording runner could take is then refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. Under `preferred` the page says `runner_declined`, until a stored cast clears it.
 - An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).
 
+### A corporate upstream proxy on a laptop runner
+
+- Where the only way out is your organisation's HTTP proxy, give the runner its URL. Every run's proxy then chains its egress through it.
+- The organisation's own upstream proxy is not sent to a laptop; this is the laptop's own.
+- Start `serve` with `--upstream-proxy http://proxy.example:3128` or `WARDYN_UPSTREAM_PROXY`. Only `http://` is supported. The URL is checked at startup, never sent to the organisation, and never printed.
+- Setup does not write it. Add it to the service's environment after setup (the env file on Linux, mode `0600`), and again after a rerun, which rewrites that file.
+- Put a credential in the variable, not the flag: a flag shows in the process list.
+- On macOS do not put a credential in the LaunchAgent: the plist is mode `0644`, readable by every local account. Use a proxy URL without one, or run with `--no-service` and a `0600` environment file that holds `WARDYN_UPSTREAM_PROXY`. See [`WARDYN_UPSTREAM_PROXY`](../ENV.md#wardyn_upstream_proxy).
+
+### Running without a service
+
+- `wardyn-runnerd setup --no-service` registers, installs the binary and writes the environment file, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
+- Use it where you run the runner yourself, or device management installs the unit.
+- It is refused while a systemd unit or LaunchAgent for this runner is installed: running both would be two processes with one identity, which the organisation refuses. Remove the service first (`systemctl --user disable --now wardyn-runnerd` or `launchctl bootout`, then delete its file), then run setup again.
+- The environment file is `~/.config/wardyn/runnerd.env` on Linux and `runnerd.env` beside the runner's state directory on macOS, mode `0600`.
+
+1. Run `wardyn-runnerd setup --org https://wardyn.example --token-file <file> --no-service`.
+2. Run the printed command from a shell that stays open: `set -a; . '<env file>'; set +a; '<binary>' serve --org <url> --state-dir '<dir>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
+3. Claim the runner as for a service: see below.
+
+### The proxy image a laptop runner uses
+
+- An unpinned runner follows the organisation: at every connect it takes the proxy image the organisation answers for its architecture, so an upgraded organisation's image reaches the laptop without a reinstall. Runs started from then on use it; runs already going keep theirs.
+- It takes any well-formed image the organisation names, including an older one. There is no version floor, and the change is logged at info level only.
+- To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
+
+### The Docker engine setup and serve use
+
+- `wardyn-runnerd` reads `DOCKER_HOST` and the engine's default socket.
+- Setup refuses `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and `DOCKER_API_VERSION`: the service never sees them, so it would reach a different engine than the one setup checked.
+- A selected docker context (`docker context use`, `DOCKER_CONTEXT`) is resolved when it is a local unix socket, and carried into the service as `DOCKER_HOST`. A TCP, SSH or TLS context is refused with the `DOCKER_HOST` to set instead.
+
 ## Claiming a runner
 
 1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.

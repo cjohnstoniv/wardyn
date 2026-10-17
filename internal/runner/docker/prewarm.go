@@ -26,7 +26,7 @@ func (d *Driver) PrewarmImages() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), imagePrewarmTimeout)
 		defer cancel()
-		for _, ref := range []string{d.cfg.ProxyImage, d.driveProbeImage()} {
+		for _, ref := range []string{d.proxyImage(), d.driveProbeImage()} {
 			if ref == "" {
 				continue
 			}

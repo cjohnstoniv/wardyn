@@ -96,6 +96,26 @@ func TestRunnerRemoteListNoLimits(t *testing.T) {
 	}
 }
 
+// `--ids` prints one id per line, whatever the names hold, and `--set-up-here` leaves out the rows that are
+// another computer's: a script reads these instead of the table, whose columns a double space in a name shifts.
+func TestRunnerRemoteListIDsAndSetUpHere(t *testing.T) {
+	here := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "say  no"}, Configured: true}
+	away := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "k8s", Name: "Cluster"}}
+	srv := newCmdServer(t, http.StatusOK, []sdk.RemoteRunnerView{here, away})
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--ids"}, "docker\nk8s\n"},
+		{[]string{"--ids", "--set-up-here"}, "docker\n"},
+	} {
+		out, err := execCmdCapture(t, append([]string{"runner", "remote", "list"}, append(tc.args, "--url", srv.URL, "--token", "t")...)...)
+		if err != nil || out != tc.want {
+			t.Errorf("list %v = %q, %v; want %q", tc.args, out, err, tc.want)
+		}
+	}
+}
+
 // `wardyn runner list --no-limits` keeps only the self-hosted runners that take no run until limits are
 // set, and skips the remote-hosted section (`wardyn runner remote list --no-limits` is that list).
 func TestRunnerListNoLimits(t *testing.T) {

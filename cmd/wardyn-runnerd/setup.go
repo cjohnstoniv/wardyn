@@ -33,7 +33,7 @@ type setupOptions struct {
 	org, tokenFile, name             string
 	proxyImage, relayListen, network string
 	relayHostTarget, trustedCAFile   string
-	claim, makeDefault               bool
+	claim, makeDefault, noService    bool
 	pool                             string
 	limits                           registerLimits
 }
@@ -43,7 +43,7 @@ type setupOptions struct {
 // is already registered is not registered again, and the service files are rewritten and restarted.
 func newSetupCommand() *cobra.Command {
 	var o setupOptions
-	cmd := &cobra.Command{Use: "setup", Short: "Register this computer, install wardyn-runnerd as a login service and start it", Args: cobra.NoArgs}
+	cmd := &cobra.Command{Use: "setup", Short: "Register this computer, install wardyn-runnerd as a login service and start it (or, with --no-service, only write its environment)", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		host, err := osSetupHost()
 		if err != nil {
@@ -60,6 +60,7 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	fl.StringVar(&o.trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust; kept when setup runs again without it")
 	fl.StringVar(&o.network, "internal-network", "wardyn-internal", "Docker bridge for proxy sidecars (created when missing)")
+	fl.BoolVar(&o.noService, "no-service", false, "write the runner's environment file and print the command that runs it, but install no systemd unit or LaunchAgent")
 	fl.BoolVar(&o.claim, "claim", false, "claim the runner for yourself now; needs WARDYN_TOKEN, your own personal API token")
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
 	fl.BoolVar(&o.makeDefault, "default", false, "with --claim and --pool, also make that pool your default")
@@ -94,7 +95,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := h.installBinary(cmd.Context(), plan.paths.installed); err != nil {
+	if err := h.installBinary(cmd.Context(), plan.paths.installed, !plan.noService); err != nil {
 		return err
 	}
 	sayNoDiskCap(cmd.Context(), out)
@@ -111,7 +112,11 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 			}
 		}
 	}
-	if err := h.startService(cmd.Context(), plan, out); err != nil {
+	start := h.startService
+	if plan.noService {
+		start = func(_ context.Context, plan setupPlan, out io.Writer) error { return h.writeRunConfig(plan, out) }
+	}
+	if err := start(cmd.Context(), plan, out); err != nil {
 		return err
 	}
 	identity, err := runneridentity.Load(plan.paths.stateDir, plan.org)
@@ -269,8 +274,15 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
 		}
 	}
-	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
-		return setupPlan{}, err
+	if !o.noService {
+		if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
+			return setupPlan{}, err
+		}
+	} else if installed := paths.installedService(); installed != "" {
+		// Refused rather than disabled: --no-service promises to touch no service, and a unit left running beside
+		// the foreground command would be a second process with this one identity, which the organisation
+		// refuses.
+		return setupPlan{}, fmt.Errorf("a service is already installed for this runner (%s): running the runner by hand as well starts a second process with one identity. Stop and remove the service first (Linux: systemctl --user disable --now %s; macOS: launchctl bootout gui/%d/%s), then delete that file and run setup --no-service again; no token was spent", installed, serviceUnit, h.uid, serviceLabel)
 	}
 	// Always, flags or not: serve runs the same check at every start, after the token is spent.
 	if plan.eng, err = h.engine(cmd.Context(), o.network, want); err != nil {

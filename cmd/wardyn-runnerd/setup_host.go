@@ -20,6 +20,11 @@ import (
 	runnerunits "github.com/cjohnstoniv/wardyn/deploy/runner"
 )
 
+// defaultDockerSocket is where the Docker SDK connects when DOCKER_HOST is unset. Setup writes the engine it
+// checked into the service every time, this included, so the service never has to look at the person's docker
+// CLI context: a later `docker context use` cannot move it to another engine or stop it starting.
+const defaultDockerSocket = "unix:///var/run/docker.sock"
+
 const (
 	serviceLabel = "com.wardyn.runnerd"
 	serviceUnit  = "wardyn-runnerd.service"
@@ -46,6 +51,9 @@ func osSetupHost() (setupHost, error) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return setupHost{}, fmt.Errorf("unsupported OS: %s (on Windows, run setup inside WSL2)", runtime.GOOS)
 	}
+	if err := checkUntransportedDockerEnv(os.Getenv); err != nil {
+		return setupHost{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return setupHost{}, err
@@ -58,7 +66,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
+		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -112,8 +120,8 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 
 // installBinary stops a running copy and replaces the installed binary with this one, atomically. It
 // leaves a binary that is already the installed one alone, so setup also works run from there.
-func (h setupHost) installBinary(ctx context.Context, dst string) error {
-	if h.goos == "linux" {
+func (h setupHost) installBinary(ctx context.Context, dst string, stopService bool) error {
+	if stopService && h.goos == "linux" {
 		_, _ = h.run(ctx, "systemctl", "--user", "stop", serviceUnit)
 	}
 	if a, aerr := os.Stat(h.exe); aerr == nil {
@@ -155,32 +163,62 @@ func writeAtomic(path string, mode os.FileMode, write func(io.Writer) error) (er
 	return os.Rename(f.Name(), path)
 }
 
+// plainShellWord is what needs no quoting in a shell or in systemd's EnvironmentFile; every setting a Linux
+// unit carries passed safeSetting, which is a subset.
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9._:/@%+=,-]+$`)
+
+// shellQuote is s as one shell word: unchanged when plain, else in single quotes. A macOS path holds a space
+// ("Application Support"), which a bare KEY=value line or command argument would split.
+func shellQuote(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellUnquote undoes shellQuote for a value read back from an environment file.
+func shellUnquote(s string) string {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
+	}
+	return s
+}
+
+// serviceEnv is the runner's environment as setup settled it, one KEY=value line each, in the form
+// systemd's EnvironmentFile reads (a Linux unit's values are all plain) and a shell can source (a value
+// with a space, such as a macOS state directory, is single-quoted).
+func (p setupPlan) serviceEnv() string {
+	line := func(k, v string) string { return k + "=" + shellQuote(v) + "\n" }
+	env := line("WARDYN_RUNNER_ORG_URL", p.org)
+	if image := p.pinnedImage(); image != "" {
+		env += line("WARDYN_PROXY_IMAGE", image)
+	}
+	if p.pinMarker() != "" {
+		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
+	}
+	env += line("WARDYN_INTERNAL_NETWORK", p.network) + line("WARDYN_RUNNER_STATE_DIR", p.paths.stateDir)
+	if p.trustedCAFile != "" {
+		env += line("WARDYN_TRUSTED_CA_FILE", p.trustedCAFile)
+	}
+	if p.relayListen != "" {
+		env += line("WARDYN_RELAY_LISTEN", p.relayListen)
+	}
+	if p.relayHostTarget != "" {
+		env += line("WARDYN_RELAY_HOST_TARGET", p.relayHostTarget)
+	}
+	if p.dockerHost != "" {
+		env += line("DOCKER_HOST", p.dockerHost)
+	}
+	return env
+}
+
 // startService writes the service definition and (re)starts it.
 func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writer) error {
 	if h.goos == "darwin" {
 		return h.startLaunchAgent(ctx, plan, out)
 	}
 	p := plan.paths
-	env := "WARDYN_RUNNER_ORG_URL=" + plan.org + "\n"
-	if image := plan.pinnedImage(); image != "" {
-		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
-	}
-	if plan.pinMarker() != "" {
-		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
-	}
-	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", plan.network, p.stateDir)
-	if plan.trustedCAFile != "" {
-		env += "WARDYN_TRUSTED_CA_FILE=" + plan.trustedCAFile + "\n"
-	}
-	if plan.relayListen != "" {
-		env += "WARDYN_RELAY_LISTEN=" + plan.relayListen + "\n"
-	}
-	if plan.relayHostTarget != "" {
-		env += "WARDYN_RELAY_HOST_TARGET=" + plan.relayHostTarget + "\n"
-	}
-	if plan.dockerHost != "" {
-		env += "DOCKER_HOST=" + plan.dockerHost + "\n"
-	}
+	env := plan.serviceEnv()
 	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", p.installed)
 	for _, f := range []struct {
 		path, text string
@@ -203,6 +241,40 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	if h.xdgConfig != "" {
 		fmt.Fprintf(out, "XDG_CONFIG_HOME is set here, so pass --state-dir %s to wardyn runner claim.\n", p.stateDir)
 	}
+	return nil
+}
+
+// installedService is the unit or LaunchAgent file already installed, or "".
+func (p setupPaths) installedService() string {
+	for _, f := range []string{p.unitFile, p.plistFile} {
+		if f == "" {
+			continue
+		}
+		if _, err := os.Stat(f); err == nil {
+			return f
+		}
+	}
+	return ""
+}
+
+// noServiceEnvFile is where --no-service writes the environment: the file a Linux service reads, and on
+// macOS, which has no such file, one beside the identity's directory.
+func (p setupPaths) noServiceEnvFile() string {
+	return cmp.Or(p.envFile, filepath.Join(filepath.Dir(p.stateDir), "runnerd.env"))
+}
+
+// writeRunConfig is --no-service: it writes the environment file and prints the command that runs the
+// runner in the foreground, and installs no unit, plist or login item.
+func (h setupHost) writeRunConfig(plan setupPlan, out io.Writer) error {
+	path := plan.paths.noServiceEnvFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := writeAtomic(path, 0o600, func(w io.Writer) error { _, err := io.WriteString(w, plan.serviceEnv()); return err }); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  set -a; . %s; set +a; %s serve --org %s --state-dir %s\n",
+		path, shellQuote(path), shellQuote(plan.paths.installed), shellQuote(plan.org), shellQuote(plan.paths.stateDir))
 	return nil
 }
 
@@ -231,19 +303,25 @@ func (p setupPlan) pinMarker() string {
 // setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
 // of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
 func (p setupPaths) keptPins() (image, caFile string) {
+	// The source is the one the service actually uses: a Linux unit's environment file, or on macOS the
+	// LaunchAgent once one is installed. The environment file --no-service writes there is read only while no
+	// LaunchAgent exists, so an older one never outranks a newer plist (or mixes with it).
+	var plist []byte
+	if p.plistFile != "" {
+		plist, _ = os.ReadFile(p.plistFile)
+	}
 	read := func(key string) string {
-		if p.envFile != "" {
-			b, _ := os.ReadFile(p.envFile)
-			for _, line := range strings.Split(string(b), "\n") {
-				if v, ok := strings.CutPrefix(line, key+"="); ok {
-					return strings.TrimSpace(v)
-				}
+		if plist != nil {
+			if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(plist); m != nil {
+				return html.UnescapeString(strings.TrimSpace(string(m[1])))
 			}
 			return ""
 		}
-		b, _ := os.ReadFile(p.plistFile)
-		if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(b); m != nil {
-			return html.UnescapeString(strings.TrimSpace(string(m[1])))
+		b, _ := os.ReadFile(p.noServiceEnvFile())
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, key+"="); ok {
+				return shellUnquote(strings.TrimSpace(v))
+			}
 		}
 		return ""
 	}

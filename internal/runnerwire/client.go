@@ -41,6 +41,8 @@ type RunnerHooks struct {
 	Revoked     func(context.Context) error
 	Offline     func(context.Context)
 	Online      func(*Peer, bool)
+	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
+	ProxyImage func(string)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 }
@@ -155,6 +157,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	if !ok.Resumed {
 		cfg = PeerConfig{}
+	}
+	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
+		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}
 	c.session, c.ready = ok.SessionID, false
 	return c.serve(ctx, conn, cfg, ok)

@@ -28,4 +28,7 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1862 adds 3 over 1859 (0.9.3 E r1), measured: a loopback or unspecified X-Forwarded-For entry keeps the TCP peer.
 # docs/operations/hybrid-laptops.md 1867 adds 5 (0.9.3 lane E r2 docs): where a device-forwarded row keeps the peer.
 # docs/operations/hybrid-laptops.md 2253 = 1923 + 330 (E), measured at the wave-A merge.
-docs/operations/hybrid-laptops.md=2253 share=35
+# docs/operations/hybrid-laptops.md 2077 adds 316 over 1761 (0.9.3 Fr), measured: the upstream proxy, running without a service and Docker engine sections.
+# docs/operations/hybrid-laptops.md 2295 adds 218 over 2077 (0.9.3 Fr fix round 1), measured: the proxy-image section (follows the organisation, any image, the pin), the --no-service refusal and quoted command, and the plist-credential warning.
+# docs/operations/hybrid-laptops.md 2787 = 2253 + 534 (Fr), measured at the wave-A merge.
+docs/operations/hybrid-laptops.md=2787 share=35
