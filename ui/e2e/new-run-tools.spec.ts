@@ -137,8 +137,9 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await expect(dialog.getByText(NR_TOOLS.SECRET_NONE)).toBeVisible();
     await expect(dialog.getByLabel(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
     await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
-    // Nothing was added: the dialog is still the one asking.
+    // Nothing was added: the dialog is still the one asking, and the host field never blamed the person.
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(NR_TOOLS.SECRET_ERR_HOST)).toHaveCount(0);
   });
 
   test("the policy preview, the preflight and the create send one body", async ({ page }) => {

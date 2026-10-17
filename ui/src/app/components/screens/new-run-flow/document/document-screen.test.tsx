@@ -14,7 +14,6 @@ import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps } from "../new-run-route";
 import { NR_DOCUMENT as C } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { MISSING_COPY } from "./missing-copy";
 import { DocumentScreen, type DocumentDeps } from "./document-screen";
 import { MAX_DOCUMENT_BYTES } from "./run-document";
 
@@ -145,6 +144,7 @@ describe("run document editor", () => {
     class Unreadable {
       onerror: (() => void) | null = null;
       readAsText() { queueMicrotask(() => this.onerror?.()); }
+      abort() {}
     }
     vi.stubGlobal("FileReader", Unreadable);
     try {
@@ -246,8 +246,9 @@ describe("run document editor", () => {
   it("holds Load example when no harness is enabled", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }] });
     await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
-    // The canon has no no-harness text yet (MISSING_COPY), so none is rendered.
-    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
+    // FR-0098: the reason is written where the button is off, and the button points at it.
+    expect(screen.getByText("Choose a harness to load its example.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toHaveAccessibleDescription("Choose a harness to load its example.");
   });
 
   it("announces one error in the singular", async () => {
@@ -372,9 +373,8 @@ describe("run document editor", () => {
     await waitFor(() => expect(text("path")).not.toContain("step="));
   });
 
-  it("the words the canon lacks are an empty seam, not text on any normal path", () => {
-    expect(Object.values(MISSING_COPY)).toEqual([""]);
-    expect([C.TOO_LARGE, C.FILE_UNREADABLE]).toEqual(["This file is over 1 MiB, the most the editor reads.", "The browser could not read this file."]);
+  it("the FR-0098 sentences are the approved words", () => {
+    expect([C.TOO_LARGE, C.FILE_UNREADABLE, C.NO_HARNESS]).toEqual(["This file is over 1 MiB, the most the editor reads.", "The browser could not read this file.", "Choose a harness to load its example."]);
   });
 
   it("starts from the draft's intent written as a kind Run document", async () => {

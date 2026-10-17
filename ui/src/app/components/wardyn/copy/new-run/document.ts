@@ -35,6 +35,10 @@ export const NR_DOCUMENT = {
   JSON_INVALID: "This JSON document isn't valid. Check the highlighted structure.",
   /** pending W-19: the recommended text until the owner answers. */
   YAML_INVALID: "This YAML document isn't valid. Check the highlighted structure.",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a document with errors. */
+  DOC_INVALID: "Fix the errors in the document.",
+  /** Lead wording 2026-10-17 (FR-0098): why Load example is off when no harness is enabled. */
+  NO_HARNESS: "Choose a harness to load its example.",
   /** Owner-approved 2026-10-17 (FR-0098): a file or document over MAX_DOCUMENT_BYTES (1 MiB) is refused unread. */
   TOO_LARGE: "This file is over 1 MiB, the most the editor reads.",
   /** Owner-approved 2026-10-17 (FR-0098): the browser's FileReader failed. */

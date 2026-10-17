@@ -17,6 +17,7 @@ import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { SCENARIO_HARNESSES } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 
 const editor = (page: Page, format: "YAML" | "JSON" = "YAML") => page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA(format) });
@@ -60,6 +61,22 @@ test.describe("New Run, the run document", () => {
     await press(page, NR_DOCUMENT.VALIDATE);
     await expect(panel(page).getByText(NR_DOCUMENT.JSON_INVALID)).toBeVisible();
     expect(asked).toBe(false);
+  });
+
+  test("Load example says why it is off when no harness is enabled (FR-0098)", async ({ page }) => {
+    let status: Record<string, unknown> | null = null;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      status ??= {
+        ...((await (await route.fetch()).json()) as Record<string, unknown>),
+        harnesses: SCENARIO_HARNESSES.full.map((h) => ({ ...h, enabled: false })),
+      };
+      await route.fulfill({ json: status });
+    });
+    await openDocument(page);
+    const load = page.getByRole("button", { name: NR_DOCUMENT.LOAD_EXAMPLE });
+    await expect(load).toBeDisabled();
+    await expect(page.getByText(NR_DOCUMENT.NO_HARNESS)).toBeVisible();
+    await expect(load).toHaveAccessibleDescription(NR_DOCUMENT.NO_HARNESS);
   });
 
   test("a file over 1 MiB is refused in words, before it is read or sent (FR-0098)", async ({ page }) => {

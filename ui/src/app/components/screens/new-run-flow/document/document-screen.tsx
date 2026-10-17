@@ -22,7 +22,6 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../ne
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { MISSING_COPY } from "./missing-copy";
 import { importRunDocument, type ImportDocument } from "./import-door";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
@@ -214,13 +213,13 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
                 importFile(file);
               }}
             />
-            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
+            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null ? NO_HARNESS_ID : undefined}
               onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
               {copy.LOAD_EXAMPLE}
             </Button>
           </div>
         </div>
-        {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
+        {harness === null && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{copy.NO_HARNESS}</p>}
         <DocumentEditor
           id={EDITOR_ID}
           value={text}

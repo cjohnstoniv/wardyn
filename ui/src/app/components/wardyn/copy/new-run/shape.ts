@@ -10,6 +10,8 @@
 export const NR_SHAPE = {
   TITLE: "What are you running?",
   LEDE: "Pick the closest shape. You can adjust every detail before launch.",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run with no shape chosen. */
+  SHAPE_REQUIRED: "Choose a shape for this run.",
   START_FROM: "Start from",
   SOURCE_SCRATCH: "From scratch",
   SOURCE_TEMPLATE: "Saved template",

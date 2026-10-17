@@ -120,6 +120,19 @@ test.describe("New Run, Review: blockers and Check again", () => {
     await expect(launch(page)).toBeDisabled();
   });
 
+  test("a document edited after it was accepted holds Launch with a sentence of its own (FR-0099, doc_invalid)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    await openReview(page);
+    await expect(launch(page)).toBeEnabled();
+    await page.goBack();
+    const editor = page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") });
+    await editor.fill(`${DOCUMENT}# edited\n`);
+    await page.goForward();
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await expect(page.locator("#nr-blockers").getByText(NR_DOCUMENT.DOC_INVALID)).toBeVisible();
+    await expect(launch(page)).toBeDisabled();
+  });
+
   test("Check again reads the server again and releases Launch", async ({ page }) => {
     const checks: Checks = { preflight: MISSING };
     await stub(page, checks);

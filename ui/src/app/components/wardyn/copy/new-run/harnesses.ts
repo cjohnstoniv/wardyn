@@ -39,6 +39,8 @@ export const NR_HARNESSES = {
   TASK_LABEL: "Task",
   TASK_PLACEHOLDER: "What should this agent accomplish?",
   TASK_HELP: "This harness starts automatically when it has a task.",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run that needs a harness and has none. */
+  HARNESS_REQUIRED: "A run needs at least one harness.",
   TASK_ERROR: "An autonomous run needs at least one task to perform.",
   ADD_HARNESS: "Add a harness",
   ADD_ANOTHER: "Add another harness",

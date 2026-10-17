@@ -72,7 +72,7 @@ async function ssoAdminSession(page: import("@playwright/test").Page, view: "adm
 }
 
 test.describe("the model-access strip on a page that is a switch (FUG-L772)", () => {
-  test("an SSO admin in the Admin view has no strip above the 'open in User view' page, and a User page draws it", async ({ page }) => {
+  test("an SSO admin in the Admin view has no strip above the 'open in User view' page", async ({ page }) => {
     await ssoAdminSession(page, "admin");
     await mockModelAccess(page, { state: "not_configured", action: AGENTS.SIGN_IN_AWS });
     await page.goto("/account");

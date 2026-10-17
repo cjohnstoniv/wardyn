@@ -85,6 +85,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 |---|---|---|
 | `TITLE` | mock | What are you running? |
 | `LEDE` | mock | Pick the closest shape. You can adjust every detail before launch. |
+| `SHAPE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose a shape for this run. |
 | `START_FROM` | mock | Start from |
 | `SOURCE_SCRATCH` | mock | From scratch |
 | `SOURCE_TEMPLATE` | mock | Saved template |
@@ -134,6 +135,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_SERVER_BODY` | mock | App servers and MCP servers. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
+| `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
 | `WHERE_LABEL` | mock | Where should it run? |
 | `POOL_LABEL` | mock | Pool |
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
@@ -257,6 +259,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
+| `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |
 | `ADDED` | mock | Harness added. |
@@ -346,6 +349,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
 | `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
+| `STARTS_HERE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose the folder the run starts in. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
 | `MOUNT_MAIN(size)` | mock | Main drive · {size} |
@@ -637,6 +641,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
 | `TOO_LARGE` | deviation (owner approved 2026-10-17, FR-0098) | This file is over 1 MiB, the most the editor reads. |
 | `FILE_UNREADABLE` | deviation (owner approved 2026-10-17, FR-0098) | The browser could not read this file. |
+| `DOC_INVALID` | deviation (lead wording 2026-10-17, FR-0099) | Fix the errors in the document. |
+| `NO_HARNESS` | deviation (lead wording 2026-10-17, FR-0098) | Choose a harness to load its example. |
 | `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon (it owns the sentence) |
 | `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon (it owns the sentence) |
 | `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon (it owns the sentence) |
@@ -867,8 +873,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `RENAME` | mock | Rename |
 | `DELETE` | mock | Delete |
 | `PUBLISH` | pending (W-24) | Publish to organisation |
-| `PUBLISH_TITLE(name)` | deviation (owner approved 2026-10-17, FR-0120) | Publish {name} to your organisation? |
-| `PUBLISHED(name)` | deviation (owner approved 2026-10-17, FR-0120) | {name} published to your organisation. |
+| `PUBLISH_TITLE(name)` | deviation (lead wording 2026-10-17, FR-0120) | Publish {name} to your organization? |
+| `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
 | `WHY_ORG` | mock | Published by your organisation. Only organisation admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
 | `EMPTY_TITLE` | mock | No templates yet |

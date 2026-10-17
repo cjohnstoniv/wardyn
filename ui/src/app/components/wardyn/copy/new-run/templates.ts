@@ -50,10 +50,10 @@ export const NR_TEMPLATES = {
   DELETE: "Delete",
   /** pending W-24: the recommended text until the owner answers. */
   PUBLISH: "Publish to organisation",
-  /** Owner-approved 2026-10-17 (FR-0120): the confirm that precedes Publish; its body is NR_SAVE.SHARED_DISCLOSURE. */
-  PUBLISH_TITLE: (name: string | number) => `Publish ${name} to your organisation?`,
-  /** Owner-approved 2026-10-17 (FR-0120): the success toast. */
-  PUBLISHED: (name: string | number) => `${name} published to your organisation.`,
+  /** Lead wording 2026-10-17 (FR-0120): the confirm that precedes Publish; its body is NR_SAVE.SHARED_DISCLOSURE. */
+  PUBLISH_TITLE: (name: string | number) => `Publish ${name} to your organization?`,
+  /** Lead wording 2026-10-17 (FR-0120): the success toast. */
+  PUBLISHED: (name: string | number) => `${name} published to your organization.`,
   WHY_ORG: "Published by your organisation. Only organisation admins can change it.",
   WHY_GROUP: (scope: string | number) => `Published to ${scope}. Only its template managers can change it.`,
   EMPTY_TITLE: "No templates yet",

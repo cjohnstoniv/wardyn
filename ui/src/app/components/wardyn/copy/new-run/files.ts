@@ -115,6 +115,8 @@ export const NR_FILES = {
   /** pending W-12: the recommended text until the owner answers. */
   NO_EXTRA_KEPT: (grace: string | number) =>
     `Only the main drive. It is deleted ${grace} after the run's end time.`,
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run with no folder marked as where it starts. */
+  STARTS_HERE_REQUIRED: "Choose the folder the run starts in.",
   CHOOSE_FILES: "Add what it needs, or choose No extra files.",
   MOUNT_TITLE: "Mount map",
   MOUNT_BODY: "Read-only view of where files appear in the sandbox.",

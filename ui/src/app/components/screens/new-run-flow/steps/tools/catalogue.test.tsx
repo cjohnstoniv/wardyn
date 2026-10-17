@@ -237,6 +237,7 @@ describe("Add a secret", () => {
     expect(dialog.getByLabelText(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(JSON.stringify(draft().overrides ?? {})).not.toContain("add_secrets");
+    expect(dialog.queryByText(NR_TOOLS.SECRET_ERR_HOST)).toBeNull();
   });
 
   it("does not add a host the run already reaches", async () => {
@@ -310,6 +311,17 @@ describe("A saved-secret read that fails (DR-0252)", () => {
     setField(dialog.getByLabelText(NR_TOOLS.MCP_URL), "https://mcp.example.com/mcp");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components?.[0].inline).toMatchObject({ mcp: { url: "https://mcp.example.com/mcp" } });
+  });
+
+  it("does not say 'no saved secrets' beside the failure notice when the names could not be read (FR-0110, DR-0252)", async () => {
+    h.names.mockRejectedValueOnce(new Error("secrets are offline"));
+    await show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SECRET_CARD_BUTTON }));
+    const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.SECRET_CARD_TITLE }));
+    expect((await dialog.findByRole("alert")).textContent).toContain("secrets are offline");
+    expect(dialog.queryByText(NR_TOOLS.SECRET_NONE)).toBeNull();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(dialog.queryByText(NR_TOOLS.SECRET_ERR_HOST)).toBeNull();
   });
 
   it("shows no failure when the read succeeds with no names", async () => {

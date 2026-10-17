@@ -338,7 +338,7 @@ export const POOL_FORM = {
   CREATED: (name: string) => `Created ${name}`,
   STALE_HINT: "Reload the pool to see the other change, then redo yours.",
   RELOAD: "Reload",
-  // Owner-approved 2026-10-17 (F4): the form's own sentence when Reload cannot re-read the pool.
+  // Lead wording 2026-10-17 (F4): the form's own sentence when Reload cannot re-read the pool.
   RELOAD_FAILED: "Couldn't reload this pool. Your changes are still here. Try Reload again.",
   ERR_NAME: "Name the pool in 1 to 64 characters, without leading or trailing spaces.",
   ERR_NAME_LONG: "A pool name is at most 64 characters.",
