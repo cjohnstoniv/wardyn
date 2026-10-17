@@ -69,7 +69,7 @@
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
-- Placement judges the posture on record, the runner's last report, however old it is. A change on the laptop counts once the runner reports it, which it does at every connect and when the posture changes.
+- Placement judges the posture on record, the runner's last report, however old it is. A change on the laptop counts once the runner reports it, which it does at every connect and within 15 minutes of a change.
 - A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`). A class with no `require_posture` places on any runner, one that has never reported posture included; to demand a report, set at least one requirement.
 - `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
@@ -162,9 +162,9 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - The proxy dials `host.docker.internal`, which its hosts map to the relay's address, at the port `wardyn-runnerd` keeps in `decision-sink.addr`. The connection is pinned to `decision-sink.key`, and each proxy has its own key: one run's proxy cannot write another run's decisions.
 - A request whose decision cannot be recorded is not sent. A decision a stopped proxy never delivered is counted, and the organisation gets a `builtin:spool-lost` deny carrying the count.
 - After a restart `wardyn-runnerd` listens on the same port before it stops the runs' proxies, so a proxy still running delivers what it holds first.
-- The runner and organisation share one wire protocol version, and each side uses a newer feature only when the other advertised it. An older runner keeps working with fewer features.
+- The runner and organisation share one wire protocol version, and the organisation uses a newer runner feature only when the runner advertised it in its caps. An older runner keeps working with fewer features.
   - A newer runner is not promised to work against an older organisation, which is why the organisation goes first. See [Runner and organisation versions](../runner-registration.md#runner-and-organisation-versions).
-  - Rolling back to 0.9.2 after a run with captured output needs the runner's state directory cleared.
+  - Clear the runner's state directory before rolling a runner that ran anything under 0.9.3 back to 0.9.2.
 - Upgrade the organisation before its runners. A runner newer than 0.9.3-rc.2 configures its proxy with `decision_sink`, which a proxy image from 0.9.3-rc.2 or older does not know. An unpinned runner of an older organisation takes that image (below), so its runs fail to start; a pinned runner needs an image at least as new as its own release.
 
 ### The proxy image a laptop runner uses

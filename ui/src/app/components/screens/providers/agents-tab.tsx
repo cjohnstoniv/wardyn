@@ -21,7 +21,6 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
-import { reconfirmPrincipal } from "../../../lib/api/reconfirm-principal";
 import { agentProviders as api, type AgentProvider, type AgentProviders } from "../../../lib/api/agent-providers";
 import { modelProviders as providersApi, type ModelProvider } from "../../../lib/api/model-providers";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
@@ -40,6 +39,7 @@ import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 
 // The two catalog agents whose model credential folds to a coarse
@@ -296,10 +296,7 @@ export function AgentsTab({
   }, []);
   React.useEffect(load, [load]);
 
-  // Discarding also re-reads /me: a 412 can mean another tab switched the session to someone else.
-  const discard = React.useCallback(() => {
-    void reconfirmPrincipal().finally(load);
-  }, [load]);
+  const discard = useDiscardReload(load);
 
   const agents = draft?.agents ?? [];
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.

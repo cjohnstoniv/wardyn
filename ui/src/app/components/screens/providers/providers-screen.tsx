@@ -28,7 +28,6 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
-import { reconfirmPrincipal } from "../../../lib/api/reconfirm-principal";
 import { providers as api, type WorkspaceProviders } from "../../../lib/api/providers";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
@@ -45,6 +44,7 @@ import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
 import { Segmented } from "../../wardyn/segmented";
@@ -112,10 +112,7 @@ export function ProvidersScreen() {
   }, []);
   React.useEffect(load, [load]);
 
-  // Discarding also re-reads /me: a 412 can mean another tab switched the session to someone else.
-  const discard = React.useCallback(() => {
-    void reconfirmPrincipal().finally(load);
-  }, [load]);
+  const discard = useDiscardReload(load);
 
   // The Agents tab's own Save re-fires only this — never `load` (A-01): a
   // successful agent save needs `setupStatus` refreshed (modelAccess/

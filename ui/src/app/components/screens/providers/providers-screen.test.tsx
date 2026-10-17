@@ -6,7 +6,7 @@
 // The /providers screen — the drives-screen.tsx precedent: forbidden (a 403 is
 // the TIER, not the network), fetch-failed (distinct from empty), the legacy
 // banner (zero rows), populated, and exactly ONE teal button at a time.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
@@ -87,12 +87,16 @@ vi.mock("react-router-dom", async () => {
 function renderScreen(operator = true) {
   return render(
     <UnsavedGuardProvider>
-      <OperatorProvider operator={operator}>
+      <OperatorProvider operator={operator} principal="alice">
         <ProvidersScreen />
       </OperatorProvider>
     </UnsavedGuardProvider>,
   );
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   getWorkspaceProvidersMock.mockReset();
@@ -395,7 +399,9 @@ describe("ProvidersScreen", () => {
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
   });
 
-  it("Discard mine and reload re-reads /me as well as the providers", async () => {
+  it("Discard mine and reload: a different person reloads the page, not just the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
     getWorkspaceProvidersMock.mockResolvedValue({
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
@@ -407,8 +413,46 @@ describe("ProvidersScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
     await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload: the same person reloads only the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "alice" });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: no answer from /me reloads only the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue(null);
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("a 400 renders the server's own refusal verbatim under SAVE_REFUSED_TITLE", async () => {

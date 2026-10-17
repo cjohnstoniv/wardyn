@@ -6,7 +6,7 @@
 // The Agents tab (§5c.4/§9.1, design §5.3): rows from SetupStatus.harnesses,
 // and each row's default model provider (packet MP-C's G1–G4). Since 0.8
 // (#548) a row carries no model credential.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool } from "../../../lib/types";
@@ -16,6 +16,7 @@ import { RAIL_PROVIDER } from "../../wardyn/copy/new-run-rail";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { AgentsTab } from "./agents-tab";
 const getAgentProvidersMock = vi.fn();
 const putAgentProvidersMock = vi.fn();
@@ -80,6 +81,10 @@ const retryRosterMock = vi.fn();
 // above stays reserved for the roster-unknown Retry, which has no draft to
 // lose). save() must call THIS on success, never retryRosterMock.
 const statusRefreshMock = vi.fn();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   getAgentProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: '"e0"' });
@@ -504,17 +509,63 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     expect(putAgentProvidersMock).toHaveBeenCalledTimes(1);
   });
 
-  it("Discard mine and reload re-reads /me as well as the agents", async () => {
+  it("Discard mine and reload: a different person reloads the page, not just the agents", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
     putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
     whoamiMock.mockResolvedValue({ principal: "someone-else" });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    render(
+      <OperatorProvider operator principal="alice">
+        <AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />
+      </OperatorProvider>,
+    );
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(getAgentProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload: the same person reloads only the agents", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    whoamiMock.mockResolvedValue({ principal: "alice" });
+    render(
+      <OperatorProvider operator principal="alice">
+        <AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />
+      </OperatorProvider>,
+    );
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
     await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: no answer from /me reloads only the agents", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    whoamiMock.mockResolvedValue(null);
+    render(
+      <OperatorProvider operator principal="alice">
+        <AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />
+      </OperatorProvider>,
+    );
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("a 400 renders SAVE_REFUSED_TITLE over the server's verbatim body", async () => {
