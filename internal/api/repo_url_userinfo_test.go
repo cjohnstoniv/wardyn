@@ -43,7 +43,10 @@ var credentialedRepoURLs = []struct{ url, secret string }{
 	{"https://PAT-x7@dev.azure.com/PAT-x7//../contoso/proj/_git/app", "PAT-x7@"},
 	{"https://PAT-x7@dev.azure.com/PAT-x7/%2e%2e/contoso/proj/_git/app", "PAT-x7@"},
 	{"https://PAT-x7@dev.azure.com/PAT-x7/..%2Fcontoso/proj/_git/app", "PAT-x7@"},
-	{"\u200bhttps://zw-tok9@github.com/acme/app.git", "zw-tok9"}, // a zero-width space before the scheme
+	{"https://PAT-x7@dev.azure.com/PAT-x7/..;/contoso/proj/_git/app", "PAT-x7@"},   // a dot segment with a ;param
+	{"https://PAT-x7@dev.azure.com/PAT-x7/.../contoso/proj/_git/app", "PAT-x7@"},   // a trailing-dot segment
+	{"https://PAT-x7@dev.azure.com/PAT-x7/..%20/contoso/proj/_git/app", "PAT-x7@"}, // a trailing-space segment
+	{"\u200bhttps://zw-tok9@github.com/acme/app.git", "zw-tok9"},                   // a zero-width space before the scheme
 }
 
 // allowedUserRepoURLs carry a user name that is no secret: the SSH login user

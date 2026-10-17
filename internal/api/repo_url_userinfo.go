@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -60,15 +61,20 @@ func repoURLHasUserinfo(raw string) bool {
 // adoCloneButtonName reports whether userinfo is the one name allowed: Azure
 // DevOps' Clone button and its remoteUrl spell https://<org>@dev.azure.com/<org>/...,
 // a user name (no password, not even an empty one) that repeats the organisation
-// already in the path, so it hides nothing, over a path with no dot segment or
-// escape. A token in that place does not.
+// already in the path, so it hides nothing, over a path already in Azure
+// DevOps canonical form. A token in that place does not.
 func adoCloneButtonName(userinfo, host, path string) bool {
 	org, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
-	return strings.EqualFold(host, "dev.azure.com") && strings.HasPrefix(path, "/") &&
-		userinfo != "" && !strings.Contains(userinfo, ":") && strings.EqualFold(userinfo, org) &&
-		// git's curl squashes dot segments, so /<token>/../<org>/... would send the
-		// token while the first segment matched it.
-		repoLocatorPathSafe("https://"+host+path, nil)
+	if !strings.EqualFold(host, "dev.azure.com") || !strings.HasPrefix(path, "/") ||
+		userinfo == "" || strings.Contains(userinfo, ":") || !strings.EqualFold(userinfo, org) {
+		return false
+	}
+	// A layer that resolves dot segments (git's curl squashes /<token>/../<org>/;
+	// others strip ;params, trailing dots or spaces first) would send the token
+	// while the first segment matched it, so only the canonical spelling passes.
+	u := "https://" + host + path
+	c, ok := adoscope.CanonicalRepoURL(u, nil)
+	return ok && c == u
 }
 
 // redactRepoURL is raw without the userinfo repoURLHasUserinfo flags, for audit
