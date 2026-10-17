@@ -55,4 +55,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 3864, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/operations/hybrid-laptops.md 3926 adds 62, measured: runner trust classes (with the required --reason) and by_trust in Resident credentials and posture.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
-docs/operations/hybrid-laptops.md=4195 share=35
+# docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
+docs/operations/hybrid-laptops.md=4380 share=35

@@ -154,6 +154,15 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. Run the printed command from a shell that stays open: `set -a; . '<env file>'; set +a; '<binary>' serve --org <url> --state-dir '<dir>'`. Setup prints it with the quoting your shell needs; on macOS the paths hold a space (`Application Support`), so copy the printed line rather than retyping it.
 3. Claim the runner as for a service: see below.
 
+### How audit decisions reach the organisation
+
+- A run's proxy sends each egress decision to `wardyn-runnerd`, which alone writes it to the run's spool, `spools/<run>` in its state directory. It sends the spool to the organisation and deletes each record the organisation acknowledges.
+- The proxy shares no directory with the runner, so an engine in a VM (Docker Desktop, Colima, Rancher Desktop) records decisions as a native one does.
+- The proxy dials `host.docker.internal`, which its hosts map to the relay's address, at the port `wardyn-runnerd` keeps in `decision-sink.addr`. The connection is pinned to `decision-sink.key`, and each proxy has its own key: one run's proxy cannot write another run's decisions.
+- A request whose decision cannot be recorded is not sent. A decision a stopped proxy never delivered is counted, and the organisation gets a `builtin:spool-lost` deny carrying the count.
+- After a restart `wardyn-runnerd` listens on the same port before it stops the runs' proxies, so a proxy still running delivers what it holds first.
+- Upgrade the organisation before its runners. A runner newer than 0.9.3-rc.2 configures its proxy with `decision_sink`, which a proxy image from 0.9.3-rc.2 or older does not know. An unpinned runner of an older organisation takes that image (below), so its runs fail to start.
+
 ### The proxy image a laptop runner uses
 
 - An unpinned runner follows the organisation: at every connect it takes the proxy image the organisation answers for its architecture, so an upgraded organisation's image reaches the laptop without a reinstall. Runs started from then on use it; runs already going keep theirs.
@@ -260,7 +269,7 @@ Do this when a runner's runs keep failing after an upgrade or after its Docker e
 
    Leave volumes alone: a drive's volume holds its files. The shared `wardyn-internal` network carries no runner label and stays.
 4. Keep the state directory as it is (`~/Library/Application Support/wardyn/runner` on macOS, `~/.config/wardyn/runner` on Linux). `runner.json` is the runner's identity, and `spools/` and `offline/` hold audit records not yet delivered and what the runner still owes for its runs. Keep the CA file you gave setup: `serve` copies it into the state directory at every start.
-5. Start the service: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wardyn.runnerd.plist` on macOS, `systemctl --user start wardyn-runnerd` on Linux. At start `serve` checks that the Docker engine sees the state directory, and exits naming the directory when it does not.
+5. Start the service: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wardyn.runnerd.plist` on macOS, `systemctl --user start wardyn-runnerd` on Linux.
 
 ## Behind a shared ingress
 

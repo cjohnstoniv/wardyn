@@ -27,4 +27,5 @@
 # threatmodel/THREAT-MODEL.md 59420 = 59316 + 104, measured: the runner door, admin read and harness-uid sentences.
 # threatmodel/THREAT-MODEL.md 60728 = 60624 + 104, measured: at the FIN-C2 merge into the final train (both sides' sentences).
 # threatmodel/THREAT-MODEL.md 62948 adds 2220, measured: the 0.9.3 runner sweep (B13 organisation runner, trust class, resident delivery, recording, runner CA, CLI doors under a ceiling; residuals 89-90), corrected after review for NetworkPolicy defaults, the sandbox CA, erase closure and trust bypass.
-threatmodel/THREAT-MODEL.md=62948
+# threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
+threatmodel/THREAT-MODEL.md=63025
