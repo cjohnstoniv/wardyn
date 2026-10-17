@@ -435,6 +435,12 @@ env: {}
 # it. 0 (the default) is unlimited. The per-member cap stays a governance profile limit.
 maxConcurrentRuns: 0
 
+# Reverse proxies whose X-Forwarded-For names the client (WARDYN_TRUSTED_PROXIES): a
+# comma-separated CIDR list of your ingress addresses, "" (the default) trusts none.
+# Only list your own proxies; see docs/operations/hybrid-laptops.md, "Trusted proxies".
+# An env or extraEnv WARDYN_TRUSTED_PROXIES entry replaces it.
+trustedProxies: ""
+
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
 # must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
 # WARDYN_OIDC_CLIENT_SECRET and WARDYN_AUDIT_SINKS
