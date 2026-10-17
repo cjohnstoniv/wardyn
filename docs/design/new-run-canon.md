@@ -20,7 +20,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Start | Three paths meet at Review: AI composer (Coming soon), Guided setup, and the YAML or JSON run document. |
 | Template and Run again | Choosing one loads the saved setup and opens Review. Anything missing is a blocker that links to its step. |
 | Review | Blockers come first: local issues, unsupported document fields, template setup items, the server refusal, missing setup items, then a stale check. Launch stays shut until a check under 60 seconds old matches the draft. |
-| Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. |
+| Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. A check that fails or is rate-limited leaves Launch available, since the create is the authority. |
 | Launched | Starting shows an indeterminate bar. Waiting shows the place in line, the time waiting and when the run gives up. |
 | Disabled options | Every disabled option shows its reason as visible text or an InfoTip. |
 

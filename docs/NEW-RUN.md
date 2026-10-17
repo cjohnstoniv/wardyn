@@ -212,7 +212,7 @@ The `wardyn template` commands are listed in [Run templates](sdk.md#run-template
 
 **Launch run** opens **Name this run**. **Title** is required; **Description** is optional.
 
-- The dialog checks the draft again (**Checking…**, then **Checked just now**). **Launch** stays off until it ends.
+- The dialog checks the draft again (**Checking…**, then **Checked just now**). **Launch** stays off until it ends. If the check fails or is rate-limited, **Launch** stays available and the launch itself refuses what the check would have.
 - A refusal shows the server's sentence, and what you typed stays.
 - A launch the run's Azure DevOps token refused adds a note. Either connect again with **Connect Azure DevOps**, after which the dialog checks once more, or read that your organisation restricts who can create personal access tokens.
 
