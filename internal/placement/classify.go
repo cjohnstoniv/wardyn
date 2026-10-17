@@ -104,6 +104,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "ConfinementClass", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "Resources", Class: ClassExempt, Rule: RuleExempt, Variant: "checked against the advertised capacity"},
 	{Struct: StructSandboxSpec, Field: "Interactive", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructSandboxSpec, Field: "Record", Class: ClassExempt, Rule: RuleExempt, Variant: "organisation's per-run recording choice"},
 	{Struct: StructSandboxSpec, Field: "OnWaiting", Class: ClassExempt, Rule: RuleNotSent, Variant: "a callback; waiting events replace it"},
 	{Struct: StructSandboxSpec, Field: "ExecOutput", Class: ClassExempt, Rule: RuleNotSent, Variant: "a writer; the output stream replaces it"},
 	{Struct: StructSandboxSpec, Field: "ProxyConfig", Class: ClassComposite, Rule: RuleStrip, Variant: "classified field by field under ProxyConfig"},

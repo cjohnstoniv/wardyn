@@ -24,5 +24,9 @@
   { "key": "NO_ONLINE_RUNNER", "args": ["Home server"], "text": "None of your runners in Home server is online." },
   { "key": "RUNNER_AT_CAPACITY", "args": ["Home server"], "text": "Every runner in Home server is at its limit. Try again when a run there finishes, or raise the runner's limits." },
   { "key": "RUNNER_LIMITS_UNSET", "args": ["Home server"], "text": "No runner in Home server has its limits set. Every runner needs limits before it can run anything." },
+  { "key": "RUNNER_RECORDING_OFF", "args": ["Home server"], "text": "Recording is required, and no runner in Home server records runs. Choose another pool, or turn recording on for the runner." },
+  { "key": "RUNNER_RECORDING_OFF_UNPOOLED", "args": [], "text": "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner." },
+  { "key": "RECORDING_STORE_OFF", "args": [], "text": "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred." },
+  { "key": "RECORDING_SAVE_STORE_OFF", "args": [], "text": "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first." },
   { "key": "WAIT_RUNNERS_AT_CAPACITY", "args": ["Home server"], "text": "Every runner in Home server is at its limit. This run starts when one has room." }
 ]

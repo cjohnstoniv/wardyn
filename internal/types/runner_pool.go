@@ -94,9 +94,12 @@ type RunnerPool struct {
 	Revision int64 `json:"revision"`
 	// Limits are the pool's own limits per run type. Absent, the pool adds no
 	// bound of its own (a pool migrated from before limits existed).
-	Limits    *RunnerPoolLimits `json:"limits,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+	// Recording is whether the pool requires its runs recorded; empty is preferred. The stricter of
+	// the pool's and the organisation's (RunnerPoolDefaults.Recording) applies.
+	Recording RecordingRequirement `json:"recording,omitempty"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
 }
 
 // RunnerPoolNameMax is the longest pool name, in characters.
@@ -184,6 +187,8 @@ const RunnerPoolDefaultPrefKey = "runner_pool_default.v2"
 type RunnerPoolDefaults struct {
 	PoolID  *uuid.UUID       `json:"pool_id,omitempty"`
 	Barrier ConfinementClass `json:"barrier,omitempty"`
+	// Recording is the organisation's alone, like Barrier: whether every run must be recorded.
+	Recording RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate checks the document's shape. Whether the pool exists, is permitted
@@ -195,6 +200,9 @@ func (d RunnerPoolDefaults) Validate() error {
 	}
 	if d.Barrier != "" && d.Barrier.Rank() == 0 {
 		return fmt.Errorf("barrier %q is not CC1, CC2 or CC3", d.Barrier)
+	}
+	if !d.Recording.Valid() {
+		return fmt.Errorf("recording %q is not preferred or required", d.Recording)
 	}
 	return nil
 }

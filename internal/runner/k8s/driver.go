@@ -305,6 +305,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// are impossible on k8s — but only when Config.Record is on, so a
 		// Record=false substrate never advertises an upload it won't perform.
 		SessionRecording: d.cfg.Record,
+		RecordPerRun:     true, // the pod's labelRecord, within Config.Record (recordsPod)
 		// Under the recorder the exec's container log is empty: wardyn-rec runs
 		// asciinema, which writes nothing to a stdout that is not a TTY, so
 		// followExecOutput would copy nothing and the run would read as a

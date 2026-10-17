@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -256,12 +257,17 @@ type PoolDefault struct {
 type CreateRunnerPoolRequest struct {
 	Name   string            `json:"name"`
 	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+	// Recording is whether the pool requires its runs recorded: preferred (empty) or required.
+	Recording types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses a bad name and limits a pool cannot keep.
 func (r CreateRunnerPoolRequest) Validate() error {
 	if err := types.ValidateRunnerPoolName(r.Name); err != nil {
 		return err
+	}
+	if !r.Recording.Valid() {
+		return fmt.Errorf("recording %q is not preferred or required", r.Recording)
 	}
 	if r.Limits != nil {
 		return r.Limits.Validate()
@@ -273,8 +279,9 @@ func (r CreateRunnerPoolRequest) Validate() error {
 // are as CreateRunnerPoolRequest's; every run is still bounded by the caller's
 // governance profile.
 type CreateMyRunnerPoolRequest struct {
-	Name   string            `json:"name"`
-	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+	Name      string                     `json:"name"`
+	Limits    *RunnerPoolLimits          `json:"limits,omitempty"`
+	Recording types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses a bad name and limits a pool cannot keep.
@@ -302,6 +309,8 @@ type UpdateRunnerPoolRequest struct {
 	Name     *string           `json:"name,omitempty"`
 	State    *RunnerPoolSwitch `json:"state,omitempty"`
 	Limits   *RunnerPoolLimits `json:"limits,omitempty"`
+	// Recording, when set, replaces the pool's recording requirement.
+	Recording *types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses an update that changes nothing, a revision that was never
@@ -311,8 +320,10 @@ func (r UpdateRunnerPoolRequest) Validate() error {
 	switch {
 	case r.Revision < 1:
 		return errors.New("revision is the revision you read")
-	case r.Name == nil && r.State == nil && r.Limits == nil:
-		return errors.New("change the name, the state or the limits")
+	case r.Name == nil && r.State == nil && r.Limits == nil && r.Recording == nil:
+		return errors.New("change the name, the state, the limits or the recording requirement")
+	case r.Recording != nil && (*r.Recording == "" || !r.Recording.Valid()):
+		return errors.New("recording is preferred or required")
 	case r.State != nil && *r.State != RunnerPoolSwitchActive && *r.State != RunnerPoolSwitchDisabled:
 		return errors.New("state is active or disabled; delete a pool with DELETE")
 	}

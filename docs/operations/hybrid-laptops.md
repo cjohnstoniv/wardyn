@@ -98,6 +98,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 3. If your shell's `SSL_CERT_FILE` already names the roots, setup says so; pass it with `--trusted-ca-file "$SSL_CERT_FILE"`.
 
+### Session recordings
+
+- `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
+- The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
+- `wardyn-runnerd serve --recording-store off` is the runner's ceiling: it never records. Otherwise the runner records the runs its organisation asks it to; a runner older than 0.9.3 records by its own setting, and counts as not recording.
+- An organisation or pool can set `recording: required` (default `preferred`). A run only a non-recording runner could take is then refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. Under `preferred` the page says `runner_declined`, until a stored cast clears it.
+- An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).
+
 ## Claiming a runner
 
 1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.

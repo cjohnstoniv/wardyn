@@ -189,7 +189,7 @@ func TestPG_PromoteQueueRespectsEveryCap(t *testing.T) {
 	}
 
 	off := types.RunnerPoolDisabled
-	if _, err := pg.UpdateRunnerPool(ctx, roomy.ID, roomy.Revision, nil, &off, nil); err != nil {
+	if _, err := pg.UpdateRunnerPool(ctx, roomy.ID, roomy.Revision, nil, &off, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, err := pg.PromoteRunQueue(ctx, pass(roomy), admitAll); err != nil || len(got) != 0 {
@@ -414,7 +414,7 @@ func TestPG_DeletingAPoolCancelsItsWaitingRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	off := types.RunnerPoolDisabled
-	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil)
+	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +545,7 @@ func TestPG_CreateQueuedRunRefusals(t *testing.T) {
 		}
 	}
 	off := types.RunnerPoolDisabled
-	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil)
+	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
