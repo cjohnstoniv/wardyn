@@ -17,22 +17,27 @@ import (
 // localCredentialIntents reads admitted configuration through the same provider,
 // ADO and redirect predicates dispatch reads. It never renews/mints or reads a
 // secret value: owner namespace proof is the own List, not fallback Get.
+// upstreams is the LLMUpstreams entry dispatch would author for the chosen
+// provider's lane (providerKeyLaneFor), so create judges it as dispatch does.
 func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, spec types.RunPolicySpec,
 	workspaces []types.Workspace, sc types.SiteConfig,
-) ([]placement.CredentialIntent, *runRefusal) {
+) (_ []placement.CredentialIntent, upstreams map[string]string, _ *runRefusal) {
 	_, actor := actorFromRequest(r)
 	owner := runIdentitySubject(r.Context(), actor)
 	var out []placement.CredentialIntent
 	choice, ref := s.authorizeRunModelProvider(r, req, workspaces, true)
 	if ref != nil {
-		return nil, ref
+		return nil, nil, ref
 	}
 	if choice.chosen {
 		intents, ok := s.localProviderIntent(r, owner, choice.provider)
 		if !ok {
-			return nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
+			return nil, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
 		}
 		out = append(out, intents...)
+		if l, ok := providerKeyLaneFor(choice.provider, req.Agent); ok && l.upstream != "" {
+			upstreams = map[string]string{l.vendorHost: l.upstream}
+		}
 	}
 	var laneHosts []string
 	for _, repo := range append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo) {
@@ -44,7 +49,7 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: s.localADOOrigin(r.Context(), owner, a)})
 	}
 	out = append(out, s.localRedirectIntents(r, spec, sc, laneHosts)...)
-	return out, nil
+	return out, upstreams, nil
 }
 
 // localProviderIntent is every credential the chosen provider's dispatch arm

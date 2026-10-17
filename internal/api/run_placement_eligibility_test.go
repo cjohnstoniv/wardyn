@@ -217,6 +217,42 @@ func TestLocalPlacement_OrgDriveRefusedOnSelfHosted(t *testing.T) {
 	}
 }
 
+// A key provider that routes through a configured gateway (a BaseURL, or any custom endpoint) is
+// refused for the person's own runner at create, preflight and preview (localPlacementRefusal). The runner
+// never gets the gateway table (LLMUpstreams is the organisation's network), so its brokered route would dial
+// the vendor host while the credential is keyed on the gateway, and every model call would fail. The same key
+// provider with no gateway is admitted.
+func TestLocalPlacement_GatewayKeyLaneRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    types.ModelProviderKind
+		base    string
+		refused bool
+	}{
+		{"anthropic key through a gateway", types.ModelProviderAnthropicAPIKey, "https://gw.corp.example/v1", true},
+		{"custom endpoint", types.ModelProviderCustomEndpoint, "https://llm.corp.example", true},
+		{"anthropic key to the vendor", types.ModelProviderAnthropicAPIKey, "", false},
+	} {
+		f := newComponentFixture(t)
+		f.srv.cfg.Store = localPlanTestStore{f.st}
+		p := types.ModelProvider{ID: "gw", UID: "uid-gw", Kind: tc.kind, BaseURL: tc.base, Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+		f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+		ctx := utCtx("user", "", nil)
+		if err := f.srv.cfg.Secrets.For(runIdentitySubject(ctx, capSub)).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("own-key")); err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		switch {
+		case tc.refused && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
+			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
+		case !tc.refused && ref != nil:
+			t.Errorf("%s: refusal %+v, want it admitted", tc.name, ref)
+		}
+	}
+}
+
 // storedPolicy is the delivery policy the store holds now: what a create's local plan would be judged on.
 func storedPolicy(t *testing.T, s *Server) placement.DeliveryPolicy {
 	t.Helper()

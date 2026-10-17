@@ -133,7 +133,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "TrustedCAPEM", Class: ClassOperator, Rule: RuleNotSent, Variant: "the proxy copy only: the runner's own --trusted-ca-file bundle replaces it, destinations needing the org's roots take via_org, and the org's roots still reach the sandbox env, where the runner appends its own"},
 	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleAllow, Variant: "the org's internal_hosts lift only the private-IP guard for declared suffixes; the egress allowlist still decides"},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyNoProxy", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
-	{Struct: StructProxyConfig, Field: "LLMUpstreams", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
+	{Struct: StructProxyConfig, Field: "LLMUpstreams", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCredential, Variant: "org network, never sent; a provider routed through a gateway keys its credential there, so the run is refused rather than dial the vendor host"},
 	{Struct: StructProxyConfig, Field: "MITMHosts", Class: ClassOperator, Rule: RuleStrip, Variant: "only hosts of own and runner_resident injections and every via_org destination; operator-only hosts dropped"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "EligibleGrants", Class: ClassOperator, Rule: RuleStrip, Variant: "grants not delivered own or runner_resident dropped; a via_org grant keeps only its grant_id and host"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretValues", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved inspection corpus never sent to a runner"},

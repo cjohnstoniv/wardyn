@@ -77,7 +77,7 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		f.st.siteConfig.UpstreamProxySecretRef = secretRef
 		f.st.siteConfig.InternalHosts = []types.InternalHost{{HostSuffix: "corp"}}
 		// "removed" was declared at dispatch and has since been deleted: a revive must not keep lifting it.
-		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}, {HostSuffix: "removed"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
+		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}, {HostSuffix: "removed"}}}
 		ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
 		// An own plan revives; the organisation's upstream proxy secret is never sent to a runner.
 		if secretRef != "" && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
