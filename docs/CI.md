@@ -301,7 +301,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 
 | Go-suite control | Where | Rule |
 |---|---|---|
-| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
@@ -569,8 +569,10 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - [`deploy/base-images.txt`](../deploy/base-images.txt) lists them. Digest pins are the Dockerfile `FROM` pins, the compose pins and kind's node image. Tag pins (`tag ` lines), kept by hand, are images CI pulls by tag.
 - [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each entry, digest unchanged, into `ghcr.io/cjohnstoniv/base-images`: on a list change on `main`, weekly, and on dispatch.
   - Dependabot cannot run it: add the bump's digest to the list on its branch, dispatch with `ref` set to that branch, then re-run the pull request's checks.
-- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls. It adds a loopback mirror over the copy to dockerd's `registry-mirrors` by a `SIGHUP` reload, which leaves service containers running. It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
-  - Anything the copy lacks, and any tag not listed, falls through to Docker Hub as before.
+- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls, instead of a separate `mirror.gcr.io` step.
+  - It puts a loopback mirror over the copy, then `mirror.gcr.io`, in dockerd's `registry-mirrors`. One dockerd restart applies it (a `SIGHUP` reload resets the host-gateway address), and the job's service containers start again.
+  - It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
+  - Anything the copy lacks, and any tag not listed, goes to `mirror.gcr.io`, then Docker Hub. If the loopback mirror does not start, `mirror.gcr.io` is still configured.
 - The Postgres service containers start before any step, so they name the copy directly and pull it with the job's `GITHUB_TOKEN` (`packages: read`).
 - Dockerfiles keep their `docker.io` `FROM` lines for Dependabot and release provenance.
 - Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.

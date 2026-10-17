@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -279,6 +279,12 @@ PG_PART ?= 1/1
 test-report-pg-api: PG_REPORT ?= pg-api
 test-report-pg-api: ## An api slice of test-report-pg: just the Postgres-gated tests of internal/api and test/apie2e
 	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part $(PG_PART))'
+
+# The store shard, selected the same way: just the DSN-gated tests of the store, db, broker,
+# cmd/wardynd, ... packages (the unit run guards this selection too).
+test-report-pg-store: PG_REPORT ?= pg-store
+test-report-pg-store: ## The store slice of test-report-pg: just the Postgres-gated tests of the store-side packages
+	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages store)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part 1/1 $(shell ./scripts/pg-test-select.sh --packages store))'
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls

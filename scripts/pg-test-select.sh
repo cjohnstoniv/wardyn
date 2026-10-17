@@ -3,36 +3,69 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Which tests of a package need Postgres. The PG shards used to run every test
-# of internal/api, ~46% of them tests the `go` (unit) job already runs under
+# of their packages, many of them tests the `go` (unit) job already runs under
 # -race; this picks the ones that skip without WARDYN_TEST_PG.
 #
 #   scripts/pg-test-select.sh [--part i/n] [<go package pattern>...]
 #       Prints a `go test -run` regexp: ^(TestA|TestB|...)$. A package pattern
 #       is anything `go list` accepts; none means the api shard (API_PKGS). --part i/n keeps the
 #       i-th of n slices (by a hash of the test name) plus every probe.
-#   scripts/pg-test-select.sh --packages
-#       Prints API_PKGS, the one place the api shard's package list lives.
+#   scripts/pg-test-select.sh --packages [api|store]
+#       Prints API_PKGS (the default) or STORE_PKGS: the one place each shard's
+#       package list lives (the store shard is store, db, broker, cmd/wardynd, ...).
 #   scripts/pg-test-select.sh --guard <go test -json output> [<go package pattern>...]
 #       The unit job's JSON (WARDYN_TEST_PG unset) is the independent proof:
 #       every top-level test there that skipped naming WARDYN_TEST_PG must be
 #       in the selection, else exit 1. A selector blind spot (a gate the
 #       analysis cannot see) fails the unit job instead of silently dropping a
-#       PG test from CI.
+#       PG test from CI. With no pattern it guards both shards' packages.
 #
-# The selection is a package-local taint analysis over every *_test.go file: a
-# func is gated if its body names WARDYN_TEST_PG, or names (call, method value
-# or reference) a gated func of the same package; a TestXxx is selected when
-# gated. Names are matched without receivers, so it over-selects rather than
-# misses. Every `testfloor.Mark(t, "pg")` probe is selected regardless: the
+# The selection is a taint analysis over every *_test.go file: a func is gated
+# if its body names WARDYN_TEST_PG, or names (call, method value or reference) a
+# gated func of the same package, or a gating helper from outside any _test.go
+# file (subjectkeytest.ThrowawayDB, and what calls it: gating_helpers below); a
+# TestXxx is selected when gated. Names are matched without receivers, so it
+# over-selects rather than misses. Every `testfloor.Mark(t, "pg")` probe is selected regardless: the
 # skip floor in test-report.sh fails the shard when a probe never ran.
 set -euo pipefail
 
 API_PKGS="./internal/api/... ./test/apie2e/..."
+STORE_PKGS="./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... ./internal/livebus/..."
+
+# Names of funcs in non-test files that name WARDYN_TEST_PG, or call one that does, anywhere in the
+# module: the DSN gates that live in a helper package (a test in another package reaches them by
+# name, which the package-local analysis below cannot see). Found by growing the set until stable.
+gating_helpers() {
+  local names="" new files root all="--include=*.go --exclude=*_test.go --exclude-dir=node_modules --exclude-dir=.git"
+  root="$(go list -m -f '{{.Dir}}')"
+  files="$(grep -rl $all WARDYN_TEST_PG "$root" || true)"
+  while [ -n "$files" ]; do
+    # shellcheck disable=SC2086 # one word per file
+    new="$(awk -v ext="$names" '
+      function flush(   t, id) {
+        if (name == "") return
+        if (cur ~ /WARDYN_TEST_PG/) out[name] = 1
+        t = cur
+        while (match(t, /[A-Za-z_][A-Za-z0-9_]*/)) { id = substr(t, RSTART, RLENGTH); t = substr(t, RSTART + RLENGTH); if (id in known) out[name] = 1 }
+        name = ""; cur = ""
+      }
+      BEGIN { k = split(ext, e, " "); for (i = 1; i <= k; i++) known[e[i]] = 1 }
+      FNR == 1 { flush() }
+      /^func / { flush(); s = $0; if (s ~ /^func \(/) sub(/^func \([^)]*\) */, "", s); else sub(/^func */, "", s); sub(/[^A-Za-z0-9_].*/, "", s); name = s }
+      name != "" { if ($0 !~ /^[ \t]*\/\//) cur = cur " " $0 }
+      END { flush(); for (n in out) print n }' $files | sort -u | paste -sd' ')"
+    [ "$new" != "$names" ] || break
+    names="$new"
+    files="$(grep -rlwE $all "$(tr ' ' '|' <<<"$names")" "$root" || true)"
+  done
+  echo "$names"
+}
 
 select_pkg() { # <dir>: prints the gated top-level Test funcs of one package dir
   local f=("$1"/*_test.go)
   [ -e "${f[0]}" ] || return 0
-  awk '
+  awk -v ext="$GATING" '
+    BEGIN { k = split(ext, e, " "); for (i = 1; i <= k; i++) external[e[i]] = 1 }
     function flush() {
       if (name == "") return
       body[name] = body[name] " " cur;
@@ -49,6 +82,12 @@ select_pkg() { # <dir>: prints the gated top-level Test funcs of one package dir
       sub(/[^A-Za-z0-9_].*/, "", s)
       name = s
     }
+    # An export_test.go alias (var Name = unexported) is a name a test reaches the gate through.
+    /^var [A-Za-z_]/ { flush(); s = $0; sub(/^var +/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); name = s }
+    # The same inside a grouped `var ( ... )` block (gofmt indents it with one tab).
+    /^var \(/ { flush(); invar = 1; next }
+    invar && /^\)/ { flush(); invar = 0; next }
+    invar && /^\t[A-Za-z_][A-Za-z0-9_]*([ \t]+[^ \t=]+)?[ \t]*=/ { flush(); s = $0; sub(/^\t/, "", s); sub(/[^A-Za-z0-9_].*/, "", s); name = s }
     name != "" { line = $0; if (line !~ /^[ \t]*\/\//) cur = cur " " line }
     END {
       flush()
@@ -56,6 +95,7 @@ select_pkg() { # <dir>: prints the gated top-level Test funcs of one package dir
         t = body[n]
         while (match(t, /[A-Za-z_][A-Za-z0-9_]*/)) {
           id = substr(t, RSTART, RLENGTH); t = substr(t, RSTART + RLENGTH)
+          if (id in external) gated[n] = 1
           if ((id in body) && id != n && !((n SUBSEP id) in seen)) { seen[n, id] = 1; refs[n] = refs[n] " " id }
         }
       }
@@ -73,17 +113,25 @@ select_pkg() { # <dir>: prints the gated top-level Test funcs of one package dir
 
 selection() { # <patterns...>: sorted unique "<import path> <Test> [probe]" lines
   local path dir
+  GATING="${GATING-$(gating_helpers)}"
   while read -r path dir; do
     select_pkg "$dir" | sed "s|^|${path} |"
   done < <(go list -f '{{.ImportPath}} {{.Dir}}' "$@" 2>/dev/null | sort -u)
 }
 
-if [ "${1:-}" = "--packages" ]; then echo "$API_PKGS"; exit 0; fi
+if [ "${1:-}" = "--packages" ]; then
+  case "${2:-api}" in
+    api) echo "$API_PKGS" ;;
+    store) echo "$STORE_PKGS" ;;
+    *) echo "pg-test-select: --packages takes api or store" >&2; exit 2 ;;
+  esac
+  exit 0
+fi
 
 if [ "${1:-}" = "--guard" ]; then
   json="${2:?--guard needs the unit go test -json file}"
   shift 2
-  [ $# -gt 0 ] || set -- $API_PKGS
+  [ $# -gt 0 ] || set -- $API_PKGS $STORE_PKGS
   sel="$(selection "$@" | awk '{print $1 " " $2}')"
   [ -n "$sel" ] || { echo "pg-test-select: empty selection for: $*" >&2; exit 1; }
   scope="$(go list "$@" 2>/dev/null)"
@@ -96,7 +144,7 @@ if [ "${1:-}" = "--guard" ]; then
   while IFS= read -r pt; do
     [ -n "$pt" ] || continue
     pkg="${pt% *}"; t="${pt#* }"
-    # Only packages this selection covers; the other shards run whole packages.
+    # Only packages this selection covers.
     grep -qxF "$pkg" <<<"$scope" || continue
     grep -qxF "${pkg} ${t}" <<<"$sel" || missing="${missing}${pkg} ${t}"$'\n'
   done <<<"$skipped"
