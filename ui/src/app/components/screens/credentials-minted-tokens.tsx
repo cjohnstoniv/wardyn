@@ -34,8 +34,19 @@ const personOf = (t: AdminMintedToken) => t.email || t.principal;
 // The State cell: a chip with the disposition's label and a line under it saying what is true now. A value this
 // console does not know shows as written in a neutral chip; a row with none (a daemon that predates the
 // field) shows nothing.
+const isExpired = (t: AdminMintedToken) => !t.revoked_at && !!t.expires_at && Date.parse(t.expires_at) <= Date.now();
+
 function StateCell({ t }: { t: AdminMintedToken }) {
   if (!t.disposition) return null;
+  // Past its expiry and never revoked: the token no longer authenticates, so "needs a decision" would be false.
+  if (isExpired(t)) {
+    return (
+      <>
+        <Chip tone="neutral" dot>{MINTED.EXPIRED}</Chip>
+        <span className="mt-1 block text-xs text-muted-foreground">{MINTED.EXPIRED_SUB}</span>
+      </>
+    );
+  }
   const d = DISPOSITION[t.disposition];
   return (
     <>
@@ -76,6 +87,8 @@ export function AdminMintedTokens() {
 
   const live = tokens ? tokens.filter((t) => !t.revoked_at) : [];
   const revokedShown = tokens ? tokens.length - live.length : 0;
+  // "Still work" counts what authenticates: an expired token is listed, but is not one of them.
+  const working = live.filter((t) => !isExpired(t)).length;
   const shown = includeRevoked ? (tokens ?? []) : live;
 
   const revoke = async () => {
@@ -116,7 +129,7 @@ export function AdminMintedTokens() {
           <h2 id="admin-minted-title" className="text-sm font-semibold text-foreground">
             {MINTED.TITLE}
           </h2>
-          {live.length > 0 && <Chip tone="warning">{MINTED.CHIP(live.length)}</Chip>}
+          {working > 0 && <Chip tone="warning">{MINTED.CHIP(working)}</Chip>}
         </div>
 
         {failed ? (
@@ -133,7 +146,7 @@ export function AdminMintedTokens() {
           </div>
         ) : (
           <>
-            <p className="mt-2 text-xs text-muted-foreground">{live.length === 0 ? MINTED.NONE_LIVE : MINTED.COUNT(live.length)}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{working === 0 ? MINTED.NONE_LIVE : MINTED.COUNT(working)}</p>
             <p className="text-xs text-muted-foreground">{MINTED.NOTE}</p>
             {toggle}
             {includeRevoked && revokedShown > 0 && (

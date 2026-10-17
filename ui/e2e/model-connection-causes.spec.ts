@@ -40,6 +40,9 @@ test("connection changes disclose the destination and store failures re-check wi
   await expandCard(page, CONNECTIONS.TITLE);
   const card = page.getByTestId("model-connections-card");
   await expect(card).toContainText(CONNECTIONS.STORE_UNREADABLE);
+  // R2-0061: a store that could not be read is "Could not check" in the card's summary, never "Needs you".
+  await expect(card).toContainText(CONNECTIONS.COULD_NOT_CHECK);
+  await expect(card).not.toContainText(CONNECTIONS.SUMMARY_NEEDS_YOU);
   const before = checks;
   await card.getByRole("button", { name: CONNECTIONS.RECHECK, exact: true }).click();
   await expect.poll(() => checks).toBe(before + 1);

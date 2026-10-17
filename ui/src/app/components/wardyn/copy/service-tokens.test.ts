@@ -145,6 +145,8 @@ describe("Admin > Credentials state column", () => {
     ["Revoked 2 days ago, when they claimed their own.", DISPOSITION.replaced_by_owner.sub("2 days ago")],
     ["Moved to a service identity", DISPOSITION.moved_to_service_identity.label],
     ["Revoked 9 days ago, after the move.", DISPOSITION.moved_to_service_identity.sub("9 days ago")],
+    ["Expired", MINTED.EXPIRED],
+    ["No longer works. Nothing to decide.", MINTED.EXPIRED_SUB],
     ["Revoked", DISPOSITION.revoked.label],
     ["Revoked 30 days ago, with no replacement.", DISPOSITION.revoked.sub("30 days ago")],
   ])("%s", (mock, actual) => expect(actual).toBe(mock));

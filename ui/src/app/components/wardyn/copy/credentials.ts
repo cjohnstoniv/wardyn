@@ -140,6 +140,10 @@ export const MINTED = {
   INCLUDE_REVOKED: "Also show revoked tokens",
   SHOWING_REVOKED: (n: number) => (n === 1 ? "Showing 1 revoked token as well." : `Showing ${n} revoked tokens as well.`),
   SERVICE_IDENTITY: "Service identity:",
+  // FUG-L260: a token past its expiry that nobody revoked has nothing left to decide. Not a wire value: the
+  // console derives it from expires_at, so DISPOSITION keeps exactly the daemon's six.
+  EXPIRED: "Expired",
+  EXPIRED_SUB: "No longer works. Nothing to decide.",
   // The footnote's two command names render mono; the parts join into the sentence.
   FOOTNOTE: ["Invite the owner with ", "wardyn person invite", ", or move the token with ", "wardyn token move", ". The console does neither."],
 } as const;
