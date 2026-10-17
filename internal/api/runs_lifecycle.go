@@ -67,7 +67,15 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// worker owns the transition; Wait/reconcile must not race its CAS.
 		if s.cfg.Store != nil {
 			run, err := s.cfg.Store.GetRun(base, runID)
-			if err != nil || (run.Placement == types.PlacementLocal && run.RunnerID != nil) {
+			if err != nil { // one more read before the 90 s lease sweep has to finish the run
+				run, err = s.cfg.Store.GetRun(base, runID)
+			}
+			if err != nil {
+				slog.WarnContext(base, "wardynd: completion watcher not started; the lease sweep will finish the run",
+					slog.String("run_id", runID.String()), slog.Any("err", err))
+				return
+			}
+			if run.Placement == types.PlacementLocal && run.RunnerID != nil {
 				return
 			}
 		}
@@ -348,6 +356,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 // RUNNING->STOPPED, so the idle stop reaches the run's event feed and revokes
 // the run's Azure DevOps personal access tokens here.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
+	// The reaper's CAS does not go through casRunState, so the idle stop is counted and frees its slot here.
+	s.metrics.runTerminal(types.RunStopped)
+	s.kickQueue()
 	s.runEvents.idleStopped(runID)
 	s.cancelRunApprovals(ctx, runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
@@ -662,7 +673,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"id":     id,
 			"state":  types.RunKilled,
-			"errors": killData,
+			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
 			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
 		})
 		return

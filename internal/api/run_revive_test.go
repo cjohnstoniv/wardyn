@@ -848,6 +848,9 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 				if got := errorReason(w); got != "revive_ceiling_denies_azure_cli" {
 					t.Errorf("reason = %q, want the literal %q", got, "revive_ceiling_denies_azure_cli")
 				}
+				if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "denied" || leaseAuditData(t, ev[0])["reason"] != "revive_ceiling_denies_azure_cli" {
+					t.Errorf("run.revive rows = %+v, want one denied row naming the ceiling reason", ev)
+				}
 				if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || (lostAt == nil) != tc.live || string(f.rs.cfg) != string(stored) {
 					t.Errorf("replaced %d, lost_at %v, stored config changed %v; want the proxy, the run and its stored config as they were",
 						len(f.rr.replaced), lostAt, string(f.rs.cfg) != string(stored))
