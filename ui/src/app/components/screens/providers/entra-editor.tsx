@@ -242,6 +242,36 @@ export function EntraEditor({
             {operator && <span className="block text-meta text-muted-foreground">{E.REST_TOGGLE_HINT}</span>}
           </span>
         </div>
+        {/* Only a token Wardyn creates can be held on a runner; a token the person pastes in is theirs. */}
+        {tokenMode !== "own_pat" && (
+          <>
+            <div className="mt-4 flex items-start gap-2.5">
+              <Switch
+                checked={cfg.runner_resident === true}
+                disabled={!operator}
+                label={E.RUNNER_TOGGLE}
+                // Off takes the sandbox switch with it: the server refuses the sandbox without the runner.
+                onChange={(on) => set(on ? { runner_resident: true } : { runner_resident: false, runner_resident_sandbox: false })}
+              />
+              <span>
+                <span className="block text-body font-medium text-foreground">{E.RUNNER_TOGGLE}</span>
+                {operator && <span className="block text-meta text-muted-foreground">{E.RUNNER_TOGGLE_HINT}</span>}
+              </span>
+            </div>
+            <div className="mt-4 flex items-start gap-2.5">
+              <Switch
+                checked={cfg.runner_resident_sandbox === true}
+                disabled={!operator || cfg.runner_resident !== true}
+                label={E.SANDBOX_TOGGLE}
+                onChange={(on) => set({ runner_resident_sandbox: on })}
+              />
+              <span>
+                <span className="block text-body font-medium text-foreground">{E.SANDBOX_TOGGLE}</span>
+                {operator && <span className="block text-meta text-muted-foreground">{E.SANDBOX_TOGGLE_HINT}</span>}
+              </span>
+            </div>
+          </>
+        )}
       </div>
 
       <div>

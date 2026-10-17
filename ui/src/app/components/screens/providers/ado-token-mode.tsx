@@ -176,7 +176,8 @@ export function AdoTokenMode({
   const mode = adoTokenMode(row);
   const set = (patch: Partial<ADOEntraConfig>) => onUpdate({ ...row, entra: { ...cfg, ...patch } });
   // bearer is the unset default; writing nothing keeps an untouched row's diff empty.
-  const pick = (m: Mode) => set({ token_mode: m === "bearer" ? undefined : m });
+  // A token the person pastes in is theirs, so a row switched to it cannot hold one on a runner (the server refuses both).
+  const pick = (m: Mode) => set({ token_mode: m === "bearer" ? undefined : m, ...(m === "own_pat" ? { runner_resident: undefined, runner_resident_sandbox: undefined } : {}) });
 
   const view = check ? orgCheckView(check) : null;
   // The banner's person: the admin when their own check was refused, else the

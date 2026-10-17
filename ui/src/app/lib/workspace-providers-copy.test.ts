@@ -210,10 +210,15 @@ describe("ADO_CAP_COPY — one name and consequence per grantable capability", (
   });
 });
 
-// The two member-drive Storage controls sit outside the doc tables, so their
+// The member-drive Storage controls sit outside the doc tables, so their
 // words are pinned here.
 describe("MEMBER_DRIVES — the Storage tab's member-drive controls", () => {
-  it("carries the two labels as the design gives them", () => {
-    expect(MEMBER_DRIVES).toEqual({ FIELD_ENABLED: "Let people create their own drives", FIELD_MAX: "Drives per person" });
+  it("carries the three labels and the size help as decided", () => {
+    expect(MEMBER_DRIVES).toEqual({
+      FIELD_ENABLED: "Let people create their own drives",
+      FIELD_MAX: "Drives per person",
+      FIELD_SIZE: "Size of each drive",
+      SIZE_HINT: "Each person's drive gets this much space.",
+    });
   });
 });

@@ -26,6 +26,8 @@ vi.mock("../../../lib/api/credential-delivery", () => ({
 import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
+import { unsavedSnapshot } from "../../../lib/unsaved-registry";
+import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import type { DeliveryPolicy } from "../../../lib/types/credential-delivery";
 import { RunnerCredentials } from "./runner-credentials";
@@ -280,6 +282,25 @@ describe("RunnerCredentials — a stale save", () => {
     await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
     await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
     expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"theirs"']);
+  });
+
+  it("keeps the unsaved guard armed while the refused draft is only in the banner, and lets go once it is discarded", async () => {
+    getMock
+      .mockResolvedValueOnce({ ...doc(), etag: '"read"' })
+      .mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), etag: '"theirs"' });
+    putMock.mockRejectedValueOnce(new HttpError(412, RAW));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    expect(await screen.findByText("Someone else saved this first")).toBeInTheDocument();
+    // The reload made the editor equal to the stored document; the banner still holds the only copy of the draft.
+    expect(unsavedSnapshot()).toContain("api_key");
+    expect(screen.getByText(PROVIDERS_EXTRA.SAVED_ELSEWHERE_RELOADED_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(PROVIDERS_EXTRA.DISCARD_AND_RELOAD)).toBeNull();
+    await user.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_RELOADED }));
+    expect(unsavedSnapshot()).toBeNull();
   });
 });
 

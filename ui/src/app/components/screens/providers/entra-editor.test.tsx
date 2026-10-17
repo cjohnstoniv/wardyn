@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR as E, ADO_GROUP_COPY } from "../../../lib/workspace-providers-copy";
 import { gitRowInvalid } from "./display";
 import { EntraEditor } from "./entra-editor";
@@ -166,6 +167,37 @@ describe("EntraEditor", () => {
         rest_api: false,
       },
     });
+  });
+
+  it("lets a row hold its minted tokens on a runner, and in the sandbox only once it may hold them", async () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow()} onLatest={(r) => (latest = r)} />);
+    expect(screen.getByRole("switch", { name: E.RUNNER_TOGGLE })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE })).toBeDisabled();
+    await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
+    expect(latest?.entra?.runner_resident).toBe(true);
+    await userEvent.click(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE }));
+    expect(latest?.entra?.runner_resident_sandbox).toBe(true);
+    // Off takes the sandbox switch with it: the server refuses the sandbox without the runner.
+    await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
+    expect(latest?.entra?.runner_resident).toBe(false);
+    expect(latest?.entra?.runner_resident_sandbox).toBe(false);
+    expect(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE })).toBeDisabled();
+  });
+
+  it("offers neither runner switch on a row whose tokens the person pastes in", () => {
+    render(<Harness initial={entraRow({ token_mode: "own_pat" })} />);
+    expect(screen.queryByRole("switch", { name: E.RUNNER_TOGGLE })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: E.SANDBOX_TOGGLE })).not.toBeInTheDocument();
+  });
+
+  it("switching a row to the person's own token drops its runner settings", async () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={entraRow({ runner_resident: true, runner_resident_sandbox: true })} onLatest={(r) => (latest = r)} />);
+    await userEvent.click(screen.getByRole("radio", { name: ADO_PAT.MODE_OWN }));
+    expect(latest?.entra?.token_mode).toBe("own_pat");
+    expect(latest?.entra?.runner_resident).toBeUndefined();
+    expect(latest?.entra?.runner_resident_sandbox).toBeUndefined();
   });
 
   it("is read-only for a caller who can't edit", () => {
