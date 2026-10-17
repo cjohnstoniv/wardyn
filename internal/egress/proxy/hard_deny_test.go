@@ -133,3 +133,20 @@ func TestHardDenyRefusesAnUpstreamProxyInsideIt(t *testing.T) {
 		}
 	}
 }
+
+// TestHardDenyLiteralDetailNamesHardDeny: a literal refused by the runner's hard deny says so, rather
+// than telling the agent its address is merely missing from allowed_domains.
+func TestHardDenyLiteralDetailNamesHardDeny(t *testing.T) {
+	p, _ := newInternalHostsProxy(t, types.RunPolicySpec{AllowedDomains: []string{"10.40.1.9"}}, fakeResolver{m: map[string][]net.IP{}}, nil, nil, nil, "")
+	hd, err := compileHardDeny(&HardDenyConfig{Suffixes: []string{"svc"}, Hosts: []string{"10.40.1.9"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.hardDeny = hd
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://10.40.1.9/"))
+	d := rec.Header().Get(egressHeaderDetail)
+	if rec.Code != http.StatusForbidden || !strings.Contains(d, "in-cluster name or address this runner denies to every run") || strings.Contains(d, "not listed") {
+		t.Fatalf("status %d, detail %q", rec.Code, d)
+	}
+}
