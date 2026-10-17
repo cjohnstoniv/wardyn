@@ -148,6 +148,11 @@ func (d *Driver) ensureFence(runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	// A proxy with a persisted witness has had its IP refusal released (as ReplayFences skips it): a
+	// later containment path, StopSandbox after StopProxy, must not refuse a recycled IP again.
+	if p := ev.Pods[componentProxy]; p != nil && p.Witness != nil {
+		return nil
+	}
 	if d.cfg.Fence != nil {
 		d.cfg.Fence(runID, ev.Fence.ProxyIP)
 	}
