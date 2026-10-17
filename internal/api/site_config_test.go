@@ -234,6 +234,9 @@ func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
 		"0.0.0.0/0",      // everything
 		"8.8.8.0/24",     // public
 		"::/0",           // everything, v6
+		"fd00:ec2::/64",  // AWS instance-metadata block, inside the liftable ULA range
+		"fd00:ec2::254/128",
+		"100.100.100.200/32", // Alibaba metadata, inside the liftable CGNAT range
 	}
 	for _, cidr := range bad {
 		t.Run(cidr, func(t *testing.T) {

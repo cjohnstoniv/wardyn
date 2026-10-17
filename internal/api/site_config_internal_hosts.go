@@ -39,6 +39,11 @@ func validateInternalHosts(hosts []types.InternalHost) error {
 			if !liftable {
 				return fmt.Errorf("internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, c)
 			}
+			if slices.ContainsFunc(ipguard.NeverLift, func(n netip.Prefix) bool {
+				return n.Bits() <= prefix.Bits() && n.Contains(prefix.Addr())
+			}) {
+				return fmt.Errorf("internal_hosts[%d].cidrs[%d]: %q is a cloud instance-metadata endpoint, which is never liftable", i, j, c)
+			}
 		}
 	}
 	return nil
