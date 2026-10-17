@@ -1114,7 +1114,8 @@ func TestStaticKeyServiceCheck(t *testing.T) {
 	}
 	node, ok := staticKeyServiceCheck("AWS KMS in us-east-1", false, true)
 	if !ok || node.ID != "kek_service_static_key" || node.Status != "warn" ||
-		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity") {
+		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity on Kubernetes") ||
+		!strings.Contains(node.Detail, "pod or process") { // a plain EC2 Docker host has no pods
 		t.Fatalf("node role row = %+v, %v", node, ok)
 	}
 	for name, c := range map[string]struct {

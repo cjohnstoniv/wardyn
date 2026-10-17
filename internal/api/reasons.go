@@ -345,7 +345,7 @@ const (
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
 	reasonInvitationTargetUnknown    = "invitation_target_unknown"     // no person row and no bound identity has that principal
 	reasonInvitationReplacesInvalid  = "invitation_replaces_invalid"   // replaces_token_id is not a live admin-minted token of the target
-	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative
+	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative or over 100 years
 	reasonInvitationCapReached       = "invitation_cap_reached"        // the target already has the maximum pending invitations
 	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired

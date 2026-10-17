@@ -595,3 +595,31 @@ func serverMethodName(call *ast.CallExpr) string {
 	}
 	return sel.Sel.Name
 }
+
+// The parity scan above sees Server methods only. These plain functions are launch gates too: the
+// request enums and the hold/interactive conflict. Review calls each one launch's validation calls.
+func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
+	fset := token.NewFileSet()
+	calls := func(fn *ast.FuncDecl) map[string]bool {
+		out := map[string]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if id, ok := c.Fun.(*ast.Ident); ok {
+					out[id.Name] = true
+				}
+			}
+			return true
+		})
+		return out
+	}
+	launch := calls(parseHandler(t, fset, "runs_create_validate.go", "decodeAndValidateCreateRun"))
+	preflight := calls(parseHandler(t, fset, "preflight.go", "handlePreflightRun"))
+	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError"} {
+		if !launch[gate] {
+			t.Errorf("launch no longer calls %s: re-point this guard", gate)
+		}
+		if !preflight[gate] {
+			t.Errorf("handlePreflightRun does not call %s, which launch's validation does", gate)
+		}
+	}
+}
