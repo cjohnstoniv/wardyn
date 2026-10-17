@@ -307,7 +307,9 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		tdata["change_id"], tdata["proposed_by"] = out.ID, out.ProposedBy
-		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
+		if applied.action != "" {
+			s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, applied.action, applied.target, "success", mustJSON(tdata)))
+		}
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.approve", out.ID.String(), "success", mustJSON(data)))
 		if bypass {
 			s.recordGovernanceBypass(r, out.TargetKind, out.ID.String(), "success", map[string]any{"change_id": out.ID, "proposed_by": out.ProposedBy})

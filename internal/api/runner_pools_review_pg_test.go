@@ -402,6 +402,25 @@ func TestPG_RunnerPoolDetachFromAPolicyPoolIsHeld(t *testing.T) {
 	}
 }
 
+// A held detach whose executor was taken out meanwhile removes nothing, so it writes no detach row.
+func TestPG_RunnerPoolHeldDetachOfAnAbsentExecutorWritesNoDetachRow(t *testing.T) {
+	e := newPoolEnv(t, true)
+	a := e.createPool("A", types.RunnerPoolOrganization)
+	if w := e.call(e.super, http.MethodPut, poolPath(a.ID)+"/remote-runners/fake", ""); w.Code != http.StatusOK {
+		t.Fatalf("attach = %d", w.Code)
+	}
+	e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(a.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`)).ID)
+	held := e.pending(e.call(e.super, http.MethodDelete, poolPath(a.ID)+"/remote-runners/fake", ""))
+	if w := e.admin(http.MethodDelete, poolPath(a.ID)+"/remote-runners/fake", ""); w.Code != http.StatusNoContent || e.members(a.ID) != 0 {
+		t.Fatalf("admin token detach = %d", w.Code)
+	}
+	before := len(e.audits(auditPoolRunnerRemove))
+	e.approveExecutor(held.ID)
+	if n := len(e.audits(auditPoolRunnerRemove)); n != before {
+		t.Errorf("approving a detach that removed nothing wrote %d detach rows, want %d", n, before)
+	}
+}
+
 // within reports whether done closes inside d.
 func within(done <-chan *httptest.ResponseRecorder, d time.Duration) (*httptest.ResponseRecorder, bool) {
 	select {
