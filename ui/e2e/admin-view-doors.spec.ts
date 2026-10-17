@@ -3,43 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, asRealMember, consoleAPI } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI } from "./fixtures";
 
-// Admin and member views: the doors the Admin view must not close, and the writes
-// the member view must not allow.
+// Admin and member views: the writes the member view must not allow.
 //
-// An SSO admin who is in the Admin view is refused 409 `admin_view` at the three
-// launch doors (POST /runs, /runs/preflight, /runs/policy-preview), and only there:
-// Record, the site-config probes and the model provider sign-in are operator controls
-// and stay open to them. That session needs an OIDC install, so those arms are pinned
-// in Go (internal/api/admin_view_launch_exceptions_test.go) and walked on the kind SSO
-// estate. What this backend can prove is the other half: a plain admin token (a
-// single-operator install) is never refused as the Admin view at any of those doors, and a real
-// member is refused every admin write.
+// What the Admin view closes and leaves open belongs to an SSO admin session: it is refused 409
+// `admin_view` at the three launch doors (POST /runs, /runs/preflight, /runs/policy-preview), and only
+// there; Record, the site-config probes and the model provider sign-in stay open to it. That session
+// needs an OIDC install, so those arms are pinned in Go
+// (internal/api/admin_view_launch_exceptions_test.go) and walked on the kind SSO estate. A plain admin
+// token never carries the Admin view, so a test with it could not fail and is not written. This backend
+// can prove the other half: a real member is refused every admin write and may still launch its own run.
 
-const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 const RUN = { agent: "claude-code", task: "t" };
-
-test.describe("the admin token is never refused as the Admin view", () => {
-  const doors: { method: "POST"; path: string; body: unknown }[] = [
-    { method: "POST", path: "/api/v1/runs/preflight", body: RUN },
-    { method: "POST", path: "/api/v1/runs/policy-preview", body: RUN },
-    { method: "POST", path: "/api/v1/runs", body: RUN },
-    { method: "POST", path: `/api/v1/workspaces/${randomUUID()}/record`, body: { name: "build" } },
-    { method: "POST", path: "/api/v1/site-config/test-proxy", body: {} },
-    { method: "POST", path: "/api/v1/site-config/test-redirect", body: { from: "registry.npmjs.org", to: "artifactory.corp/npm" } },
-    { method: "POST", path: "/api/v1/model-providers/no-such-provider/sign-in", body: {} },
-  ];
-  for (const door of doors) {
-    test(`${door.method} ${door.path.replace(/[0-9a-f-]{36}/, ":id")}`, async ({ page }) => {
-      const res = await page.request.fetch(door.path, { method: door.method, headers: auth, data: door.body });
-      // Some of these doors answer 409 for their own reasons; none answers the Admin view's.
-      const text = await res.text();
-      expect(text, `${res.status()}`).not.toContain("admin_view");
-    });
-  }
-});
 
 test("a real member is refused the admin writes, and the same session may still launch its own run", async ({ page }) => {
   await asRealMember(page);
@@ -53,4 +29,8 @@ test("a real member is refused the admin writes, and the same session may still 
   }
   const own = await consoleAPI(page, "POST", "/api/v1/runs", RUN);
   expect(own.status, own.text).toBe(201);
+  // The run was this test's own: end it so the shared backend keeps no stray run.
+  const { id } = JSON.parse(own.text) as { id: string };
+  const killed = await consoleAPI(page, "POST", `/api/v1/runs/${id}/kill`, {});
+  expect(killed.status, killed.text).toBeLessThan(500);
 });
