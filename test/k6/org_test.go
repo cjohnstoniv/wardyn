@@ -814,11 +814,13 @@ func TestK6Org(t *testing.T) {
 			_ = exec.Command("docker", "exec", n, "systemctl", "start", "kubelet").Run()
 		}
 	})
-	o.lapseSetup(t)
 	kase("walk-trust-placement", caseOrgWalk)
 	kase("hard-deny-from-agent", caseOrgHardDeny)
 	kase("fence-live-http2", caseOrgFence)
 	kase("restart-fence-replay-reregister-sinks", caseOrgRestart)
+	// After every runnerd restart but the sweep case's: a READY sweeps the runs the org holds terminal,
+	// and the lapse run is one, so a restart inside its renew window would reclaim it before the refusal.
+	o.lapseSetup(t)
 	kase("self-lapse-end-to-end", caseOrgSelfLapse)
 	kase("org-triggered-sweep-rollback", caseOrgSweepRollback)
 	kase("keystore-deleted-on-revoke", caseOrgKeystoreRevoke) // last: revokes the org runner
