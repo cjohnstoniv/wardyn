@@ -55,6 +55,7 @@ coverage verdict pointing back into this document.
 | **Enrolled hybrid laptop (device, v0.8; deprecated in 0.9, removed in 1.0)** | Not a human — a member-mode laptop (topology m′) that has enrolled with an org control plane and holds a `wdd_`-prefixed device credential (issue #103). | 🟡 Authenticated, narrowly trusted, self-reporting. Trusted to submit ITS OWN audit rows under a chain the organisation verifies on ingest. |
 | | `deviceAuth` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) resolves that bearer to a device identity ONLY, scoped ONLY to `/api/v1/devices/{id}/*` (push its own audit rows, heartbeat) — it is never a caller `isOperator` or `isMember` admits anywhere else. | Not trusted for completeness of what it chose to send, and not an operator or member principal on any other route. Residuals #50–#52 state the limits. |
 | **Runner host (client mode, 0.9)** | A developer's laptop running `wardyn-runnerd`: it holds a runner key, dials out to the organisation and runs its owner's local runs. | 🟡 Authenticated by key possession; self-reporting, and its developer is root: [B12](#b12--runner-host-vs-the-organisation). |
+| **Organisation runner (Kubernetes, 0.9.3)** | `wardyn-runnerd` in a cluster, owned by the organisation rather than a person and claimed by a security operator; it runs any member's runs an organisation pool places on it. | 🟡 Authenticated by key possession; self-reporting; its cluster's admins are trusted with what its runs use: [B13](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 
 ### Member on a member-mode desktop (topology m′)
 
@@ -252,6 +253,7 @@ coverage verdict pointing back into this document.
 | | | The two tiers sit BESIDE each other rather than nested, which is why `security_admin` never satisfies a check that means "reaches into a run it does not own" (SSH-key role stamps, attach tickets, take-over). |
 | | | Refusals on each side audit distinctly (`authz.denied` `reason` `admin_surface` vs `security_admin_surface`) so a reader can tell WHICH tier a denial was measured against. Residual #14. |
 | **B12 — Runner host vs. the organisation** | 🟡 partial **[0.9]** | A developer-administered laptop runs what the organisation schedules, enforces and audits: [detail](#b12--runner-host-vs-the-organisation). |
+| **B13 — Organisation runner vs. its Kubernetes cluster** | 🟡 partial **[0.9.3]** | An organisation's runner in a cluster: outbound-only, ServiceAccount and NetworkPolicy isolation, and the cluster's admins trusted: [detail](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 
 On a single-operator machine the boundaries compose into a strict containment
 ladder — Wardyn never *adds* power beyond what the operating user already has:
@@ -347,12 +349,13 @@ that ceiling down; each run receives only the minimal subset its task needs.
   - A loopback-only local install has no internal listener and serves the surface on the console.
   - Whoever can read wardynd's secret store with its age key holds the CA key, the same custody as
     the signing key.
-  - A compromised runner is assumed; the control plane never trusts runner-asserted identity
+  - A compromised runner is assumed; the control plane never trusts runner-asserted identity claims.
 - **Relayed hops [0.9, client mode]** ([design §4.3](../docs/design/0.9/PLAN.md#43-runner_id-binding-in-internalauth)).
   - A runner forwards a laptop proxy's TLS to `ControlPlaneURL` byte for byte, so TLS ends at wardynd and no CA key is on the laptop.
   - The relay listener serves only `relayedInternalRoutes`; `/internal/groundtruth`, scan results and the container-login upload are refused there (`relay_route_refused`). Injection and mint through a relay serve only a grant delivered `own` (`refuseRelayedDelivery`).
-  - `internalAuth` refuses a relayed request for a run not placed on that runner (`relay_runner_mismatch`) and an unrelayed one for a local run (`relay_required`) (`refuseRelayBinding`). Residual #71.
-    claims.
+  - `internalAuth` refuses a relayed request for a run not placed on that runner (`relay_runner_mismatch`) and an unrelayed one for a local run (`relay_required`) (`refuseRelayBinding`, [`internal/api/internal_relay.go`](../internal/api/internal_relay.go)). Residual #71.
+  - **On an organisation runner [0.9.3]** the proxy pod's host alias resolves the organisation's control-plane name to the relay Service address, so that name reaches the organisation only through the relay (`ControlPlaneRelay` in [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)).
+    - The relay accepts a connection only from the address of one of the runner's live, unfenced proxy pods, and closes a fenced run's connections (`k8sRelay`, [`cmd/wardyn-runnerd/relay_k8s.go`](../cmd/wardyn-runnerd/relay_k8s.go)). TLS still ends at wardynd, and the run-token and `runner_id` binding above apply unchanged.
 - **Organisation credentials used by a self-hosted run (`via_org`) [0.9].**
   - A `via_org` credential is used by the developer's run but never read: the value stays at the
     organisation, which re-runs the run's egress checks as authoritative and dials the destination over
@@ -410,6 +413,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - **The developer is root on that host.** B1, B2 and L0 hold between the sandbox and the laptop proxy, so they and every other control bind the **agent**, never the developer (residual #69).
 - A background task placed on a runner is closed at the organisation's doors (terminal, SSH, exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
 - An admin who may read a run's detail also reads a runner-placed sandbox's file names and resource counts, through a fixed read-only command the runner runs. Entering its terminal stays the run owner's alone.
+- **Trust class [0.9.3].** Every claimed runner carries one of `personal` < `managed_device` < `org_cluster` (`RunnerTrustClass`, [`internal/types/runner.go`](../internal/types/runner.go)). It is an administrator's assertion, never the runner's: residual #90.
 
 | Crossing | Guard | Residual |
 |---|---|---|
@@ -417,10 +421,39 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Laptop proxy → organisation internal listener | End-to-end TLS through an opaque relay; run token; `runner_id` binding; a closed relayed-route list | #71 |
 | Organisation → laptop (dispatch) | The dispatch-plan classification refuses or strips org-held material | #72 |
 | Laptop → organisation (evidence) | The organisation writes every row; the content is `runner_asserted` | #73, #74 |
-| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` can be set and delivers nothing in 0.9.0 | #75, #76 |
+| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort | #75, #76 |
+| Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
 
 - B1–B11 are unchanged for a run placed `remote`.
+
+### B13 — Organisation runner vs. its Kubernetes cluster
+
+- **[0.9.3]** An organisation's runner is `wardyn-runnerd serve --substrate k8s`, installed by its own chart ([`deploy/helm/wardyn-runnerd/values.yaml`](../deploy/helm/wardyn-runnerd/values.yaml)) into a cluster the organisation chooses.
+- It is **outbound-only**: runnerd dials the organisation as a laptop runner does, and nothing outside the cluster dials in. Its Service is `ClusterIP`, for its own runs' proxies only.
+- B12 holds for it, with the organisation's cluster admins in the developer's place: they administer the nodes, Secrets and etcd that hold what a run uses (residual #89).
+- **Identity.** A security operator mints a single-use, 72 h token (`POST /runners/org-tokens`, `handleRunnerOrgToken` in [`internal/api/runner_registration.go`](../internal/api/runner_registration.go)), and a human security operator claims it (`POST /runners/{id}/claim-org`, `handleRunnerClaimOrg`).
+  - Under `WARDYN_GOVERNANCE_SECOND_HUMAN` the claimer must be a different human from a human minter. An admin-token mint is applied as break-glass, stored `break_glass` with a `governance.change.bypass` row, and never counts as a second human.
+  - The row has no owner (`owner_kind` `org`), its trust class is always `org_cluster`, and only an organisation pool offers it (`OrgRunnerCandidates`, [`internal/runnerpool/candidates.go`](../internal/runnerpool/candidates.go)).
+- **ServiceAccount isolation.** runnerd runs in its own namespace and places pods in a dedicated runs namespace; boot refuses the two being one. A pod can name only its own namespace's ServiceAccount, and the agent and proxy pods mount no token.
+- **NetworkPolicy.** runnerd's own policy denies both ways ([`deploy/helm/wardyn-runnerd/templates/networkpolicy.yaml`](../deploy/helm/wardyn-runnerd/templates/networkpolicy.yaml)).
+  - Ingress comes only from its runs namespace's `wardyn.component: proxy` pods, on the relay and sink ports, so an agent pod cannot reach runnerd.
+  - Egress goes only to DNS, the API server and the organisation, whose default rule excludes the private ranges pods use.
+  - Agent pods keep egress to their own proxy only; the proxy gains one explicit runnerd peer (`runnerdPeerRules`, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)).
+- **Boot refusals** (`k8sRunnerHooks` in [`cmd/wardyn-runnerd/production_k8s.go`](../cmd/wardyn-runnerd/production_k8s.go)).
+  - runnerd boots only on an `enforced` egress-canary verdict. `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` are refused on a runner (`errRunnerNetPolOverride`).
+  - A SelfSubjectAccessReview that finds a missing verb refuses boot (`CheckRunnerAccess`), and so do another runner's objects in the runs namespace (`CheckForeignObjects`).
+  - A schedulable node of the runner's architecture whose kubelet is below 1.31 refuses boot, named (`kubelet_below_floor`, `CheckKubeletFloor`).
+  - A cluster that rewrites a pod's source address toward the relay Service refuses boot (`relay_source_rewritten`, `ProbeRelaySource`).
+- **Hard deny.** Every run's proxy refuses `svc`, the cluster domain, the relay address, runnerd's pod IP, the API server and any operator CIDRs. It checks the name and every resolved address before `internal_hosts` lifts anything (`NewHardDeny`, [`internal/runner/k8s/hard_deny.go`](../internal/runner/k8s/hard_deny.go)). A run on an organisation runner reaches no in-cluster service.
+- **Terminal self-lapse.** The proxy is closed until its first renew and lapses for good at the last renew's send time plus the run-token TTL (`selfLapseTTL`, [`internal/egress/proxy/self_lapse.go`](../internal/egress/proxy/self_lapse.go)). Its pod is never restarted, and both pods carry a deadline (`sandbox.maxPodLifetime`, `168h` by default).
+
+| Crossing | Guard | Residual |
+|---|---|---|
+| runnerd ↔ organisation | B12's stream and claim; the claim is a human security operator's | #89 |
+| Proxy pod → runnerd | Ingress from proxy pods only; the relay admits only a live, unfenced proxy pod's address; the decision sink needs a per-run key (`DecisionSink`) | #89 |
+| Agent pod → runnerd, API server, in-cluster services | Egress to its own proxy only, then the proxy's hard deny | #89 |
+| Cluster admins → run material | None: choosing `org_cluster` trusts them | #89 |
 
 ---
 
@@ -504,7 +537,8 @@ is not the deployment described above.**
 | Member escalating past a capability grant | **[v0.6 shipped]** Capability grants bound a member; every switch ships OFF: [detail](#member-escalating-past-a-capability-grant). | B5, ID, AU |
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. | B1, ID |
 | | Unset roots = no member host mounts at all. Mechanism: [§4.4](#44-member-authored-host-mounts-v06--the-gate). Residuals #25, #26 | |
-| Org-held credential reaching a developer-rooted runner host | **[0.9]** Local placement is derived from a classified dispatch plan, and an org-held class is refused unless an admin chose `via_org`: [B12](#b12--runner-host-vs-the-organisation), residuals #72, #75, #76. | B12, ID |
+| Org-held credential reaching a developer-rooted runner host | **[0.9]** Local placement is derived from a classified dispatch plan, and an org-held class is refused unless an admin chose `via_org` or, since 0.9.3, `runner_resident` for the runner's trust class: [B12](#b12--runner-host-vs-the-organisation), residuals #72, #75, #76, #90. | B12, ID |
+| A run on an organisation runner reaching runnerd, the API server or in-cluster services | **[0.9.3]** Agent egress only to its proxy, runnerd ingress only from proxy pods, a proxy hard deny on in-cluster names and addresses, and boot only on an enforced NetworkPolicy canary: [B13](#b13--organisation-runner-vs-its-kubernetes-cluster), residual #89. | B13, L0 |
 | Audit tampering by in-sandbox actor | Append-only log, ground-truth stream and tamper-evident PTY casts: [detail](#audit-tampering-by-in-sandbox-actor). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: [§4.5](#45-the-audit-hash-chain--what-it-is-and-is-not) | AU |
 | Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Envelope v1 binds every secret to its owner and name: [detail](#stored-credential-moved-or-forged-by-a-database-writer). | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
@@ -2491,6 +2525,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A request that names no owner mints from the first owner's grant. Only metadata and identity routes classify that way; widening that set must not reach what an owner's grant could not.
       - The token acts as the App, so GitHub's audit log names the App, not the person. A permitted response can echo data into the sandbox.
       - The hand-back at run end is best effort, bounded to `3s`; GitHub's expiry within `1h` is the backstop. The lane is refused on a person's own runner (#72).
+      - **A ceiling that walls GitHub off withholds the door [0.9.3].** A governance ceiling that denies any host the git broker re-originates to takes the door away at dispatch and at revive (`githubDoorWithheld`, [`internal/api/runs_cli_github.go`](../internal/api/runs_cli_github.go)).
+      - Those hosts are `github.com`, `api.github.com`, `codeload.github.com` and `*.githubusercontent.com`. Withheld means no grant, no inert token in the sandbox, and `api.github.com` denied again (`dropGitHubDoor`). Plain egress to `api.github.com`, with no door, stays an exact-host decision.
     - (p) **A remote MCP server is reached only through the proxy's broker route, and a held tool relies on the harness having asked [0.9].**
       - Each harness reaches a server at `/wardyn/mcp/<token>/<server>`. The broker binds the request to the harness by its token, adds the server's credential, refuses redirects, and answers a tool call the run's rules block with a JSON-RPC error.
       - It re-originates over the same guarded path as the git broker, and a direct request to an attached server's host is refused. The credential never enters the sandbox.
@@ -2517,26 +2553,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The guard refuses only a public suffix itself. A non-PSL parent such as `amazonaws.com` can still span tenants; the approving humans must assess its reach.
 
 67. **A run attached to several workspaces holds the union of their reach in one sandbox [0.9].**
-    - Since 0.9 a run attaches up to `32` workspaces, and each one's requirements, secrets, grants and egress fold into the run. Equal or nested targets across workspaces are refused (`workspace_target_overlap`).
+    - Since 0.9 a run attaches up to `32` workspaces (`maxRunWorkspaces`, [`internal/api/run_contract.go`](../internal/api/run_contract.go)), and each one's requirements, secrets, grants and egress fold into the run. Equal or nested targets across workspaces are refused (`workspace_target_overlap`).
     - So content from one workspace's repository, a prompt injection in a README included, drives an agent holding every other workspace's credentials: A's resident `env_secret` is readable, and B's git grant can push what A's sources authored.
     - The ceiling and grants bind the union, review attributes each folded requirement secret to its workspace, and two distinct model-provider pins or base images are refused.
     - Attribution is visibility, not separation: keep workspaces whose credentials differ in sensitivity in separate runs.
 
 68. **Sync lets agent-authored content reach files the developer later executes [0.9].**
     - `wardyn sync` copies between a laptop directory and a remote run over the SSH gateway's dedicated `wardyn-sync` subsystem; a pull from the sandbox needs `--pull`, per run.
-    - The CLI applies the safety defaults on the laptop (`syncDenied`): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
+    - The CLI applies the safety defaults on the laptop (`syncDenied`, [`cmd/wardyn/sync_rules.go`](../cmd/wardyn/sync_rules.go)): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).
-    - A run on a runner takes no laptop folder in 0.9.0: a `local_dir` source or a `host_path` drive is refused `placement_local_path`.
+    - **Bind write-back does not exist yet.** Through 0.9.3 a run on a runner takes no laptop folder: a `local_dir` source or a `host_path` drive is refused `placement_local_path` (`ReasonPlacementLocalPath`, [`internal/placement/reasons.go`](../internal/placement/reasons.go)), because nothing binds a path to a runner yet.
 
 69. **On a runner host the developer is root: every control binds the agent, not the developer, and everything a local run uses is developer-readable [0.9, client mode].**
     - A run placed `local` runs on its owner's laptop under `wardyn-runnerd`, with the same sandbox, proxy sidecar and gatewayless network as any Docker run (B12).
     - The developer administers that Docker daemon, proxy container and runner state. Egress policy, managed settings, Azure DevOps narrowing, push rules, method pins and tool rules therefore bind the agent; the developer acts from their own shell.
     - Readable by the developer, by design: the run token, the per-run MITM CA key, the proxy's config (including the organisation's `internal_hosts` suffixes and CIDRs, since 0.9.2), the sandbox, the started harness's tool-approval credential (`stampHarnessCredential`), and their own credentials.
     - The organisation keeps what it never sends (#72, #75), the ceiling, whether local placement is allowed (`deny_placements`), and the audit chain, whose laptop content is self-reported (#73).
-    - A run lands only on its launching person's own claimed runner (`OwnRunnerCandidates`), so nobody reaches another person's run through their own runner.
-    - An organisation-side erase reaches the laptop late: a runner reporting a run the organisation no longer holds gets a kill and a quarantine, and deletes that run's local evidence at revocation or `90` days later (`RunnerAssertedEvidenceTTL`).
+    - **A runner's corporate CA [0.9.3].** `--trusted-ca-file` (`WARDYN_TRUSTED_CA_FILE`, at most 64 KiB) names roots that runnerd's own session, every run's proxy and its sandbox trust beside the system roots, on create and revive (`InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go)).
+      - The host's owner chooses the file, so a root in it reads runnerd's session to the organisation: dispatch specs, run tokens and any `runner_resident` value (#76). Relayed run traffic inside that session is TLS to wardynd (B6).
+      - It widens upstream trust for that runner's runs only. The organisation's own `WARDYN_TRUSTED_CA_FILE` is never sent (#72); an organisation runner takes its bundle from the chart's `trustedCA.configMap`.
+    - A run lands only on its launching person's own claimed runner (`OwnRunnerCandidates`, [`internal/runnerpool/candidates.go`](../internal/runnerpool/candidates.go)), so nobody reaches another person's run through their own runner. An organisation pool's runs land on organisation runners instead (#89).
+    - An organisation-side erase reaches the laptop late: a runner reporting a run the organisation no longer holds gets a kill and a quarantine, and deletes that run's local evidence at revocation or `90` days later (`RunnerAssertedEvidenceTTL`, [`internal/types/runner.go`](../internal/types/runner.go)).
 
 70. **A runner key reaches its owner's locally placeable runs until it is revoked, and nothing binds it to the hardware [0.9, client mode].**
     - A single-use `wdr_` token (`1h` self-minted, `72h` when an admin mints it for a person) buys an `unclaimed` runner ([design §3.1](../docs/design/0.9/PLAN.md#31-registration-claim-and-credential)).
@@ -2545,6 +2584,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Each connection signs a fresh server nonce bound to the organisation URL's hash: no bearer crosses the wire.
     - **Theft.** Whoever copies the key file reaches what the runner reaches until it is revoked: the owner's local runs, their own credentials, and those runs' tokens and evidence.
     - It cannot create a run, reach another person's, or read a `via_org` value. No TPM or Secure Enclave binds the key in 0.9.
+    - An organisation runner's key, on its persistent volume, reaches every run an organisation pool places on it, and the `runner_resident` values delivered for them (#89).
     - **A stolen registration token** buys only an `unclaimed` runner. *My runner* shows its fingerprint abbreviated (`abbreviateFingerprint`), so a claim must carry the full fingerprint, read where the key lives.
     - **Revocation**, by an admin, a security admin or the owner (`not_mine`), ends every unfinished run on the runner KILLED in one transaction (`revokeRunner`), then runs each run's kill cascade. A live session closes; an offline runner learns it on reconnect (#77).
     - A session another replica holds closes at its next stored-row recheck, within one 15-second ping interval, so under `WARDYN_HA` a revoked runner's live session can outlast the revoke by that long. Its runs are already KILLED, its credentials revoked and its writes refused.
@@ -2564,10 +2604,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Terminal, SSH and UI-gateway byte streams keep their own principal checks and audit rows, stamped `data.relay`, and are reset, never resumed, on reconnect. The relay serves no human route, and a runner cannot open a terminal or exec stream toward the organisation itself.
 
 72. **Local placement refuses org-held material through a closed classification, and what it lets through is readable on the laptop [0.9, client mode].**
-    - `LocalEligibility` classifies every credential-bearing field of `runner.SandboxSpec` and `runner.ProxyConfig` as `own`, `operator`, `brokered` or `platform` (`placement.Table`); an unclassified field refuses, and a test fails until it is classified ([design §6.3](../docs/design/0.9/PLAN.md#63-dispatch-plan-classification)).
+    - `LocalEligibility` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)) classifies every credential-bearing field of `runner.SandboxSpec` and `runner.ProxyConfig` as `own`, `operator`, `brokered` or `platform` (`placement.Table`, [`internal/placement/classify.go`](../internal/placement/classify.go)); an unclassified field refuses, and a test fails until it is classified ([design §6.3](../docs/design/0.9/PLAN.md#63-dispatch-plan-classification)).
     - One table, three chokepoints: create refuses naming the field, dispatch strips or refuses on the built spec, and revive strips the stored config again.
     - A run on a runner is created and executed only under the organisation's current lease and execution generation (`leaseRunOnRunner`). A token renewal sends a fresh lease, so the lapse follows the organisation's own stamp.
-    - `operator` and `brokered` classes are refused unless the credential delivery policy sends one `via_org` (#75), and `cloud_sts` always. Trusted-output runs (scan, record, verify, container login, probes) are cluster-only.
+    - `operator` and `brokered` classes are refused unless the credential delivery policy, for the runner's trust class (#90), sends one `via_org` (#75) or, since 0.9.3, `runner_resident` (#76); `cloud_sts` always. Trusted-output runs (scan, record, verify, container login, probes) are cluster-only.
     - A local run's own stored-secret grants are persisted `OwnerOnly` once the owner's namespace is proven, so injection never falls back to the operator namespace.
     - **What reaches the laptop by design:** own material, the run token and the per-run MITM CA key, which intercepts one's own sandbox only.
     - Organisation-component `config` is operator data: the laptop-bound environment drops every key an organisation's component wrote (`applyComponentConfigEnv`).
@@ -2583,6 +2623,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     - On an architecture mismatch the driver starts the image once, for at most 3 s, under the run's class runtime, with no network, host mounts or capabilities, as uid 1000. Only a runnable verdict is cached, per architecture and runtime.
     - A self-hosted runner's limits, `max_runs` among them, are owner-set and enforced by the organisation under the runner row lock (#85). The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
     - This replaces #50–#52 for client mode: one writer re-chains nothing, and the open question is what the runner chose to send.
+    - **Recording follows the organisation [0.9.3].** The organisation decides at dispatch whether a run's terminal session is recorded (`NotRecordedFor`, [`internal/types/run_recording.go`](../internal/types/run_recording.go)).
+      - With no recording store the run is marked `org_off`. A runner that does not record, by its `--recording-store off` ceiling or because it is older than 0.9.3, marks it `runner_declined`.
+      - An upload for a run marked either way is refused `409` `recording_off`, except a cast from a recording runner older than 0.9.3.
+      - An organisation or pool can set `recording: required`: a run only a non-recording runner could take is then refused `runner_recording_off`. Required is what the organisation asked for; the cast a runner sends is still `runner_asserted`.
+      - Console and SSH sessions opened through the organisation are recorded there while it keeps a store, even on a run marked not recorded.
 
 74. **A runner's confinement class is runner-asserted, and it never satisfies the floor for an org credential held on the laptop [0.9, client mode].**
     - A local run records its class as `runner_asserted` (`evidence_source`). A developer can advertise a class their host does not enforce, as §7's name-matched CC3 already allows, and the record says so.
@@ -2598,12 +2643,22 @@ hiding them would repeat the failure mode we are designed to avoid.
     - An idle or offline release retires that engine's generation, and a retired generation serves no stream (`admitViaOrg`).
     - **What stays open.** The developer can use the credential through any request those rules admit while the run lives, and an echoing host returns the value (§5.1a). The stream and byte limits hold per server replica and reset on restart.
 
-76. **`runner_resident` is a delivery mode an admin can set, and 0.9.0 delivers no value under it [0.9, client mode].**
-    - A security operator may set a class to `runner_resident` with `PUT /governance/credential-delivery`, optionally requiring posture; under `WARDYN_GOVERNANCE_SECOND_HUMAN` the change waits for a second person.
-    - `runner_resident` values are not yet delivered to runners in 0.9.0. A local run that needs a credential of such a class is still refused: `placement_credential`, or `runner_posture_unmet` where the floor or posture gate answers first.
-    - The mode's design leaves a delivered value readable by any process running as the runner's user ([design §7.4](../docs/design/0.9/PLAN.md#74-runner_resident-and-device-posture)). Treat setting it as that decision.
+76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
+    - A security operator may set a class to `runner_resident` with `PUT /governance/credential-delivery`, optionally requiring posture and per trust class (#90); under `WARDYN_GOVERNANCE_SECOND_HUMAN` the change waits for a second person.
+    - Four classes are delivered: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` (`residentBuilt`, [`internal/placement/resident_lift.go`](../internal/placement/resident_lift.go)). Any other class set to it is still refused `placement_credential`.
+    - Never resident: a grant that requires approval, a `git_pat` while the PAT broker is on, an Azure DevOps git token (`residentGrantRefusal`, [`internal/api/run_resident_delivery.go`](../internal/api/run_resident_delivery.go)), a brokered `github_token`, which would bypass branch, push and REST rules, and `cloud_sts`.
+    - A run with a blast-radius floor never takes one, because a runner-asserted class never meets it (`ResidentAdmits`, `runner_posture_unmet`, #74).
+    - **Delivery fence.** The organisation opens the run's erase obligation and a delivery lease before any value is sent. It does so only while the run is `STARTING` on a claimed, unrevoked runner bound to it, with no erase begun (`BeginResidentDelivery`, [`internal/store/store_runner_resident.go`](../internal/store/store_runner_resident.go)).
+      - Each value goes in its own call before the create, re-judged against the policy and posture of that moment. Any failure fails the run and starts the erase (`deliverResident`).
+      - A create whose spec carries a delivered value is refused (`refuseResident`, [`internal/runner/remote/substrate.go`](../internal/runner/remote/substrate.go)), so a value reaches the runner by this one path.
+    - **Where it lives.** On a laptop, only in the OS keystore (Secret Service, or the macOS Keychain) under the runner's own service, with no file fallback ([`internal/runner/keystore/keystore.go`](../internal/runner/keystore/keystore.go)). A runner with no keystore refuses (`runner_keystore_unavailable`). Any process running as the runner's user can read it there ([design §7.4](../docs/design/0.9/PLAN.md#74-runner_resident-and-device-posture)); treat setting the mode as that decision.
+      - On an organisation runner it is a Secret in runnerd's own namespace ([`internal/runner/keystore/k8s.go`](../internal/runner/keystore/k8s.go), #89). Then it is in the sandbox or proxy it was applied to.
+    - **Read cap.** The runner reads a value until the earliest of the run's lifetime cap, its end and 24 h after delivery (`residentNotAfter`). After that the runner refuses it and a revive is refused.
+    - **Erase is best effort.** At run end the organisation asks the runner to erase and retries until it confirms (`sweepResidentErase`), and a revoke erases everything the runner holds.
+      - A busy or stuck keystore call, a failing delete, a stopped runnerd or an offline runner delays the delete past the cap. Nothing proves the bytes are gone.
+      - Root on the host can copy a value while it is held. A value already in the sandbox or proxy stays until the run ends, and a key or token already used stays valid at the forge until rotated.
     - Posture is the runner's own report (`posture_source: runner_asserted`, audited `runner.posture.record`). It tells a lost or unmanaged laptop from a healthy one; it does not constrain the developer.
-    - Never resident, not configurable: a brokered `github_token`, which would bypass branch, push and REST rules, and `cloud_sts`. An Azure DevOps minted token is resident only on a connection that opted in.
+    - An Azure DevOps minted token is resident only on a connection that opted in, and its resident delivery is not built yet.
 
 77. **Offline, a laptop run keeps egress on its cached policy until the lapse, spooling self-reported decisions behind a fail-closed bound [0.9, client mode].**
     - No governed run is created while a runner's link is down (`runner_offline`), and a run in flight is never torn down by a drop.
@@ -2690,6 +2745,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The door judges method and path, never the query or the body: a path under one of the component's subscriptions, or one of three tenant-level reads; `read` admits GET and HEAD only. A segment holding `;`, `?`, `#` or `%` is refused, and so is a method-override header.
     - Only `login.microsoftonline.com` is terminated, to answer the tenant's public OpenID document; Entra's other hosts stay governed by the run's policy alone. A long-running operation whose polling address is another host is refused there, so a write can read as failed while it runs.
     - The sign-in starts at `GET /api/v1/components-entra/signin?component=<id>`, a navigable link, so a cross-site page can start a capture for the signed-in person, bound to that person. No console door starts it.
+    - **Under a ceiling that denies Resource Manager [0.9.3].** When the owner's governance ceiling denies `management.azure.com`, dispatch withholds the door with its credential and takes back the allowlist entries the lane opened (`closeWithheld`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)).
+      - A revive under such a ceiling is refused `409` `revive_ceiling_denies_azure_cli` and leaves the proxy as it was (`azureCLIReviveRefusal`). The door is exact-host, unlike the GitHub door's family rule (#64 (o)).
 
 87. **What the Azure CLI door leaves open [0.9].**
     - The token carries every role assignment the person holds. A body naming another subscription, and a query an Azure API reads across scopes, are Azure's role check to refuse; a `read` GET can carry such a query.
@@ -2713,6 +2770,27 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Which drive homes a person should have is not derivable from the database, so a person's home missing from the set is not detected.
     - The tree digest includes the permission bits with setuid, setgid and sticky, so stage and restore with modes preserved.
     - Other sealed blobs (masking manifests, sealed audit fields, sealed proxy configs) are reached through keys the rehearsal proves but are not opened. The verdict does not look for target rows the manifest does not describe.
+
+89. **An organisation runner trusts its cluster's admins with what its runs use, and its runs' evidence is still self-reported [0.9.3].** ([B13](#b13--organisation-runner-vs-its-kubernetes-cluster).)
+    - Choosing `org_cluster` trusts the cluster's admins with each run's Secrets, the Secrets holding `runner_resident` values, etcd backups and each run's MITM CA key. runnerd's ServiceAccount can read any Secret by name in its own dedicated namespace.
+    - Its runs are placed `local`, so their decisions, recordings, output and posture are `runner_asserted`, as a laptop's are (`EvidenceFor`, [`internal/placement/placement.go`](../internal/placement/placement.go); #73). Trusted-output runs stay on the organisation's own substrate.
+    - runnerd's ServiceAccount lists every Node, with names, addresses, labels, taints and images. In its runs namespace it creates, execs into, patches and adds ephemeral containers to pods ([`deploy/helm/wardyn-runnerd/templates/rbac.yaml`](../deploy/helm/wardyn-runnerd/templates/rbac.yaml)). A cluster that will not grant the node list cannot host one.
+    - **runnerd down.** A run's proxy lapses for good at its last successful renew plus the run-token TTL and is never restarted, so a longer runnerd outage ends its runs. Meanwhile the proxy refuses new requests once runnerd's write-ahead grant is spent (`remoteSink`, [`internal/egress/proxy/remote_sink.go`](../internal/egress/proxy/remote_sink.go)).
+    - **Unconfirmed stops.** A sandbox pod on a lost or partitioned node, or whose deletion a finalizer or admission webhook holds, may not be confirmed stopped. Its proxy can serve cached-policy egress until its lapse.
+      - The run then reads termination unknown (`errTerminationUnknown`, [`internal/runner/k8s/stop_proxy.go`](../internal/runner/k8s/stop_proxy.go)). It keeps its slot, policies and records until the node returns or an operator records the node powered off.
+    - **Operator requirements, detected only in part.** Two kubelets under one node name, and a node name reused for another machine while a run's pods remain, are unsupported. runnerd refuses to release a run on a name it saw reused except by the node-powered-off record; a reuse none of its lists samples is not caught.
+    - **CNI semantics.** How `ipBlock` treats pod addresses, and whether policy holds for a container whose pod is being deleted, depend on the CNI. Without enforcement the relay and sink ports are reachable in-cluster; the relay admits only proxy addresses and carries ciphertext, and the sink needs a per-run key.
+    - **Identity.** The runner key lives on its persistent volume, so losing the volume loses the identity; 0.9.3 has no re-key. A revoke stops every run's proxy on the runner (`Revoked`, [`internal/runner/offline/manager.go`](../internal/runner/offline/manager.go)).
+    - **In-cluster services.** A run cannot reach any in-cluster service, declared or not (B13's hard deny). Reach one by an external name or an address outside the deny.
+    - One architecture per runner release: a mixed cluster installs one release per architecture.
+
+90. **A runner's trust class is an administrator's assertion, and it decides how much organisation material the runner may hold [0.9.3].**
+    - The claim sets it: `personal` for a person's runner, `org_cluster` for an organisation's, and no other pairing is stored (`FitsOwner`, [`internal/types/runner.go`](../internal/types/runner.go)).
+    - Afterwards only a security operator changes it, with a reason (`handlePutRunnerTrust`, [`internal/api/runner_registration_trust.go`](../internal/api/runner_registration_trust.go)). Under `WARDYN_GOVERNANCE_SECOND_HUMAN` the change waits for a second person; it is audited `runner.trust.write`.
+    - `managed_device` says an administrator vouches for the laptop. No runner report, posture or advertised capability feeds the class, so a runner cannot raise its own, and a person's runner is never `org_cluster`.
+    - The delivery policy can set a mode per credential class for each trust class, falling back to the global row and then to refusal. A global `via_org` row is never trust-gated (`ForTrust`, [`internal/placement/delivery.go`](../internal/placement/delivery.go)).
+    - A run records the class it was admitted at. Resident delivery and revive judge the runner's current class, and a difference refuses `runner_trust_changed`.
+    - A downgrade does not pull a value already delivered; it refuses at the next door. `managed_device` is only as true as the administrator who set it.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -2865,7 +2943,7 @@ exactly these terms.
 **On a runner (client mode, 0.9) the laptop is a second place a value lands.**
 
 - Placement changes none of the rows above, which list the SANDBOX. A local run's laptop proxy also holds its run token, MITM CA key and the owner's own credentials, all developer-readable (residual #69).
-- No org-held credential value reaches a laptop in 0.9.0: `via_org` keeps it at the organisation, and `runner_resident` delivers nothing yet (residuals #75, #76).
+- `via_org` keeps an org-held value at the organisation (residual #75). Since 0.9.3 `runner_resident` puts four classes on the runner host for the run: the OS keystore on a laptop, a Secret on an organisation runner, then the sandbox or proxy (residual #76).
 
 **The AWS CLI component's sign-in (0.9) is not resident.**
 
