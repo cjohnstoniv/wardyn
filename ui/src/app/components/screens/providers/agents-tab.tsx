@@ -21,6 +21,7 @@ import * as React from "react";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
+import { reconfirmPrincipal } from "../../../lib/api/reconfirm-principal";
 import { agentProviders as api, type AgentProvider, type AgentProviders } from "../../../lib/api/agent-providers";
 import { modelProviders as providersApi, type ModelProvider } from "../../../lib/api/model-providers";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
@@ -295,6 +296,11 @@ export function AgentsTab({
   }, []);
   React.useEffect(load, [load]);
 
+  // Discarding also re-reads /me: a 412 can mean another tab switched the session to someone else.
+  const discard = React.useCallback(() => {
+    void reconfirmPrincipal().finally(load);
+  }, [load]);
+
   const agents = draft?.agents ?? [];
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
@@ -424,7 +430,7 @@ export function AgentsTab({
           above the rows rather than replacing them, so an edit typed
           moments before the 412 is still readable. #217: Copy my changes
           before Discard mine and reload — there is no "Save over theirs" arm. */}
-      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
+      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={discard} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>

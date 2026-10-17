@@ -19,6 +19,12 @@ import { HttpError } from "../../../lib/api/core";
 import { AgentsTab } from "./agents-tab";
 const getAgentProvidersMock = vi.fn();
 const putAgentProvidersMock = vi.fn();
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/health")>("../../../lib/api/health");
+  return { ...actual, health: { ...actual.health, whoami: (...a: unknown[]) => whoamiMock(...a) } };
+});
+
 vi.mock("../../../lib/api/agent-providers", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/agent-providers")>(
     "../../../lib/api/agent-providers",
@@ -78,6 +84,7 @@ const statusRefreshMock = vi.fn();
 beforeEach(() => {
   getAgentProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: '"e0"' });
   getModelProvidersMock.mockReset();
+  whoamiMock.mockReset();
   withProviders([]);
   putAgentProvidersMock.mockReset();
   retryRosterMock.mockReset();
@@ -495,6 +502,19 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
     expect(putAgentProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload re-reads /me as well as the agents", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code" }] }, etag: '"v1"' });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    whoamiMock.mockResolvedValue({ principal: "someone-else" });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getAgentProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
   });
 
   it("a 400 renders SAVE_REFUSED_TITLE over the server's verbatim body", async () => {

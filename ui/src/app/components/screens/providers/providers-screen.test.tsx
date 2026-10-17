@@ -33,6 +33,12 @@ vi.mock("../../../lib/api/providers", async () => {
   };
 });
 
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/health")>("../../../lib/api/health");
+  return { ...actual, health: { ...actual.health, whoami: (...a: unknown[]) => whoamiMock(...a) } };
+});
+
 const getAgentProvidersMock = vi.fn();
 const putAgentProvidersMock = vi.fn();
 vi.mock("../../../lib/api/agent-providers", async () => {
@@ -96,6 +102,7 @@ beforeEach(() => {
   getAgentProvidersMock.mockReset();
   getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
   putAgentProvidersMock.mockReset();
+  whoamiMock.mockReset();
 });
 
 describe("ProvidersScreen", () => {
@@ -386,6 +393,22 @@ describe("ProvidersScreen", () => {
     // Save providers is STILL on screen (the draft is still there to save) —
     // an ordinary retry sends If-Match, as the sibling test below pins.
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
+  });
+
+  it("Discard mine and reload re-reads /me as well as the providers", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "someone-else" });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
   });
 
   it("a 400 renders the server's own refusal verbatim under SAVE_REFUSED_TITLE", async () => {

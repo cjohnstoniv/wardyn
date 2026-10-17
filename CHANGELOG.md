@@ -8,6 +8,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- "Discard mine and reload" on the Providers and Agents screens now also re-reads who you are signed in as, so a session another tab switched to someone else no longer refuses every save.
+- The run page's "Not recorded by the runner" note no longer claims the organization's sessions are recorded now.
+
 ## [0.9.3-rc.3] — 2026-10-17
 
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
