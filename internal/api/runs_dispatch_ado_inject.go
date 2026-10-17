@@ -916,6 +916,11 @@ func (s *Server) refuseADOEntraDispatch(ctx context.Context, run types.AgentRun,
 // enum), so agent-run's clone failure line can point at the reason.
 const adoLaneDeclinedEnv = "WARDYN_ADO_LANE_DECLINED"
 
+// adoLaneDeclinedHostsEnv names, space-separated and lower-cased, the hosts of the Azure DevOps
+// repositories that went without the credential (hosts only, never addresses), so a clone failure on
+// another host is not blamed on the decline.
+const adoLaneDeclinedHostsEnv = "WARDYN_ADO_LANE_DECLINED_HOSTS"
+
 // adoDeclineAuditEvent is the run.ado_lane.skip row for a run the lane declined.
 // Outcome denied: the run went ahead without a credential it would have had
 // (run.requirement.skip's meaning), never failure, which `wardyn run get` reads
@@ -928,29 +933,68 @@ func adoDeclineAuditEvent(runID uuid.UUID, why adoLaneDecline, now time.Time) ty
 	}
 }
 
+// adoLaneDecision is dispatch's per-person Azure DevOps lane decision: the lane
+// (empty when none), why not (empty when on or when nothing is claimed), and the
+// hosts of the repositories that declined.
+type adoLaneDecision struct {
+	run     adoEntraRun
+	decline adoLaneDecline
+	hosts   []string
+}
+
 // decideADOLane is dispatch's per-person Azure DevOps lane decision: resolved from
 // site config when it read, a site_config_unreadable decline for a run on an
-// Azure DevOps Services host when it did not, and announced either way.
+// Azure DevOps Services host when it did not. It announces nothing: a decline is
+// announced (announceADODecline) once the dispatch is going ahead.
 func (s *Server) decideADOLane(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
-	ws []types.WorkspaceRepo, repo string, sandboxEnv map[string]string) adoEntraRun {
-	var adoRun adoEntraRun
-	var adoDecline adoLaneDecline
+	ws []types.WorkspaceRepo, repo string) adoLaneDecision {
+	var d adoLaneDecision
+	owner := adoLaneOwnerOfRun(ctx, run)
 	switch {
 	case siteCfgErr == nil:
-		adoRun, adoDecline = resolveADOEntraLane(siteCfg, ws, repo, adoLaneOwnerOfRun(ctx, run))
+		d.run, d.decline = resolveADOEntraLane(siteCfg, ws, repo, owner)
 	case namesADOServicesRepo(ws, repo):
-		adoDecline = adoDeclineSiteConfigUnreadable
+		d.decline = adoDeclineSiteConfigUnreadable
 	}
-	s.announceADODecline(ctx, run, adoDecline, sandboxEnv)
-	return adoRun
+	if d.decline != "" {
+		d.hosts = declinedADOHosts(siteCfg, siteCfgErr, ws, repo, owner)
+	}
+	return d
+}
+
+// declinedADOHosts is the sorted, lower-cased hosts (never addresses or paths) of the lane's Azure DevOps
+// repositories that went without the credential: those a present row claims, or, with the site config
+// unreadable, those on an Azure DevOps Services host.
+func declinedADOHosts(sc types.SiteConfig, siteCfgErr error, ws []types.WorkspaceRepo, repo, owner string) []string {
+	var hosts []string
+	for _, r := range presentRepos(append(repoLocatorsOf(ws), repo)) {
+		t, ok := parseCloneTarget(r, nil)
+		if !ok {
+			continue
+		}
+		h := canonicalProviderHost(t.host)
+		if siteCfgErr != nil {
+			if !adoServicesHost(h) {
+				continue
+			}
+		} else if a, why, isADO := adoEntraLaneForRepo(sc, r, owner); !isADO || (why == "" && a.rowID != "") {
+			continue
+		}
+		hosts = append(hosts, strings.ToLower(h))
+	}
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
 }
 
 // announceADODecline makes dispatch's decline visible: one run.ado_lane.skip
-// row and the sandbox env code. A no-op for no decline.
-func (s *Server) announceADODecline(ctx context.Context, run types.AgentRun, why adoLaneDecline, sandboxEnv map[string]string) {
-	if why == "" {
+// row and the sandbox env code and hosts. A no-op for no decline.
+func (s *Server) announceADODecline(ctx context.Context, run types.AgentRun, d adoLaneDecision, sandboxEnv map[string]string) {
+	if d.decline == "" {
 		return
 	}
-	sandboxEnv[adoLaneDeclinedEnv] = string(why)
-	s.recordAudit(ctx, adoDeclineAuditEvent(run.ID, why, s.cfg.Now().UTC()))
+	sandboxEnv[adoLaneDeclinedEnv] = string(d.decline)
+	if len(d.hosts) > 0 {
+		sandboxEnv[adoLaneDeclinedHostsEnv] = strings.Join(d.hosts, " ")
+	}
+	s.recordAudit(ctx, adoDeclineAuditEvent(run.ID, d.decline, s.cfg.Now().UTC()))
 }
