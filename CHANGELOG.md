@@ -27,6 +27,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `asserted` proof. Rows written before it are left as they are.
 - `wardyn runner remote list --ids --json` is refused instead of ignoring `--json`; `wardyn runner trust` names only
   `personal` and `managed_device` as settable.
+- A runner whose unclaimed registration lapsed, or whose registration changed while it connected, is told so in the
+  runner log (`registration_lapsed`) instead of seeing a bare refusal; the sentence is sent only after the runner
+  proved its key.
+- Switching runners off now ends a runner session that was admitted while the switch was being turned off, and a
+  revoke or quarantine ends an admission that was stalled on a dead link instead of waiting out its timeouts.
+- A runner that cannot open one run's spool still replays the other runs' evidence, and a quarantine that lands
+  mid-replay stops that run's remaining backlog. A retired run no longer publishes activity every second.
+- A runner link no longer stalls when a peer opens many streams the runner refuses, and a handler panic ends that one
+  link instead of the runner process.
+- The organisation's relay listener speaks HTTP/1.1 only and holds at most 128 relay streams per runner, so one runner
+  cannot fill its own session.
+- `wardyn-rec` forwards SIGTERM and SIGHUP to the recorder, so a terminated recording is still delivered.
+- A refused sandbox create no longer leaves its output sink registered, and an adopted run registers its sink before
+  the runner is asked for its output.
 
 ## [0.9.3-rc.2] — 2026-10-17
 
