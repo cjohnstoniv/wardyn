@@ -129,7 +129,7 @@ func TestPeople_MintRouteNoStoreGuardsStayFirst(t *testing.T) {
 
 // TestListAllAPITokens_MintedForOthersInventory pins the #1477 inventory: with
 // ?minted_for_others=true GET /tokens lists only live tokens whose minter is
-// someone other than their owner, never a plaintext; without the parameter the
+// someone other than their owner and that have not expired, never a plaintext; without the parameter the
 // route answers exactly as before, and a person can still mint their own.
 func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 	h := newHarness(t)
@@ -139,9 +139,10 @@ func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 	srv := New(cfg)
 	sec := accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
 	now := time.Now().UTC()
+	var expiry *time.Time // the next seeded token's expires_at
 	seed := func(principal, mintedBy string, revoked bool) types.APIToken {
 		t.Helper()
-		row := types.APIToken{ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, Name: "n", MintedBy: mintedBy, CreatedAt: now}
+		row := types.APIToken{ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, Name: "n", MintedBy: mintedBy, CreatedAt: now, ExpiresAt: expiry}
 		if revoked {
 			row.RevokedAt = &now
 		}
@@ -153,8 +154,11 @@ func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 	}
 	legacy := seed("pat", "admin-1", false)
 	seed("pat", "admin-1", true) // revoked: gone from the inventory
-	seed("pat", "pat", false)    // self-minted: not for others
-	seed("pat", "", false)       // owner-minted: not for others
+	expiry = ptrTime(now.Add(-time.Hour))
+	expired := seed("pat", "admin-1", false) // expired: gone from the inventory, as a revoked row is
+	expiry = nil
+	seed("pat", "pat", false) // self-minted: not for others
+	seed("pat", "", false)    // owner-minted: not for others
 	_, own := mintToken(t, srv, sec, "mine")
 
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true", sec, "")
@@ -170,6 +174,9 @@ func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 	}
 	if _, has := rows[0]["token"]; has {
 		t.Errorf("inventory row carries a token: %v", rows[0])
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true&include_revoked=true", sec, ""); !strings.Contains(w.Body.String(), expired.ID.String()) {
+		t.Errorf("include_revoked=true inventory = %s, want the expired token kept", w.Body.String())
 	}
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens", sec, ""); !strings.Contains(w.Body.String(), own.ID.String()) || !strings.Contains(w.Body.String(), legacy.ID.String()) {
 		t.Errorf("without the parameter the route lists everything, got %s", w.Body.String())
