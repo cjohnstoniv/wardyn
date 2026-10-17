@@ -392,14 +392,22 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 
 // RecoverOutput reads the runner-side output buffer into w.
 func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
+	if err := s.own(ref); err != nil {
+		return err
+	}
+	// The stream is claimed on the session that answered the call, as Attach does.
+	sess, err := s.pin()
+	if err != nil {
+		return err
+	}
 	var res runnerwire.RecoverResult
-	if err := s.refCall(ctx, runnerwire.MethodRecoverOutput, ref, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RefArgs{Ref: ref}, &res); err != nil {
 		return err
 	}
 	if res.Unrecoverable {
 		return runner.ErrOutputUnrecoverable
 	}
-	st, err := s.t.TakeStream(res.Stream)
+	st, err := sess.TakeStream(res.Stream)
 	if err != nil {
 		return err
 	}

@@ -267,3 +267,24 @@ func TestGitHubAPI_OtherPortTunnelRefused(t *testing.T) {
 	p.handleConnect(rec, req)
 	ghRefused(t, rec)
 }
+
+// The door answers every request on its host before injection runs, so an injection rule there
+// would never send its credential: boot refuses the pair, whatever the spelling of the host.
+func TestGitHubAPI_DoorHostCarriesNoInjectionRule(t *testing.T) {
+	door := &GitHubAPIGrant{Grants: map[string]uuid.UUID{"acme": uuid.New()}}
+	for _, host := range []string{"api.github.com", "API.GitHub.com.", " api.github.com "} {
+		c := Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", GitHubAPI: door, Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: host}}}}
+		err := c.validateTerminatedGates()
+		if err == nil || !strings.Contains(err.Error(), "GitHub CLI door's host") {
+			t.Fatalf("injection rule on %q beside the door: err = %v, want the one-credential refusal", host, err)
+		}
+	}
+	c := Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", GitHubAPI: door, Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "other.test"}}}}
+	if err := c.validateTerminatedGates(); err != nil {
+		t.Fatalf("injection rule on another host: %v", err)
+	}
+	c = Config{MITMCACertPEM: "cert", MITMCAKeyPEM: "key", Injection: []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: "api.github.com"}}}}
+	if err := c.validateTerminatedGates(); err != nil {
+		t.Fatalf("injection rule on api.github.com with no door: %v", err)
+	}
+}

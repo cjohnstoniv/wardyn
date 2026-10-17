@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
@@ -599,6 +600,13 @@ func (c *Config) validateTerminatedGates() error {
 	}
 	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
+	}
+	// The door serves every request on its host ahead of injection (serveAPIDoor), so a rule there
+	// would never send its credential: a host carries one credential.
+	for _, inj := range c.Injection {
+		if c.GitHubAPI != nil && patAPIHost(strings.TrimSpace(inj.Host)) == ghscope.APIHost {
+			return fmt.Errorf("config: injection rule host %q is the GitHub CLI door's host; a host carries one credential", inj.Host)
+		}
 	}
 	if err := c.validateAzureARM(); err != nil {
 		return err

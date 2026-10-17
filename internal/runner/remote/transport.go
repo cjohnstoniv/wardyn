@@ -99,6 +99,43 @@ func (l *Link) TakeStream(id uint32) (*runnerwire.Stream, error) {
 	return p.TakeStream(id)
 }
 
+// session is the calls and streams of one runner session. A byte stream belongs to the session whose
+// call opened it: its claim and every control after it (Resize, Wait, Close) go to that session.
+type session interface {
+	Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error
+	TakeStream(id uint32) (*runnerwire.Stream, error)
+}
+
+// pinSession returns the current session for the life of the streams it opens. Once a reconnect replaces it,
+// its calls answer errOffline and never reach the replacement, whose stream ids may repeat the old ones.
+func (l *Link) pinSession() (session, error) {
+	p := l.current()
+	if p == nil || !l.Online() {
+		return nil, errOffline
+	}
+	return pinnedPeer{l: l, p: p}, nil
+}
+
+// pinnedPeer is one peer of l, reachable only while it is still l's current session.
+type pinnedPeer struct {
+	l *Link
+	p *runnerwire.Peer
+}
+
+func (s pinnedPeer) Call(ctx context.Context, method string, args, result any, opts ...runnerwire.CallOption) error {
+	if s.l.current() != s.p || !s.l.Online() {
+		return errOffline
+	}
+	return s.p.Call(ctx, method, args, result, opts...)
+}
+
+func (s pinnedPeer) TakeStream(id uint32) (*runnerwire.Stream, error) {
+	if s.l.current() != s.p {
+		return nil, errOffline
+	}
+	return s.p.TakeStream(id)
+}
+
 // StreamCount is the byte streams the current session holds (0 when none).
 func (l *Link) StreamCount() int {
 	if p := l.current(); p != nil {

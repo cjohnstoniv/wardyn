@@ -210,7 +210,7 @@ func adoControlPlaneRefusal(err error, fallback string) string {
 func (i *injector) grantIDFor(host string) (uuid.UUID, bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	e, ok := i.byHost[strings.ToLower(strings.TrimSuffix(host, "."))]
+	e, ok := i.byHost[hostKey(host)]
 	if !ok {
 		return uuid.Nil, false
 	}
@@ -225,7 +225,7 @@ func (i *injector) installResolved(host string, resolved types.ResolvedInjection
 		return
 	}
 	i.mu.Lock()
-	e, ok := i.byHost[strings.ToLower(strings.TrimSuffix(host, "."))]
+	e, ok := i.byHost[hostKey(host)]
 	i.mu.Unlock()
 	if !ok {
 		return

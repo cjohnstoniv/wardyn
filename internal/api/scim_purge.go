@@ -536,6 +536,8 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	// An owed refusal row is drained whatever became of the person since: a reactivated person or a member
 	// added back is no longer leaver or mover work above (run last, so a row those resumes just drained or
 	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
+	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
+	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
 	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, o := range owed {
