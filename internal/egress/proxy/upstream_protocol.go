@@ -235,6 +235,7 @@ func (e *h2MismatchError) Unwrap() error { return e.err }
 // h2ResendClass is a fixed word for why the HTTP/2 resend failed. The error's own text can carry the peer's
 // GOAWAY debug data, which the peer chose and the sandbox's run reads (CWE-117), so it is never printed.
 func h2ResendClass(err error) string {
+	//lint:ignore SA1019 the deprecated http2.Transport h2Fallback uses still returns it on a GOAWAY; x/net names no replacement
 	var goAway http2.GoAwayError
 	var stream http2.StreamError
 	var conn http2.ConnectionError
