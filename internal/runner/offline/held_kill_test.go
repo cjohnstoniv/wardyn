@@ -18,7 +18,7 @@ import (
 
 // TestHeldKillRefusesNotFailsSession: a queued kill whose teardown is held (a pod on a NotReady node,
 // termination unknown) holds that run as containment pending and is refused with its reason; it never
-// fails Pending, so a restarted runner still reaches READY (§8 P2).
+// fails Pending, so a restarted runner still reaches READY.
 func TestHeldKillRefusesNotFailsSession(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
