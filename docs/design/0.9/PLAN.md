@@ -553,7 +553,8 @@ Two layers, in this order:
 | `AzureGates` (Azure Foundry, the person's own Entra sign-in) | `own` | Allowed |
 | `AzureGates` (Azure Foundry, any shared capture) | `brokered` | Per OD-12 ([§7.2](#72-per-kind-bounds)) |
 | `UpstreamProxyURL` (from `upstream_proxy_secret_ref`) | `operator` | Never sent; the runner's own upstream-proxy config applies |
-| `TrustedCAPEM`, `UpstreamProxyNoProxy`, `LLMUpstreams` | `operator` (org network) | Not sent; the runner's own config applies. Destinations needing them take `via_org` |
+| `TrustedCAPEM`, `UpstreamProxyNoProxy` | `operator` (org network) | Not sent; the runner's own config applies. Destinations needing them take `via_org` |
+| `LLMUpstreams` | `operator` (org network) | Never sent. A run that needs it (a key or `custom_endpoint` provider with a base URL) is refused, `placement_credential` (0.9.3) |
 | `InternalHosts` | `operator` (org network) | Sent (0.9.2): lifts only the private-IP guard for a declared suffix; the allowlist still decides |
 | `MITMHosts` | `operator` (org network) | Not sent as dispatched; the laptop copy holds the hosts of `own` and `runner_resident` injections and of every `via_org` destination (the laptop proxy must terminate that TLS to forward plaintext). Operator-only hosts are dropped |
 | `Policy.EligibleGrants` | `operator` for any grant not delivered `own` / `runner_resident` | The laptop-bound `Policy` copy drops those grants; a `via_org` grant keeps only its `grant_id` and host. Operator secret names never reach the laptop |

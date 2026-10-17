@@ -65,6 +65,7 @@
 - A declaration lifts only the private-IP guard for that suffix. The egress allowlist still decides, and loopback, link-local and metadata addresses stay closed.
 - On a laptop the sandbox resolves through the person's network, so declare `cidrs` on each entry a laptop estate uses. An entry without them lifts the whole private range for that suffix.
 - The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop's proxy. The runner's own CA bundle takes the trusted CA's place: see below.
+- A key or `custom_endpoint` provider with a base URL (a gateway) needs those LLM upstream overrides, so any harness using one is refused on your own runner at Review, preflight and create (`placement_credential`, naming `ProxyConfig.LLMUpstreams`).
 
 ### A corporate CA on a laptop runner
 
