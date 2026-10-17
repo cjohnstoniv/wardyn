@@ -5,10 +5,16 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 // withManagedPrefs makes this a Mac whose profile holds prefs; extracted records the files read.
@@ -27,17 +33,18 @@ func withManagedPrefs(t *testing.T, goos string, prefs map[string]string) {
 
 func serveDefaults(t *testing.T, args ...string) (org string, opts serveOptions) {
 	t.Helper()
-	cmd := newServeCommand(func(_ context.Context, _ runneridentity.Identity, _ string, o serveOptions) (runnerRuntime, error) {
-		opts = o
-		return runnerRuntime{}, nil
-	})
-	_ = cmd.ParseFlags(args)
+	cmd := newServeCommand(nil)
+	if err := cmd.ParseFlags(args); err != nil {
+		t.Fatal(err)
+	}
+	// The flag defaults are the environment's; the command applies the profile over them when it runs.
 	org, _ = cmd.Flags().GetString("org")
 	opts.proxyImage, _ = cmd.Flags().GetString("proxy-image")
 	opts.relayListen, _ = cmd.Flags().GetString("relay-listen")
 	opts.network, _ = cmd.Flags().GetString("internal-network")
 	opts.trustedCAFile, _ = cmd.Flags().GetString("trusted-ca-file")
 	opts.recording, _ = cmd.Flags().GetString("recording-store")
+	applyManagedServe(cmd, &org, &opts)
 	return org, opts
 }
 
@@ -87,5 +94,68 @@ func TestManagedPreferenceOrgSatisfiesRequiredFlag(t *testing.T) {
 	withManagedPrefs(t, "darwin", map[string]string{"OrgURL": "https://wardyn.example"})
 	if err := cmd(); err == nil || err.Error() == `required flag(s) "org" not set` {
 		t.Fatalf("a profile's OrgURL did not satisfy --org: %v", err)
+	}
+}
+
+func TestManagedPreferencesAreReadOnlyWhenServeRuns(t *testing.T) {
+	reads := 0
+	withManagedPrefs(t, "darwin", map[string]string{"OrgURL": "https://wardyn.example"})
+	counted := prefsExtract
+	prefsExtract = func(file, key string) string { reads++; return counted(file, key) }
+	newServeCommand(nil)
+	newSetupCommand()
+	if reads != 0 {
+		t.Fatalf("building the commands read %d managed preferences; only serve and setup runs should", reads)
+	}
+}
+
+func TestSetupOrgDefaultsToManagedPreference(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	run := func() error {
+		c := newSetupCommand()
+		c.SetArgs(nil)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		return c.Execute()
+	}
+	withManagedPrefs(t, "darwin", nil)
+	if err := run(); err == nil || err.Error() != `required flag(s) "org" not set` {
+		t.Fatalf("without a profile --org stays required: %v", err)
+	}
+	withManagedPrefs(t, "darwin", map[string]string{"OrgURL": "https://wardyn.example"})
+	if err := run(); err == nil || err.Error() == `required flag(s) "org" not set` {
+		t.Fatalf("a profile's OrgURL did not satisfy setup's --org: %v", err)
+	}
+}
+
+func TestServeTakesTheSingleInstanceLock(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "runner")
+	key, err := runneridentity.Generate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key, Fingerprint: runnerwire.Fingerprint(key.Public().(ed25519.PublicKey)), OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	if err := runneridentity.Save(stateDir, identity); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockSingleInstance(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	cmd := newServeCommand(func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error) {
+		called = true
+		return runnerRuntime{}, nil
+	})
+	cmd.SetArgs([]string{"--org", "https://org.example", "--state-dir", stateDir})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "already running") || called {
+		t.Fatalf("a second serve was not refused: %v called=%v", err, called)
+	}
+	unlock()
+	if again, err := lockSingleInstance(stateDir); err != nil {
+		t.Fatalf("the lock was not released: %v", err)
+	} else {
+		again()
 	}
 }

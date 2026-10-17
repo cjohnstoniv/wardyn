@@ -48,6 +48,10 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
 		// The Docker client reads DOCKER_HOST itself; a profile's DockerHost outranks the environment.
+		applyManagedServe(cmd, &org, &opts)
+		if org == "" {
+			return errors.New(`required flag(s) "org" not set`)
+		}
 		if h := managedPref("DockerHost"); h != "" {
 			if err := os.Setenv("DOCKER_HOST", h); err != nil {
 				return err
@@ -71,6 +75,12 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		// Two serves on one identity would fight over its connection; a second one stops here.
+		unlock, err := lockSingleInstance(stateDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		// The flag (whose default is the environment) outranks the image the organisation named at
 		// registration, which outranks this binary's release image.
 		opts.proxyImage = cmp.Or(opts.proxyImage, identity.ProxyImage, releaseProxyImage())
@@ -96,17 +106,29 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		}
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)
 	}
-	// A profile may supply the organisation (the OrgURL managed preference); the flag is required only without one.
-	cmd.Flags().StringVar(&org, "org", managedPref("OrgURL"), "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")
+	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
-	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", setting("ProxyImage", "WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
-	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", setting("RelayListen", "WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
-	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", setting("RelayHostTarget", "WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
-	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(setting("InternalNetwork", "WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
-	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", setting("TrustedCAFile", "WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
-	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(setting("RecordingStore", "WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
-	if org == "" {
-		_ = cmd.MarkFlagRequired("org")
-	}
+	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", os.Getenv("WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
+	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", os.Getenv("WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
+	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
+	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
+	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
+	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	return cmd
+}
+
+// applyManagedServe lets the managed preferences (macOS configuration profile) replace the environment
+// defaults of the flags the command line left alone. Read here, not when the command is built, so only
+// serve pays for it.
+func applyManagedServe(cmd *cobra.Command, org *string, o *serveOptions) {
+	for _, f := range []struct {
+		flag, key string
+		dst       *string
+	}{{"org", "OrgURL", org}, {"proxy-image", "ProxyImage", &o.proxyImage}, {"relay-listen", "RelayListen", &o.relayListen},
+		{"relay-host-target", "RelayHostTarget", &o.relayHostTarget}, {"internal-network", "InternalNetwork", &o.network},
+		{"trusted-ca-file", "TrustedCAFile", &o.trustedCAFile}, {"recording-store", "RecordingStore", &o.recording}} {
+		if v := managedPref(f.key); v != "" && !cmd.Flags().Changed(f.flag) {
+			*f.dst = v
+		}
+	}
 }

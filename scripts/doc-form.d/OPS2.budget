@@ -22,4 +22,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1747 adds 13 over 1734 (0.9.3 A1 fix), measured: certificate file note, rerun line.
 # docs/operations/hybrid-laptops.md 1761 adds 14 (0.9.3 A1 fix): the agent-image caveat for a merged bundle.
 # docs/operations/hybrid-laptops.md 2141 adds 380 over 1761 (0.9.3 PKG), measured: the macOS package and MDM section and its managed-preferences key table.
-docs/operations/hybrid-laptops.md=2141 share=35
+# docs/operations/hybrid-laptops.md 2255 adds 114 over 2141 (0.9.3 PKG round 2), measured: Open Anyway and MDM-agent install wording, the single-instance lock, the per-user profile path.
+docs/operations/hybrid-laptops.md=2255 share=35

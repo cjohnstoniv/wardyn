@@ -985,7 +985,9 @@ jobs:
   # Signing turns on by secret and each step is skipped with a log line when its secrets are unset
   # (scripts/build-runner-pkg.sh header): APPLE_DEVELOPER_ID_APPLICATION_* signs the binary,
   # APPLE_DEVELOPER_ID_INSTALLER_* signs the package, APPLE_NOTARY_* notarizes it once both are signed.
-  # With none set the package is unsigned and people open it with right-click, Open.
+  # With none set the package is unsigned: a person allows it in System Settings (Privacy & Security, Open
+  # Anyway), and only an MDM agent or script install can push it (Apple's own app-install command needs a
+  # Developer ID Installer signature).
   runner-pkg:
     name: macOS runner package (.pkg)
     runs-on: macos-14
@@ -1019,7 +1021,7 @@ jobs:
             --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
-          pkgutil --payload-files wardyn-runnerd.pkg | grep -q 'usr/local/wardyn/bin/wardyn-runnerd'
+          grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$(pkgutil --payload-files wardyn-runnerd.pkg)"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-pkg

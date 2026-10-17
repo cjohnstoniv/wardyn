@@ -12,7 +12,7 @@
   unset. Only OrgURL is required.
 
     OrgURL            flag org                  organisation public HTTPS URL (required)
-    ProxyImage        flag proxy-image          proxy image pin; left out, the release image of this binary
+    ProxyImage        flag proxy-image          proxy image pin; left out, the image the organisation named at registration, else this binary's release image
     RelayListen       flag relay-listen         run relay address; left out, found by a probe container
     RelayHostTarget   flag relay-host-target    what a run's proxy reaches the relay at; left out, found by a probe
     InternalNetwork   flag internal-network     Docker bridge for proxy sidecars (default wardyn-internal)

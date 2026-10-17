@@ -4,7 +4,6 @@
 package main
 
 import (
-	"cmp"
 	"os"
 	"os/exec"
 	"os/user"
@@ -53,10 +52,4 @@ func plutilExtract(file, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// setting is a serve default: the managed preference key, else the environment variable (which
-// the service definition `setup` writes sets).
-func setting(prefKey, envName string) string {
-	return cmp.Or(managedPref(prefKey), os.Getenv(envName))
 }

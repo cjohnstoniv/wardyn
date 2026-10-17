@@ -22,7 +22,9 @@ import (
 
 const (
 	serviceLabel = "com.wardyn.runnerd"
-	serviceUnit  = "wardyn-runnerd.service"
+	// managedServiceLabel is the agent the macOS package installs; it must not run beside the setup agent.
+	managedServiceLabel = serviceLabel + ".managed"
+	serviceUnit         = "wardyn-runnerd.service"
 )
 
 // setupHost is everything setup reads from or does to the computer it runs on, so a test runs it in a
@@ -292,6 +294,7 @@ func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.
 		return err
 	}
 	domain := fmt.Sprintf("gui/%d", h.uid)
+	_, _ = h.run(ctx, "launchctl", "bootout", domain+"/"+managedServiceLabel)
 	_, _ = h.run(ctx, "launchctl", "bootout", domain+"/"+serviceLabel)
 	if b, err := h.run(ctx, "launchctl", "bootstrap", domain, p.plistFile); err != nil {
 		return fmt.Errorf("launchctl bootstrap: %w: %s", err, strings.TrimSpace(string(b)))

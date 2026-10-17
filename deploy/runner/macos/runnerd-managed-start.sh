@@ -8,10 +8,12 @@
 # agent's KeepAlive does not restart. After `wardyn-runnerd register`, start it with:
 #   launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed
 # The organisation and every other setting come from the com.wardyn.runnerd managed preferences.
-# WARDYN_RUNNERD_BIN and WARDYN_RUNNERD_HOME are for tests.
+# WARDYN_RUNNERD_BIN, _HOME, _PLUTIL and _PREFS are for tests.
 set -eu
 bin="${WARDYN_RUNNERD_BIN:-/usr/local/wardyn/bin/wardyn-runnerd}"
 home="${WARDYN_RUNNERD_HOME:-$HOME}"
+plutil="${WARDYN_RUNNERD_PLUTIL:-/usr/bin/plutil}"
+prefs="${WARDYN_RUNNERD_PREFS:-/Library/Managed Preferences}"
 log="$home/Library/Logs/wardyn/runnerd.log"
 mkdir -p "$(dirname "$log")"
 exec >>"$log" 2>&1
@@ -21,6 +23,13 @@ if [ -f "$home/Library/LaunchAgents/com.wardyn.runnerd.plist" ]; then
 fi
 if [ ! -f "$home/Library/Application Support/wardyn/runner/runner.json" ]; then
   echo "wardyn-runnerd: this computer is not registered; run 'wardyn-runnerd register --org <url> --token-file <file>', then launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed"
+  exit 0
+fi
+# Without an OrgURL in the profile serve would fail and restart every 10 seconds.
+org=$("$plutil" -extract OrgURL raw -o - -- "$prefs/$(id -un)/com.wardyn.runnerd.plist" 2>/dev/null) ||
+  org=$("$plutil" -extract OrgURL raw -o - -- "$prefs/com.wardyn.runnerd.plist" 2>/dev/null) || org=""
+if [ -z "$org" ]; then
+  echo "wardyn-runnerd: the com.wardyn.runnerd profile sets no OrgURL; the managed agent stays idle"
   exit 0
 fi
 exec "$bin" serve

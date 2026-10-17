@@ -34,7 +34,7 @@ AGENT="${SRC}/com.wardyn.runnerd.managed.plist"
 grep -q 'com.wardyn.runnerd.managed' "${SRC}/pkg-scripts/postinstall" "${SRC}/pkg-scripts/preinstall" || fail "the pkg scripts do not name the agent"
 MC="${SRC}/wardyn-runnerd.mobileconfig"
 [ "$(plist_get "$MC" 'd["PayloadContent"][0]["PayloadType"]')" = "$(sed -n 's/^const prefsDomain = "\(.*\)"$/\1/p' "${REPO_ROOT}/cmd/wardyn-runnerd/managed_prefs.go")" ] || fail "the profile's payload type is not the domain runnerd reads"
-want_keys="$(grep -ho 'managedPref("[A-Za-z]*")\|setting("[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/serve.go | sed 's/.*("\([A-Za-z]*\)".*/\1/' | sort -u | tr '\n' ' ')"
+want_keys="$(grep -ho 'managedPref("[A-Za-z]*")\|{"[a-z-]*", "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/serve.go | sed 's/.*"\([A-Za-z]*\)".*/\1/' | sort -u | tr '\n' ' ')"
 have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] if not k.startswith("Payload")))')"
 [ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences serve.go reads ($want_keys)"
 
@@ -42,7 +42,10 @@ have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] 
 H="${WORK}/home"; mkdir -p "$H"
 printf '#!/bin/sh\necho "started: $*" >>"$STUB_LOG"\n' >"${WORK}/runnerd"; chmod +x "${WORK}/runnerd"
 export STUB_LOG="${WORK}/launcher.log"; : >"$STUB_LOG"
-launch() { WARDYN_RUNNERD_BIN="${WORK}/runnerd" WARDYN_RUNNERD_HOME="$H" sh "${SRC}/runnerd-managed-start.sh"; }
+# A stub plutil that finds an OrgURL only in a profile file that exists.
+printf '#!/bin/sh\nfor a; do f="$a"; done\n[ -f "$f" ] && echo https://wardyn.example\n' >"${WORK}/plutil"; chmod +x "${WORK}/plutil"
+PREFS="${WORK}/prefs"; mkdir -p "$PREFS"
+launch() { WARDYN_RUNNERD_BIN="${WORK}/runnerd" WARDYN_RUNNERD_HOME="$H" WARDYN_RUNNERD_PLUTIL="${WORK}/plutil" WARDYN_RUNNERD_PREFS="$PREFS" sh "${SRC}/runnerd-managed-start.sh"; }
 launch || fail "the launcher failed while unregistered (a nonzero exit restarts it every 10 seconds)"
 [ ! -s "$STUB_LOG" ] || fail "the launcher served an unregistered computer"
 grep -q 'not registered' "$H/Library/Logs/wardyn/runnerd.log" || fail "the launcher did not say why it stayed idle"
@@ -51,6 +54,10 @@ mkdir -p "$H/Library/LaunchAgents"; : >"$H/Library/LaunchAgents/com.wardyn.runne
 launch || fail "the launcher failed beside a setup agent"
 [ ! -s "$STUB_LOG" ] || fail "the launcher started a second runner beside the setup agent"
 rm "$H/Library/LaunchAgents/com.wardyn.runnerd.plist"
+launch || fail "the launcher failed with no OrgURL (a nonzero exit restarts it every 10 seconds)"
+[ ! -s "$STUB_LOG" ] || fail "the launcher served with no OrgURL in the profile"
+grep -q 'sets no OrgURL' "$H/Library/Logs/wardyn/runnerd.log" || fail "the launcher did not say the profile has no OrgURL"
+: >"$PREFS/com.wardyn.runnerd.plist"
 launch || fail "the launcher failed when registered"
 [ "$(cat "$STUB_LOG")" = "started: serve" ] || fail "the registered launcher did not exec 'serve': $(cat "$STUB_LOG")"
 

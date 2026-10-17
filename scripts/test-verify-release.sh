@@ -68,7 +68,8 @@ case "$1 $2" in
   "release view")
     echo "prerelease=false draft=false assets=0"
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
-    cat "${DIR}/want.txt"
+    # The package exists from 0.9.3 (and a test can leave it out).
+    if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want.txt"; else cat "${DIR}/want.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
     while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; shift; done
@@ -96,7 +97,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -132,6 +133,15 @@ run 0.8.5-rc.1 v0.8.5-rc.1 bundle
 run 0.8.5-rc.1 v0.8.5 bundle
 [ "${rc}" != 0 ] || fail "V=0.8.5-rc.1 accepted a v0.8.5 signature"
 pass "a prerelease version is bound to its own tag"
+
+# 3b. the macOS package is required from 0.9.3 and not before.
+run 0.9.3-rc.1 v0.9.3-rc.1 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.3-rc.1 with the package exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+NO_PKG=1 run 0.9.3 v0.9.3 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
+run 0.9.2 v0.9.2 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.2 (no package in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+pass "wardyn-runnerd.pkg is required from 0.9.3 on"
 
 # 4. a malformed V exits 2 BEFORE any network call, and never reaches a regexp.
 for bad in '0.8.3.*' '0.8' 'v0.8.3' '0.8.3 ' '0.8.3/../x' '0.8.3;id' '..*'; do

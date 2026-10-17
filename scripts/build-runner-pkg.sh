@@ -21,7 +21,9 @@
 #            + APPLE_DEVELOPER_ID_INSTALLER_IDENTITY     (productsign)
 #   notarize APPLE_NOTARY_APPLE_ID + APPLE_NOTARY_TEAM_ID + APPLE_NOTARY_PASSWORD (an app-specific password);
 #            runs only when both certificates signed, then staples the ticket.
-# Without them the package is unsigned: a person opens it with right-click, Open.
+# Without them the package is unsigned: a person allows it in System Settings, Privacy & Security, Open
+# Anyway (macOS 15 and later; right-click, Open no longer works), and MDM can push it only through an
+# agent or script install (a Jamf or Kandji policy, `installer` run as root), not Apple's native app install.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -102,7 +104,7 @@ if secret_set "${INST_SECRETS[@]}"; then
   echo "build-runner-pkg: signed the package"
 else
   cp "${WORK}/unsigned.pkg" "$OUT"
-  echo "build-runner-pkg: package signing skipped: APPLE_DEVELOPER_ID_INSTALLER_* secrets are not all set; the package is unsigned (right-click, Open)"
+  echo "build-runner-pkg: package signing skipped: APPLE_DEVELOPER_ID_INSTALLER_* secrets are not all set; the package is unsigned (Privacy & Security, Open Anyway)"
 fi
 
 if [ "$PKG_SIGNED" = 1 ] && [ "$BIN_SIGNED" = 1 ] && secret_set "${NOTARY_SECRETS[@]}"; then

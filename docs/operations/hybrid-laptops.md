@@ -114,9 +114,12 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ## Installing with a macOS package and MDM
 
-- Every release carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd`, and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
+- Every release from 0.9.3 carries `wardyn-runnerd.pkg`, a universal (Apple silicon and Intel) installer for `wardyn-runnerd`, and a managed-preferences profile template, `deploy/runner/macos/wardyn-runnerd.mobileconfig` (also inside the package and `wardyn-runner-units.tar.gz`).
 - The package installs the binary and a LaunchAgent. It cannot register the laptop: that needs a person's single-use token ([Claiming a runner](#claiming-a-runner)).
-- **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click: right-click the file, choose **Open**, then **Open** again. MDM-pushed installs are not blocked. Signing and notarization turn on in the release workflow when the maintainers add the Apple Developer ID secrets; nothing here changes then.
+- **Until the release is signed, the package is unsigned.** Gatekeeper refuses a double-click.
+  - On macOS 15 and later, open **System Settings**, then **Privacy & Security**, and choose **Open Anyway** (right-click, **Open** no longer works there).
+  - Apple's native MDM app install needs a Developer ID Installer signature, so push the package from an MDM agent or script (a Jamf or Kandji policy, or `installer -pkg` run as root).
+  - Signing and notarization turn on in the release workflow when the maintainers add the Apple Developer ID secrets; nothing here changes then.
 
 | Installed path | What it is |
 |---|---|
@@ -126,23 +129,24 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
-2. Push `wardyn-runnerd.pkg` with the same MDM.
+2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
 3. Deliver each person's registration token to a file only they can read ([Claiming a runner](#claiming-a-runner), step 2).
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
 5. The person claims the runner as usual.
 
-- **Without MDM** install the package, then run `wardyn-runnerd setup --org <url> --token-file <file>`. `setup` writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent then stays idle, so one runner never runs twice.
+- **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
+  - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
 - Logs go to `~/Library/Logs/wardyn/runnerd.log` either way.
 
 ### Managed preferences
 
-- The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`.
+- The profile's preference domain is `com.wardyn.runnerd`, which macOS writes to `/Library/Managed Preferences/com.wardyn.runnerd.plist`. A user-scoped profile lands in `/Library/Managed Preferences/<user>/com.wardyn.runnerd.plist` and wins over the device-wide file for that user.
 - `wardyn-runnerd serve` reads it as the default of a flag. A flag wins over the profile, and the profile wins over the environment variable `setup` writes. An empty key is unset.
 
 | Key | Same as | Notes |
 |---|---|---|
-| `OrgURL` | `--org` | required; the organisation's public HTTPS URL |
-| `ProxyImage` | `--proxy-image` | an image pin; left out, the release image matching the binary |
+| `OrgURL` | `--org` | required for `serve` unless `--org` is passed; also the default of `setup --org` |
+| `ProxyImage` | `--proxy-image` | an image pin; left out, the image the organisation named at registration, else the release image matching the binary |
 | `RelayListen` | `--relay-listen` | left out, found by a probe container |
 | `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
 | `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
