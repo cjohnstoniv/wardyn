@@ -166,11 +166,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 }
 
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
-	// Every refusal here must be a full spool, which the drop count sees; one that timed out waiting
-	// behind the others' fsyncs is refused without a drop.
-	prev := spoolAdmitTimeout
-	spoolAdmitTimeout = time.Minute
-	t.Cleanup(func() { spoolAdmitTimeout = prev })
+	// Every refusal is counted, a full spool's and one that timed out waiting behind the others' fsyncs.
 	ctx := context.Background()
 	id := uuid.New()
 	dir := filepath.Join(t.TempDir(), "spool")
@@ -243,6 +239,28 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 	}
 	release()
 }
+
+func TestLocalSpoolCountsAnAdmissionRefusedByItsDeadline(t *testing.T) {
+	// The refusal a busy spool gives a request whose admission deadline ran out is counted like a full
+	// spool's, though that deadline has passed by the time it is counted.
+	ctx := context.Background()
+	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	p := &Proxy{sink: s}
+	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	w := httptest.NewRecorder()
+	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(expired)); admitted != nil || w.Code != 503 {
+		t.Fatalf("an admission past its deadline: admitted %v, status %d, want a 503 refusal", admitted != nil, w.Code)
+	}
+	if _, _, drops, err := s.local.Stats(ctx); err != nil || drops != 1 {
+		t.Fatalf("drops %d (err %v), want the refusal counted once", drops, err)
+	}
+}
+
 func TestLocalSpoolSingleWriterAndSecretMask(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.New()
