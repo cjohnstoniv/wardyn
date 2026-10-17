@@ -45,7 +45,8 @@ docs/operations/who-gets-in.md=1507 share=35
 # docs/operations/admin-only-writes.md 3463 adds 19 over 3444 (0.9.3 RV5), measured: serving-replica revoke scope, template 501 wording, user-type delete blocker.
 # docs/operations/admin-only-writes.md 3471 adds 27 over 3444 (0.9.3 RV4b R2-0057): the /governance/egress-baseline tier row; measured.
 # docs/operations/admin-only-writes.md 3490 = 3463 + 27 (RV4b), measured at the wave-A merge.
-docs/operations/admin-only-writes.md=3490 share=35
+# docs/operations/admin-only-writes.md 3541 = 3490 + 51 (RV4c), measured at the wave-A merge.
+docs/operations/admin-only-writes.md=3541 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
@@ -113,3 +114,4 @@ docs/operations/denials.md=4963 share=35
 # docs/operations/governance-writes.md 3047 adds 35 over 3012, measured: a rename that can move an equal-priority group tie is held.
 # docs/operations/governance-writes.md 3076 adds 29 over 3047, measured: a held role mapping carries the effect its proposer acknowledged.
 # three-roles.md 4173 (+49) and governance-writes.md 3086 (+10), measured: a maximum where no size is set can raise the member cap.
+# docs/operations/admin-only-writes.md 3495 adds 51 over 3444, measured: the two security-tier rows for GET and PUT /governance/credential-delivery (the tier table covered neither).

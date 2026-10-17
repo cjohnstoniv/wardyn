@@ -317,7 +317,7 @@ func eraseLeaverSponsorships(ctx context.Context, st store.Store, principals []s
 		sponsored = append(sponsored, names...)
 	}
 	if len(sponsored) > 0 {
-		return nil, fmt.Errorf("%w: %s; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE)",
+		return nil, fmt.Errorf("%w; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE): %s",
 			errStillSponsoring, strings.Join(sponsored, ", "))
 	}
 	return detail, nil
@@ -444,7 +444,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
-		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
+		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
 		"granted_drives": granted,
 	}

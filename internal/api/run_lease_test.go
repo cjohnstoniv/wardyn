@@ -803,3 +803,13 @@ func TestRunLease_ATransientEndErrorKeepsTheRun(t *testing.T) {
 		t.Errorf("broker revocations = %d, want still 1", f.brk.count(f.run.ID))
 	}
 }
+
+// The idle reaper's RUNNING -> STOPPED does not go through casRunState; its one call into the server counts it.
+func TestCancelTerminalRunApprovals_CountsTheIdleStop(t *testing.T) {
+	srv := newHarness(t).srv
+	before := runsTerminalCount(srv, types.RunStopped)
+	srv.CancelTerminalRunApprovals(context.Background(), uuid.New())
+	if got := runsTerminalCount(srv, types.RunStopped); got != before+1 {
+		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d, want %d", got, before+1)
+	}
+}

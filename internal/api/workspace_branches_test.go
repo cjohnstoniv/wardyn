@@ -358,6 +358,20 @@ func TestWorkspaceBranches_AuditHasNoBranchNames(t *testing.T) {
 	}
 }
 
+// A locator authored with userinfo is audited without it.
+func TestWorkspaceBranches_AuditDropsLocatorUserinfo(t *testing.T) {
+	app := types.GitProvider{ID: "gh-1", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"}, Lanes: []types.GitLane{types.GitLaneApp}}
+	gh := &broker.FakeGitHubMinter{Branches: []string{"main"}, DefaultBranch: "main"}
+	repo := "https://person:s3cret@github.com/" + branchTestGitHub
+	ws := branchWorkspace("", repo)
+	srv, audit := newBranchServer(t, adoSite(app), nil, gh, ws)
+	listBranches(t, srv, memberCookie(t), ws.ID, repo)
+	rows := auditRowsOf(audit, "workspace.branches.list")
+	if len(rows) != 1 || strings.Contains(string(rows[0].Data), "s3cret") || strings.Contains(string(rows[0].Data), "person") {
+		t.Fatalf("rows = %+v, want one row without the locator's userinfo", rows)
+	}
+}
+
 // The GitHub arm asks the organisation's App about the one repository, only
 // where the admitting row permits the App lane.
 func TestWorkspaceBranches_GitHubApp(t *testing.T) {

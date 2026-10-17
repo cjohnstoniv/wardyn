@@ -1392,11 +1392,11 @@ erases one person's retained records by explicit scope, in one audited act
 | Step | What it does |
 |---|---|
 | Suspend | Completed first, if it is not already |
-| Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
+| Erase | Credentials, masking copies, components, run setups and runner pools: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
-| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
+| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed, and the drives the person created are listed too. Reclaim storage with the steps in "Reclaiming a departed person's storage", and delete the drives they created as in "Member drives" |
 
 - The identity row stays as a tombstone with `purged_at` set.

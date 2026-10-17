@@ -332,7 +332,7 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: raw, TTLSeconds: azureCLIGrantTTLSec},
 	}, false); err != nil {
-		return refuse("could not record the Azure CLI's credential grant: " + err.Error())
+		return refuse(loggedMsg(ctx, "could not record the Azure CLI's credential grant", err))
 	}
 	rule, err := injectionRuleFromScope(raw)
 	if err != nil {

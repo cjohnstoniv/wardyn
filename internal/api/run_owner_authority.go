@@ -383,7 +383,7 @@ func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*Resolve
 	}
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerProfileUnreadable,
-			msg: "resolve the owner's governance profile: " + err.Error()}
+			msg: loggedMsg(ctx, "resolve the owner's governance profile", err)}
 	}
 	return p, nil
 }
@@ -685,7 +685,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
 	case err != nil:
 		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
-			msg: "read the run's proxy config to re-check its owner's authority: " + err.Error()}
+			msg: loggedMsg(ctx, "read the run's proxy config to re-check its owner's authority", err)}
 	default:
 		if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
 			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerUnverifiable,

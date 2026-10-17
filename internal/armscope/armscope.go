@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 )
@@ -170,7 +171,20 @@ func segments(rawPath string) ([]string, error) {
 		if err != nil || strings.ContainsAny(seg, segmentMarks) {
 			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
 		}
+		if dotLookalike(seg) {
+			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
+		}
 		parts[i] = strings.ToLower(seg)
 	}
 	return parts, nil
+}
+
+// dotLookalike reports whether seg has no letter or digit and holds a dot or a
+// non-ASCII character: a fullwidth dot, ".." with a zero-width character or
+// "..+" is a dot segment to a layer that folds or strips it.
+func dotLookalike(seg string) bool {
+	if strings.IndexFunc(seg, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0 {
+		return false
+	}
+	return strings.IndexFunc(seg, func(r rune) bool { return r == '.' || r > unicode.MaxASCII }) >= 0
 }

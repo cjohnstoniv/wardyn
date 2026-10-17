@@ -366,8 +366,8 @@ func (s PG) ServiceStillSponsored(ctx context.Context, name, sponsor string, ope
 }
 
 // EraseServiceIdentityAttributionOf clears person as the creator, suspender and retirer of every service
-// identity, and returns how many rows that changed and, by name, the identities that are not retired and
-// that person still sponsors. A sponsor is never cleared: tokens and runs are checked against it, so such an
+// identity and as the linker of every token move, and returns how many service identity rows that changed
+// and, by name, the identities that are not retired and that person still sponsors. A sponsor is never cleared: tokens and runs are checked against it, so such an
 // identity is handed to another sponsor or retired first. A retired identity keeps its last sponsor.
 func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string) (cleared int, sponsored []string, err error) {
 	if person == "" {
@@ -383,6 +383,10 @@ func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string
 			return err
 		}
 		cleared = int(tag.RowsAffected())
+		// A token move names the person who linked it; clear that too. It is not counted in cleared.
+		if _, err = q.Exec(ctx, `UPDATE api_token_moves SET linked_by = '' WHERE linked_by = $1`, person); err != nil {
+			return err
+		}
 		sponsored, err = collect(ctx, q, "list", "sponsored service identities",
 			`SELECT name FROM service_identities WHERE sponsor = $1 AND retired_at IS NULL ORDER BY name`, []any{person},
 			func(row pgx.Row) (string, error) {

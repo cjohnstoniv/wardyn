@@ -231,6 +231,8 @@ func TestSCIMPurgeErasesComponents(t *testing.T) {
 	}
 	if d := dataOf(t, rows[0]); d["components_erased"] != float64(1) {
 		t.Errorf("purge row = %v, want components_erased 1", d)
+	} else if _, ok := d["runner_pools_deleted"]; !ok {
+		t.Errorf("purge row = %v, want runner_pools_deleted", d)
 	}
 	if _, err := e.st.GetComponent(t.Context(), by.saved.ID, "sub-bystander-comp"); err != nil {
 		t.Errorf("the bystander's saved component: %v", err)

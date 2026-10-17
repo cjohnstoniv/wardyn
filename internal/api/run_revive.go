@@ -213,6 +213,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
+		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+				mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
+		}
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
@@ -361,7 +365,7 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 			fmt.Sprintf("%s is at its limit, so this run cannot start there now. Try again when a run there finishes, or raise the runner's limits.", atMax.Runner))
 	}
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "claim the run for revive", err))
 	}
 	if !claimed {
 		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
@@ -380,7 +384,7 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 	}
 	n, err := c.CountNonTerminalRuns(ctx, run.ID)
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "count active runs", err))
 	}
 	if n >= s.cfg.MaxConcurrentRuns {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)

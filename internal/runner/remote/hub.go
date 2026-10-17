@@ -58,8 +58,9 @@ type HubConfig struct {
 	Verified func(context.Context, uuid.UUID) error
 	// Inactive, when set, says a claimed runner may hold no session now (its
 	// owner is deactivated), without revoking it. Such a connection is sent
-	// GOAWAY before admission, and the stored-row recheck ends a live session
-	// the same way, so a connection after reactivation is admitted again.
+	// GOAWAY (runner_owner_inactive) before admission, and the stored-row
+	// recheck ends a live session with GOAWAY (fresh_session_required), so a
+	// connection after reactivation is admitted again.
 	Inactive func(context.Context, types.Runner) (bool, error)
 	// ProxyImage, when set, names the proxy image the organisation runs for a claimed runner (chosen
 	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's

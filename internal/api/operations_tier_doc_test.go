@@ -188,6 +188,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},
+	{"GET /api/v1/governance/credential-delivery", "`GET /governance/credential-delivery`"},
+	{"PUT /api/v1/governance/credential-delivery", "`PUT /governance/credential-delivery`"},
 	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
 	{"PUT /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
@@ -273,13 +275,8 @@ var docTierRows = []struct{ route, token string }{
 //
 // Every other gated route the completeness check has surfaced is rowed in
 // docs/OPERATIONS.md and listed in docTierRows above. What stays here is
-// admitted debt: today the two credential-delivery routes, pending their
-// tier-table row.
-var docTierUndocumented = map[string]string{
-	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
-	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
-	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
-}
+// admitted debt; there is none today.
+var docTierUndocumented = map[string]string{}
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
 // means" table — the section the doc's own intro sends a

@@ -170,7 +170,7 @@ func (c WebhookConfig) validate() (interval, base, timeout time.Duration, err er
 	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: url must be an http:// or https:// url (scheme %q)", u.Scheme)
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: url has no host")
 	}
 	// The bearer is a long-lived, replayable SIEM credential resent on every
