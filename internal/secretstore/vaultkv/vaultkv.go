@@ -38,8 +38,10 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -261,6 +263,7 @@ type kvMeta struct {
 	MaxVersions    int               `json:"max_versions"`
 	CustomMetadata map[string]string `json:"custom_metadata"`
 	Versions       map[string]struct {
+		CreatedTime  string `json:"created_time"`
 		DeletionTime string `json:"deletion_time"`
 		Destroyed    bool   `json:"destroyed"`
 	} `json:"versions"`
@@ -316,10 +319,34 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 		"data":    map[string]string{"value": base64.StdEncoding.EncodeToString(value)},
 		"options": map[string]int{"cas": m.CurrentVersion},
 	}
-	if _, err := s.as(rel).call(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil {
+	began := time.Now()
+	if _, retried, err := s.as(rel).callRetried(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil &&
+		!(retried && casMismatch(err) && s.landed(ctx, rel, m.CurrentVersion+1, began)) {
 		return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 	}
 	return s.ref(rel), nil
+}
+
+// casMismatch reports whether err is Vault refusing a write because its
+// check-and-set version is not the current one.
+func casMismatch(err error) bool {
+	var ve *vaultError
+	return errors.As(err, &ve) && ve.status == http.StatusBadRequest && slices.ContainsFunc(ve.msgs, func(m string) bool { return strings.Contains(m, "check-and-set") })
+}
+
+// landed reports whether the write that expected to create version want is the
+// one Vault holds: a retry after a lost answer meets its own first attempt's
+// version as a check-and-set mismatch. It reads the metadata, never the value.
+// The version must be the current one and, when Vault says when it was
+// created, no earlier than the write began (so another writer's is not taken
+// for it; a Vault clock behind this one's fails closed, as before).
+func (s *Store) landed(ctx context.Context, rel string, want int, began time.Time) bool {
+	m, found, err := s.metadata(ctx, rel)
+	if err != nil || !found || m.CurrentVersion != want {
+		return false
+	}
+	created, err := time.Parse(time.RFC3339Nano, m.Versions[fmt.Sprint(want)].CreatedTime)
+	return err != nil || !created.Before(began)
 }
 
 func sameMap(a, b map[string]string) bool {

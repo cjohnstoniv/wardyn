@@ -430,6 +430,33 @@ func TestPut_CheckAndSetAndCreateOnly(t *testing.T) {
 	}
 }
 
+// A write retried after its answer was lost meets its own first attempt as a
+// check-and-set mismatch. The retry confirms the landed version from the
+// metadata, so the value is not orphaned; a version Vault says was created
+// before the write began is someone else's and stays a failure.
+func TestPut_ARetriedWriteThatAlreadyLandedSucceeds(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		skew time.Duration
+		want bool
+	}{{"landed", 0, true}, {"created before the write", -time.Hour, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeVault(t)
+			f.landThenFail, f.createdSkew = 1, c.skew
+			s := newFakeStore(t, f)
+			ref, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false)
+			if (err == nil) != c.want {
+				t.Fatalf("Put after a lost answer = (%q, %v); want success %v", ref, err, c.want)
+			}
+			if c.want {
+				if v, err := s.Get(t.Context(), "", "k", ref); err != nil || string(v) != "v1" {
+					t.Fatalf("Get = (%q, %v); want v1", v, err)
+				}
+			}
+		})
+	}
+}
+
 // A revoked policy answers 403 to every call. Each answer stays definitive,
 // and the logins it triggers are bounded: one per reloginEvery, not one per
 // call (each is a TokenReview and a line in both audit logs).
