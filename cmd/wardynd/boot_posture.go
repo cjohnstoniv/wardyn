@@ -537,24 +537,26 @@ func validateRunOutputTailBytes(n int) error {
 	return nil
 }
 
-// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS:
-// 0 keeps persisted output forever, a positive number is the window in days.
+// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS, and one above
+// maxRetentionDays, which wraps when multiplied into a duration (to a negative window or a short one, and
+// the sweep would then delete recent output): 0 keeps persisted output forever, a positive number is the
+// window in days.
 func validateRunOutputRetentionDays(n int) error {
-	if n < 0 {
-		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
+	if n < 0 || n > maxRetentionDays {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or between 1 and %d days", n, maxRetentionDays)
 	}
 	return nil
 }
 
-// maxRecordingRetentionDays is the most days whose duration fits a time.Duration (106751).
-const maxRecordingRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
+// maxRetentionDays is the most days whose duration fits a time.Duration (106751).
+const maxRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
 
-// validateRecordingRetentionDays refuses a WARDYN_RECORDING_RETENTION_DAYS above maxRecordingRetentionDays,
+// validateRecordingRetentionDays refuses a WARDYN_RECORDING_RETENTION_DAYS above maxRetentionDays,
 // before the days are multiplied into a duration: a larger value wraps, to a negative window or to a short
 // one, and the retention sweep would then delete recent recordings. 0 keeps them forever.
 func validateRecordingRetentionDays(n int) error {
-	if n > maxRecordingRetentionDays {
-		return fmt.Errorf("WARDYN_RECORDING_RETENTION_DAYS is %d; it must be at most %d days (use 0 to keep recordings forever)", n, maxRecordingRetentionDays)
+	if n > maxRetentionDays {
+		return fmt.Errorf("WARDYN_RECORDING_RETENTION_DAYS is %d; it must be at most %d days (use 0 to keep recordings forever)", n, maxRetentionDays)
 	}
 	return nil
 }

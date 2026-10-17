@@ -90,16 +90,18 @@ func TestValidateRunOutputTailBytes(t *testing.T) {
 	}
 }
 
-// TestValidateRunOutputRetentionDays: 0 (forever) and a positive window boot; a
-// negative one is refused, naming the variable.
+// TestValidateRunOutputRetentionDays: 0 (forever) and a positive window up to 106751 days boot; a
+// negative one, or one whose duration overflows (106752 wraps negative), is refused, naming the variable.
 func TestValidateRunOutputRetentionDays(t *testing.T) {
-	for _, n := range []int{0, 1, 30, 3650} {
+	for _, n := range []int{0, 1, 30, 3650, 106751} {
 		if err := validateRunOutputRetentionDays(n); err != nil {
 			t.Fatalf("%d refused: %v", n, err)
 		}
 	}
-	if err := validateRunOutputRetentionDays(-1); err == nil || !strings.Contains(err.Error(), "WARDYN_RUN_OUTPUT_RETENTION_DAYS") {
-		t.Fatalf("-1: error %v does not name the variable", err)
+	for _, n := range []int{-1, 106752, 213505} {
+		if err := validateRunOutputRetentionDays(n); err == nil || !strings.Contains(err.Error(), "WARDYN_RUN_OUTPUT_RETENTION_DAYS") {
+			t.Fatalf("%d: error %v does not name the variable", n, err)
+		}
 	}
 }
 
