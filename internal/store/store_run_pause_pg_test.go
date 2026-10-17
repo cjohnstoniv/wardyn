@@ -291,6 +291,51 @@ func TestPG_RunPause_ReauthCountsOnceItsHoldIsOver(t *testing.T) {
 	}
 }
 
+// TestPG_RunPause_ListsARequestDecidedSincePause pins the candidate flag the sweep's idle backstop reads: a
+// request decided before the pause began is not "since", one decided after it is, and a run that is not
+// paused never reports it.
+func TestPG_RunPause_ListsARequestDecidedSincePause(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-decided", 3600
+	persistRun(t, ctx, pool, run)
+	decide := func(id uuid.UUID) {
+		t.Helper()
+		if _, err := pg.DecideApproval(ctx, id, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "owner"}); err != nil {
+			t.Fatalf("decide approval: %v", err)
+		}
+	}
+	since := func(step string, want bool) {
+		t.Helper()
+		if c := pauseCandidate(t, pg, run.ID); c == nil || c.RequestDecidedSincePause != want {
+			t.Errorf("%s: candidate = %+v; want RequestDecidedSincePause = %v", step, c, want)
+		}
+	}
+
+	before, err := pg.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	decide(before.ID)
+	since("decided on a run that is not paused", false)
+
+	fresh, _ := pg.GetRun(ctx, run.ID)
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, fresh.ActiveAt); err != nil || !ok {
+		t.Fatalf("idle pause = %v, %v; want true", ok, err)
+	}
+	since("decided before the pause", false)
+
+	after, err := pg.CreateApproval(ctx, newApproval(run.ID, time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	since("a request open since the pause", false)
+	decide(after.ID)
+	since("decided after the pause", true)
+}
+
 func pauseCandidate(t *testing.T, pg store.PG, id uuid.UUID) *store.PauseCandidate {
 	t.Helper()
 	cands, now, err := pg.ListPauseCandidates(context.Background())
