@@ -235,4 +235,21 @@ describe("an edit validates and sends what it will send, field by field", () => 
     const e = validate({ ...v, bg: { ...v.bg, lifeDn: "1", lifeDu: "minutes" } }, SHORT);
     expect(e["bg.life"]).toBe("Background tasks, lifetime: the default (1 minute) can't be longer than the maximum (20 seconds).");
   });
+
+  it("FR-0151: a default typed to match the maximum as shown is accepted, and the maximum goes as shown", () => {
+    const v = fromPool({ name: "odd", limits: ODD });
+    expect(v.bg.lifeMn).toBe("3");
+    const edited = { ...v, bg: { ...v.bg, lifeDn: "3", lifeDu: "minutes" as const } };
+    expect(validate(edited, ODD)).toEqual({});
+    expect(toLimits(edited, ODD).background?.lifetime).toEqual({ default_sec: 180, max_sec: 180 });
+  });
+
+  it("FR-0117: a Maximum refusal marks the Maximum, a Default refusal the Default", () => {
+    const v = fromPool({ name: "odd", limits: ODD });
+    const over = validate({ ...v, bg: { ...v.bg, lifeDn: "3", lifeDu: "hours" as const, lifeMn: "2", lifeMu: "hours" as const } }, ODD);
+    expect(over["bg.life.max"]).toBe(over["bg.life"]);
+    const small = validate({ ...v, bg: { ...v.bg, lifeDn: "0" } }, ODD);
+    expect(small["bg.life"]).toBeTruthy();
+    expect(small["bg.life.max"]).toBeUndefined();
+  });
 });

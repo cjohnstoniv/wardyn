@@ -173,8 +173,9 @@ export function validate(v: FormValues, loaded?: RunnerPoolLimits): FormErrors {
       const unl = x[`${pre}Unl`];
       const key = `${k}.${pre === "life" ? "life" : "idle"}`;
       if (!noEnd && !keepD && !(dsec >= 1)) e[key] = POOL_FORM.ERR_DUR_DEFAULT(title, what);
-      else if (!unl && !(msec >= 1)) e[key] = POOL_FORM.ERR_DUR_MAX(title, what, never);
-      else if (!unl && dsec > msec) e[key] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
+      // A Maximum error is also filed under `${key}.max` so the form marks that input, not the Default.
+      else if (!unl && !(msec >= 1)) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_MAX(title, what, never);
+      else if (!unl && dsec > msec) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
     };
     dur("life", POOL_FORM.LIFETIME.toLowerCase(), POOL_FORM.NO_MAXIMUM);
     if (k === "it") dur("idle", POOL_FORM.IDLE.toLowerCase(), POOL_FORM.NEVER);
@@ -198,11 +199,14 @@ function durSecs(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLim
   const same = (a: "Dn" | "Mn", b: "Du" | "Mu") => !!o && x[`${pre}${a}`] === o[`${pre}${a}`] && x[`${pre}${b}`] === o[`${pre}${b}`];
   const unl = x[`${pre}Unl`];
   const keepD = !!src && same("Dn", "Du") && (src.default_sec > 0 || unl) && (pre !== "life" || x.lifeNoEnd === o?.lifeNoEnd);
-  const keepM = same("Mn", "Mu");
   const typed = (n: "Dn" | "Mn", u: "Du" | "Mu") => Math.round(num(x[`${pre}${n}`]) * SECS[x[`${pre}${u}`]]);
+  const dsec = keepD ? src.default_sec : noEnd ? 0 : typed("Dn", "Du");
+  // An untouched maximum goes back exactly, unless the default now outgrows it but fits the maximum as the field shows it (150 s shows as
+  // 3 minutes): a default typed to match what is on screen is not refused.
+  const keepM = same("Mn", "Mu") && !!src?.max_sec && !(dsec > src.max_sec && typed("Mn", "Mu") >= dsec);
   return {
     keepD,
-    dsec: keepD ? src.default_sec : noEnd ? 0 : typed("Dn", "Du"),
+    dsec,
     msec: (keepM && src?.max_sec) || typed("Mn", "Mu"),
   };
 }

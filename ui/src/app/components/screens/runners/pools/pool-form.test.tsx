@@ -182,6 +182,19 @@ describe("edit", () => {
     expect(screen.queryByText("Reload the pool to see the other change, then redo yours.")).toBeNull();
   });
 
+  it("FR-0116: says so when Reload cannot re-read the pool, and keeps Reload", async () => {
+    updateMineMock.mockRejectedValue(new HttpError(409, "Laptop changed while this was open.", "runner_pool_stale"));
+    renderAt("/account/pools/p-lap/edit", "mine");
+    await screen.findByRole("heading", { name: "Edit Laptop" });
+    setField(field("Name"), "Laptop 2");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("Laptop changed while this was open.", { exact: false });
+    getMock.mockRejectedValue(new HttpError(500, "boom"));
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText("Something went wrong reaching the server.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+  });
+
   it("shows any other refusal as the server's sentence, without Reload", async () => {
     updateMineMock.mockRejectedValue(new HttpError(409, "a pool with that name already exists", "runner_pool_name_taken"));
     renderAt("/account/pools/p-lap/edit", "mine");
