@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -518,12 +519,15 @@ func (s *Server) interactiveNothingKept(run types.AgentRun, reader bool) string 
 // so a read says the output was not captured instead of serving an empty,
 // complete one. The runner is the run's own: the self-hosted runner it was
 // bound to (a person's laptop or an organisation's runner), else the executor
-// of this deployment its pool named, else this deployment's executor. A run
+// of this deployment its pool named, else the executor of this deployment that
+// holds its sandbox, or before the create the one its class routes to
+// (runner.ExecOutputReporter), else this deployment's executor. A run
 // that is not recorded is captured whatever its runner says, since the
 // recorder wraps only a recorded run's exec, unless its runner records whatever
 // it is asked (runnerRecordsUnasked). A self-hosted runner or named executor
 // that cannot be asked now (offline, or not connected to this replica) leaves
-// the answer to this deployment's executor, so a recorded run keeps the
+// the answer to this deployment's executor (as does an executor that holds the
+// sandbox or takes the class but cannot be asked), so a recorded run keeps the
 // recording path the deployment would use and a run that is not recorded keeps
 // its tail. known is false only when this deployment's executor cannot be
 // asked: the answer is then neither "captured" nor "uncaptured". A run that
@@ -537,6 +541,12 @@ func (s *Server) execOutputCapture(ctx context.Context, run types.AgentRun) (unc
 	case run.RunnerPoolExecutor != "":
 		if f, ok := s.executorFacts(ctx, run.RunnerPoolExecutor); ok {
 			return f.ExecOutputUncaptured && run.NotRecorded == "", true
+		}
+	default:
+		if r, ok := s.cfg.Runner.(runner.ExecOutputReporter); ok {
+			if u, known := r.ExecOutputUncapturedFor(ctx, run.SandboxRef, run.ConfinementClass); known {
+				return u && run.NotRecorded == "", true
+			}
 		}
 	}
 	if s.cfg.Runner == nil {

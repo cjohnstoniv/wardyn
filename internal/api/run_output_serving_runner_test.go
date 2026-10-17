@@ -146,3 +146,65 @@ func TestRunOutput_PooledRunAsksItsOwnExecutor(t *testing.T) {
 		t.Fatal("the recorded Kubernetes executor's pooled run kept a tail")
 	}
 }
+
+// unpooledDockerAndRecordedK8s is the recording fixture on a deployment with two executors and no
+// pool: Docker, which keeps a tail and takes CC1, ahead of Kubernetes under the recorder, which takes
+// CC1 and CC2. The run has no sandbox yet, as at dispatch, so its class decides which executor gets it.
+func unpooledDockerAndRecordedK8s(t *testing.T, class types.ConfinementClass) (*outputFixture, *outputRecordingStore, *orchestrator.Orchestrator) {
+	t.Helper()
+	docker, k8s := runnertest.NewFake(), runnertest.NewFake()
+	docker.Support = dockerRunnerSupport
+	k8s.Support = recordedK8sRunnerSupport
+	k8s.Support.Classes = []types.ConfinementClass{types.CC1, types.CC2}
+	orch := orchestrator.New(pooledExecutor{Fake: docker, name: "docker"}, pooledExecutor{Fake: k8s, name: "k8s"})
+	f, rs := newRecordingOutputFixture(t, func(c *Config) { c.Runner = orch })
+	f.st.mu.Lock()
+	f.st.run.SandboxRef, f.st.run.ConfinementClass = "", class
+	f.st.mu.Unlock()
+	f.run.SandboxRef, f.run.ConfinementClass = "", class
+	return f, rs, orch
+}
+
+// createUnpooled is the dispatch's create: the orchestrator places the run by its class, and the
+// stored run carries the sandbox's ref from then on.
+func createUnpooled(t *testing.T, f *outputFixture, orch *orchestrator.Orchestrator) {
+	t.Helper()
+	sb, err := orch.CreateSandbox(t.Context(), runner.SandboxSpec{RunID: f.run.ID, ConfinementClass: f.run.ConfinementClass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.st.mu.Lock()
+	f.st.run.SandboxRef = sb.Ref
+	f.st.mu.Unlock()
+	f.run.SandboxRef = sb.Ref
+}
+
+// A run whose class lands on the Docker executor keeps its tail beside a Kubernetes executor under
+// the recorder, and its output reads as stdout: the merged answer (some executor keeps no tail) does
+// not decide it.
+func TestRunOutput_UnpooledRunOnDockerKeepsItsTail(t *testing.T) {
+	f, _, orch := unpooledDockerAndRecordedK8s(t, types.CC1)
+	writeExecOutput(t, f.open(t), "docker printed this\n")
+	createUnpooled(t, f, orch)
+	if code, got := f.get(t); code != http.StatusOK || got.Source != "stdout" || got.Output != "docker printed this\n" {
+		t.Fatalf("read = %d %+v, want 200 with the tail's bytes from source stdout", code, got)
+	}
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if row := f.finalRow(t); row.Source != "stdout" || string(row.Output) != "docker printed this\n" || row.CaptureGap {
+		t.Fatalf("final row = %+v output %q, want the tail kept as source stdout", row, row.Output)
+	}
+}
+
+// A run whose class lands on the Kubernetes executor under the recorder keeps no tail, and its output
+// is read from its recording.
+func TestRunOutput_UnpooledRunOnRecordedK8sReadsTheRecording(t *testing.T) {
+	f, rs, orch := unpooledDockerAndRecordedK8s(t, types.CC2)
+	if f.srv.openExecOutput(f.run, false) != nil {
+		t.Fatal("the recorded Kubernetes executor's run kept a tail")
+	}
+	createUnpooled(t, f, orch)
+	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","k8s printed this\n"]`+"\n")
+	if code, got := f.get(t); code != http.StatusOK || got.Source != recordingOutputSource || got.Output != "k8s printed this\n" {
+		t.Fatalf("read = %d %+v, want 200 with the recording's bytes", code, got)
+	}
+}

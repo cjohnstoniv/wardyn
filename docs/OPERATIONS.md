@@ -112,6 +112,8 @@ copy is permanent.
   - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
     answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
   - A pooled run asks the executor its pool named.
+  - With several executors and no pool, the executor the run's class lands on answers, and once the sandbox exists
+    the executor that holds it.
   - So turning on a recording store (`WARDYN_RECORDING_STORE`) moves the output of runs on this deployment's
     Kubernetes runner from `stdout` to `recording`; a laptop run on Docker keeps `stdout`.
 - **Recording-on Kubernetes output.**

@@ -52,6 +52,15 @@ type TargetInspector interface {
 	ExecutorFacts(ctx context.Context, executor string) (TargetFacts, bool)
 }
 
+// ExecOutputReporter answers whether the executor that runs a sandbox can capture
+// an exec's output (Capabilities.ExecOutputUncaptured): the executor that holds
+// ref, or with no ref yet the executor a create of that class would go to. A
+// deployment with several executors answers per run, not for all of them. known
+// is false when that executor cannot be named or asked.
+type ExecOutputReporter interface {
+	ExecOutputUncapturedFor(ctx context.Context, ref string, class types.ConfinementClass) (uncaptured, known bool)
+}
+
 // ExactExecutor creates the sandbox on the named configured executor and on no
 // other: a run bound to a remote-provided pool goes where it was admitted, never
 // to the first substrate that can enforce its class.

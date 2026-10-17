@@ -500,16 +500,34 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 	if spec.RunnerID != "" {
 		sub, err = o.substrateForRunner(spec.RunnerID)
 	} else {
-		class := spec.ConfinementClass
-		if class == "" {
-			class = types.CC1
-		}
-		sub, err = o.substrateFor(ctx, class)
+		sub, err = o.substrateFor(ctx, spec.ConfinementClass)
 	}
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
 	return o.createOn(ctx, sub, spec)
+}
+
+// ExecOutputUncapturedFor implements runner.ExecOutputReporter. Once the
+// sandbox exists the substrate that holds ref answers; before the create, the
+// substrate CreateSandbox routes class to (substrateFor, the same first match).
+// known is false when that substrate cannot be named or its capabilities read.
+func (o *Orchestrator) ExecOutputUncapturedFor(ctx context.Context, ref string, class types.ConfinementClass) (uncaptured, known bool) {
+	var sub substrate.Substrate
+	var err error
+	if ref != "" {
+		sub, err = o.subForRef(ctx, ref)
+	} else {
+		sub, err = o.substrateFor(ctx, class)
+	}
+	if err != nil {
+		return false, false
+	}
+	cs, err := o.classesFor(ctx, sub)
+	if err != nil {
+		return false, false
+	}
+	return cs.ExecOutputUncaptured, true
 }
 
 // createOn creates the sandbox on sub and records ref->substrate.
@@ -541,9 +559,13 @@ func (o *Orchestrator) substrateForRunner(runnerID string) (substrate.Substrate,
 	return nil, fmt.Errorf("%w: runner %s is not registered", runner.ErrRunnerOffline, runnerID)
 }
 
-// substrateFor returns the first substrate that advertises the class. Fails
-// closed when none can enforce it (never silently downgrade).
+// substrateFor returns the first substrate that advertises the class (CC1 when
+// none is named). Fails closed when none can enforce it (never silently
+// downgrade).
 func (o *Orchestrator) substrateFor(ctx context.Context, class types.ConfinementClass) (substrate.Substrate, error) {
+	if class == "" {
+		class = types.CC1
+	}
 	var probeErrs []error
 	for _, s := range o.locals() {
 		cs, err := o.classesFor(ctx, s)
