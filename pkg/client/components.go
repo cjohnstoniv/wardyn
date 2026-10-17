@@ -49,11 +49,13 @@ type ComponentSecretView struct {
 // OrgComponentView is an organisation component as a person granted it sees it:
 // where it reaches and how, with no secret names and no config values.
 type OrgComponentView struct {
-	ID         uuid.UUID             `json:"id"`
-	Name       string                `json:"name"`
-	Hosts      []string              `json:"hosts"`
-	Secrets    []ComponentSecretView `json:"secrets"`
-	ConfigKeys []string              `json:"config_keys"`
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	// Description is the admin's one line for the card, when they wrote one.
+	Description string                `json:"description,omitempty"`
+	Hosts       []string              `json:"hosts"`
+	Secrets     []ComponentSecretView `json:"secrets"`
+	ConfigKeys  []string              `json:"config_keys"`
 	// Category is what kind of card the row is: cli, mcp or api (neither block).
 	Category string   `json:"category"`
 	CLI      *CLIView `json:"cli,omitempty"`

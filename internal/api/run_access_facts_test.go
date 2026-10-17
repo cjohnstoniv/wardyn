@@ -526,3 +526,34 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 		})
 	}
 }
+
+// Each non-model credential is named by its kind and whose it is, never by a secret's name; a model
+// credential is left to the console, which names its provider.
+func TestCredentialLabel_ByKindAndOwner(t *testing.T) {
+	for _, tc := range []struct{ kind, owner, want string }{
+		{credKindGitHubApp, credOwnerOrgApp, "Your organisation's GitHub App"},
+		{credKindADOSignIn, credOwnerOwn, "Your Azure DevOps sign-in"},
+		{credKindAWSRole, credOwnerOwn, "Your AWS sign-in"},
+		{credKindAzureARM, credOwnerOwn, "Your Azure sign-in"},
+		{credKindGitPAT, credOwnerShared, "A Git token your organisation provides"},
+		{credKindSSHKey, credOwnerShared, "An SSH key your organisation provides"},
+		{credKindSecret, credOwnerOwn, "Your secret"},
+		{credKindSecret, credOwnerShared, "A secret your organisation provides"},
+		{credKindModel, credOwnerOwn, ""},
+	} {
+		if got := credentialLabel(tc.kind, tc.owner); got != tc.want {
+			t.Errorf("credentialLabel(%s, %s) = %q, want %q", tc.kind, tc.owner, got, tc.want)
+		}
+	}
+}
+
+// An organisation component's card carries the admin's description, and nothing of its secrets.
+func TestOrgComponentView_CarriesTheDescription(t *testing.T) {
+	v := orgComponentView(types.Component{ID: uuid.New(), Name: "Postgres", Definition: types.ComponentDefinition{
+		Description: "Query the analytics replica.", Hosts: []string{"db.example.com"},
+		Secrets: []types.ComponentSecret{{SecretName: "pg-password", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "PGPASSWORD"}}}}})
+	b, _ := json.Marshal(v)
+	if v.Description != "Query the analytics replica." || !strings.Contains(string(b), `"description":"Query the analytics replica."`) || strings.Contains(string(b), "pg-password") {
+		t.Errorf("view = %s, want the description and no secret name", b)
+	}
+}

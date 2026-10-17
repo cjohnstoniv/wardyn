@@ -230,6 +230,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
         icon={row.category === "mcp" ? CARD_ICON.mcp : CARD_ICON.api}
         title={row.name}
         org
+        body={row.description || undefined}
         brings={<Brings hosts={row.hosts} deliveries={row.secrets.map((s) => MODE_DELIVERY[s.delivery.mode])} />}
         look={on ? "added" : reason ? "off" : "plain"}
       >
@@ -298,7 +299,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
               key={key}
               icon={generic.icon}
               title={title}
-              body={generic.body}
+              body={row?.description || generic.body}
               brings={row && <Brings hosts={row.hosts} deliveries={delivery ? [delivery] : []} />}
               look={on ? "added" : off || reason ? "off" : "plain"}
             >

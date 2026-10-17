@@ -374,7 +374,7 @@ Preflight (`PreflightResult.Access`) and the policy preview answer `access`, one
 
 - `rows`: what brings access, inherited first (the harness, each Git provider's repositories, a command), then what the person added (components, secrets by header, allowed hosts). Each has a `status`: `ready`, `needs_setup`, `unavailable` or `refused`.
 - `hosts`: the Network total, without the site-config SCM hosts. Each host has a `verdict` against the resolved, clamped policy, never the request: `allowed`, `needs_approval` (a review mode) or `not_allowed` with `reason` `clamped`, `denied_list` or `always_deny`. A deny entry wins over everything.
-- `credentials`: the Credentials total, each with its `delivery` and what is left once the run ends (`after_end`). The repository on Wardyn's git broker lists no raw host; its credential is delivered `git_broker`.
+- `credentials`: the Credentials total, each with its `delivery`, what is left once the run ends (`after_end`) and, for every credential but a model's, a `label` naming its kind and whose it is, never a secret's name. The repository on Wardyn's git broker lists no raw host; its credential is delivered `git_broker`.
 - An AWS sign-in follows `WARDYN_AWS_SSO_PROXY_INJECT`. On: the role credentials are in the sandbox, short-lived. Off: the session's access token is in the sandbox too, as a file. Both expire at the lifetime AWS sets.
 - `unlisted`: what happens to a host nothing lists: the effective `mode`, `allow_all`, `hold_sec` for `wait_for_review`, and `decider` (`you`, `admin` or `you_or_admin`, from your `egress_host` capability).
 - `setup`: what is still needed, as checklist rows with a `fix`: `add_secret`, `sign_in` (`target`, and `id` for a component) or `choose_model_provider` (`tool`). A model-provider sign-in names no provider id; sign in to the provider the draft chose.
@@ -417,7 +417,7 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 | `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
 
 - `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine`, `org` and `clis`.
-  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: the admin's `description` when there is one, hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
   - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
   - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
