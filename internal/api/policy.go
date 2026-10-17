@@ -156,7 +156,7 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
 		return err
 	}
-	if err := validatePolicyWorkspaces(spec); err != nil {
+	if err := validatePolicyWorkspaces(spec, resolveMounts); err != nil {
 		return err
 	}
 	if err := validateToolRules(spec.ToolRules); err != nil {
@@ -787,7 +787,7 @@ func validateAllowedMethods(methods []string) error {
 // validatePolicyWorkspaces validates workspace_mounts/workspace_repos and the
 // LLM-inspection block (extracted from validatePolicySpec for the gocyclo
 // gate; behavior is identical).
-func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
+func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool) error {
 	// WorkspaceMounts are operator/policy-controlled host bind mounts. Validate
 	// each against the SAME deny-list the docker driver enforces (absolute,
 	// cleaned, non-dangerous Source; allowed-prefix Target) so a bad mount is
