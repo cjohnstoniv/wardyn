@@ -43,6 +43,7 @@ export function AdminOlderLimitsCard() {
   const operator = useOperator();
   const [outsideIds, setOutsideIds] = React.useState<string[] | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
   const [results, setResults] = React.useState<AdminRestartResult[] | null>(null);
 
   const load = React.useCallback(() => {
@@ -70,6 +71,7 @@ export function AdminOlderLimitsCard() {
   const restart = async () => {
     if (!outsideIds) return;
     setBusy(true);
+    setProgress({ done: 0, total: outsideIds.length });
     // Every batch's results are kept, including those a later failing batch leaves behind. That
     // batch's own runs are unknown (a restart the server claimed survives the request that
     // timed out), so the listing is refreshed whatever happened.
@@ -81,12 +83,14 @@ export function AdminOlderLimitsCard() {
         collected.push(...res.results);
         // FR-0163: a restart is minutes long, so each batch's answer shows as it lands.
         setResults([...collected]);
+        setProgress({ done: collected.length, total: outsideIds.length });
       }
     } catch (err) {
       toast.error("Couldn't restart these runs", { description: getErrorMessage(err) });
     } finally {
       load();
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -106,6 +110,7 @@ export function AdminOlderLimitsCard() {
           <p className="mt-2 text-meta text-muted-foreground">{RL.RESTART_HINT}</p>
         </>
       )}
+      {busy && progress && <p className="mt-2 text-meta text-muted-foreground">{RL.RESTART_PROGRESS(progress.done, progress.total)}</p>}
       {results && (
         // R2-4: neither the mock nor the design draws per-run restart result
         // words — "Restarted" is the closest drawn wording (the past tense of
@@ -113,7 +118,7 @@ export function AdminOlderLimitsCard() {
         // server's OWN refusal text verbatim (e.g. reviveEligible's "revive
         // it from the run's page" for a rebooted run the bulk path can never
         // start again), never a second, invented "still lost" gloss on it.
-        <ul className="mt-2 space-y-1 text-meta text-muted-foreground">
+        <ul aria-live="polite" className="mt-2 space-y-1 text-meta text-muted-foreground">
           {results.map((r) => (
             <li key={r.run_id}>
               {r.run_id.slice(0, 8)}: {r.ok ? "Restarted" : r.error}

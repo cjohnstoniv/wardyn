@@ -15,7 +15,7 @@
 import { test, expect, ADMIN_TOKEN, gotoConsole, sql } from "./fixtures";
 import type { Page, Route } from "@playwright/test";
 import { runsViewSaved } from "../src/app/components/wardyn/copy/runs-landing";
-import { OLDER_LIMITS_CHIP, RESTART_WITH_CURRENT_LIMITS } from "../src/app/components/wardyn/copy/run-lifetime";
+import { OLDER_LIMITS_CHIP, RESTART_PROGRESS, RESTART_WITH_CURRENT_LIMITS } from "../src/app/components/wardyn/copy/run-lifetime";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
 
@@ -315,6 +315,8 @@ test.describe("Admin runs: the older-limits restart", () => {
     // The first five are answered while the sixth is still out.
     const card = page.getByTestId("admin-older-limits-card");
     await expect(card.getByText(/: Restarted$/)).toHaveCount(5);
+    await expect(card.getByText(RESTART_PROGRESS(5, 6))).toBeVisible();
+    await expect(card.locator("ul")).toHaveAttribute("aria-live", "polite");
     await expect(button).toHaveAttribute("aria-busy", "true");
     release();
     await expect(card.getByText(/: Restarted$/)).toHaveCount(6);

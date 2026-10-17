@@ -176,5 +176,7 @@ export const PAUSE_IDLE_FLOOR_SEC = 630;
 
 export const OLDER_LIMITS_CHIP = "Older limits";
 export const RESTART_WITH_CURRENT_LIMITS = "Restart with current limits";
+/** Lead wording 2026-10-17 (FR-0163): how far a bulk restart has come, shown while it runs. */
+export const RESTART_PROGRESS = (done: number, total: number) => `${done} of ${total}`;
 export const RESTART_HINT =
   "Restarts each run's network proxy with its owner's current limits. Terminals stay open; requests in flight fail once.";

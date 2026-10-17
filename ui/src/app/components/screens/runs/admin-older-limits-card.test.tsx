@@ -123,8 +123,11 @@ describe("AdminOlderLimitsCard", () => {
     await user.click(button);
     expect(await screen.findAllByText(/Restarted/)).toHaveLength(5);
     expect(button).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("5 of 6")).toBeInTheDocument();
+    expect(screen.getAllByText(/Restarted/)[0].closest("ul")).toHaveAttribute("aria-live", "polite");
     settleSecond({ results: [{ run_id: "b1", ok: true }] });
     await waitFor(() => expect(screen.getAllByText(/Restarted/)).toHaveLength(6));
+    await waitFor(() => expect(screen.queryByText("6 of 6")).toBeNull());
   });
 
   // R2-4 (PR #1317 round-2 review): a real restart rewrites the run's own
