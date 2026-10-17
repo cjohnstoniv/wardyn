@@ -110,8 +110,8 @@
 # docs/sdk.md 17560 measured after merging the Files-step seam lane (RP-3 runner limits reasons) into E6b-pdc over the member drives chain's 17473.
 # docs/sdk.md 17645 adds 16 over 17629 (0.9 release text for the fix sets merged at release); measured.
 # docs/sdk.md 17669 adds 24 over 17645 (0.9.3 D), measured: the runner_pool_run_type_missing reason.
-# docs/sdk.md 17905 adds 236 over 17669 (0.9.3 RV5), measured: the four pool refusal reasons, the import size note, the access-block harnesses fact, runner_not_found and approval-body limits.
-docs/sdk.md=17905 share=21
+# docs/sdk.md 17904 adds 235 over 17669 (0.9.3 RV5), measured: the four pool refusal reasons, the import size note, the access-block harnesses fact, runner_not_found and approval-body limits.
+docs/sdk.md=17904 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
