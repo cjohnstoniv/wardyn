@@ -175,8 +175,16 @@ func TestSourceScanKeepsStrongest(t *testing.T) {
 	if before.Code != http.StatusOK {
 		t.Fatalf("read the organisation defaults = %d %s", before.Code, before.Body)
 	}
+	// The restore leaves the revision out: the barrier write below moves it on, and a write naming the
+	// one read here would be refused 409 runner_pool_stale, leaving the barrier and no default pool.
+	restore := decodeJSON[types.RunnerPoolDefaults](t, before)
+	restore.Revision = 0
+	restoreBody, err := json.Marshal(restore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, before.Body.String()); w.Code != http.StatusOK {
+		if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, string(restoreBody)); w.Code != http.StatusOK {
 			t.Errorf("restore the organisation defaults = %d %s", w.Code, w.Body)
 		}
 	})

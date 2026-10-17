@@ -188,7 +188,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // the run's owner for one they defined. A model's host is never one (the gate refuses it), so #4
 // cannot reach #1's traffic.
 func (p *Proxy) isMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
@@ -211,7 +211,7 @@ func (p *Proxy) mitmLLMHost(host string, port int) bool {
 // compileMITMHosts does) so case/trailing-dot can't miss the entry and read as any-port. 0 means the
 // entry named no port and stays any-port (legacy).
 func (p *Proxy) mitmPortAllowed(host string, port int) bool {
-	cport := p.mitmPorts[strings.TrimSuffix(strings.ToLower(host), ".")]
+	cport := p.mitmPorts[hostKey(host)]
 	return cport == 0 || cport == port
 }
 
@@ -223,7 +223,7 @@ func (p *Proxy) mitmPortAllowed(host string, port int) bool {
 // api.anthropic.com/api.openai.com, this check alone stops a corp artifact token from silently
 // landing on real Anthropic/OpenAI traffic, bypassing the mitmLLM intent gate.
 func (p *Proxy) isCorpMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return false
 	}
@@ -237,7 +237,7 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // channelSharedGateway: only a brokered route names the schema, so a direct request's body is
 // marked uninspected (refused under fail-closed blocking), never read as one vendor's by chance.
 func (p *Proxy) channelForHost(host string) contentscan.Channel {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if vendor, ok := p.gatewayVendorOf(h); ok {
 		if vendor == "" {
 			return channelSharedGateway

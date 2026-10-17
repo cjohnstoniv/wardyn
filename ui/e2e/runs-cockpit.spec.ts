@@ -169,6 +169,30 @@ test.describe("Run cockpit — a long kill outcome scrolls instead of clipping",
   });
 });
 
+// A kill whose sandbox stop was queued for an offline runner (run.kill success with data.sandbox_stop
+// "queued", from a lifetime or sweep kill) says the sandbox waits on the runner, never that it was removed.
+// The kill row is spliced: the hermetic backend has no offline runner to queue a stop for.
+test.describe("Run cockpit — a kill queued for an offline runner", () => {
+  test("says the credentials are revoked and the sandbox stays until the runner reconnects", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
+    const id = list.find((r) => r.task === "e2e fixture 7")!.id;
+    const at = new Date().toISOString();
+    await page.route(/\/api\/v1\/audit\?/, async (route) => {
+      if (new URL(route.request().url()).searchParams.get("action") === "run.kill") {
+        return route.fulfill({ json: [{ id: "k1", time: at, actor_type: "system", actor: "wardynd", action: "run.kill", outcome: "success", data: { reason: "lifetime_cap", sandbox_stop: "queued" } }] });
+      }
+      return route.fallback();
+    });
+    await page.goto(`runs/${id}`);
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toHaveAttribute("data-evidence", "queued");
+    await expect(block).toContainText("Its credentials were revoked at once");
+    await expect(block).toContainText("was told to remove the sandbox when it next connects");
+    await expect(block).not.toContainText(/stopped and removed the sandbox|reported it removed the sandbox/);
+  });
+});
+
 // R4-F037: the attach card's OFF paragraphs are claims about the DEPLOYMENT
 // ("Off on this deployment... an operator turns it on by setting
 // WARDYN_SSH_LISTEN"). lib/api/health.ts swallows a non-ok /healthz into a

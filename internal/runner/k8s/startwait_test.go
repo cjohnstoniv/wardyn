@@ -81,6 +81,65 @@ func TestWaitPodIP_UnplaceableProxyWaitsForRoomThenStarts(t *testing.T) {
 	}
 }
 
+// readyNode marks n Ready, as a live node is.
+func readyNode(n *corev1.Node) *corev1.Node {
+	n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
+	return n
+}
+
+// A pod that no healthy node can take by placement (a mistyped nodeSelector, an operator taint) is not
+// waiting for room: with the node read on it spends the ordinary start budget and fails with the
+// scheduler's own words. Anything that may only be a pool coming and going (a cordon, an autoscaler's
+// deletion taint, no node at all, no healthy node) keeps the capacity wait, as does an allowed node.
+func TestWaitPodIP_PlacementThatExcludesEveryNodeFailsAtTheStartBudget(t *testing.T) {
+	fastPoll(t)
+	const msg = "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector."
+	pool := map[string]string{"pool": "sandbox"}
+	cordoned := readyNode(node("n1", 4000, 8192, pool, corev1.Taint{Key: "node.kubernetes.io/unschedulable", Effect: corev1.TaintEffectNoSchedule}))
+	cordoned.Spec.Unschedulable = true
+	notReadyOther := node("n1", 4000, 8192, map[string]string{"pool": "general"}) // no Ready condition
+	for _, tc := range []struct {
+		name    string
+		nodes   []*corev1.Node
+		wantErr bool
+	}{
+		{"healthy nodes, none matches the selector", []*corev1.Node{readyNode(node("n1", 4000, 8192, map[string]string{"pool": "general"}))}, true},
+		{"healthy node refused by an operator taint", []*corev1.Node{readyNode(node("n1", 4000, 8192, pool, corev1.Taint{Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoSchedule}))}, true},
+		{"an allowed node exists", []*corev1.Node{readyNode(node("n1", 4000, 8192, pool))}, false},
+		{"the pool is only cordoned", []*corev1.Node{cordoned, readyNode(node("n2", 4000, 8192, map[string]string{"pool": "general"}))}, false},
+		{"the pool carries an autoscaler deletion taint", []*corev1.Node{
+			readyNode(node("n1", 4000, 8192, pool, corev1.Taint{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectNoSchedule})),
+			readyNode(node("n2", 4000, 8192, map[string]string{"pool": "general"}))}, false},
+		{"no node at all", nil, false},
+		{"no healthy node", []*corev1.Node{notReadyOther}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond, CapacityWait: 5 * time.Second,
+				ReadNodes: true, SandboxPlacement: `{"nodeSelector":{"pool":"sandbox"}}`})
+			for _, n := range tc.nodes {
+				seed(t, cs, n)
+			}
+			const podName = "wardyn-proxy-selector"
+			podByAge(cs, podName, func(age time.Duration) corev1.PodStatus {
+				if age < 1500*time.Millisecond {
+					return unschedulableStatus(msg)
+				}
+				return proxyReadyStatus()
+			})
+			_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("waitPodIP: %v; want the wait to run past StartTimeout and start", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "did not start within") || !strings.Contains(err.Error(), msg) {
+				t.Fatalf("waitPodIP err = %v; want the start-budget failure carrying the scheduler's message", err)
+			}
+		})
+	}
+}
+
 // Only the agent contends: the proxy starts at once, the agent waits for room, and the shared clock
 // still lets it start.
 func TestWaitContainerRunning_AgentOnlyContention(t *testing.T) {

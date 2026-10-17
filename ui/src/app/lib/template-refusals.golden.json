@@ -41,28 +41,28 @@
     "args": [
       "intent.preset"
     ],
-    "text": "intent.preset is never part of a template: it belongs to one launch, or it is retired."
+    "text": "intent.preset cannot be set in a document: it is entered at launch, set by the server, or retired."
   },
   {
     "key": "SECRET_REFUSED",
     "args": [
       "intent.task"
     ],
-    "text": "intent.task holds what looks like a secret. A template keeps references to secrets, never their values."
+    "text": "intent.task holds what looks like a secret. A document keeps references to secrets, never their values."
   },
   {
     "key": "RUN_STATE_REFUSED",
     "args": [
       "intent.run_id"
     ],
-    "text": "intent.run_id is state of one run. A template holds reusable choices, not a run's history or authority."
+    "text": "intent.run_id is state of one run. A document holds choices, not a run's history or authority."
   },
   {
     "key": "METADATA_IN_CONTENT",
     "args": [
       "group_id"
     ],
-    "text": "group_id is set by the server from who saves the template. Remove it from the document."
+    "text": "group_id is set by the server, never by a document. Remove it from the document."
   },
   {
     "key": "FIELD_UNAVAILABLE",

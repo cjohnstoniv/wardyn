@@ -82,6 +82,49 @@ func TestGitHubCLI_CreateWiresTheDoor(t *testing.T) {
 	}
 }
 
+// The GitHub CLI's door credentials api.github.com, so a run that binds another credential to that
+// host is refused at every door: a header component after the CLI row or before it, and a policy's
+// own credential there. Two GitHub CLI rows share the one door and are admitted.
+func TestGitHubCLI_DoorHostCarriesOneCredential(t *testing.T) {
+	header := inlineComponent([]string{"api.github.com"}, headerSecret(compOwnSecret, "api.github.com"))
+	for _, tc := range []struct {
+		name string
+		body func(f *componentFixture, cli map[string]any) map[string]any
+	}{
+		{"a header component after the CLI row", func(_ *componentFixture, cli map[string]any) map[string]any {
+			return componentBody(cli, header)
+		}},
+		{"a header component before the CLI row", func(_ *componentFixture, cli map[string]any) map[string]any {
+			return componentBody(header, cli)
+		}},
+		{"a policy credential on the door's host", func(f *componentFixture, cli map[string]any) map[string]any {
+			f.srv.cfg.DefaultPolicy.EligibleGrants = append(f.srv.cfg.DefaultPolicy.EligibleGrants, types.GrantSpec{Kind: types.GrantAPIKey, TTLSeconds: 3600,
+				Scope: json.RawMessage(`{"host":"api.github.com","secret_name":"` + govCorpSecret + `"}`)})
+			return componentBody(cli)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, cli := githubCLIFixture(t)
+			body := tc.body(f, cli)
+			body["repo"] = "acme/app"
+			for _, door := range componentDoors {
+				w := f.ask(t, door, body)
+				if got := decodeErrorBody(t, w); w.Code != http.StatusUnprocessableEntity || got.Reason != reasonComponentHostCollision {
+					t.Errorf("%s = %d %s, want 422 %s", door, w.Code, w.Body, reasonComponentHostCollision)
+				}
+			}
+		})
+	}
+	f, cli := githubCLIFixture(t)
+	second := f.org("6f0c1d2e-0000-4000-8000-0000000c05a6", types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindGitHub,
+		GitHub: &types.CLIGitHub{Capabilities: []ghscope.Capability{ghscope.CapIssuesRead}}}})
+	body := componentBody(cli, second)
+	body["repo"] = "acme/app"
+	if w := f.ask(t, componentDoors[1], body); w.Code >= 300 {
+		t.Fatalf("two GitHub CLI rows at %s = %d %s, want admitted", componentDoors[1], w.Code, w.Body)
+	}
+}
+
 // Without a GitHub repository the launch and Review doors refuse with the
 // card's reason, and the preview shows the row unavailable for it.
 func TestGitHubCLI_NoRepoIsTheCardsReason(t *testing.T) {

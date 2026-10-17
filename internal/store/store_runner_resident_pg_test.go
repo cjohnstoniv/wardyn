@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -197,9 +198,15 @@ func TestResidentObligation_ClaimBackoffAndSkipLocked(t *testing.T) {
 		t.Fatalf("next erase %v, want the 1h cap %v", row.nextErase, at.Add(time.Hour))
 	}
 
-	// A row another claim holds is skipped at once.
+	// A row another claim holds is skipped at once. The hold is on a pool of its own: the claim asks
+	// f.pool for a connection on this goroutine (WARDYN_TEST_POOL_GUARD).
 	due := at.Add(2 * time.Hour)
-	tx, err := f.pool.Begin(ctx)
+	holdPool, err := pgxpool.New(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	tx, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -268,7 +268,7 @@ func (s *Server) handleClaimInvitation(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	sub, ok := s.mintGuards(w, r)
+	sub, ok := s.mintGuards(w, r, "me.invitations.claim")
 	if !ok {
 		return
 	}

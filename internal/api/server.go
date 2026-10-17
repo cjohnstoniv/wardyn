@@ -15,7 +15,6 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"net"
 	"net/http/httputil"
 	"net/netip"
@@ -711,6 +710,8 @@ type Server struct {
 	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
+	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	revokedEndRetry revokedEndRetry
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
@@ -967,44 +968,4 @@ func New(cfg Config) *Server {
 		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
 	}
 	return s
-}
-
-// Audit-spool drain cadence: a modest ticker with a bounded per-tick batch so a
-// large post-outage backlog replays over several ticks without holding the spool
-// lock (blocking Append) for long or hammering the store in one burst.
-const (
-	auditSpoolDrainInterval = 30 * time.Second
-	auditSpoolDrainBatch    = 200
-)
-
-// recordAudit is a best-effort audit emit for control-plane-originated events.
-// Audit failures must never block the primary operation (the Recorder owns
-// durability/retry); we swallow the error after the event is constructed.
-func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
-	_ = s.recordAuditDurably(ctx, ev)
-}
-
-// recordAuditDurably is recordAudit that says whether the row was durably accepted: written, or held by the
-// audit spool for its drain.
-func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bool {
-	if s.cfg.Audit == nil {
-		return true
-	}
-	if ev.ID == uuid.Nil {
-		ev.ID = uuid.New()
-	}
-	if ev.Time.IsZero() {
-		ev.Time = s.cfg.Now().UTC()
-	}
-	ev.Data = audit.StampRelay(ctx, ev.Data)
-	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
-	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
-	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)
-	// Invariant 6, C1: the audit log is the system of record. A failed durable
-	// write is handled by the shared recorder chain (spoolingRecorder below
-	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
-	// event to the durable local fallback so it is never silently lost — for every
-	// audit writer, not just this one. So there is no API-layer-only spool here.
-	err := s.cfg.Audit.Record(ctx, ev)
-	return err == nil || errors.Is(err, audit.ErrSpooled)
 }

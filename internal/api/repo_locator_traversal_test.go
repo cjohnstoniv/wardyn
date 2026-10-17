@@ -73,12 +73,12 @@ func TestTraversalLocatorsRefusedAtBothWriteDoors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			lib := validateSourceWrite(types.Source{Kind: types.SourceRepo, Name: "n", Locator: tc.locator}, nil)
 			if want := fmt.Sprintf(repo400LocatorShape, "locator"); lib != want {
-				t.Errorf("validateSourceWrite = %q, want the DRAFT shape sentence %q", lib, want)
+				t.Errorf("validateSourceWrite = %q, want the shape sentence %q", lib, want)
 			}
 			ws := validateWorkspaceSource(types.WorkspaceSource{
 				Type: types.WorkspaceSourceTypeRepo, Source: tc.locator}, nil)
 			if want := fmt.Sprintf(repo400LocatorShape, "source"); ws != want {
-				t.Errorf("validateWorkspaceSource = %q, want the DRAFT shape sentence %q", ws, want)
+				t.Errorf("validateWorkspaceSource = %q, want the shape sentence %q", ws, want)
 			}
 		})
 	}

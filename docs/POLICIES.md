@@ -782,7 +782,7 @@ What the check does and does not settle:
 | Inline | the run request, `components[].inline` | that run only, never stored |
 
 - A run names stored components by `components[].id`. It carries at most 8.
-- A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys).
+- A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys). It may carry a `description`: one plain line of up to 500 characters that New Run shows on the component's card.
 - Each secret names one stored secret and one delivery:
 
 | `delivery.mode` | What the secret does | The grant it becomes |

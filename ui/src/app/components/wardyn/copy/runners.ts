@@ -232,6 +232,11 @@ export const LOCAL_RUN = {
   KILL_DONE: (elapsed: string, name: string) =>
     `An operator killed this run ${elapsed} in. ${name} reported it removed the sandbox; Wardyn issues it no more credentials.`,
   KILL_FILES_LOCAL: (name: string) => `Files the run wrote to a folder on ${name} are still there; scratch is gone.`,
+  // A kill whose stop was queued for an offline runner (run.kill data.sandbox_stop "queued"): the credentials
+  // are gone, the sandbox is not yet.
+  KILL_QUEUED: (elapsed: string, name: string) =>
+    `This run was killed ${elapsed} in while ${name} was offline. Its credentials were revoked at once, and ${name} was told to remove the sandbox when it next connects.`,
+  KILL_QUEUED_FILES: (name: string) => `Until ${name} reconnects, the sandbox and anything the run wrote stay there.`,
   TERMINAL_OFFLINE: (name: string) => `${name} is offline, so its terminal can't be reached. The session keeps running there.`,
   SPOOLED: (when: string) => `Recorded offline at ${when}`,
   SPOOL_FULL: "Refused — the runner's offline log was full",

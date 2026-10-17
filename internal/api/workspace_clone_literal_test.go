@@ -205,7 +205,7 @@ func TestCloneHostDropWarning(t *testing.T) {
 	for _, tc := range []struct{ host, kind, want string }{
 		{"10.0.0.5", "workspace", `dropped clone host "10.0.0.5" of workspace "app": a private address not in operator allowlist; allow it in the workspace's approved egress`},
 		{"fd12:3456::1", "workspace", `dropped clone host "fd12:3456::1" of workspace "app": a private address not in operator allowlist; list it in the ceiling's allowed_domains`},
-		{"10.0.0.5", "source", `dropped clone host "10.0.0.5" of source "app": a private address not in operator allowlist; list it in the deployment ceiling's allowed_domains`},
+		{"10.0.0.5", "source", `dropped clone host "10.0.0.5" of source "app": a private address not in operator allowlist; list it in the allowed_domains of the launching operator's ceiling`},
 	} {
 		if got := cloneHostDropWarning(tc.host, tc.kind, "app"); got != tc.want {
 			t.Errorf("warning = %q, want %q", got, tc.want)

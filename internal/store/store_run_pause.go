@@ -39,7 +39,17 @@ type PauseCandidate struct {
 	// WaitingRequest: one of those counts toward a waiting pause
 	// (waitingHoldSQL).
 	WaitingRequest bool
+	// RequestDecidedSincePause: a request of the run was decided after the run
+	// was paused (false for a run that is not paused). It is how the sweep tells
+	// an idle pause whose closing request was missed from one that simply has
+	// no request open.
+	RequestDecidedSincePause bool
 }
+
+// decidedSincePauseSQL is TRUE when agent_runs (the outer query's row) is
+// paused and has a request decided after paused_at.
+const decidedSincePauseSQL = `EXISTS (SELECT 1 FROM approvals a WHERE a.run_id = agent_runs.id
+		  AND agent_runs.paused_at IS NOT NULL AND a.decided_at > agent_runs.paused_at)`
 
 // RunPauser is the pause surface. Optional like RunLeaser and for the same
 // reason; the api layer runs no pause sweep, and stamps no presence, when a
@@ -141,7 +151,7 @@ func (w withExtra) Scan(dest ...any) error { return w.Row.Scan(append(dest, w.ex
 
 // ListPauseCandidates — see RunPauser.
 func (s PG) ListPauseCandidates(ctx context.Context) ([]PauseCandidate, time.Time, error) {
-	q := `SELECT ` + runCols + `, ` + openHoldSQL + `, ` + waitingHoldSQL + `, now() FROM agent_runs
+	q := `SELECT ` + runCols + `, ` + openHoldSQL + `, ` + waitingHoldSQL + `, ` + decidedSincePauseSQL + `, now() FROM agent_runs
 		WHERE state = $1 AND lost_at IS NULL AND sandbox_ref <> ''`
 	rows, err := s.Pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
@@ -154,7 +164,7 @@ func (s PG) ListPauseCandidates(ctx context.Context) ([]PauseCandidate, time.Tim
 	)
 	for rows.Next() {
 		var c PauseCandidate
-		run, err := scanRun(withExtra{Row: rows, extra: []any{&c.OpenRequest, &c.WaitingRequest, &now}})
+		run, err := scanRun(withExtra{Row: rows, extra: []any{&c.OpenRequest, &c.WaitingRequest, &c.RequestDecidedSincePause, &now}})
 		if err != nil {
 			return nil, time.Time{}, err
 		}

@@ -98,6 +98,21 @@ func TestPushRuleSets_ADOServerRecordsTheRowBasePath(t *testing.T) {
 	}
 }
 
+// One Azure DevOps Server host serving two collections, one base URL each: a repository in the second
+// collection is keyed under its own base URL, never the first one on the host.
+func TestPushRuleSets_ADOServerPicksTheBaseURLTheRepositoryIsUnder(t *testing.T) {
+	sc := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{{
+		ID: "tfs", Kind: types.GitProviderAzureDevOps,
+		BaseURLs: []string{"https://tfs.corp.example/tfs/CollA", "https://tfs.corp.example/tfs/CollB"}}}}}
+	sets, _, err := (&Server{}).pushRuleSetsFor(prSpec("https://tfs.corp.example/tfs/CollB/Proj/_git/app", "https://tfs.corp.example/tfs/CollA/Proj/_git/web"), nil, sc)
+	if err != nil || len(sets) != 2 {
+		t.Fatalf("sets = %+v err %v, want one per collection", sets, err)
+	}
+	if sets[0].Org != "collb" || sets[0].BasePath != "/tfs/CollB" || sets[1].Org != "colla" || sets[1].BasePath != "/tfs/CollA" {
+		t.Errorf("sets = %+v, want each collection under its own base URL", sets)
+	}
+}
+
 // Dispatch hands the sidecar the per-entry sets and takes the run-wide block off
 // its policy (the proxy refuses both together); a run with no sets keeps the block.
 func TestPushRuleSets_DispatchCarriesSetsInsteadOfTheRunWideBlock(t *testing.T) {

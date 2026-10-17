@@ -20,7 +20,7 @@ import (
 // needed to leave it.
 func orgComponentView(c types.Component) client.OrgComponentView {
 	v := client.OrgComponentView{
-		ID: c.ID, Name: c.Name,
+		ID: c.ID, Name: c.Name, Description: c.Definition.Description,
 		Hosts:      append([]string{}, c.Definition.Hosts...),
 		Secrets:    make([]client.ComponentSecretView, 0, len(c.Definition.Secrets)),
 		ConfigKeys: sortedKeys(c.Definition.Config),

@@ -195,7 +195,7 @@ describe("ProvidersScreen", () => {
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
   });
 
-  // V1 lens E finding 2 (HIGH): Save was withheld on the DRAFT's emptiness, so
+  // V1 lens E finding 2 (HIGH): Save was withheld on the draft's emptiness, so
   // removing the last row hid the only button that could commit the removal —
   // the tab flipped to the legacy-open banner whose only action is Add, and the
   // change was discarded on navigation. The withhold is on the LOADED snapshot.

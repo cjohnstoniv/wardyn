@@ -162,9 +162,11 @@ func viewedUserType(sess Session) string {
 	return sess.UserType
 }
 
-// ExpiryFromContext returns when the verified session expires, or the zero
-// time when absent. No refresh — the session dies outright — so the console
-// surfaces it as an advance warning rather than a surprise 401.
+// ExpiryFromContext returns when the verified session stops authenticating
+// requests, or the zero time when absent: its expiry, or its sign-in time plus
+// a positive RoleStampTTL when that comes first (withPrincipal). No refresh —
+// the session dies outright — so the console surfaces it as an advance warning
+// rather than a surprise 401.
 func ExpiryFromContext(ctx context.Context) time.Time {
 	t, _ := ctx.Value(expiryCtxKey{}).(time.Time)
 	return t
@@ -256,6 +258,17 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, memberPreviewNoCredCtxKey{}, sess.MemberMode && sess.MemberModeNoCredential)
 	ctx = context.WithValue(ctx, issuedAtCtxKey{}, sess.IssuedAt)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
+}
+
+// withPrincipal is contextWithPrincipal with the expiry this Authenticator
+// enforces: Middleware refuses a session from IssuedAt plus a positive
+// RoleStampTTL on, so a sooner role deadline is the expiry a request reads.
+func (a *Authenticator) withPrincipal(ctx context.Context, sess Session) context.Context {
+	ctx = contextWithPrincipal(ctx, sess)
+	if ttl := a.cfg.RoleStampTTL; ttl > 0 && !sess.IssuedAt.IsZero() && sess.IssuedAt.Add(ttl).Before(sess.Expiry) {
+		ctx = context.WithValue(ctx, expiryCtxKey{}, sess.IssuedAt.Add(ttl))
+	}
+	return ctx
 }
 
 // principalCtxKey — see PrincipalFromContext.

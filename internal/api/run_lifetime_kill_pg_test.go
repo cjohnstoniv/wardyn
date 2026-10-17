@@ -416,3 +416,32 @@ func TestKill_APersonsKillReadsAQueuedSandboxKillAsAFailure(t *testing.T) {
 		t.Fatalf("run.kill rows = %+v, want one failure", kills)
 	}
 }
+
+// TestLease_KillAtTheCapOfAPoolNamesThePool: the run.kill row of a run killed at its pool's lifetime
+// carries the pool's name as its source, as run.create wrote it, not "your pool".
+func TestLease_KillAtTheCapOfAPoolNamesThePool(t *testing.T) {
+	f := newLifetimeFixture(t)
+	pool, err := f.st.CreateRunnerPool(context.Background(), types.RunnerPool{ID: uuid.New(), Name: "Night shift", Scope: types.RunnerPoolOrganization}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := f.now.Add(-time.Second)
+	run, err := f.st.CreateRun(context.Background(), types.AgentRun{
+		ID: uuid.New(), CreatedAt: f.now.Add(-48 * time.Hour), UpdatedAt: f.now, CreatedBy: "life@example.com",
+		Agent: "claude-code", Task: "lifetime", ConfinementClass: types.CC2, State: types.RunRunning,
+		RunnerTarget: "docker", SandboxRef: "wardyn-agent-" + uuid.NewString()[:8], Experience: types.ExperienceBackground,
+		LifetimeCapAt: &at, LifetimeCapSource: types.LimitSourcePool, RunnerPoolID: &pool.ID,
+		RunnerPoolRevision: pool.Revision, RunnerPoolSelection: types.RunnerPoolSelectedExplicit,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	f.sweep(t)
+	kills := f.audit.eventsFor(run.ID, "run.kill")
+	if len(kills) != 1 {
+		t.Fatalf("run.kill rows = %+v, want one", kills)
+	}
+	if data := leaseAuditData(t, kills[0]); data["source"] != "Night shift" {
+		t.Errorf("run.kill source = %v, want the pool's name", data["source"])
+	}
+}

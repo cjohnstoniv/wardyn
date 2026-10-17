@@ -734,5 +734,7 @@ test.describe("a failed sign-out is surfaced, not swallowed", () => {
     // server-side session was never confirmed dead.
     await expect(page.getByText(SHELL.SIGN_OUT_FAILED_TITLE)).toBeVisible();
     await expect(page.getByText(SHELL.SIGN_OUT_FAILED_BODY)).toBeVisible();
+    // A retry from this tab has no cookie left to end, so the advice is to sign in and out again.
+    await expect(page.getByText(/Sign in again, then sign out/)).toBeVisible();
   });
 });

@@ -39,6 +39,7 @@ export function ToolRules({ fact, harnessName, personal, onAdd, onRemove }: Tool
           {fact.policy_rules.map((r) => (
             <li key={`policy:${r.tool}`} data-locked="" className={ROW_CLASS}>
               <Lock aria-hidden className="size-3.5 text-muted-foreground" />
+              <span className="sr-only">{NR_TOOLS.ROW_LOCKED}</span>
               <span className="min-w-0 flex-1 font-mono [overflow-wrap:anywhere]">{label(r.tool)}</span>
               <Chip tone={EFFECT_TONE[r.effect as ToolEffect] ?? "neutral"}>{EFFECT_LABEL[r.effect as ToolEffect] ?? r.effect}</Chip>
             </li>

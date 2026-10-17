@@ -13,6 +13,7 @@ import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
+import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
 
 const ENV_SECRET_LINE = "Wardyn can't revoke a secret this run received as an environment variable — rotate it where it was issued.";
@@ -203,6 +204,19 @@ describe("RunFailureBlock", () => {
     expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
     expect(screen.queryByText(/torn down|stopped working at that moment|identity revoked/)).not.toBeInTheDocument();
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
+  });
+
+  // A kill whose sandbox stop was queued for an offline runner revoked the credentials, but the sandbox
+  // waits on the runner: neither "removed" nor a failed teardown.
+  it("killed with the stop queued for an offline runner: says the sandbox stays until the runner reconnects", () => {
+    const queued = ev("run.kill", "success", { data: { reason: "lifetime_cap", sandbox_stop: "queued" } });
+    expect(runEndingFromAudit("KILLED", [queued])).toMatchObject({ evidence: "queued" });
+    renderBlock("KILLED", [queued]);
+    const name = runnerLabel(run("KILLED"));
+    expect(screen.getByText(LOCAL_RUN.KILL_QUEUED("26m 0s", name))).toBeInTheDocument();
+    expect(screen.getByText(LOCAL_RUN.KILL_QUEUED_FILES(name))).toBeInTheDocument();
+    expect(screen.queryByText(/stopped and removed the sandbox|teardown step failed/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "queued");
   });
 
   // Ported from the review probe: a kill that failed partway printed "may

@@ -39,7 +39,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "build-runner-pkg: --version must be X.Y.Z or X.Y.Z-rc.N" >&2; exit 2; }
-[ -f "$ARM64" ] && [ -f "$AMD64" ] && [ -n "$OUT" ] || { echo "build-runner-pkg: --arm64, --amd64 (existing files) and --out are required" >&2; exit 2; }
+if [ ! -f "$ARM64" ] || [ ! -f "$AMD64" ] || [ -z "$OUT" ]; then
+  echo "build-runner-pkg: --arm64, --amd64 (existing files) and --out are required" >&2
+  exit 2
+fi
 PKG_VERSION="${VERSION%%-*}"   # pkgbuild versions are dotted numbers
 
 WORK="$(mktemp -d)"

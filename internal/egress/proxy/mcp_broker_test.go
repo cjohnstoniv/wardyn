@@ -327,6 +327,22 @@ func TestMCPBroker_DirectOriginDeniedEvenWhenHostAllowedElsewhere(t *testing.T) 
 	}
 }
 
+// A harness that ignores NO_PROXY sends its broker address through the forward lane as an absolute-form
+// request: the record carries the broker's redacted path, never the token.
+func TestMCPBroker_ForwardLaneRecordNeverCarriesTheToken(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{}, nil, nil)
+	tok := mcpToken("claude-code")
+	req := httptest.NewRequest(http.MethodPost, "http://wardyn-proxy.test:3128/wardyn/mcp/"+tok+"/linear", strings.NewReader(mcpInit))
+	rec := httptest.NewRecorder()
+	f.p.ServeHTTP(rec, req)
+	if strings.Contains(f.buf.String(), tok) {
+		t.Fatalf("the harness's MCP token reached a decision record: %s", f.buf.String())
+	}
+	if d := lastDecision(t, f.buf); d.Request.Path != mcpRedactedPath("claude-code", "linear") {
+		t.Fatalf("path = %q, want the broker's redacted form", d.Request.Path)
+	}
+}
+
 // mcpResolver answers per host and per call, counting the calls.
 type mcpResolver struct {
 	mu     sync.Mutex

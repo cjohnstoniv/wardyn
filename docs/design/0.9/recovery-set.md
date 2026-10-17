@@ -45,7 +45,7 @@ It amends the lane brief where the code disagrees with it ([§1.2](#12-amendment
 | Item | Source | In the set as | Notes |
 |---|---|---|---|
 | Database | `WARDYN_PG_DSN` | The dump or provider snapshot, outside the set directory | Identified by its audit head ([§3](#3-snapshot-identity)) |
-| Audit spool and sidecars | `WARDYN_AUDIT_SPOOL`, `<spool>.consumed`, `<spool>.quarantine` | `audit/<spool basename>` and its two sidecars | Each file may be absent |
+| Audit spool and sidecars | `WARDYN_AUDIT_SPOOL`, `<spool>.consumed`, `<spool>.quarantine` | `audit/<spool basename>` and its two sidecars | Each file may be absent; none is staged when the spool is unset |
 | Recordings | `WARDYN_RECORDING_STORE` and `WARDYN_RECORDING_DIR` | `recordings/`, only under the `fs` store | `pg` is in the database; `off` has none |
 | Drive objects | One per drive and home, named by `types.DriveObjectName` | `drives/<drive id>/<home>/` | Volume, `host_path` subtree or PVC contents |
 | Keys | `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`, `WARDYN_KEK` and its service | **Never.** Fingerprints only, in the manifest | [§4](#4-encrypted-key-handling) |
@@ -64,7 +64,7 @@ It amends the lane brief where the code disagrees with it ([§1.2](#12-amendment
 | `source.db` | Host, port and database name | User, password, query parameters |
 | `snapshot` | `audit_head_seq`, `audit_head_hash`, `schema_migration` | |
 | `keys` | Fingerprints and row counts per key class ([§4.1](#41-what-the-set-holds)) | Any identity, key, token, wrapped key or value |
-| `audit_spool` | Basename; per file `present` or `absent`, size, `sha256` | File contents |
+| `audit_spool` | Basename (empty when `WARDYN_AUDIT_SPOOL` is unset, and then verify and rehearse compare no spool files); per file `present` or `absent`, size, `sha256` | File contents |
 | `recordings` | Store kind; under `fs`, entry count and tree digest | Recording contents |
 | `drives` | Per object: drive id, home, backend, object name, `staged` or `not_in_set`, entry count, tree digest | Subject, file contents |
 
@@ -100,7 +100,7 @@ The database snapshot is identified by its audit head at quiesce: `max(seq)` of 
 |---|---|---|---|
 | `WARDYN_AGE_KEY` (`local` KEK) | The `age1…` recipient | The identity | Whoever holds the identity and the dump: residual 48(b), unchanged |
 | `WARDYN_PLATFORM_KEY_FILE` | Its recipient | The file | Holder of the file, for boot-key rows only |
-| `WARDYN_KEK=transit` or `azurekv` | Mode, mount and key names, from configuration only; no key-service call | Vault token, Entra secret, any wrapped key | Whoever the key service lets unwrap |
+| `WARDYN_KEK=transit`, `azurekv` or `awskms` | Mode, and each mount and key name that is set (`kek_keys`, by environment name), from configuration only; no key-service call | Vault token, Entra secret, any wrapped key | Whoever the key service lets unwrap |
 | Principal keys (`principal_keys`) | Row count per purpose and state, from the dump | Unwrapped keys | As the key-domain KEK above them |
 | Store mode (`vaultkv`, `azurekv`) | Count of pointer rows | Values (in the external store) | The external store's own access |
 | Desktop `age.key` | Recipient, when present on the device | The file ([DESKTOP.md](../../DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)) | The device only |
@@ -284,7 +284,7 @@ The owner accepted every recommendation (DECISIONS.md, 2026-10-10, "#1514 recove
 
 ## 12. Slices
 
-Every slice is Z0 tier. "Free": a free executor may build it; "core": Sonnet/high or Opus. A skipped PG test is not evidence.
+Every slice is Z0 tier. "Free": a free executor may build it; "core": a core executor. A skipped PG test is not evidence.
 
 | Slice | Model | Builds | Owns |
 |---|---|---|---|

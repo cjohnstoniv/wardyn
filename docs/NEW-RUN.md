@@ -129,7 +129,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 |---|---|
 | CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **Google Cloud CLI** and **kubectl** are **Coming soon** |
 | GitHub CLI | Works only with this run's GitHub repositories (`cli_no_github_repo`). The proxy adds its token |
-| AWS CLI | Role credentials are issued into the sandbox, short-lived |
+| AWS CLI | Role credentials are issued into the sandbox, short-lived. On a run whose model provider is Bedrock, `AWS_REGION` and `AWS_DEFAULT_REGION` are the provider's region and win over the profile's; pass `--region` for another |
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |
@@ -138,6 +138,8 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.
 - A repository whose token or key lane the run drops reads **Needs setup**, with "No credential is set up for this repository, so the run starts without one." (`repo_no_credential`) under it.
+- A background Claude Code run with no MCP server and no tool-approval hold still loads the repository's own `.mcp.json`. That traffic goes through the run's egress policy like any other.
+- Harnesses in one sandbox run as the same user, so each can read the others' MCP addresses. The rules that hold for a server are those of the least restricted harness that has it turned on.
 
 ## Review
 

@@ -289,7 +289,14 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     }
     return {
       ...from("killed", kill, "run.kill"),
-      evidence: !kill ? "unknown" : kill.outcome === "success" ? "confirmed" : "partial",
+      evidence: !kill
+        ? "unknown"
+        : kill.outcome !== "success"
+          ? "partial"
+          : // The credentials are revoked; the offline runner removes the sandbox when it reconnects.
+            str(kill.data?.sandbox_stop) === "queued"
+            ? "queued"
+            : "confirmed",
     };
   }
   if (state === "STOPPED") {

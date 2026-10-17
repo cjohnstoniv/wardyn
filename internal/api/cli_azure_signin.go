@@ -62,7 +62,6 @@ const (
 	azureCLIPKCECookieName  = "wardyn_azcli_pkce"
 )
 
-// DRAFT (canon pending).
 const (
 	cliSignInNotAzure           = "this component is not an Azure CLI, so there is nothing to sign in to"
 	azureCLISignInNoSession     = "An Azure sign-in must be started from a signed-in browser session: the captured sign-in is bound to your identity provider subject, and an admin-token caller has none"
@@ -155,6 +154,8 @@ func (s *Server) componentAzureCLIAdmitted(r *http.Request, adm *componentAdmiss
 		return nil
 	case !s.credentialPerson(adm.caller):
 		return own(fmt.Sprintf("components[%d]: %s", i, azureCLINotPersonRefusal))
+	case isServicePrincipal(adm.caller):
+		return own(fmt.Sprintf("components[%d]: %s", i, azureCLIServiceIdentityRefusal))
 	}
 	return own(fmt.Sprintf(azureCLISignInRequired, i, c.snapshot.Name))
 }

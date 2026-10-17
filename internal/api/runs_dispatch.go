@@ -207,8 +207,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 
 	// The run's masking manifest opens before any value is resolved and completes
-	// before the sandbox exists (mask_manifest.go).
-	if !s.beginMaskManifest(ctx, run) {
+	// before the sandbox exists (mask_manifest.go); a resident value needs a runner that holds one.
+	if !s.beginValueResolution(ctx, run) {
 		return
 	}
 
@@ -671,7 +671,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
 	// The file_secret files join the spec last, so the manifest completes over their values.
-	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
+	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, grantRows, p.PATBroker, &spec, &resident) {
 		return
 	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {

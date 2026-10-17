@@ -76,10 +76,13 @@ type AccessHost struct {
 // minted value's ceiling, 0 when the run's lifetime bounds it or Wardyn does not
 // set it. AfterEnd is gone, expires or stays.
 type AccessCredential struct {
-	ID          string `json:"id"`
-	Row         string `json:"row"`
-	Kind        string `json:"kind"`
-	Owner       string `json:"owner"`
+	ID    string `json:"id"`
+	Row   string `json:"row"`
+	Kind  string `json:"kind"`
+	Owner string `json:"owner"`
+	// Label names the credential by its kind and whose it is, never by a secret's name. Empty for a
+	// model credential, which the console names by its provider.
+	Label       string `json:"label,omitempty"`
 	Delivery    string `json:"delivery"`
 	LifetimeSec int    `json:"lifetime_sec,omitempty"`
 	Renewed     bool   `json:"renewed,omitempty"`

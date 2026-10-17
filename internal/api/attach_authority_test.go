@@ -407,6 +407,28 @@ func TestAttachAuthority_LiveSessionStaysOpen(t *testing.T) {
 	}
 }
 
+// TestAttachAuthority_AnotherPersonsCookieDoesNotBoundATicket: a ticket presented beside another
+// person's session cookie keeps its own bound, writer and observer: that cookie's earlier deadline
+// ends nothing.
+func TestAttachAuthority_AnotherPersonsCookieDoesNotBoundATicket(t *testing.T) {
+	rig := newAuthorityRig(t, 30*time.Minute)
+	owner := rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour))
+	other := rig.cookie(t, holderSecond, time.Now().UTC().Add(10*time.Minute))
+	var ends [2]<-chan error
+	for i, readOnly := range []bool{false, true} {
+		_, ends[i] = rig.dial(t, other, rig.ticket(t, owner), readOnly)
+	}
+	rig.offset.Store(int64(29 * time.Minute))
+	time.Sleep(10 * authorityTick)
+	for i, end := range ends {
+		select {
+		case err := <-end:
+			t.Fatalf("socket %d (0 writer, 1 observer) ended at another person's cookie deadline: %v", i, err)
+		default:
+		}
+	}
+}
+
 type closeOrder struct {
 	mu     sync.Mutex
 	events []string

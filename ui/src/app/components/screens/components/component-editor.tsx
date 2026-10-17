@@ -216,6 +216,16 @@ export function ComponentEditor({
           />
         </Field>
 
+        <Field label={T.DESCRIPTION} htmlFor="component-description" hint={T.DESCRIPTION_HINT}>
+          <Input
+            id="component-description"
+            value={draft.description ?? ""}
+            maxLength={500}
+            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+            autoComplete="off"
+          />
+        </Field>
+
         <Field label={T.HOSTS} htmlFor="component-hosts" hint={T.HOSTS_HINT}>
           <Textarea
             id="component-hosts"

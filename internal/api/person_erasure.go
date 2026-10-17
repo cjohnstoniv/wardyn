@@ -18,8 +18,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -89,7 +87,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 		})
 	}
 	if s.cfg.MaskManifests != nil {
-		steps[erasure.MaskCopies] = s.eraseMaskCopies
+		steps[erasure.MaskCopies] = func(ctx context.Context, person string) (any, error) {
+			return s.eraseMaskCopies(ctx, person, want)
+		}
 	}
 	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
 		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
@@ -157,13 +157,22 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *
 	}
 	defer finish()
 	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
-	var runs []uuid.UUID
+	fenced := 0
 	if s.cfg.MaskManifests != nil && owner != "" { // "" is refused by the erase below
-		if runs, err = s.cfg.MaskManifests.FenceSubject(ctx, owner); err != nil {
+		// Every namespace eraseLocked erases: a run started under an entra form owns its manifest by it.
+		namespaces, err := s.personNamespaces(ctx, owner, want)
+		if err != nil {
 			return 0, err
 		}
+		for _, ns := range namespaces {
+			runs, err := s.cfg.MaskManifests.FenceSubject(ctx, ns)
+			fenced += len(runs)
+			if err != nil {
+				return fenced, err
+			}
+		}
 	}
-	return len(runs), s.eraseLocked(ctx, owner, rowID, want, rep)
+	return fenced, s.eraseLocked(ctx, owner, rowID, want, rep)
 }
 
 // alsoEraseLaunchIntents runs step, then erases the person's launch intents and
@@ -362,7 +371,7 @@ func (s *Server) provedNames(ctx context.Context, person string, want *erasureNa
 // under, and clears the person from the governance changes they proposed or decided (migration 0126).
 // The fields are sealed under the person's principal; a name the directory did not yet know when a row
 // was written is under its own key, so the keys of the person's proved names (erasureNames) are
-// destroyed too (a destroy that finds no live key writes nothing). A governance change matches on its
+// destroyed too (a destroy that finds no live key writes only a tombstone). A governance change matches on its
 // recorded principal by those names, and on its recorded email by the proved aliases alone: an email
 // claim can spell the principal, so the principal is never matched against one.
 func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *erasureNames) (any, error) {
