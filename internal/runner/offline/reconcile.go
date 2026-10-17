@@ -37,6 +37,12 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &a.RunID, Data: b}); err != nil {
 			return err
 		}
+		if a.Kind == types.RunnerActionRetire && result.Outcome == "success" {
+			// The org holds the receipt now. A failed compaction keeps the full record, as before.
+			if err := m.compactRetired(a.RunID); err != nil {
+				slog.WarnContext(ctx, "runner kept a retired run's full record", "run_id", a.RunID, "error", err)
+			}
+		}
 	}
 	return nil
 }

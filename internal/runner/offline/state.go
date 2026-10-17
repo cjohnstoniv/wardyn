@@ -47,6 +47,9 @@ type localRun struct {
 	// OutputCapture records that the create handed the sandbox an output
 	// writer; a retirement that says the run had no output is refused when set.
 	OutputCapture bool `json:"output_capture,omitempty"`
+	// Tombstone marks a retired run the org acknowledged retiring, compacted to its identity
+	// (compactRetired): only RunID, Ref, Lease.RunID and Retired remain.
+	Tombstone bool `json:"tombstone,omitempty"`
 }
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.

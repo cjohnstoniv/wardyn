@@ -267,7 +267,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		d.endsLeft = old.endsLeft - m.since(old.receipt)
 	}
 	m.deadlines[l.RunID] = d
-	if r, ok := m.state.Runs[l.RunID]; ok {
+	if r, ok := m.state.Runs[l.RunID]; ok && !r.Tombstone {
 		r.Lease = l
 		m.state.Runs[l.RunID] = r
 		return m.save()
