@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -31,38 +30,16 @@ func claimIntoPool(cmd *cobra.Command, c *sdk.Client, runnerID uuid.UUID, arg st
 	return nil
 }
 
-// ownPoolNamed is the person's user pool an argument names, and whether it was just made for it.
-// It looks only in the pools the caller may use (GET /me/runner-pools), where a user-scope row is their own;
-// an organization pool of the same name is not theirs to put a self-hosted runner in, so it is passed over.
+// ownPoolNamed is the person's user pool an argument names (its id, or a name sdk.Client.OwnRunnerPool
+// finds or makes), and whether it was just made for it.
 func ownPoolNamed(cmd *cobra.Command, c *sdk.Client, arg string) (pool sdk.RunnerPool, fresh bool, err error) {
 	if id, perr := uuid.Parse(arg); perr == nil {
 		pool, err = c.GetRunnerPool(cmd.Context(), id)
 		return pool, false, err
 	}
-	list, err := c.ListMyRunnerPools(cmd.Context(), "")
-	if err != nil {
-		return pool, false, err
+	pool, fresh, err = c.OwnRunnerPool(cmd.Context(), arg)
+	if fresh {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "created user pool %s (%s)\n", pool.Name, pool.ID)
 	}
-	var ids []uuid.UUID
-	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && strings.EqualFold(p.Name, arg) {
-			ids = append(ids, p.ID)
-		}
-	}
-	switch len(ids) {
-	case 0:
-		req := sdk.CreateMyRunnerPoolRequest{Name: arg}
-		if err = req.Validate(); err != nil {
-			return pool, false, err
-		}
-		pool, err = c.CreateMyRunnerPool(cmd.Context(), req)
-		if err == nil {
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "created user pool %s (%s)\n", pool.Name, pool.ID)
-		}
-		return pool, true, err
-	case 1:
-		pool, err = c.GetRunnerPool(cmd.Context(), ids[0])
-		return pool, false, err
-	}
-	return pool, false, fmt.Errorf("%d of your pools are named %q; name it by id", len(ids), arg)
+	return pool, fresh, err
 }

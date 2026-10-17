@@ -107,7 +107,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// asks, on any replica, whether or not it ever holds a watcher lease.
 	buildErr := errors.Join(s.loadMaskManifests(ctx), s.sweepOrphanedBuilds(ctx))
 	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok && s.watcherBaseCtx() != nil {
-		go s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval)
+		s.goBackground(func() { s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval) })
 	}
 	if s.cfg.Runner == nil {
 		return buildErr
@@ -117,7 +117,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// store error in the boot pass must not disable adoption for the process's
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
-	go s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval)
+	s.goBackground(func() { s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval) })
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
 	// containers are visible to the label sweep as "row terminal, containers still
@@ -280,7 +280,7 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		if !s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep") {
 			continue // still stuck; audited above, ref stays set for the next boot
 		}
-		if serr := s.cfg.Store.SetSandboxRef(ctx, run.ID, ""); serr != nil {
+		if serr := s.clearSandboxRef(ctx, run.ID); serr != nil {
 			slog.ErrorContext(ctx, "wardynd: orphan sweep tore down the sandbox but could not clear its ref",
 				slog.String("run_id", run.ID.String()), slog.Any("err", serr))
 		}
@@ -488,7 +488,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		}
 		// Still alive (or momentarily unreachable): attach a watcher so the run
 		// finalizes when the agent actually exits, not on a transient probe error.
-		go s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID)
+		s.goBackground(func() { s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID) })
 		reattached++
 	}
 	if reattached > 0 || finalized > 0 {
@@ -602,6 +602,9 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// Ended runs' runner_resident values, erased by the runners this replica
 	// holds; on every replica, after the passes above that end runs.
 	pass("runner resident erase sweep", s.sweepResidentErase(ctx))
+	// Ended runner runs' retirements, one step each; on every replica, as
+	// each step is one transaction under the run lock.
+	pass("runner retirement producer", s.produceRunnerRetirements(ctx))
 	return first
 }
 

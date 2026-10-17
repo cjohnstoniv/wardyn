@@ -12,7 +12,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { EffectiveLimit } from "../../../../../lib/types/runner-pools";
 import { parseCpuMillis, parseMemoryMib, setCpu, setMemory } from "../../lenses/limits-lens";
 import { draftSource } from "../provenance";
-import { cpuNumber, lifetimeText, memoryNumber } from "../format";
+import { cpuNumber, memoryNumber, resolvedLifetime, resolvedLifetimeText } from "../format";
 import { ReviewGroup } from "../review-group";
 import type { GroupProps } from "./group-props";
 
@@ -65,11 +65,11 @@ export function LimitsGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const requested = draft.intent.resources;
   const cpuMillis = applied?.cpu_millis.applied ?? requested?.cpu_millis;
   const memoryMib = applied?.memory_mib.applied ?? requested?.memory_mib;
-  const lifetime = draft.intent.ends_after_sec ?? (pre?.limits?.lifetime_sec.default.unlimited ? undefined : pre?.limits?.lifetime_sec.default.value);
+  const lifetime = resolvedLifetimeText(resolvedLifetime(draft.intent, pre?.limits));
   const size = cpuMillis !== undefined && memoryMib !== undefined ? [cpuNumber(cpuMillis), memoryNumber(memoryMib)] : undefined;
   const value = size && (lifetime === undefined
     ? NR_SHARED.JOIN(NR_SHARED.CPU(size[0]), NR_SHARED.MIB(size[1]))
-    : NR_REVIEW.LIMITS_VALUE(size[0], size[1], lifetimeText(lifetime)));
+    : NR_REVIEW.LIMITS_VALUE(size[0], size[1], lifetime));
   const source = applied?.cpu_millis.source_name || applied?.memory_mib.source_name;
   return (
     <ReviewGroup

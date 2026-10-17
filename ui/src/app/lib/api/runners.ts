@@ -16,6 +16,8 @@ import type {
   RunnerRevokeAnswer,
   RunnerSettingsRequest,
   RunnerTokenRequest,
+  RunnerTrustClass,
+  RunnerTrustRequest,
   RunnerUpdateRequest,
   RunnerView,
 } from "../types/runners";
@@ -58,6 +60,14 @@ export const runners = {
   /** PUT /me/runners/{id}: the owner declares its limits; a total past what the computer reports is refused 422. */
   updateMine: (id: string, limits: RunnerLimits) =>
     wfetch(`/me/runners/${seg(id)}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ limits } satisfies RunnerUpdateRequest) }).then((r) =>
+      asJson<RunnerView>(r),
+    ),
+  /**
+   * PUT /runners/{id}/trust (security tier): a person's runner, personal or managed_device, with the reason
+   * the audit keeps. Held for a second person it answers 202, which throws PendingChangeError.
+   */
+  setTrust: (id: string, trust_class: RunnerTrustClass, reason: string) =>
+    wfetch(`/runners/${seg(id)}/trust`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ trust_class, reason } satisfies RunnerTrustRequest) }).then((r) =>
       asJson<RunnerView>(r),
     ),
   /** DELETE /runners/{id} (security tier). */

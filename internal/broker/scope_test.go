@@ -5,6 +5,7 @@ package broker
 
 import (
 	"encoding/hex"
+	"math"
 	"testing"
 	"time"
 
@@ -166,6 +167,7 @@ func TestTTLFor_Edges(t *testing.T) {
 		{"zero_clamps_to_max", 0, defaultMaxTTL},
 		{"negative_clamps_to_max", -1, defaultMaxTTL},
 		{"over_max_clamps_to_max", 99999, defaultMaxTTL},
+		{"overflowing_value_clamps_to_max", math.MaxInt64 / 1000, defaultMaxTTL},
 		{"exactly_max_preserved", int(defaultMaxTTL / time.Second), defaultMaxTTL},
 		{"one_second_over_max_clamps", int(defaultMaxTTL/time.Second) + 1, defaultMaxTTL},
 		{"one_second_under_max_honored", int(defaultMaxTTL/time.Second) - 1, defaultMaxTTL - time.Second},
@@ -211,17 +213,17 @@ func TestNewJTI_UniqueAndOpaque(t *testing.T) {
 // trust-domain path so audit/attribution joins line up.
 func TestSpiffeForRun(t *testing.T) {
 	runID := uuid.New()
-	got := spiffeForRun(runID)
+	got := spiffeForRun(defaultTrustDomain, runID)
 	want := "spiffe://wardyn.local/agent-run/" + runID.String()
 	if got != want {
 		t.Fatalf("spiffeForRun = %q, want %q", got, want)
 	}
 	// Deterministic: same run id -> same SPIFFE id.
-	if again := spiffeForRun(runID); again != got {
+	if again := spiffeForRun(defaultTrustDomain, runID); again != got {
 		t.Fatalf("spiffeForRun not deterministic: %q != %q", again, got)
 	}
 	// Distinct runs -> distinct ids.
-	if other := spiffeForRun(uuid.New()); other == got {
+	if other := spiffeForRun(defaultTrustDomain, uuid.New()); other == got {
 		t.Fatalf("spiffeForRun collided across distinct runs: %q", other)
 	}
 }

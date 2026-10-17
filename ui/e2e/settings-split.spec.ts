@@ -50,11 +50,13 @@ test.describe("Admin Settings — S-5, a security admin is refused", () => {
     // page or role, so it is not this test's claim. What S-5 promises is
     // narrower: navigating INTO Settings adds no further read of its own —
     // neither a second /setup/status round trip nor GET /site-config (which
-    // only AdminSettingsScreen ever calls, gated on `adminReads`). Counting
-    // from here, right before the navigation, isolates that claim.
+    // only AdminSettingsScreen ever calls, gated on `adminReads`). Only reads
+    // issued once the address is Settings count: the Runs landing this test
+    // starts on reads /setup/status on mount and every 5 s (runs.tsx
+    // SETUP_POLL_MS), and one of those can land after this route is armed (#2056).
     let setupStatusCalls = 0;
     await page.route("**/api/v1/setup/status", (route) => {
-      setupStatusCalls++;
+      if (new URL(page.url()).pathname.endsWith("/admin/settings")) setupStatusCalls++;
       return route.continue();
     });
     const siteConfigCalls: string[] = [];

@@ -84,6 +84,19 @@ func SetRoleStampTTLForTest(a *Authenticator, ttl time.Duration) {
 	a.cfg.RoleStampTTL = ttl
 }
 
+// ConfigureSessionLifeForTest lets a test turn on the session-lifetime behaviours (session_life.go)
+// of an already-built Authenticator.
+func ConfigureSessionLifeForTest(a *Authenticator, set func(*Config)) {
+	set(&a.cfg)
+}
+
+// DecodeSessionForTest reads a session cookie back the way Middleware does.
+func DecodeSessionForTest(a *Authenticator, c *http.Cookie) (Session, error) {
+	r, _ := http.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(c)
+	return a.decodeSession(r)
+}
+
 // SetSessionTTLForTest sets Config.SessionTTL on an already-built Authenticator.
 func SetSessionTTLForTest(a *Authenticator, ttl time.Duration) {
 	a.cfg.SessionTTL = ttl

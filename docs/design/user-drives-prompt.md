@@ -705,7 +705,7 @@ With the switch off nothing else on the screen changes.
 | `EMPTY_ALLOC_TITLE` | No allocations yet |
 | `EMPTY_ALLOC_BODY` | A drive with no allocation is mounted by nobody. Allocate one to a group to start. |
 | `PREVIEW_TITLE` | Who gets what |
-| `PREVIEW_LEAD` | Paste the roles, groups, or email a person's token would carry, and see which drive and directory they would mount. |
+| `PREVIEW_LEAD` | Paste the roles, groups, or email a person's token would carry, choose their user type, and see which drive and directory they would mount. |
 | `PREVIEW_CTA` | Preview |
 | `PREVIEW_NONE` | No drive is allocated to these claims. |
 | `PREVIEW_RESULT(drive, tier)` | "{drive}" via the {tier} allocation |

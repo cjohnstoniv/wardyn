@@ -618,7 +618,7 @@ func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testin
 	pool := e.createPool("Provided", types.RunnerPoolOrganization)
 	renamed := "Renamed"
 	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
-		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &renamed, nil, nil); err != nil {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &renamed, nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	}}
@@ -628,5 +628,62 @@ func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testin
 	}
 	if n := len(e.audits(auditPoolUpdate)); n != 0 {
 		t.Errorf("%d update audit rows for a request that wrote nothing", n)
+	}
+}
+
+// A write landing between the pool read and the store call: the request names the revision it read,
+// the pre-check passes, and the store's own revision check refuses it, with no update audit row.
+func TestPG_RunnerPoolUpdateLosingTheRaceToTheStoreIsStale(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolOrganization)
+	other := "Other"
+	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &other, nil, nil, nil); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), `{"revision":1,"name":"Renamed"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Errorf("update that lost the race = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if n := len(e.audits(auditPoolUpdate)); n != 0 {
+		t.Errorf("%d update audit rows for a request that wrote nothing", n)
+	}
+	if got, err := e.pg.GetRunnerPool(context.Background(), pool.ID); err != nil || got.Name != "Other" {
+		t.Errorf("pool = %+v, %v; want the other admin's rename kept", got, err)
+	}
+}
+
+// racingDefaultsWrite runs before the organisation default write, the way a pool delete lands between
+// the handler's check and the store call.
+type racingDefaultsWrite struct {
+	store.PG
+	before func()
+}
+
+func (r *racingDefaultsWrite) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before, after types.RunnerPoolDefaults, err error) {
+	r.before()
+	return r.PG.PutRunnerPoolOrgDefaults(ctx, d, by)
+}
+
+// A default naming a pool that was deleted after the check answers the one pool_not_found, writes
+// nothing and leaves no audit row; a write that lands records the defaults it replaced.
+func TestPG_OrgDefaultNamingAPoolDeletedAfterTheCheckIs404(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolOrganization)
+	e.srv.cfg.Store = &racingDefaultsWrite{PG: e.pg, before: func() {
+		if _, err := e.pg.DeleteRunnerPool(context.Background(), pool.ID); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, pool.ID))
+	if w.Code != http.StatusNotFound || wireReason(t, w) != string(runnerpool.ReasonNotFound) {
+		t.Fatalf("default naming a pool deleted after the check = %d %s, want 404 %s", w.Code, w.Body, runnerpool.ReasonNotFound)
+	}
+	if n := len(e.audits(auditPoolDefaultSet)); n != 0 {
+		t.Errorf("%d default.set audit rows for a write that landed nothing", n)
+	}
+	if got, _ := e.pg.GetRunnerPoolOrgDefaults(context.Background()); got.PoolID != nil {
+		t.Errorf("the refused write named %v", got.PoolID)
 	}
 }

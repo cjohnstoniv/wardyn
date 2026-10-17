@@ -36,6 +36,23 @@ type localRun struct {
 	ProxyStoppedAt  *time.Time                   `json:"proxy_stopped_at,omitempty"`
 	Exit            *runnerwire.AgentExit        `json:"exit,omitempty"`
 	ExitAcked       bool                         `json:"exit_acked,omitempty"`
+	// Substrate is the k8s runner's per-run evidence record (internal/runner/k8s), opaque here and
+	// written only by this file's atomic save.
+	Substrate json.RawMessage `json:"substrate,omitempty"`
+	// ProxyExited is the durable obligation that the run's self-lapsing proxy will not serve again
+	// (design K1 §6.2 P1). Leases never clear it.
+	ProxyExited *proxyExit `json:"proxy_exited,omitempty"`
+	// ContainmentPending holds a run whose proxy is not proven stopped (design K1 §3.1 Q2).
+	ContainmentPending *runnerwire.ContainmentPending `json:"containment_pending,omitempty"`
+	// OutputCapture records that the create handed the sandbox an output
+	// writer; a retirement that says the run had no output is refused when set.
+	OutputCapture bool `json:"output_capture,omitempty"`
+}
+
+// proxyExit is one ProxyExited obligation and the evidence that recorded it.
+type proxyExit struct {
+	Evidence string    `json:"evidence"`
+	At       time.Time `json:"at"`
 }
 type localState struct {
 	RunnerID uuid.UUID                   `json:"runner_id"`

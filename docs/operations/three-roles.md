@@ -149,6 +149,7 @@ derives its role.
   - A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
   - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
   - Only an admin or a `security_admin` can read the graph (`GET /governance`).
+  - `GET /governance` returns every profile and every assignment. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
   - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
 - *Deleting and unassigning.*
   - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).

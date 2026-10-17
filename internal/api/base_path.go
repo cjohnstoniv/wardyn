@@ -31,7 +31,7 @@ func (s *Server) Handler() http.Handler {
 			s.router.ServeHTTP(w, r)
 		})
 	}
-	return underBasePath(s.cfg.BasePath, h)
+	return underBasePath(s.cfg.BasePath, s.trustedProxyClient(h))
 }
 
 // InternalHandler returns the chi router at the host root, for the

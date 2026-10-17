@@ -521,6 +521,11 @@ func closedEnumChecks() []closedEnumCheck {
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
 		)},
+		// Why the org stopped waiting for a runner's resident erase. The Go set
+		// is store.ResidentAbandon*, which this package cannot import (store
+		// imports db); TestResidentAbandonReasonsMatchStore, in the external
+		// db_test package, holds this entry to those constants.
+		{"runner_resident_runs", "abandoned_reason", stringSet("runner_revoked", "runner_deleted", "expired_unconfirmed")},
 	}
 }
 

@@ -123,12 +123,17 @@ type dispatchParams struct {
 	// carries them INSTEAD of the policy's run-wide push_rules.
 	PushRuleSets []types.PushRuleSet
 	// HarnessToolRules are the run's tool rules per included harness
-	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
+	// (applyHarnessToolRules). When set, the proxy carries them, and a credential
 	// per harness, INSTEAD of the policy's run-wide tool_rules.
 	HarnessToolRules []types.HarnessToolRules
 	// Harnesses are the run's run_harnesses rows, nil without the harness set;
 	// each that names a provider gets its own model credential lane.
 	Harnesses []types.RunHarness
+	// ADOLaneRepo is the run's own repository as the per-person Azure DevOps
+	// lane may serve it. Set only by finishCreateRunLaunch (the create and
+	// pool-queue doors) from the request the fold graded; a server-authored lane
+	// leaves it empty and resolves from WorkspaceRepos alone.
+	ADOLaneRepo string
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -340,16 +345,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
 	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
-	// already read and the run's own repositories (resolveADOEntraRun). Decided
-	// HERE, ahead of the redirect plan, which leaves a lane host's credential to
-	// the lane (laneCarriesHost), and of the LLM phase, where the per-run CA this
-	// lane cannot run without is minted; it is AUTHORED after both.
-	// A failed site-config read decides nothing — no row, no lane.
-	var adoRun adoEntraRun
-	var adoInject bool
-	if siteCfgErr == nil {
-		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	}
+	// already read and the run's own repositories (resolveADOEntraLane): its
+	// workspace repositories and p.ADOLaneRepo, never run.Repo, which a
+	// server-authored lane sets too. Decided HERE, ahead of the redirect plan,
+	// which leaves a lane host's credential to the lane (laneCarriesHost), and of
+	// the LLM phase, where the per-run CA this lane cannot run without is minted;
+	// it is AUTHORED after both. A failed site-config read decides nothing — no
+	// row, no lane — and says so for a run on an Azure DevOps Services host. A
+	// decline is announced (run.ado_lane.skip and the sandbox env), never refused.
+	adoRun := s.decideADOLane(ctx, run, siteCfg, siteCfgErr, policy.WorkspaceRepos, p.ADOLaneRepo, sandboxEnv)
+	adoInject := adoRun.rowID != ""
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
@@ -456,7 +461,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
-	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+	secretEnvKeys, resident := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
@@ -672,7 +677,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
+	if !s.applyRunRecording(ctx, &run, &spec) {
+		return
+	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
+	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
 	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
@@ -784,7 +793,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 
 	if interactive {
 		if byoi {
-			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
+			s.byoiSelftest(ctx, run, ref, execution, false /* warn-only */)
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(map[string]any{
@@ -805,7 +814,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			if s.byoiExecLessRefused(ctx, run, ref) {
 				return
 			}
-			if !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
+			if !s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */) {
 				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
 				s.failAndRevoke(ctx, run.ID, types.RunRunning,
 					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")

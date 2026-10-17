@@ -20,7 +20,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-dir=deploy/helm/wardyn/templates
+# Usage: check-helm-templates.sh [chart dir], default deploy/helm/wardyn.
+dir="${1:-deploy/helm/wardyn}/templates"
 [ -d "$dir" ] || { echo "FAIL: $dir does not exist — this gate would check nothing" >&2; exit 1; }
 
 # `! -type d`, not `-type f`: a symlink or any other entry is a file Helm may load.

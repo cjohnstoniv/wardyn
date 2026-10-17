@@ -42,6 +42,10 @@ export const NR_RUN = {
     "A pool is required. Pools you can use stay visible, with the reason when one can't take this run.",
   POOL_OPTION_REASON: (pool: string | number, reason: string | number) => `${pool} · ${reason}`,
   REASON_NO_ONLINE: "No online runners",
+  /** pending W-55: the recommended text until the owner answers. */
+  FIT_STARTS_NOW: "Starts now",
+  /** pending W-55: the recommended text until the owner answers. */
+  FIT_WAITS: "Waits for a slot",
   /** pending W-03: the recommended text until the owner answers. */
   REASON_SWITCHED_OFF: "Switched off",
   /** pending W-03: the recommended text until the owner answers. */

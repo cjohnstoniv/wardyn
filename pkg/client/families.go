@@ -340,7 +340,9 @@ func baselineAsserted(sent, stored types.SiteConfig) bool {
 	return false
 }
 
-// normalizedHost lowercases a host name and drops a trailing dot, as the server does before comparing.
+// normalizedHost lowercases a host name and drops a trailing dot. The server's normalizeHostName
+// (internal/api/egress_baseline.go) lowercases and trims space but keeps a trailing dot, so this compares
+// more loosely than the server writes.
 func normalizedHost(h string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
 }

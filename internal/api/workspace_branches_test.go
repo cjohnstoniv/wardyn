@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -233,6 +234,10 @@ func TestWorkspaceBranches_ADOOwnTokenListed(t *testing.T) {
 		if f.auths[i] != adoOwnPATHeaderValue(ownPATToken) {
 			t.Errorf("request %d carried %q, want the person's own token", i, f.auths[i])
 		}
+		q := u.Query()
+		if q.Get("api-version") != adoBranchAPIVersion || strings.HasSuffix(u.Path, "/refs") && q.Get("filter") != "heads/" {
+			t.Errorf("request %d asked %q, want api-version=%s and, on refs, filter=heads/", i, u.RawQuery, adoBranchAPIVersion)
+		}
 	}
 	if len(f.urls) != 4 {
 		t.Fatalf("%d requests, want 4 (repository and refs, twice)", len(f.urls))
@@ -353,6 +358,20 @@ func TestWorkspaceBranches_AuditHasNoBranchNames(t *testing.T) {
 	}
 }
 
+// A locator authored with userinfo is audited without it.
+func TestWorkspaceBranches_AuditDropsLocatorUserinfo(t *testing.T) {
+	app := types.GitProvider{ID: "gh-1", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"}, Lanes: []types.GitLane{types.GitLaneApp}}
+	gh := &broker.FakeGitHubMinter{Branches: []string{"main"}, DefaultBranch: "main"}
+	repo := "https://person:s3cret@github.com/" + branchTestGitHub
+	ws := branchWorkspace("", repo)
+	srv, audit := newBranchServer(t, adoSite(app), nil, gh, ws)
+	listBranches(t, srv, memberCookie(t), ws.ID, repo)
+	rows := auditRowsOf(audit, "workspace.branches.list")
+	if len(rows) != 1 || strings.Contains(string(rows[0].Data), "s3cret") || strings.Contains(string(rows[0].Data), "person") {
+		t.Fatalf("rows = %+v, want one row without the locator's userinfo", rows)
+	}
+}
+
 // The GitHub arm asks the organisation's App about the one repository, only
 // where the admitting row permits the App lane.
 func TestWorkspaceBranches_GitHubApp(t *testing.T) {
@@ -414,6 +433,7 @@ func TestADOBranchTarget(t *testing.T) {
 		{services, "https://contoso@dev.azure.com/contoso/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
 		{services, "https://contoso.visualstudio.com/DefaultCollection/proj/_git/app", adoOwnPATAPIBase + "/contoso", "proj", "app", true},
 		{services, "https://dev.azure.com/contoso/_git/app", adoOwnPATAPIBase + "/contoso", "app", "app", true},
+		{services, "https://dev.azure.com/contoso/My%20Project/_git/app", adoOwnPATAPIBase + "/contoso", "My Project", "app", true},
 		{services, "https://dev.azure.com/contoso/proj/app", "", "", "", false},
 		{services, "https://dev.azure.com/contoso/proj/_git/..", "", "", "", false},
 		{services, "https://dev.azure.com/contoso/proj/_git/.", "", "", "", false},
@@ -427,5 +447,47 @@ func TestADOBranchTarget(t *testing.T) {
 		if base != tc.base || project != tc.project || name != tc.name || ok != tc.ok {
 			t.Errorf("%s = %q %q %q %v, want %q %q %q %v", tc.repo, base, project, name, ok, tc.base, tc.project, tc.name, tc.ok)
 		}
+	}
+}
+
+// adoBranchGet maps the forge's answer to a reason: a refusal (401, 403 or a redirect to its
+// sign-in page, never followed) is forge_refused; a transient status, a body that is not JSON and an
+// unreachable host are forge_unreachable; a 200 decodes.
+func TestADOBranchGetStatusMapping(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"ok", http.StatusOK, `{"defaultBranch":"refs/heads/main"}`, ""},
+		{"unauthorised", http.StatusUnauthorized, ``, branchReasonRefused},
+		{"forbidden", http.StatusForbidden, ``, branchReasonRefused},
+		{"sign-in redirect", http.StatusFound, ``, branchReasonRefused},
+		{"unavailable", http.StatusServiceUnavailable, ``, branchReasonUnreachable},
+		{"not json", http.StatusOK, `<html>`, branchReasonUnreachable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prev := adoOwnPATTransport
+			adoOwnPATTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				h := http.Header{}
+				if tc.status == http.StatusFound {
+					h.Set("Location", "https://app.vssps.visualstudio.com/_signin")
+				}
+				return &http.Response{StatusCode: tc.status, Header: h, Body: io.NopCloser(strings.NewReader(tc.body)), Request: r}, nil
+			})
+			t.Cleanup(func() { adoOwnPATTransport = prev })
+			var out struct{ DefaultBranch string }
+			if got := adoBranchGet(context.Background(), "https://dev.azure.com/contoso/p/_apis/git/repositories/app", "Bearer x", &out); got != tc.want {
+				t.Errorf("%d %q = %q, want %q", tc.status, tc.body, got, tc.want)
+			}
+		})
+	}
+	prev := adoOwnPATTransport
+	t.Cleanup(func() { adoOwnPATTransport = prev })
+	adoOwnPATTransport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("dial refused") })
+	var out struct{}
+	if got := adoBranchGet(context.Background(), "https://dev.azure.com/x", "Bearer x", &out); got != branchReasonUnreachable {
+		t.Errorf("a failed dial = %q, want %q", got, branchReasonUnreachable)
 	}
 }

@@ -125,7 +125,7 @@ func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration,
 			"Stop it first (docs/OPERATIONS.md, \"Stopped-writer upgrade\")", holder)
 	}
 	s := &migrateOnlySession{pool: pool, conn: conn, release: release}
-	others, err := otherClients(connectCtx, conn)
+	others, err := otherClientsAfterGrace(connectCtx, conn)
 	if err != nil {
 		s.close()
 		return nil, &exitCodeError{code: exitMigrateFailed, err: err}
@@ -137,6 +137,29 @@ func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration,
 			"Scale every wardynd to zero first (docs/OPERATIONS.md, \"Stopped-writer upgrade\")", len(others), strings.Join(others, "; "))
 	}
 	return s, nil
+}
+
+// quietGrace is how long acquireQuiet lets other client backends drain before it refuses.
+const quietGrace = 2 * time.Second
+
+// otherClientsAfterGrace is otherClients, retried for quietGrace while it finds any. A closed client
+// connection is gone from pg_stat_activity only when its backend exits, a moment after the client
+// hangs up, so a wardynd that was just stopped, or a pool this process just closed, can still be
+// listed. A live writer holds its connection, so it is still listed when the grace ends and the
+// refusal stands.
+func otherClientsAfterGrace(ctx context.Context, conn *pgxpool.Conn) ([]string, error) {
+	deadline := time.Now().Add(quietGrace)
+	for {
+		others, err := otherClients(ctx, conn)
+		if err != nil || len(others) == 0 || !time.Now().Before(deadline) {
+			return others, err
+		}
+		select {
+		case <-ctx.Done():
+			return others, nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // otherClients describes each client backend other than conn's own on conn's database.

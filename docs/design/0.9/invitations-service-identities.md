@@ -20,7 +20,7 @@ Admin-minted tokens from 0.8.5 get a visible path to one of the two, and nothing
 | Invitation reuses the hashed single-use token shape | No secret: the target's own session is the only authority ([D1](#11-owner-rulings-2026-10-10)) | A claim needs the target signed in anyway, so a code adds a thing to steal and protects nothing |
 | Redeem route | `POST /me/invitations/{id}/claim`, audit `invitation.claim` | `claim` is already on the closed verb list ([Grammar](../../AUDIT-ACTIONS.md#grammar)); `redeem` would extend it |
 | C1–C3 core, M1–M3 mechanical | Adds C4 for the amended D11, and U1, a console slice | A claim needs a browser session: the CLI has no sign-in, and an API token may not mint |
-| Migration per slice | One file, `0196_invitations_service_identities.sql`, owned by C1 | The lead gave one number; C2 and C3 build on C1's tables |
+| Migration per slice | One file, `0157_invitations_service_identities.sql`, owned by C1 | The lead gave one number; C2 and C3 build on C1's tables |
 | Delegation, if needed | No new mechanism ([§5](#5-owner-authorised-delegation)) | The portal lane already records both parties and revokes without ending sessions |
 
 ## 2. Facts this design builds on
@@ -46,7 +46,7 @@ Admin-minted tokens from 0.8.5 get a visible path to one of the two, and nothing
 
 ### 3.1 Record
 
-Table `person_invitations`, in migration 0196. No secret column.
+Table `person_invitations`, in migration 0157. No secret column.
 
 | Field | Meaning |
 |---|---|
@@ -167,7 +167,7 @@ Each row of `?minted_for_others=true` gains `disposition`, derived at read. Revo
 | The admin token still authenticates | `TestAPITokenAuth_AdminTokenStillWorks` |
 | A CI principal that is an IdP user keeps its own token | `TestAPITokens_CreateListRevoke` |
 | Local mode is unchanged; service identities answer `409` `needs_sso` there, invitation claims per [§3.4](#34-who-gets-what) | `TestServiceIdentity_LocalModeRefusesAndRunsStillLaunch` (new) |
-| The upgrade itself changes no token | `TestMigration0196_TokensAndRunsUnchanged` (new): seeded 0195 database, every `api_tokens` and `agent_runs` row byte-identical after |
+| The upgrade itself changes no token | `TestMigration0157_TokensAndRunsUnchanged` (new): seeded 0156 database, every `api_tokens` and `agent_runs` row byte-identical after |
 
 ## 7. Wire
 
@@ -273,7 +273,7 @@ Every slice: each named test fails with its fix reverted and passes restored; th
 
 | Slice | DONE WHEN |
 |---|---|
-| C1 | 0196 applies on a seeded 0195 database and `TestMigration0196_TokensAndRunsUnchanged` passes; a seeded `service:` principal aborts it |
+| C1 | 0157 applies on a seeded 0156 database and `TestMigration0157_TokensAndRunsUnchanged` passes; a seeded `service:` principal aborts it |
 | C1 | The widened `actor_type` check accepts `service`; the report gives the lock mode it takes and its time on `12` seeded partitions of `100k` rows |
 | C1 | The three C1 tests of [§8](#8-acceptance-to-tests) pass, each with a revert mutation; the mint-site pin names exactly two mint-core callers and no `MintedBy` write |
 | C2 | `TestServiceIdentity_RunsUnderItsOwnPrincipal` and the C2 negatives pass, with it and `TestServiceIdentity_NeverOperatorNeverSecondHuman` run under both actor forms; `TestAuthzMatrix` covers every new route |

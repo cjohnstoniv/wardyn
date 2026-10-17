@@ -61,11 +61,14 @@ func TestRetirementWaitsForObserverThroughDurableExit(t *testing.T) {
 	restore()
 	// Fresh retirement still cannot discard the observer's unsent durable exit.
 	a.ID = uuid.New()
-	if _, err := m.apply(t.Context(), a); err == nil {
-		t.Fatal("old absent-exit proof accepted late exit")
+	if got, err := m.apply(t.Context(), a); err != nil || got.Outcome != types.RunnerActionRefused {
+		t.Fatalf("old absent-exit proof against a late exit = %+v %v, want refused", got, err)
 	}
 	r = m.state.Runs[id]
-	a.Retirement.ExitHash = exitDigest(r.Exit)
+	a.ID = uuid.New()
+	proof := *a.Retirement
+	proof.ExitHash = exitDigest(r.Exit)
+	a.Retirement = &proof
 	if got, err := m.apply(t.Context(), a); err != nil || got.Outcome != "deferred" {
 		t.Fatalf("unacknowledged exit: %+v %v", got, err)
 	}

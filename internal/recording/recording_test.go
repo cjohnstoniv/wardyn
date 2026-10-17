@@ -4,9 +4,11 @@
 package recording_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
@@ -71,8 +74,13 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 	if err := os.WriteFile(orphan, []byte("partial"), 0o600); err != nil {
 		t.Fatalf("write orphan: %v", err)
 	}
+	// wardyn-rec's .log fallback, which DeleteRun erases and retention must too.
+	fallback := filepath.Join(root, "old-fallback.log")
+	if err := os.WriteFile(fallback, []byte("unmasked output"), 0o600); err != nil {
+		t.Fatalf("write fallback: %v", err)
+	}
 	aged := time.Now().Add(-48 * time.Hour)
-	for _, p := range []string{filepath.Join(root, "old-run.cast"), orphan} {
+	for _, p := range []string{filepath.Join(root, "old-run.cast"), orphan, fallback} {
 		if err := os.Chtimes(p, aged, aged); err != nil {
 			t.Fatalf("Chtimes(%s): %v", p, err)
 		}
@@ -82,8 +90,8 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("Sweep removed %d, want 2 (aged cast + orphaned temp)", n)
+	if n != 3 {
+		t.Fatalf("Sweep removed %d, want 3 (aged cast + orphaned temp + aged .log fallback)", n)
 	}
 	if _, err := store.OpenCast(ctx, "fresh-run"); err != nil {
 		t.Fatalf("fresh cast must survive: %v", err)
@@ -210,5 +218,27 @@ func TestHandler_AuthorizerDenies(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("denied authorizer: status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// failingOpenStore is a Store whose casts cannot be opened.
+type failingOpenStore struct{ recording.Store }
+
+func (failingOpenStore) OpenCast(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("disk gone")
+}
+
+// A store failure on replay is a 500 with a log line; the line is the only place the cause survives.
+func TestHandler_ReplayStoreFailureIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	id := uuid.New().String()
+	rr := httptest.NewRecorder()
+	newTestRouter(failingOpenStore{}).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+id+"/recording/"+id+"~web", nil))
+	if rr.Code != http.StatusInternalServerError || !strings.Contains(logs.String(), "disk gone") {
+		t.Errorf("status %d, log %q; want a 500 and the cause logged", rr.Code, logs.String())
 	}
 }

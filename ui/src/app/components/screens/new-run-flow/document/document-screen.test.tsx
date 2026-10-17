@@ -4,7 +4,7 @@
  */
 
 import type * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { SCENARIO_HARNESSES } from "../../../../lib/new-run-fixtures/scenarios/harnesses";
@@ -153,6 +153,76 @@ describe("run document editor", () => {
     expect(editor().value).toContain("kind: harness");
     expect(editor().value).toContain("id: second");
     expect(editor().value).not.toContain(ROSTER[0].id);
+  });
+
+  // DR-0217: a file read lands whenever the browser finishes it. These readers finish only when told, and still
+  // call onload after abort, so the screen's own guard (not the browser's abort) is what is pinned.
+  describe("a file read that finishes late", () => {
+    class SlowReader {
+      static all: SlowReader[] = [];
+      result: string | null = null;
+      aborted = false;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        SlowReader.all.push(this);
+      }
+      readAsText() {}
+      abort() {
+        this.aborted = true;
+      }
+      finish(body: string) {
+        this.result = body;
+        act(() => this.onload?.());
+      }
+    }
+    const YAML_A = "api_version: wardyn/v1\nkind: Run\nintent:\n  agent: from-file-a\n";
+    const YAML_B = "api_version: wardyn/v1\nkind: Run\nintent:\n  agent: from-file-b\n";
+
+    beforeEach(() => {
+      SlowReader.all = [];
+      vi.stubGlobal("FileReader", SlowReader);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("does not overwrite what was typed after the file was chosen", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      type("intent: typed-later");
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe("intent: typed-later");
+      expect(SlowReader.all[0].aborted).toBe(true);
+    });
+
+    it("does not overwrite a Load example pressed after the file was chosen", async () => {
+      open();
+      await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeEnabled());
+      upload(file("a.yaml", YAML_A));
+      press(C.LOAD_EXAMPLE);
+      const example = editor().value;
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe(example);
+    });
+
+    it("lets only the newest of two chosen files land", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      upload(file("b.yaml", YAML_B));
+      SlowReader.all[1].finish(YAML_B);
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe(YAML_B);
+    });
+
+    it("is aborted when the screen is left, and a callback that still arrives changes nothing", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      cleanup();
+      expect(SlowReader.all[0].aborted).toBe(true);
+      expect(() => SlowReader.all[0].finish(YAML_A)).not.toThrow();
+    });
   });
 
   it("holds Load example when no harness is enabled", async () => {

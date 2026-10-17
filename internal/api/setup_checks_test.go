@@ -758,12 +758,13 @@ var setupCheckBlockingStatus = map[string]string{
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
 	"key_domains": true, "principal_keys": true, "key_domain_changes": true,
-	"kek_service": true, "kek_local": true, "kek_local_rows": true,
+	"kek_service": true, "kek_service_static_key": true, "kek_local": true, "kek_local_rows": true,
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":        true,
 	"runner_limits":      true,
+	"runner_arch_images": true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
@@ -847,6 +848,11 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
+	if chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("staticKeyServiceCheck absent")
+	}
 	for _, chks := range [][]SetupCheck{
 		secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false),
 		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false),
@@ -1101,20 +1107,26 @@ func TestKeyCustodyRows(t *testing.T) {
 // long-lived access key; a role's credentials, no key service and store mode
 // never raise it.
 func TestStaticKeyServiceCheck(t *testing.T) {
-	chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true)
+	chk, ok := staticKeyServiceCheck("AWS KMS in us-east-1", true, false)
 	if !ok || chk.ID != "kek_service_static_key" || chk.Label != "Credential key access" || chk.Status != "warn" ||
 		!strings.Contains(chk.Detail, "long-lived AWS access key") || !strings.Contains(chk.Fix, "IRSA or EKS Pod Identity") {
 		t.Fatalf("static key row = %+v, %v", chk, ok)
 	}
+	node, ok := staticKeyServiceCheck("AWS KMS in us-east-1", false, true)
+	if !ok || node.ID != "kek_service_static_key" || node.Status != "warn" ||
+		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity") {
+		t.Fatalf("node role row = %+v, %v", node, ok)
+	}
 	for name, c := range map[string]struct {
-		keyService string
-		static     bool
+		keyService       string
+		static, nodeRole bool
 	}{
-		"role credentials":   {"AWS KMS in us-east-1", false},
-		"no key service":     {"", true},
-		"neither of the two": {"", false},
+		"role credentials":          {"AWS KMS in us-east-1", false, false},
+		"no key service":            {"", true, false},
+		"no key service, node role": {"", false, true},
+		"neither of the two":        {"", false, false},
 	} {
-		if chk, ok := staticKeyServiceCheck(c.keyService, c.static); ok {
+		if chk, ok := staticKeyServiceCheck(c.keyService, c.static, c.nodeRole); ok {
 			t.Errorf("%s: static key row %+v, want none", name, chk)
 		}
 	}

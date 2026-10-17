@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -169,7 +170,7 @@ func (c WebhookConfig) validate() (interval, base, timeout time.Duration, err er
 	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: url must be an http:// or https:// url (scheme %q)", u.Scheme)
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
 		return 0, 0, 0, fmt.Errorf("sinks.webhook: url has no host")
 	}
 	// The bearer is a long-lived, replayable SIEM credential resent on every
@@ -375,6 +376,8 @@ func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, bod
 	if err != nil {
 		return 0, 0, fmt.Errorf("http post: %w", withoutURL(err))
 	}
+	// Read what a small reply carries before closing, so HTTP/1.1 keep-alive reuses the connection.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")),

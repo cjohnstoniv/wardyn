@@ -89,7 +89,7 @@ func (p *Proxy) isLLMHost(host string) bool {
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
-	if _, ok := p.gatewayVendor[h]; ok {
+	if _, ok := p.gatewayVendorOf(h); ok {
 		return true
 	}
 	if _, ok := p.channelHosts[h]; ok {

@@ -19,7 +19,7 @@ const open = async (name: string) => userEvent.click(within(rowOf(name)).getByRo
 
 describe("Already included", () => {
   it("lists what the earlier steps bring, each with its chip and sub-line, and offers nothing to add or remove", () => {
-    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }] }} />);
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.member} intent={{ tools: [{ id: "claude-code", kind: "harness" }], startup: { kind: "harness", tool: "claude-code" } }} />);
     expect(screen.getByRole("heading", { level: 2, name: NR_TOOLS.INCLUDED_TITLE })).toBeInTheDocument();
     expect(screen.getByText(NR_TOOLS.INCLUDED_BODY)).toBeInTheDocument();
     const harness = within(rowOf("Claude Code"));
@@ -37,6 +37,17 @@ describe("Already included", () => {
     render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={intent} />);
     expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.SUB_STARTS)).toBeInTheDocument();
     expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+  });
+
+  it("starts a background agent task's agent with the run, and no harness with a command (DR-0230)", () => {
+    const task: RunIntent = { ...TWO_HARNESSES, workload: { kind: "agent_task", agent: "codex-cli" } };
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={task} />);
+    expect(within(rowOf("Codex CLI")).getByText(NR_TOOLS.SUB_STARTS)).toBeInTheDocument();
+    expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+    cleanup();
+    render(<AlreadyIncluded names={HARNESS_NAMES} answered access={SCENARIO_ACCESS.interactive2} intent={{ ...TWO_HARNESSES, startup: { kind: "command", command: "make test" } }} />);
+    expect(within(rowOf("Claude Code")).getByText(NR_TOOLS.SUB_AVAILABLE)).toBeInTheDocument();
+    expect(screen.queryByText(NR_TOOLS.SUB_STARTS)).not.toBeInTheDocument();
   });
 
   it("marks a row that still needs setup, and a ready one", () => {

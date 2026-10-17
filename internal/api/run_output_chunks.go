@@ -41,8 +41,8 @@ const (
 	runOutputChunkEvery = 100 * time.Millisecond
 	// runOutputChunkMax caps one chunk row.
 	runOutputChunkMax = 32 << 10
-	// runOutputChunkQueueMax caps what a tail queues while its writes fail: past it the oldest
-	// queued bytes are dropped (the ring still has them).
+	// runOutputChunkQueueMax caps what a tail queues while its writes fail: past it, or past the tail the
+	// table keeps if that is larger, the oldest queued bytes are dropped (the ring still has them).
 	runOutputChunkQueueMax = 256 << 10
 	// runOutputChunkRetry is the wait after a failed write.
 	runOutputChunkRetry = time.Second
@@ -87,7 +87,8 @@ func (q *chunkQueue) add(p []byte) {
 		return
 	}
 	q.pend = append(q.pend, p...)
-	if over := len(q.pend) - runOutputChunkQueueMax; over > 0 {
+	// Never below the tail the table keeps, or bytes inside it drop with nothing to say so.
+	if over := len(q.pend) - max(runOutputChunkQueueMax, q.keep); over > 0 {
 		q.pend = append(q.pend[:0], q.pend[over:]...)
 	}
 	if !q.running {
@@ -113,7 +114,8 @@ func (q *chunkQueue) putBack(b []byte) {
 		return
 	}
 	q.pend = append(b, q.pend...)
-	if over := len(q.pend) - runOutputChunkQueueMax; over > 0 {
+	// Never below the tail the table keeps, or bytes inside it drop with nothing to say so.
+	if over := len(q.pend) - max(runOutputChunkQueueMax, q.keep); over > 0 {
 		q.pend = append([]byte(nil), q.pend[over:]...)
 	}
 }

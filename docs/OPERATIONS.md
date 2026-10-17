@@ -407,6 +407,14 @@ boots against the restored data, and Postgres as the ONLY thing running while th
 dump loads.
 
 ```sh
+# 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
+#    database you are replacing can still be read, record its revocation
+#    high-water mark: every session it issued sits at or below it. (That
+#    database is gone? See "Revocation order" below the block.)
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+docker exec -i wardyn-postgres psql -U wardyn -d wardyn -Atc \
+  "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
+
 # 1. Age key FIRST, before anything boots against the restored data — copy
 #    it back into deploy/compose/.env (wherever you stashed it in backup
 #    step 3 above).
@@ -424,11 +432,13 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 #    it and leaving a partial database with no error.
 docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
 
-# 3b. A restore rewinds the sequence that orders revocations against sessions. Advance it
-#     before anything signs in (a point-in-time restore needs this). A dump from a release
-#     that predates the sequence has none: run `wardynd -migrate-only` first, then this step.
+# 3b. A restore rewinds the sequence that orders revocations against sessions. Before any
+#     wardynd starts, set it strictly above step 0's mark. A fixed increment cannot prove
+#     that: restoring the same dump twice lands on the same value, below sessions issued
+#     after the first restore. A dump from a release that predates the sequence has none:
+#     run `wardynd -migrate-only` first, then this step.
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c \
-  "SELECT setval('oidc_revocation_seq', (SELECT last_value FROM oidc_revocation_seq) + 1000000)"
+  "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $(cat revocation-hwm.txt)) + 1)"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
@@ -513,6 +523,14 @@ commands are the ones in "Back them up" and "Restore them", and in
   database snapshot: never pair a newer cursor with an older dump.
 - **Older dump.** Restoring an older dump rolls back `audit_events`. Export the
   live trail first.
+- **Revocation order.** With no high-water mark (the replaced database is lost),
+  no value proves the sequence is past every session it issued, so do not pick one.
+  End every console session instead, with every wardynd still stopped: after step 3
+  has loaded the dump and before step 3b, replace the session key the way
+  [the boot keys are replaced](operations/secrets-and-keys.md), so the next boot
+  mints a new one:
+  `docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`.
+  Then run step 3b with `0` in place of the mark. Every person then signs in again.
 - **Drives.** Record the volume to drive id to person map at backup time. After
   a restore, a volume you recreate by hand is adopted by name, so the
   `wardyn.drive=<id>` label is the only check that it belongs to the right drive.
@@ -1374,11 +1392,11 @@ erases one person's retained records by explicit scope, in one audited act
 | Step | What it does |
 |---|---|
 | Suspend | Completed first, if it is not already |
-| Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
+| Erase | Credentials, masking copies, components, run setups and runner pools: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
-| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
+| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed, and the drives the person created are listed too. Reclaim storage with the steps in "Reclaiming a departed person's storage", and delete the drives they created as in "Member drives" |
 
 - The identity row stays as a tombstone with `purged_at` set.
@@ -1449,10 +1467,19 @@ lose access now, do not wait for it:
     - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
       each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
       spells it.
-    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
-      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
+    - For a person no sign-in has bound, an alias that names more than one principal, or aliases that together name
+      different principals, stops a purge before it touches anything. A bound person's aliases never fail for that.
+      A directory that cannot be read stops either kind of person the same way. The request answers 5xx and a
+      `person.deprovision` row says why.
+    - A suspension in that state still deactivates the person's own identity row and cuts the sessions of the
+      principal that row binds, never an email and never an object-id form another issuer's sign-in holds. Its
+      other steps wait: it answers 5xx, a `person.deprovision` row says why, it stays pending with the reason on
+      the SCIM status card, and a retry once the emails name one principal runs it in full.
+    - A SCIM group removal stops the same way before it cuts a session or revokes a token. It stays pending with the
+      reason, listed on the SCIM status card, and a retry finishes it once the person's emails name one principal.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
+- **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
 - **A database writer** can clear `deactivated_at`, as it could any other row. The authority epoch only rises, so
@@ -1660,7 +1687,7 @@ per run per hour (per replica).
 
 Moved to [hybrid-laptops.md](operations/hybrid-laptops.md#managed-laptops-client-mode-runners).
 
-- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer (no `X-Forwarded-For` is read).
+- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists it.
   - The routes are `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
   - Allow-list the networks your runners connect from on those paths, or give runners a dedicated ingress or hostname.
   - Details and the refusal reasons: [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).
@@ -2118,6 +2145,8 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 > [!IMPORTANT]
 > **`http://` only — an `https://` upstream proxy URL is rejected server-side, always** (`validateSiteConfig`, same file).
 
+- The corporate proxy must allow `CONNECT` to every destination port the policy allows, port 80 included: a plain-HTTP request and a non-443 destination are also sent as `CONNECT host:80` or `CONNECT host:port`, which a stock Squid refuses.
+  - In Squid, add the ports to `acl SSL_ports port ...` (for example `acl SSL_ports port 80`), or allow `CONNECT` for those ports in a separate `acl`.
 - The hop from wardyn-proxy to your corporate proxy is a plaintext CONNECT + `Proxy-Authorization` header; an `https://` URL would need a TLS wrap the sidecar doesn't do, or would leak that Basic credential in cleartext.
 - Dispatch applies the same gate (`resolveUpstreamProxyURL`, [`internal/api/runs_bedrock.go`](../internal/api/runs_bedrock.go)), and a secret referenced via `upstream_proxy_secret_ref` carries the same restriction — store the plain `http://` proxy URL in the secret even when it embeds a credential.
 
@@ -2425,7 +2454,7 @@ Delivery per install path:
 - The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
 - Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
-- On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `warn`. Runs that do not use the lane keep the redirect's token.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `denied`. Runs that do not use the lane keep the redirect's token.
 
 What you get depends on whether `ecosystem` is set:
 
@@ -2512,7 +2541,6 @@ The residuals an operator should plan for:
 - `host_suffix` is already the control; a `cidrs` list assembled from what you can see is usually wrong in a way that looks exactly like a correct configuration.
 - A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the interface endpoint's own ENI address, in the VPC's RFC1918 range.
 - A `cidrs` list drawn from what the operator's own machine sees excludes the range the SANDBOX actually resolves into, and the resulting 403 is indistinguishable from never having declared the entry at all.
-- This cost one deployment two failed runs before the mismatch was found.
 - Tighten `cidrs` only once you have evidence of what the sandbox itself resolves, never from what your own machine resolves.
 - The 403 says the same thing to whoever hits it next:
 
@@ -2532,6 +2560,7 @@ The residuals an operator should plan for:
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
+- [Self-hosted runner](operations/hybrid-laptops.md) proxies get them too (0.9.2); a revive drops undeclared ones.
 
 > [!WARNING]
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
@@ -2855,8 +2884,9 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
 | kept after an outage, before its end (its agent still runs; only its proxy was stopped) | yes, its agent only (no proxy); also counted as `kept` |
 | kept otherwise: after its end, a reboot, or an outage past its end (`lost_at` set, agent stopped) | no; counted as `kept` |
-| bound to a registered runner | no; appears only in `states`, `kept` and `paused` |
+| bound to a registered runner, or placed outside this deployment (a local placement, or a runner that is not one of its own) | no; appears only in `states`, `kept` and `paused` |
 | `PENDING` | no; appears only in `states` |
+| `QUEUED` (waiting for a slot in a capped runner pool) | no; it holds no slot and no reservation, and appears only in `states` |
 | terminal | no |
 
 - Kubernetes rows sum requests and report limits beside them; Docker rows report caps, and a proxy with no CPU cap adds nothing to the CPU sum (`proxy_cpu_uncapped` counts them).
@@ -3230,7 +3260,7 @@ Naming these is the point of the walk, not a caveat on it:
 - `internal_hosts` is for a private endpoint that is not a provider's configured gateway: "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" above is that case, its dials take the ordinary guard, and they do need the lift.
 - Two invariants carry over unchanged: the `egress_redirects` lane above still points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an equivalent harness setting) at a gateway independently of Wardyn's injection lane.
 - An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
-- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
+- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `denied`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
 
 ### Upgrading from `artifact_overrides`
 
@@ -3458,7 +3488,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - After an upgrade, setup status shows a "Runner limits" warning, for operators only, while any runner has none. `wardyn runner list --all --no-limits` and `wardyn runner remote list --no-limits` list the runners without limits.
 - If `wardyn runner remote propose` says the runner reports no CPU or memory, the message names the read that failed: grant the node read with `k8s.readNodes=true`, or create a ResourceQuota in the runs namespace that sets `requests.cpu`, `requests.memory` and `requests.ephemeral-storage`, then propose again.
-- First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
+- First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers. It checks the first two breaks only, a `member` role and a `MEMBER` variable spelling; check the issuer URL yourself.
 
 - Migrations are **forward-only**.
 - `internal/db` records each applied filename in `schema_migrations` and applies anything new on boot, under an advisory lock so concurrent starts do not race.
@@ -3815,18 +3845,23 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
 - `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
+- `0166` (`0166_run_component_mcp_harnesses`) adds `run_components.mcp_harnesses` (`0137`'s table), the harnesses each MCP component's server was turned on for.
 - `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless user pools made before it, and clears an organisation preference for self-hosted runners.
+- `0169` (`0169_user_drive_grants_per_drive`) replaces the unique key on `user_drive_grants` (`0054`'s table) so a subject may hold one grant per drive.
 - `0172` (`0172_runner_max_runs`) adds `runners.max_runs` and `runners.machine_name` (`0139`'s table).
 - `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held add on `governance_changes` (`0126`'s table); every pool change held for a second human then goes stale and is proposed again.
 - `0174` (`0174_runner_limits`) adds the six limit columns (`total_cpu_millis`, `total_memory_mib`, `total_disk_mib`, `run_cpu_millis`, `run_memory_mib`, `run_disk_mib`) to `runners` (`0139`'s table) and to `remote_runners` (`0173`'s table), with `max_runs` on `remote_runners`, and `reserved_cpu_millis`, `reserved_memory_mib` and `reserved_disk_mib` to `agent_runs` (`0001`'s table), backfilled for runs holding a sandbox.
 - `0176` (`0176_revocation_order`) adds `seq` to `oidc_session_revocations` (`0049`'s table) and `oidc_session_cuts` (`0128`'s table) and `rev_seq` to `api_tokens` (`0045`'s table), `ssh_public_keys` (`0033`'s table), `attach_tickets` (`0026`'s table) and `delegated_tokens` (`0094`'s table), beside its new `oidc_revocation_seq` sequence, and creates the `oidc_revocation_stamp` and `oidc_revocation_position` functions, which run as the migrator.
 - `0177` (`0177_member_drives`) adds `user_drives.owner_subject` and `delete_started_at` (`0054`'s table) and replaces the table's name uniqueness with per-owner indexes and two checks.
+- `0180` (`0180_run_recording`) adds `recording` to `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables) and `not_recorded` to `agent_runs` (`0001`'s table).
+- `0181` (`0181_runner_org_trust`) adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and `registration_token_id` to `runners` (`0139`'s table) and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to `runner_registration_tokens` (`0142`'s table), with checks that an org row has no owner and that `org_cluster` is the trust class of an org runner and only of one; existing rows become `person` and `personal`.
+- `0184` (`0184_run_runner_trust_class`) adds `runner_trust_class` to `agent_runs`: the trust class a local run's credential plan was admitted at, which a revive holds its runner to; local runs already bound to a runner become `personal`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
 - `0087` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
   `launch_presets` table.
-- [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) derives that list from the migration bodies, so a new `ALTER TABLE` landing undocumented fails there rather than here.
+- [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) checks that list against the migration bodies, but only for an `ALTER TABLE` of a table created at or before `0049` and for any `CREATE OR REPLACE FUNCTION`. An `ALTER TABLE` of a table created later, as `0166` and `0169` do, is not checked there, so name it here when you add one.
 
 > [!WARNING]
 > The failure is loud and the boot is refused — but **it is not a rollback, and it does

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -180,6 +181,9 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 	}
 	if a.ProfileID == uuid.Nil {
 		return fmt.Errorf("profile_id: required")
+	}
+	if a.Priority < math.MinInt32 || a.Priority > math.MaxInt32 { // the column is INT
+		return fmt.Errorf("priority: out of range")
 	}
 	if a.SubjectType == types.CapabilitySubjectAll {
 		// "all" names every signed-in human; the migration is explicit that

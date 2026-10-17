@@ -129,7 +129,7 @@ function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: 
   return (
     <>
       <span />
-      <Button type="button" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
+      <Button type="button" variant="outline" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
     </>
   );
 }
@@ -171,17 +171,24 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
   const [names, setNames] = React.useState<string[] | null>(null);
+  const [namesError, setNamesError] = React.useState<string>();
+  const [namesTry, setNamesTry] = React.useState(0);
 
-  // The saved secret names a dialog offers are read when one opens.
+  // The saved secret names a dialog offers are read when one opens. A read that failed is not an empty list:
+  // the dialog opens without names (a tokenless path still works) and says why, with a retry.
   React.useEffect(() => {
     if (!door || door === "host") return;
     let live = true;
-    secrets.listSecrets().then((n) => live && setNames(n), () => live && setNames([]));
+    secrets.listSecrets().then(
+      (n) => { if (live) { setNames(n); setNamesError(undefined); } },
+      (e: unknown) => { if (live) { setNames([]); setNamesError(getErrorMessage(e)); } },
+    );
     return () => { live = false; };
-  }, [door]);
+  }, [door, namesTry]);
+  const namesFailure = namesError ? { message: namesError, retry: () => setNamesTry((n) => n + 1) } : undefined;
 
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
-  const close = () => { setDoor(null); setNames(null); };
+  const close = () => { setDoor(null); setNames(null); setNamesError(undefined); };
   const added = (message: string) => { announce(message); close(); };
   const attach = (ref: ComponentRef) => { edit((i) => attachComponent(i, ref)); added(ref.name ? NR_TOOLS.COMPONENT_ADDED_NAMED(ref.name) : NR_TOOLS.COMPONENT_ADDED); };
   const addSecret = (a: SecretAddition) => {
@@ -341,6 +348,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
       {door === "secret" && names && (
         <AddSecretDialog
           names={names}
+          namesFailure={namesFailure}
           hosts={access?.hosts.map((h) => h.host) ?? []}
           residentAllowed={residentAllowed}
           mayDefine={mayDefine}
@@ -349,8 +357,8 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           onClose={close}
         />
       )}
-      {door === "mcp" && names && <AddMcpDialog names={names} onAdd={attach} onClose={close} />}
-      {door === "custom" && names && <CustomComponentDialog names={names} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
+      {door === "mcp" && names && <AddMcpDialog names={names} namesFailure={namesFailure} onAdd={attach} onClose={close} />}
+      {door === "custom" && names && <CustomComponentDialog names={names} namesFailure={namesFailure} residentAllowed={residentAllowed} secretsPath={SECRETS_PATH} onAttach={attach} onClose={close} />}
     </section>
   );
 }

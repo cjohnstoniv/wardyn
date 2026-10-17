@@ -9,6 +9,7 @@ package oidc
 // decode. Split from oidc.go for the file-size gate; no new behaviour.
 
 import (
+	"cmp"
 	"log/slog"
 	"net/http"
 	"time"
@@ -79,6 +80,7 @@ type callbackClaims struct {
 	emailVerified *bool
 	// name: console header display only — never gates, never logged.
 	name       string
+	loginHint  string // LoginHint only: preferred_username, else email
 	roles      []string
 	groups     []string
 	claimNames map[string]any
@@ -159,6 +161,12 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 		Oid string `json:"oid"`
 	}
 	_ = idToken.Claims(&ec)
+	// The account a later sign-in names as login_hint (LoginHint), and nothing else; tolerant, so an
+	// odd shape costs only the hint.
+	var hc struct {
+		PreferredUsername string `json:"preferred_username"`
+	}
+	_ = idToken.Claims(&hc)
 	return callbackClaims{
 		issuer:        idToken.Issuer,
 		tid:           ec.Tid,
@@ -166,6 +174,7 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 		email:         claims.Email,
 		emailVerified: claims.EmailVerified,
 		name:          claims.Name,
+		loginHint:     cmp.Or(hc.PreferredUsername, claims.Email),
 		roles:         rc.Roles,
 		groups:        gc.Groups,
 		claimNames:    dc.ClaimNames,
@@ -210,11 +219,15 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	if widened {
 		a.expireWidenedMarker(w)
 	}
+	silent := a.consumeSilentMarker(w, r)
 
 	// A refusal of the extra (widened) scopes restarts the login with just the
 	// login's own scopes, once, so it doesn't cost the person the console.
 	// Every other refusal falls through unchanged (login_grant.go).
 	if idpErr := r.URL.Query().Get("error"); idpErr != "" {
+		if a.silentFallback(w, r, silent, idpErr) {
+			return
+		}
 		if a.retryLoginUnwidened(w, r, widened, idpErr) {
 			return
 		}
@@ -324,6 +337,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	}
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
+	a.rememberDevice(w, cc)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
 

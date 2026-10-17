@@ -287,3 +287,40 @@ func TestAttachSlots_AFailedSetupReleasesItsSlot(t *testing.T) {
 		t.Fatalf("%d slots counted after a failed ssh attach, want 0", n)
 	}
 }
+
+// FUG-L750 N2: the ticket mint refuses at the per-run cap with the cap's reason, a response a console
+// can read (a refused WebSocket handshake shows a browser nothing), and mints again once a slot frees.
+func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+	run := uuid.New()
+	ast.mu.Lock()
+	ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Unlock()
+	mint := func() *httptest.ResponseRecorder {
+		return do(t, srv, http.MethodPost, "/api/v1/runs/"+run.String()+"/attach-ticket", adminToken, "")
+	}
+
+	var releases []func()
+	for range maxAttachSessionsPerRun {
+		release, ok := srv.reserveAttachSlot(run)
+		if !ok {
+			t.Fatal("a slot below the cap was refused")
+		}
+		releases = append(releases, release)
+	}
+	w := mint()
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonAttachSessionCapReached) {
+		t.Fatalf("mint at the cap = %d %s, want 503 %s", w.Code, w.Body, reasonAttachSessionCapReached)
+	}
+	if n := attachSlotsHeld(srv, run); n != maxAttachSessionsPerRun {
+		t.Errorf("the refused mint changed the slots held to %d", n)
+	}
+	releases[0]()
+	if w := mint(); w.Code != http.StatusOK {
+		t.Errorf("mint below the cap = %d %s, want 200", w.Code, w.Body)
+	}
+}

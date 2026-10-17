@@ -274,3 +274,26 @@ func TestLaunchIntentWireTwin(t *testing.T) {
 		}
 	}
 }
+
+// A reference's explicit empty mcp_harnesses ("on for no harness") is kept in
+// the saved intent as [], and a reference that names none stays without the key.
+func TestLaunchIntent_KeepsAnEmptyMCPHarnessesList(t *testing.T) {
+	asked := mustJSON(createRunRequest{Components: []types.ComponentRef{
+		{Name: "off", Inline: &types.ComponentDefinition{Hosts: []string{"mcp.off.test"}}, MCPHarnesses: []string{}},
+		{Name: "default", Inline: &types.ComponentDefinition{Hosts: []string{"mcp.default.test"}}},
+	}})
+	li := launchIntentFor(asked)
+	if li.doc == nil {
+		t.Fatalf("no intent kept: %q %v", li.reason, li.refusals)
+	}
+	var refs []map[string]json.RawMessage
+	if err := json.Unmarshal(liIntent(t, li.doc)["components"], &refs); err != nil || len(refs) != 2 {
+		t.Fatalf("components = %v (%v)", refs, err)
+	}
+	if got := string(refs[0]["mcp_harnesses"]); got != "[]" {
+		t.Errorf("explicit none kept as %q, want []", got)
+	}
+	if _, ok := refs[1]["mcp_harnesses"]; ok {
+		t.Errorf("a reference with no list gained mcp_harnesses: %s", refs[1]["mcp_harnesses"])
+	}
+}

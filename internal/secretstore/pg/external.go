@@ -87,13 +87,17 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		return fmt.Errorf("pg secretstore: put %s: begin: %w", ref, err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := lockRow(ctx, tx, s.owner, name); err != nil {
-		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
-	}
+	// The counter row's share lock comes before the row's advisory lock, the
+	// order DeleteEverywhere takes them in: an erase queued for the counter
+	// row would otherwise leave this Put holding the advisory lock while it
+	// waits behind the erase, which waits for a delete that waits for this Put.
 	if gen, fenced := s.generationFence(ctx); fenced {
 		if err := s.checkGeneration(ctx, tx, gen); err != nil {
 			return err
 		}
+	}
+	if err := lockRow(ctx, tx, s.owner, name); err != nil {
+		return fmt.Errorf("pg secretstore: put %s: %w", ref, err)
 	}
 	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
 		if err := s.checkRevision(ctx, tx, name, rev); err != nil {

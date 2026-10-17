@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -208,8 +209,8 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	var diag *client.TemplateDiagnostic
 	if req.ExpectedRevision == nil {
 		diag = templateInvalid("expected_revision", "is required: the revision you read")
-	} else if req.Scope != "" {
-		if owner, d := c.targetOwner(req.Scope, req.GroupID); d != nil || owner.Scope != cur.Owner.Scope || owner.Group != cur.Owner.Group {
+	} else if req.Scope != "" || req.GroupID != "" {
+		if owner, d := c.targetOwner(cmp.Or(req.Scope, cur.Owner.Scope), req.GroupID); d != nil || owner.Scope != cur.Owner.Scope || owner.Group != cur.Owner.Group {
 			diag = templateInvalid("scope", "cannot change: copy the template to publish it elsewhere")
 		}
 	}

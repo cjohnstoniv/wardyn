@@ -9,6 +9,7 @@ deploy/images/README.md=4704 share=35
 # docs/operations/build-images.md 1418 adds 120 over 1298 (0.9 DS1-S4): offering two harnesses in one run.
 # docs/operations/build-images.md 1451 adds 33 over 1418 (0.9 F-1516 B7): pinned inputs and a pointer to the refresh.
 # docs/operations/build-images.md 1792 adds 341 over 1451 (0.9.3 M): images for both laptop architectures; the lead re-measures at merge.
-docs/operations/build-images.md=1792 share=35
+# docs/operations/build-images.md 1820 adds 28 (0.9.3 M-2/DR-0235): the digest-and-platform clause and the staged claude-bin refusal.
+docs/operations/build-images.md=1820 share=35
 # docs/ENVBUILD.md 3190 adds 1122 over 2068 (0.9 F-1516 B7): the build record, rebuild and refresh sections.
 docs/ENVBUILD.md=3190 share=35

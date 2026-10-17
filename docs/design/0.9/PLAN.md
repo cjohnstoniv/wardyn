@@ -411,7 +411,7 @@ Two layers, in this order:
 | Proxy while offline | Enforces its cached policy; raises nothing (a hold cannot be raised, so a first-use host is denied); spools every decision |
 | Link down past the lapse | The runner stops the proxy itself, keeps agent and files; no local decision is made |
 | Kill, Ends, stop issued while offline | Durable pending actions, applied first on reconnect ([§3.7](#37-pending-actions)) |
-| Revocation | The runner stops every governed proxy; the org marks runs lost `runner_revoked` and runs the kill cascade |
+| Revocation | The runner stops every governed proxy; the org ends every unfinished run `KILLED` (`run.kill` reason `runner_revoked`) and runs the kill cascade |
 
 ### 5.2 The lapse rule on the runner
 
@@ -553,7 +553,8 @@ Two layers, in this order:
 | `AzureGates` (Azure Foundry, the person's own Entra sign-in) | `own` | Allowed |
 | `AzureGates` (Azure Foundry, any shared capture) | `brokered` | Per OD-12 ([§7.2](#72-per-kind-bounds)) |
 | `UpstreamProxyURL` (from `upstream_proxy_secret_ref`) | `operator` | Never sent; the runner's own upstream-proxy config applies |
-| `TrustedCAPEM`, `UpstreamProxyNoProxy`, `LLMUpstreams` | `operator` (org network) | Not sent; the runner's own config applies. Destinations needing them take `via_org` |
+| `TrustedCAPEM`, `UpstreamProxyNoProxy` | `operator` (org network) | Not sent; the runner's own config applies. Destinations needing them take `via_org` |
+| `LLMUpstreams` | `operator` (org network) | Never sent. A run that needs it (a key or `custom_endpoint` provider with a base URL) is refused, `placement_credential` (0.9.3) |
 | `InternalHosts` | `operator` (org network) | Sent (0.9.2): lifts only the private-IP guard for a declared suffix; the allowlist still decides |
 | `MITMHosts` | `operator` (org network) | Not sent as dispatched; the laptop copy holds the hosts of `own` and `runner_resident` injections and of every `via_org` destination (the laptop proxy must terminate that TLS to forward plaintext). Operator-only hosts are dropped |
 | `Policy.EligibleGrants` | `operator` for any grant not delivered `own` / `runner_resident` | The laptop-bound `Policy` copy drops those grants; a `via_org` grant keeps only its `grant_id` and host. Operator secret names never reach the laptop |
@@ -604,9 +605,9 @@ The predicate is `reservedRunTasks` plus `source scan` plus probe runs. Refusal 
 | Display | `/healthz` and the setup runner card keep the union; remote substrates are excluded from the deployment `Capabilities` |
 | Unsupported interfaces | A demand that needs one ([§3.4](#34-rpc-set)) is refused, not dropped |
 
-### 6.6 `confinement_source: runner_asserted`
+### 6.6 `evidence_source: runner_asserted`
 
-- A local run records `confinement_source = runner_asserted`. A remote run records `substrate`.
+- A local run records `evidence_source = runner_asserted` (approved as `confinement_source`). A remote run records `substrate`.
 - Self-reported for a local run: proxy decisions, recordings, `ExecOutput`, exit codes, advertised `Capabilities`, posture.
 - The CC3 blast-radius floor still applies (Q7):
   - For `own` and `via_org` credentials it is evaluated against the runner-asserted classes.
@@ -634,7 +635,7 @@ The five Placement control states each come from one server answer, so the card 
 | Grant set refuses | `placement_credential`, naming the field; reveals Access and focuses the owning entry |
 | Eligible | No refusal; several runners list by name, and none chosen with several online is `runner_ambiguous` |
 
-Run detail and the header show `placement`, the runner's name, `placement_filled` and `confinement_source`.
+Run detail and the header show `placement`, the runner's name, `placement_filled` and `evidence_source`.
 
 ## 7. Credential delivery (OD-12)
 
@@ -868,7 +869,7 @@ The release asset for `wardyn-runnerd` joins `release.yml`, `verify-release.sh` 
 | Checkpoint | Flag |
 |---|---|
 | CP2 | `placement: local` refuses `placement_unavailable` when no runner is registered |
-| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates registration token minting (a person's and an admin's), registration, claim, the runner stream and a person's own runner routes. The admin inventory, token list and revoke, and the settings routes stay ungated |
+| CP3 | Site-config `runners.enabled` (default `false`, admin-only, audited) gates registration token minting (a person's and an admin's), registration, claim, the runner stream and a person's own runner routes, except `DELETE /me/runners/{id}`. The admin inventory, token list and revoke, the owner's own revoke, and the settings routes stay ungated |
 
 ### 10.5 Migrations
 
@@ -897,7 +898,7 @@ Pattern: a refusal asserts "no sandbox exists and nothing was minted", not just 
 | C8 | Trusted output | api | A scan or record run never places locally |
 | C9 | Offline > lapse | loopback + Docker | Proxy stopped by the runner; agent alive; files kept; no local decision made |
 | C10 | Kill while offline | loopback + Docker | Kill answers `202` pending; token denied; on reconnect the kill applies before any relay |
-| C11 | Revocation | loopback + Docker | Live: every proxy stops, runs lost `runner_revoked`. Offline: `AUTH` answers `REVOKED`, then the same |
+| C11 | Revocation | loopback + Docker | Live: every proxy stops, runs `KILLED` with reason `runner_revoked`. Offline: `AUTH` answers `REVOKED`, then the same |
 | C12 | Relay binding | api | A relayed request for a run on another runner, or a remote run, refuses `relay_runner_mismatch` |
 | C13 | Relay required | api | A non-relayed `/internal/*` call for a local run refuses `relay_required` |
 | C14 | `via_org` scope | api + proxy | A relayed injection or mint for a `via_org` grant refuses `delivery_via_org`; a non-`via_org` destination is not forwarded; the laptop copy's `MITMHosts` holds every `via_org` destination and no operator-only host |
@@ -949,7 +950,7 @@ Names follow the closed-verb grammar. **Deviation**: the release plan's `runner.
 | `runner.token.revoke` | A token is revoked before use | `owner` |
 | `runner.enrol` | A runner registered (was `runner.register`) | `name`, `state`, `key_fingerprint` |
 | `runner.claim` | The owner claimed a runner (needs verb `claim` added to the list) | `key_fingerprint` |
-| `runner.revoke` | A runner was revoked | `by`, `runs_lost` |
+| `runner.revoke` | A runner was revoked | `by`, `reason`, `runs_killed` |
 | `runner.connect` | First authenticated session after an offline row (was `runner.online`) | `version`, `resumed` |
 | `runner.disconnect` | A session ended and was not resumed in `120s` (was `runner.offline`) | `last_seen_at` |
 | `runner.action.request` | A pending action was queued | `kind`, `run_id` |
@@ -962,8 +963,8 @@ Names follow the closed-verb grammar. **Deviation**: the release plan's `runner.
 
 Changed rows:
 
-- `run.create` gains `placement`, `placement_filled`, `runner_id`, `confinement_source`, `delivery`.
-- `run.lost` gains reason `runner_revoked` and containment `pending_runner`.
+- `run.create` gains `placement`, `placement_filled`, `runner_id`, `evidence_source`, `delivery`.
+- `run.lost` gains containment `pending_runner`. A revoked runner's runs end `KILLED`, as `run.kill` rows with reason `runner_revoked`.
 - `secret.read` gains `runner_id`, `delivery`, `posture`.
 - `egress.*` gains `spooled` and `observed_at` on rows ingested from a runner (actor `runner:<id>`), and the `rule_source` `builtin:spool-full`.
 

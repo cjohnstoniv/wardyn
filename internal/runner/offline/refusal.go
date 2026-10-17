@@ -40,6 +40,9 @@ func (m *Manager) refuseAction(ctx context.Context, a runnerwire.PendingAction, 
 // the encoded result fits the org's bound: JSON escaping can grow a byte to
 // six, and a result the org refuses would replay on every reconnect.
 func fitRefusalReason(r *runnerwire.ActionResult) {
+	// An invalid byte encodes as six (\ufffd escaped) and decodes to three at the org, so it is
+	// dropped first, whatever the length.
+	r.Reason = strings.ToValidUTF8(r.Reason, "")
 	if len(r.Reason) > runnerwire.MaxRefusalReason {
 		r.Reason = strings.ToValidUTF8(r.Reason[:runnerwire.MaxRefusalReason], "")
 	}
@@ -48,9 +51,10 @@ func fitRefusalReason(r *runnerwire.ActionResult) {
 		if err != nil || len(b) <= runnerwire.MaxActionResultBytes || r.Reason == "" {
 			break
 		}
-		// Each byte cut shrinks the encoding by at least one byte.
-		over := min(len(b)-runnerwire.MaxActionResultBytes, len(r.Reason))
-		r.Reason = strings.ToValidUTF8(r.Reason[:len(r.Reason)-over], "")
+		// A byte cut shrinks the encoding by one to six bytes; cutting over/6 never
+		// overshoots, so an escape-heavy reason keeps its head.
+		cut := min(max((len(b)-runnerwire.MaxActionResultBytes)/6, 1), len(r.Reason))
+		r.Reason = strings.ToValidUTF8(r.Reason[:len(r.Reason)-cut], "")
 	}
 	if r.Reason == "" {
 		r.Reason = "refused"

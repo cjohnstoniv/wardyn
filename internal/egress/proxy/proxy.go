@@ -211,6 +211,11 @@ type Proxy struct {
 	// "yes" for every address, which refuses every lift/trust.
 	exclusionUnknown bool
 
+	// hardDeny and lapse are set on k8s runners only (nil elsewhere): the
+	// in-cluster deny set, and the self-lapse gate every agent request passes.
+	hardDeny *hardDeny
+	lapse    *lapseGate
+
 	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
 	// public host -> {host,port,prefix}), parsed once from Options.LLMUpstreams.
 	// Empty == every brokered LLM route dials the vendor host, byte-identical
@@ -539,7 +544,16 @@ func newProxy(opts Options) *Proxy {
 			TLSClientConfig:       opts.TLSClientConfig,
 		}
 	}
-	p.transport = mkTransport(egressDial)
+	// A plain-HTTP forward dials through p.transport itself, so a failure before the connection
+	// opened is marked as connecting here, like handshakeOver does for TLS: dialStage otherwise reads
+	// any error that is not a net dial error as one on an open connection.
+	p.transport = mkTransport(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := egressDial(ctx, network, addr)
+		if err != nil {
+			return nil, &connectStageError{err}
+		}
+		return c, nil
+	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
@@ -593,6 +607,11 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
+	if !p.lapse.serving() {
+		refuseClosed(w)
+		return
+	}
 	// A via_org destination is the organisation's to decide: no spool row, no
 	// hold and no decision here (design 0.9 §7.3).
 	if route, authority, ok := p.viaOrgRouteFor(r); ok {
@@ -965,6 +984,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		return
 	}
+	defer p.trackTunnel(clientConn)()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = upstream.Close()
 		_ = clientConn.Close()

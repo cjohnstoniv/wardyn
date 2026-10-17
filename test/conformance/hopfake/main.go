@@ -25,7 +25,10 @@ import (
 	"strings"
 )
 
-const recordingsPath = "/api/v1/internal/recordings/"
+const (
+	recordingsPath = "/api/v1/internal/recordings/"
+	decisionsPath  = "/api/v1/internal/decisions"
+)
 
 func main() {
 	cert, err := tls.X509KeyPair([]byte(os.Getenv("HOPFAKE_CERT_PEM")), []byte(os.Getenv("HOPFAKE_KEY_PEM")))
@@ -41,6 +44,12 @@ func main() {
 				id, len(body), bytes.Contains(body, []byte("wardyn-rec-canary")), r.TLS != nil,
 				r.Header.Get("Authorization") == wantAuth)
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == decisionsPath {
+			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			fmt.Printf("hopfake: decision %s\n", bytes.TrimSpace(body))
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		if r.URL.Path != grantPath {

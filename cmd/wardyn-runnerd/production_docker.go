@@ -35,6 +35,9 @@ import (
 )
 
 func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity, stateDir string, opts serveOptions) (runnerRuntime, error) {
+	if opts.substrate == "k8s" {
+		return k8sRunnerHooks(ctx, identity, stateDir, opts)
+	}
 	if opts.proxyImage == "" {
 		return runnerRuntime{}, errors.New("runner serve requires --proxy-image or WARDYN_PROXY_IMAGE")
 	}
@@ -57,7 +60,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	relay := newLocalRelay(ctx)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath})
+		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -66,6 +69,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	rt.hooks.ProxyImage = followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage)
 	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
@@ -164,7 +168,7 @@ func readyEngine(ctx context.Context, cli *client.Client, unreachable, network s
 func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) (dockerEngine, error) {
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd reads DOCKER_HOST, never a docker context: %w", unreachable, err)
+		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd follows DOCKER_HOST, else a docker context that is a local unix socket: %w", unreachable, err)
 	}
 	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name)}
 	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {
@@ -277,7 +281,34 @@ func ifaceAddrs(iface *net.Interface) ([]netip.Addr, error) {
 // postureInterval is how often a connected runner re-reads its posture.
 const postureInterval = 15 * time.Minute
 
-func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (_ runnerRuntime, retErr error) {
+// runRelay is the relay a runtime drives: the Docker localRelay or the k8s k8sRelay.
+type runRelay interface {
+	Online(*runnerwire.Peer)
+	Offline(*runnerwire.Peer)
+	Close() error
+}
+
+// runtimeExtras are the substrate-specific parts of a runtime. The zero value is the Docker runtime.
+type runtimeExtras struct {
+	// keystore holds runner_resident values; zero is the OS keyring.
+	keystore runneragent.Keystore
+	// noPosture: no posture reporter (k8s, design K1 §3.3).
+	noPosture bool
+	// arch is the reported architecture; "" reads the engine's.
+	arch string
+	// options are the manager's substrate options; started runs once the manager exists, before
+	// the startup containment pass (the k8s runner's fence replay and first proxy list).
+	options offline.Options
+	started func(context.Context, *offline.Manager) error
+	// closeAlso runs when the runtime closes (the k8s decision sink).
+	closeAlso func() error
+}
+
+func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (runnerRuntime, error) {
+	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, runtimeExtras{})
+}
+
+func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
 		return runnerRuntime{}, err
@@ -293,16 +324,31 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
-	ks := keystore.For(identity.RunnerID.String())
-	resident, err := runneragent.NewResident(runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck}, stateDir, manager.AdmitResident, time.Now)
+	ks := extra.keystore
+	if ks.Set == nil {
+		store := keystore.For(identity.RunnerID.String())
+		ks = runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
+	}
+	resident, err := runneragent.NewResident(ks, stateDir, manager.AdmitResident, time.Now)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	reporter := posture.NewReporter()
+	var reporter *posture.Reporter
+	if !extra.noPosture {
+		reporter = posture.NewReporter()
+	}
+	if err := manager.SetOptions(extra.options); err != nil {
+		return runnerRuntime{}, err
+	}
+	if extra.started != nil {
+		if err := extra.started(ctx, manager); err != nil {
+			return runnerRuntime{}, err
+		}
+	}
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
-		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall,
+		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
@@ -338,7 +384,11 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			}
 			// A host that cannot say its name reports none, and keeps the machine name it had.
 			machine, _ := os.Hostname()
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: engineArch(ctx), Capacity: capacity(ctx)})
+			arch := extra.arch
+			if arch == "" {
+				arch = engineArch(ctx)
+			}
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true})
 			if err != nil {
 				return err
 			}
@@ -347,8 +397,10 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			}
 			// Posture only gates runner_resident delivery; a refused report
 			// must not keep the runner from READY.
-			if err := reporter.Send(ctx, peer); err != nil {
-				slog.WarnContext(ctx, "runner posture report failed", "error", err)
+			if reporter != nil {
+				if err := reporter.Send(ctx, peer); err != nil {
+					slog.WarnContext(ctx, "runner posture report failed", "error", err)
+				}
 			}
 			return manager.Replay(ctx, peer)
 		},
@@ -356,7 +408,9 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
-			go reporter.Watch(peer, postureInterval)
+			if reporter != nil {
+				go reporter.Watch(peer, postureInterval)
+			}
 		},
 		StreamOffline: func(peer *runnerwire.Peer) {
 			streams.Offline(peer)
@@ -374,5 +428,11 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		}()
 		return manager.Run(ctx)
 	}
-	return runnerRuntime{hooks: hooks, run: run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
+	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+		err := errors.Join(manager.Close(), relay.Close())
+		if extra.closeAlso != nil {
+			err = errors.Join(err, extra.closeAlso())
+		}
+		return err
+	}}, nil
 }

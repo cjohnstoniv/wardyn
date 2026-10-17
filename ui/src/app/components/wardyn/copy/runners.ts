@@ -178,6 +178,13 @@ export const RUN_PLACEMENT = {
     `${name} is a computer its owner administers, so this run's barrier, egress decisions made on ${name}, recording, output and exit code are as ${name} reported them.`,
 } as const;
 
+/** Pending a mock round: the run's not_recorded, on the Identity card. */
+export const RUN_RECORDING = {
+  LABEL: "Recording",
+  org_off: "Not recorded; the organization kept no recordings when it started.",
+  runner_declined: "Not recorded by the runner; organization sessions are recorded.",
+} as const;
+
 export const RUN_SYNC = {
   LABEL: "Sync",
   NONE: "Nothing synced yet.",
@@ -203,6 +210,9 @@ export const LOCAL_RUN = {
   LAPSE_TITLE: (name: string) => `${name} has been offline for over an hour`,
   LAPSE_BODY: (name: string, when: string) =>
     `Its runner stops this run's network on its own after an hour offline, and keeps the agent and files. Wardyn last heard from ${name} at ${when}, so it can't confirm that yet.`,
+  UNKNOWN_TITLE: (name: string) => `Wardyn can't tell from here whether ${name} is connected`,
+  UNKNOWN_BODY: (name: string, when: string) =>
+    `Wardyn last heard from ${name} at ${when}, and this server can't say whether it is online now. After an hour offline its runner stops this run's network on its own and keeps the agent and files. If you revive it while ${name} is out of reach, Wardyn says so.`,
   REVIVE_WHEN_BACK: (name: string) => `You can revive it once ${name} is back online.`,
   STOPPED_TITLE: "This run's network was stopped",
   STOPPED_BODY: (name: string) =>

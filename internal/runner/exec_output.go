@@ -80,3 +80,8 @@ func OutputRun(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(outputRunKey{}).(uuid.UUID)
 	return id, ok && id != uuid.Nil
 }
+
+// SelftestArgv is the BYOI contract check the org execs before a task
+// (internal/api/runs_dispatch_byoi.go) and a runner diverts to its own log
+// (internal/runner/runneragent): one list, so the two cannot drift apart.
+func SelftestArgv() []string { return []string{"/usr/local/bin/agent-run", "--selftest"} }

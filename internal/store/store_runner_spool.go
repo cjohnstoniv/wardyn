@@ -104,9 +104,9 @@ func validRunnerDecision(r runnerspool.Record) bool {
 }
 
 func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (types.AgentRun, error) {
-	var owner, state string
+	var kind, owner, state string
 	var revoked *time.Time
-	err := tx.QueryRow(ctx, `SELECT owner,state,revoked_at FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&owner, &state, &revoked)
+	err := tx.QueryRow(ctx, `SELECT owner_kind,owner,state,revoked_at FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&kind, &owner, &state, &revoked)
 	if errors.Is(err, pgx.ErrNoRows) || state != string(types.RunnerClaimed) || revoked != nil {
 		return types.AgentRun{}, ErrRunnerSpoolRefused
 	}
@@ -120,7 +120,7 @@ func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (
 	if err != nil {
 		return run, err
 	}
-	if run.RunnerID == nil || *run.RunnerID != runnerID || run.Placement != types.PlacementLocal || run.CreatedBy != owner {
+	if run.RunnerID == nil || *run.RunnerID != runnerID || run.Placement != types.PlacementLocal || !runnerReportsOn(kind, owner, run.CreatedBy) {
 		return run, ErrRunnerSpoolRefused
 	}
 	if run.State != types.RunRunning && !run.State.IsTerminal() {

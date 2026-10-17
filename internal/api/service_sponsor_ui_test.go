@@ -24,12 +24,57 @@ type sponsorUIStore struct {
 	store.ServiceIdentityStore // never called: only ServiceStillSponsored is asked
 	still                      atomic.Bool
 	sponsorSince               atomic.Int64 // unix seconds the current sponsorship began; 0 = always
+	sponsorSinceNs             atomic.Int64 // when set, unix nanoseconds it began, compared exactly as the store does
 }
 
 // ServiceStillSponsored answers as the real store does: the sponsor is current, and the sponsorship
 // did not begin after openedAt, so a re-sponsor A to B to A ends a session opened before it.
 func (s *sponsorUIStore) ServiceStillSponsored(_ context.Context, _, _ string, openedAt time.Time) (bool, error) {
+	if ns := s.sponsorSinceNs.Load(); ns != 0 {
+		return s.still.Load() && !time.Unix(0, ns).After(openedAt), nil
+	}
 	return s.still.Load() && s.sponsorSince.Load() <= openedAt.Unix(), nil
+}
+
+// A service sponsored at T.200 and a ticket admitted at T.500 in the same second: the session's first relay
+// is allowed, as it was at entry. The cookie carries the authority time to the nanosecond, so the re-check
+// compares like the store does. A ticket admitted before the sponsorship still ends a session at its re-check.
+func TestServiceIdentity_SponsorUISessionAdmittedInTheSponsorshipSecond(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	st := &sponsorUIStore{uiMemStore: h.store}
+	st.still.Store(true)
+	h.srv.cfg.Store = st
+	h.run.CreatedBy = "service:ci-bot"
+	h.store.putRun(h.run)
+	sec := time.Now().Truncate(time.Second)
+	st.sponsorSinceNs.Store(sec.Add(200 * time.Millisecond).UnixNano())
+	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+	enterAt := func(at time.Time) *http.Cookie {
+		t.Helper()
+		tok, err := mintAttachTicket(context.Background(), h.store, h.run.ID, types.ActorHuman, "sponsor-sub", oidc.RoleUser, oidc.Issue{At: at})
+		if err != nil {
+			t.Fatalf("mint ticket: %v", err)
+		}
+		rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {tok}})
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == uiCookieName {
+				return c
+			}
+		}
+		t.Fatalf("enter at %v: %d %s, no relay cookie", at, rec.Code, rec.Body.String())
+		return nil
+	}
+	cookie := enterAt(sec.Add(500 * time.Millisecond))
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+		t.Errorf("first relay of a session admitted after sponsor_since in the same second: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	// Admitted at T.100, before sponsor_since T.200: refused at the entry check, so no cookie can exist; a
+	// sponsorship that moves past an open session's authority time ends it at its next re-check.
+	st.sponsorSinceNs.Store(sec.Add(900 * time.Millisecond).UnixNano())
+	h.clock.advance(uiReassertInterval + time.Second)
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusForbidden {
+		t.Errorf("a session authorized before sponsor_since: %d %s, want 403", rec.Code, rec.Body.String())
+	}
 }
 
 // TestServiceIdentity_SponsorUIEntry: a sponsor's member-stamped ticket opens a UI app of the service's run;

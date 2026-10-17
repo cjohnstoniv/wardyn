@@ -252,7 +252,7 @@ export function GovernanceScreen() {
             </div>
 
             {/* Q6's adopted variant: the server's omission list, rendered after
-                a successful save, verbatim and in response order — never
+                a save or a held write, verbatim and in response order — never
                 blocking, because narrowing by omission IS what a profile is
                 for. Each warning is its own item; they are never joined. */}
             {omission.length > 0 && (
@@ -393,9 +393,9 @@ export function GovernanceScreen() {
                   setSubmitted(false);
                   load();
                 }}
-                onSubmitted={() => {
+                onSubmitted={(notes) => {
                   setEditing(null);
-                  setOmission([]);
+                  setOmission(notes);
                   setSubmitted(true);
                   load();
                 }}

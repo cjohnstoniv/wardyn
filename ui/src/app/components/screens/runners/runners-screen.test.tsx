@@ -104,6 +104,8 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     name: "laptop-7",
     state: "claimed",
     owner: "alice@example.com",
+    owner_kind: "person",
+    trust_class: "personal",
     online: true,
     key_fingerprint: "SHA256:3Jd1d8XqFULLFINGERPRINTVALUEk2Q9",
     key_fingerprint_abbreviated: false,
@@ -145,7 +147,7 @@ const WAITING = runner({
 });
 const OLD = runner({ id: "r-old", name: "old-box", state: "revoked", online: false, revoked_at: aheadByHours(-48), revoked_by: "carol@example.com", usage: usageWith(0) });
 
-const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48) };
+const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48), owner_kind: "person", minted_by_kind: "human", break_glass: false };
 
 function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
   const { operator = true, at = "/admin/runners" } = opts;

@@ -126,6 +126,16 @@ func TestRepoTransportCharset_DispatchDrops(t *testing.T) {
 	}
 }
 
+// A run repo that names no clone URL has no record to withhold the legacy pair
+// for: it keeps its slug (the withhold fires only when a dropped record named it).
+func TestRepoTransportCharset_UnclonableRunRepoKeepsItsSlug(t *testing.T) {
+	env := map[string]string{}
+	applyRepoCloneEnv(env, types.AgentRun{Repo: "acme"}, types.RunPolicySpec{})
+	if env["WARDYN_REPO_SLUG"] != "acme" || env["WARDYN_REPO_URL"] != "" || env["WARDYN_REPOS"] != "" {
+		t.Errorf("env = %v, want only WARDYN_REPO_SLUG=acme", env)
+	}
+}
+
 // The attachments Review shows list a clone only if dispatch will make it.
 func TestRepoTransportCharset_CloneTargetIsHonest(t *testing.T) {
 	for _, r := range []types.WorkspaceRepo{

@@ -240,7 +240,7 @@ the ADMIN pre-authorized.
   - See [Custom components](custom-components.md#custom-components).
 - `service_attach` gates a service identity's sponsor entering one of its runs (a terminal or a UI app); see [`service_attach`](#service_attach) below.
 - `self_host_runner` gates a person minting a registration token for a runner of their own; see [`self_host_runner`](#self_host_runner) below.
-- Any other value is refused at write time (`400`)
+- Any other value is refused at write time (`400`), except an allow of a lowercase snake_case name: it is stored inert and grants nothing until a release ships that feature, so it can be staged before upgrading.
 #### `service_attach`
 
 - Off for everyone: migration `0167_service_attach_restriction` restricts the value, so a `*` allow grants nobody.

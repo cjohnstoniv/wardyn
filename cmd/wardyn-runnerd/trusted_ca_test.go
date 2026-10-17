@@ -65,6 +65,8 @@ func TestLoadTrustedCARefuses(t *testing.T) {
 		{"empty", writeFile(t, filepath.Join(dir, "empty.pem"), ""), "no PEM-encoded certificates"},
 		{"a key beside the cert", writeFile(t, filepath.Join(dir, "combined.pem"), ca+keyPEM), `"PRIVATE KEY"`},
 		{"over 64 KiB", writeFile(t, filepath.Join(dir, "big.pem"), big), "KiB; runners take at most 64 KiB: name a file holding only your organisation's roots, not a merged system bundle"},
+		// A-R4-L2: refused on size alone, before the file is parsed (junk would otherwise read "no PEM-encoded certificates").
+		{"over the read bound", writeFile(t, filepath.Join(dir, "huge.pem"), strings.Repeat("x", maxCAFileRead+1)), "the file is over 1024 KiB; runners take at most 64 KiB of certificates"},
 	} {
 		if _, _, err := loadTrustedCA(tc.file); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want one naming %q", tc.name, err, tc.want)
@@ -79,31 +81,36 @@ func TestLoadTrustedCARefuses(t *testing.T) {
 	}
 }
 
-// A bundle of exactly 64 KiB is the largest accepted: the refusal is "over", not "at".
+// A bundle of exactly 64 KiB is the largest accepted: the refusal is "over", not "at", and one byte
+// over is refused.
 func TestLoadTrustedCAAcceptsExactly64KiB(t *testing.T) {
-	// Certificates of many lengths, then x copies of one and y of another that add up to 64 KiB.
+	// Certificates of many lengths, then x copies of one and y of another that add up to size.
 	byLen := map[int]string{}
 	for n := 1; n <= 300; n++ {
 		c := testCAPEM(t, strings.Repeat("c", n))
 		byLen[len(c)] = c
 	}
-	var bundle string
-search:
-	for la, a := range byLen {
-		for lb, b := range byLen {
-			for y := 1; y <= 3; y++ {
-				if rem := runner.MaxEnvTrustedCAPEM - y*lb; rem > 0 && rem%la == 0 {
-					bundle = strings.Repeat(a, rem/la) + strings.Repeat(b, y)
-					break search
+	bundleOf := func(size int) string {
+		for la, a := range byLen {
+			for lb, b := range byLen {
+				for y := 1; y <= 3; y++ {
+					if rem := size - y*lb; rem > 0 && rem%la == 0 {
+						return strings.Repeat(a, rem/la) + strings.Repeat(b, y)
+					}
 				}
 			}
 		}
+		t.Fatalf("could not build a bundle of exactly %d bytes", size)
+		return ""
 	}
-	if len(bundle) != runner.MaxEnvTrustedCAPEM {
-		t.Fatalf("could not build a bundle of exactly %d bytes", runner.MaxEnvTrustedCAPEM)
-	}
+	bundle := bundleOf(runner.MaxEnvTrustedCAPEM)
 	if got, _, err := loadTrustedCA(writeFile(t, filepath.Join(t.TempDir(), "exact.pem"), bundle)); err != nil || got != bundle {
 		t.Errorf("a %d-byte bundle: err=%v, kept=%v; want it accepted whole", len(bundle), err, got == bundle)
+	}
+	over := bundleOf(runner.MaxEnvTrustedCAPEM + 1)
+	if _, _, err := loadTrustedCA(writeFile(t, filepath.Join(t.TempDir(), "over.pem"), over)); err == nil ||
+		!strings.Contains(err.Error(), "runners take at most 64 KiB") {
+		t.Errorf("a %d-byte bundle: err=%v; want it refused as over 64 KiB", len(over), err)
 	}
 }
 

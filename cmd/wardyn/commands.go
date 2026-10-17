@@ -111,6 +111,27 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 	return "  interactive: starts " + startup.Command + "; " + attach
 }
 
+// readRunPolicyFile reads --policy-file as the inline RunPolicySpec.
+func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
+	data, err := os.ReadFile(policyFile)
+	if err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("read --policy-file: %w", err)
+	}
+	// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
+	// same json-tagged spec the server validates.
+	if data, err = policyToJSON(data); err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+	}
+	// Strict decode (DisallowUnknownFields, shared with `policy set`/
+	// `policy render`): a misspelled spec field fails here, not as a
+	// silently-dropped setting the server never sees.
+	spec, err := decodeSpecStrict(data)
+	if err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+	}
+	return spec, nil
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
@@ -177,6 +198,11 @@ func runCmd(client clientFn) *cobra.Command {
 				if body, err = runFileRequest(cmd, client(), file, title, description); err != nil {
 					return err
 				}
+				// The document may carry the legacy interactive flag; it gets the same --wait refusal and attach hint.
+				interactive = body.Interactive
+				if wait && interactive {
+					return fmt.Errorf("--wait and the document's interactive: true are mutually exclusive (an interactive run never finishes on its own)")
+				}
 			}
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
 				return err
@@ -188,21 +214,9 @@ func runCmd(client clientFn) *cobra.Command {
 			// mutually exclusive with --policy; the server enforces that XOR — we
 			// only surface a clear parse error client-side.
 			if policyFile != "" {
-				data, err := os.ReadFile(policyFile)
+				spec, err := readRunPolicyFile(policyFile)
 				if err != nil {
-					return fmt.Errorf("read --policy-file: %w", err)
-				}
-				// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
-				// same json-tagged spec the server validates.
-				if data, err = policyToJSON(data); err != nil {
-					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-				}
-				// Strict decode (DisallowUnknownFields, shared with `policy set`/
-				// `policy render`): a misspelled spec field fails here, not as a
-				// silently-dropped setting the server never sees.
-				spec, err := decodeSpecStrict(data)
-				if err != nil {
-					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+					return err
 				}
 				body.InlinePolicy = &spec
 			}
@@ -245,7 +259,7 @@ func runCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --json and --dry-run go with it. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --json and --dry-run go with it. A document that sets inline_policy is refused for now: sent as inline_policy it would replace your default policy")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -266,7 +280,8 @@ func runCmd(client clientFn) *cobra.Command {
 	mode.bind(cmd.Flags())
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
-	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). With --wait and no --max-wait: --timeout minus 60s (at least 60s), so queue_timeout (exit 1) lands before --timeout (exit 124)")
+	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+
+		"With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
@@ -311,14 +326,19 @@ func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duratio
 }
 
 // queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
-// 60s (at least 60s), so the server ends a run that waits too long (queue_timeout, exit 1) before the
-// CLI gives up on it (exit 124). nil sends nothing and leaves the server's default.
+// 60s for a --timeout of 2m or more (so never under 60s), and half of --timeout (at least 1s) for a
+// shorter one. The aim is for the server to end a run that waits too long (queue_timeout, exit 1)
+// before the CLI gives up on it (exit 124); it is only the limit asked of the server. nil sends
+// nothing and leaves the server's default.
 func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
 	d := maxWait
 	switch {
 	case d > 0:
 	case wait:
 		d = max(timeout-time.Minute, time.Minute)
+		if timeout > 0 && timeout < 2*time.Minute {
+			d = max(timeout/2, time.Second)
+		}
 	default:
 		return nil
 	}
@@ -400,6 +420,11 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
 				default: // KILLED / STOPPED / ARCHIVED: lifecycle termination, not an agent result
+					// A kill the platform made (a removed pool, a lifetime end) carries its reason.
+					if sentence := types.RunEndReason(run.StatusReason).Sentence(); sentence != "" {
+						fmt.Fprintf(errW, "  reason: %s\n", sentence)
+						return &exitError{code: 2, err: fmt.Errorf("run %s terminated: %s: %s", runID, run.State, sentence)}
+					}
 					return &exitError{code: 2, err: fmt.Errorf("run %s terminated: %s", runID, run.State)}
 				}
 			}

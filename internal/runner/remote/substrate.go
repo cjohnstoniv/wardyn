@@ -63,6 +63,10 @@ type Options struct {
 	// session's authenticated runner id. It runs on the peer read loop, so it
 	// must not block; an error refuses the stream. Nil refuses every relay.
 	Relay func(runnerID string, conn net.Conn) error
+	// OutputAccepted, when set, durably records that the org accepted run's
+	// output up to accepted (an absolute end that only grows) before the
+	// runner is told. It must be idempotent: a resent prefix repeats it.
+	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -95,6 +99,7 @@ var (
 	_ runner.ProxyStopper    = (*Substrate)(nil)
 	_ runner.ProxyReviver    = (*Substrate)(nil)
 	_ runner.SandboxStarter  = (*Substrate)(nil)
+	_ runner.Selftester      = (*Substrate)(nil)
 	_ runner.SubstrateProber = (*Substrate)(nil)
 	_ runner.DriveProber     = (*Substrate)(nil)
 	_ runner.OutputRecoverer = (*Substrate)(nil)
@@ -127,7 +132,8 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	// then holds no candidate to it.
 	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
-		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives}, true
+		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives,
+		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.
@@ -264,6 +270,27 @@ func (s *Substrate) Exec(ctx context.Context, ref string, argv []string) (string
 	return res.ExecID, nil
 }
 
+// Selftest runs the BYOI selftest on the runner under the task's issued
+// generation, which the runner checks and does not spend. A runner that does
+// not advertise it is refused here, so the check is never skipped.
+func (s *Substrate) Selftest(ctx context.Context, ref string) (int, error) {
+	if err := s.own(ref); err != nil {
+		return 0, err
+	}
+	if c, ok := s.Caps(); !ok || !c.BYOISelftest {
+		return 0, runnerwire.Refuse("this runner does not support the BYOI selftest; upgrade it to run BYOI images")
+	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodSelftest, ref)
+	if err != nil {
+		return 0, err
+	}
+	var res runnerwire.SelftestResult
+	if err := s.call(ctx, runnerwire.MethodSelftest, runnerwire.SelftestArgs{Ref: ref, ExecutionGeneration: generation}, &res); err != nil {
+		return 0, err
+	}
+	return res.ExitCode, nil
+}
+
 // Wait is a long call: a link drop answers runner.ErrRunnerOffline, which is
 // transient (the runner also sends a durable agent_exit event).
 func (s *Substrate) Wait(ctx context.Context, ref string) (int, error) {
@@ -389,8 +416,14 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		s.mu.Unlock()
 	}
 	defer st.Close()
+	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this
+	// goroutine and the stream slot past the finaliser's deadline.
+	defer context.AfterFunc(ctx, func() { _ = st.Close() })()
 	_ = st.CloseWrite()
 	_, err = io.Copy(w, st)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	return err
 }
 

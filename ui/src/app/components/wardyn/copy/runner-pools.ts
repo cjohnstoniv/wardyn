@@ -89,6 +89,28 @@ export const RUNNER_V6 = {
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 
+/**
+ * A runner's trust class on Admin -> Runners (0.9.3, owner mock item 3, Q5). The mock's strings, with the
+ * console's own spelling "Organization" (Q5), not the mock's "Organisation".
+ */
+export const RUNNER_TRUST = {
+  TITLE: "Trust class",
+  META: "Security admin",
+  PERSONAL: "Personal",
+  MANAGED: "Managed device",
+  ORG: "Organization cluster",
+  PERSONAL_DESC: "A person's own computer. Wardyn assumes nothing about how it is managed.",
+  MANAGED_DESC: "A person's computer your organization manages. This is your assertion; Wardyn can't check it.",
+  ORG_DESC: "A cluster your organization runs. An organization's runner is always this class.",
+  HINT: "Credential delivery rules in Governance can differ by class. Reviving a run started under the old class is checked again and refused if the rules differ.",
+  REASON_LABEL: "Reason",
+  REASON_HINT: "Required. Kept on the change and in the audit trail.",
+  SAVE: "Change trust class",
+  SET_BY: (who: string, when: string) => `Set by ${who} ${when}`,
+  UNCLAIMED: "Available once its owner has claimed it.",
+  DONE: (runner: string, label: string) => `${runner} is now ${label}`,
+} as const;
+
 export const LIMITS_DIALOG = {
   TITLE_SETUP: (name: string) => `Set up limits for ${name}`,
   TITLE: (name: string) => `Limits for ${name}`,
@@ -385,8 +407,8 @@ export const MY_POOLS = {
   REMOVE_FROM: (runner: string, pool: string) => `Remove ${runner} from ${pool}`,
   ADDED: (runner: string, pool: string) => `${runner} added to ${pool}`,
   TITLE: "My pools",
-  ONLY_YOU: "Only you can see or change these",
-  LEDE: "A user pool is your own set of runners with limits that can narrow theirs. It can mix your self-hosted runners and remote-hosted runners your admin made available. Create as many as you like, for example Laptop and Home server. A run goes to one of your own runners with room first, then to a remote-hosted runner.",
+  ONLY_YOU: "Only you can change these. Administrators can see them.",
+  LEDE: "A user pool is your own set of runners with limits that can narrow theirs. It can mix your self-hosted runners and remote-hosted runners your admin made available. You can have up to 10 pools, for example Laptop and Home server. A run goes to one of your own runners with room first, then to a remote-hosted runner.",
   EMPTY: "You haven't created a pool yet.",
   RUNNERS_IN_IT: "Runners in it",
   ADD_RUNNER: "Add runner",

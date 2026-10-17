@@ -70,10 +70,11 @@ It amends the lane brief where the code disagrees with it ([§1.2](#12-amendment
 
 ### 2.3 Tree digest
 
-- One line per entry, sorted bytewise by path: `path \t type \t perm \t size \t sha256`, newline-terminated.
+- One line per entry, sorted bytewise by path: `quoted path \t type \t perm \t size \t sha256`, newline-terminated. The path is Go-quoted (`strconv.Quote`), so a tab or newline in a name cannot forge a line.
 - `type` is `f`, `d` or `l`. A symlink's `sha256` is over its target string; it is never followed.
 - `perm` is the four-digit octal mode: the permission bits, with setuid, setgid and sticky in the leading digit. Owner, group and times are left out, because a restore onto another host changes them.
 - The digest is `sha256` over the joined lines. Any other file type (socket, device, FIFO) fails the digest by name.
+- A hard link is read as the regular file it names: two names for one inode digest like two copies, so the digest cannot show that a restore broke the link. This is a residual.
 - Reads go through `os.Root` on the item's directory, so no entry resolves outside it.
 
 ## 3. Snapshot identity
@@ -214,7 +215,7 @@ The report is JSON on stdout: `set_id`, `verdict`, and one entry per check with 
 | `4` | `fail` | At least one check failed |
 | `5` | `incomplete` | Every check that ran passed, and some item was `not_in_set` ([OD-R5](#11-owner-rulings-2026-10-10)) |
 
-- Exit `2` is Go's `flag` parse error. Verify uses `0` and `3` only.
+- Exit `2` is Go's `flag` parse error. Verify uses `0`, `1` and `3`.
 
 ## 8. Audit
 

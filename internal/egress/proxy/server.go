@@ -56,6 +56,10 @@ type serverHooks struct {
 	res     resolver
 	engine  bool
 	maskKey uuid.UUID // where this server's secrets are filed (procMaskFor)
+	// lapseClock and lapseTune replace the self-lapse clock and renew cadence
+	// in tests; zero values are CLOCK_BOOTTIME and the design's cadence.
+	lapseClock bootClock
+	lapseTune  *lapseRenewTuning
 }
 
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
@@ -73,7 +77,59 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 		p.localClient = client
 		return
 	}
-	startRunTokenRenewer(out, p, ts, cfg, client)
+	tune := defaultLapseRenewTuning()
+	if h.lapseTune != nil {
+		tune = *h.lapseTune
+	}
+	startRunTokenRenewer(out, p, ts, cfg, client, tune)
+}
+
+// egressTLSConfig is the egress trust set: the system roots plus pemBundle, nil (the default roots) when
+// pemBundle is empty.
+func egressTLSConfig(pemBundle string) (*tls.Config, error) {
+	if pemBundle == "" {
+		return nil, nil
+	}
+	pool, perr := x509.SystemCertPool()
+	if perr != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(pemBundle)) {
+		return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
+	}
+	return &tls.Config{RootCAs: pool}, nil
+}
+
+// controlPlaneClient returns the client every control-plane caller rides.
+//
+// SECURITY: the four control-plane clients below (sink, injector, approval
+// client, token renewer) all ride THIS client. A caller-supplied client
+// with no Transport rides http.DefaultTransport, which would ride
+// ProxyFromEnvironment instead of nil-ing Proxy out. With HTTP(S)_PROXY
+// visible to the sidecar, the run token, approvals, decisions and MINTED
+// CREDENTIAL VALUES would transit the corporate proxy and skip
+// resolveTrustedURL's pin.
+//
+// So the transport is owned UNCONDITIONALLY and Proxy is cleared
+// explicitly: Transport.Clone() PRESERVES the proxy function, so this
+// can't skip the clearing. A nil client is built here, never left to a
+// callee's fallback.
+func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: controlPlaneCallTimeout}
+	}
+	if client.Transport == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil
+		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
+		// and enabling it prepends "h2" to the config's own NextProtos on
+		// first use — a shared config made the egress transport offer h2 (#359).
+		tr.TLSClientConfig = cpTLS.Clone()
+		c := *client
+		c.Transport = tr
+		client = &c
+	}
+	return client
 }
 
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
@@ -114,47 +170,15 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// the internet, not between it and wardynd. Control-plane calls trust
 	// wardynd's internal CA and nothing else — an empty pin fails every
 	// handshake rather than falling back to the system roots.
-	var tlsCfg *tls.Config
-	if cfg.TrustedCAPEM != "" {
-		pool, perr := x509.SystemCertPool()
-		if perr != nil || pool == nil {
-			pool = x509.NewCertPool()
-		}
-		if !pool.AppendCertsFromPEM([]byte(cfg.TrustedCAPEM)) {
-			return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
-		}
-		tlsCfg = &tls.Config{RootCAs: pool}
+	tlsCfg, err := egressTLSConfig(cfg.TrustedCAPEM)
+	if err != nil {
+		return nil, err
 	}
 	cpTLS, err := hoptls.ClientConfig(cfg.ControlPlaneCAPEM)
 	if err != nil {
 		return nil, err
 	}
-	// SECURITY: the four control-plane clients below (sink, injector, approval
-	// client, token renewer) all ride THIS client. A caller-supplied client
-	// with no Transport rides http.DefaultTransport, which would ride
-	// ProxyFromEnvironment instead of nil-ing Proxy out. With HTTP(S)_PROXY
-	// visible to the sidecar, the run token, approvals, decisions and MINTED
-	// CREDENTIAL VALUES would transit the corporate proxy and skip
-	// resolveTrustedURL's pin.
-	//
-	// So the transport is owned UNCONDITIONALLY and Proxy is cleared
-	// explicitly: Transport.Clone() PRESERVES the proxy function, so this
-	// can't skip the clearing. A nil client is built here, never left to a
-	// callee's fallback.
-	if client == nil {
-		client = &http.Client{Timeout: controlPlaneCallTimeout}
-	}
-	if client.Transport == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = nil
-		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
-		// and enabling it prepends "h2" to the config's own NextProtos on
-		// first use — a shared config made the egress transport offer h2 (#359).
-		tr.TLSClientConfig = cpTLS.Clone()
-		c := *client
-		c.Transport = tr
-		client = &c
-	}
+	client = controlPlaneClient(client, cpTLS)
 
 	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
 	if err != nil {
@@ -280,6 +304,22 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
+	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
+		_ = sink.close(context.Background())
+		return nil, fmt.Errorf("hard deny: %w", err)
+	}
+	// k8s runners only: the proxy is closed until its first renew and lapses
+	// for good at the last renew's send time + RunTokenTTL (§6.2).
+	if cfg.SelfLapse {
+		clock := hooks.lapseClock
+		if clock == nil {
+			clock = sysBootClock{}
+		}
+		p.lapse = newLapseGate(clock, selfLapseTTL)
+		if sink.remote != nil {
+			p.lapse.onLapse = sink.remote.lapse
+		}
+	}
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
@@ -315,7 +355,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
 // renewer gets its own lifetime instead. Alongside it, the activity reporter
 // streams the pause's presence clock for as long as the renewer runs.
-func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -324,6 +364,11 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 	out.renewStopped = make(chan struct{})
 	go func() {
 		defer close(out.renewStopped)
+		if p.lapse != nil {
+			go p.lapse.watch(rctx, tune.watchEvery)
+			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, p.lapse, tune)
+			return
+		}
 		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
@@ -392,6 +437,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	return errors.Join(httpErr, sinkErr)
 }
+
+// Lapsed closes when a self-lapsing proxy lapses; the process must then shut
+// down and exit non-zero, never serve again. Nil (never fires) otherwise.
+func (s *Server) Lapsed() <-chan struct{} { return s.proxy.lapse.Done() }
 
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }

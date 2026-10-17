@@ -16,7 +16,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Other VM-backed engines (Colima, Podman machine, OrbStack, rootless Docker) | Work when the startup reachability check passes; not verified by us. `--relay-host-target` is the knob when it does not. |
 | Podman on Linux (docker-compat API) | Unsupported and not verified in 0.9.1: the startup check is expected to refuse it. |
 | Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
-| `DOCKER_HOST` | `runnerd` reads `DOCKER_HOST` and never a docker context. Point it at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
+| `DOCKER_HOST` | `runnerd` follows `DOCKER_HOST`, else a selected docker context that is a local unix socket; a tcp, ssh or TLS context is refused. Point `DOCKER_HOST` at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
 | An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
 | A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
@@ -103,6 +103,8 @@ Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed 
 
 `wardyn runner list` (`--all` for every person's runners; `--no-limits` for those with none declared) and `wardyn runner tokens list [--owner]|revoke` use these routes.
 
+For an organization's runner a security operator runs `wardyn runner org-token mint --name <label>`, `wardyn runner claim-org <id> --fingerprint <fp>` and `wardyn runner trust <id> <class> --reason <why>`.
+
 ## Runner limits
 
 Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a self-hosted runner), a total all its runs at once may use (`total`) and what one run may use (`per_run`), each in CPU (`cpu_millis`, at least one CPU), memory (`memory_mib`) and disk (`disk_mib`, whole GiB). No per-run amount is past its total. A runner with none declared takes no run: a launch that could only go there is refused `runner_limits_unset`. Migration `0174_runner_limits` gives a runner registered before it none, so its owner sets them.
@@ -112,7 +114,7 @@ Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a se
 | Who | Can |
 |---|---|
 | The owner | Change them with `wardyn runner set <runner> [--max-runs N] [--total-cpu N --total-memory GB --total-disk GB] [--per-run-cpu N --per-run-memory GB --per-run-disk GB]` or `PUT /api/v1/me/runners/{id}` with the whole `limits` set; audited as `runner.update` with the set before and after. A total past the CPUs or memory the runner last reported is refused. |
-| An administrator | Read them on `/runners`. No route changes another person's runner, since the machine is theirs. |
+| An administrator | Read them on `/runners`. No route changes another person's runner, since the machine is theirs. A security operator sets an organization's runner's limits with `PUT /api/v1/runners/{id}`, also audited as `runner.update`. |
 
 - Every runner view carries `kind`, `limits` (`null` until set) and `usage`. `usage.in_use` counts the runs holding a sandbox on the runner and adds up what they reserve: the CPU and memory each was given and its main drive. `usage.available` is the total less that, and nothing while the runner is offline. `usage.reported` is what the runner last said it has; `usage.disk_capped` is false where its disk limits are counted, not enforced.
 - Placement offers a run only to a runner whose per-run limit holds the run's size, and holds every run to the runner's Runs at once and totals. A create, a queue promotion, a queued run's start and a revive that starts an agent each count under the runner's row lock.

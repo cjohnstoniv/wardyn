@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -191,6 +192,27 @@ func TestRegisterSendsTheEngineArch(t *testing.T) {
 	}
 }
 
+// A k8s runner reports its --arch (or WARDYN_RUNNERD_ARCH) at registration, never the engine's, and
+// refuses to register without one before anything is sent. A Docker runner refuses --arch.
+func TestRegisterK8sSendsItsArch(t *testing.T) {
+	k8s := []string{"--substrate=k8s", "--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}
+	if sent, _, _, err := registerWith(t, append(k8s, "--arch=amd64")...); err != nil || sent.Arch != "amd64" {
+		t.Fatalf("arch sent = %q, %v; want the flag's amd64, not the engine's arm64", sent.Arch, err)
+	}
+	for _, bad := range []struct{ name, want string }{{"", "want amd64 or arm64"}, {"x86_64", "want amd64 or arm64"}} {
+		if _, called, _, err := registerWith(t, append(k8s, "--arch="+bad.name)...); err == nil || called || !strings.Contains(err.Error(), bad.want) {
+			t.Fatalf("--arch=%q: called=%v err=%v, want a refusal before any request", bad.name, called, err)
+		}
+	}
+	if _, called, _, err := registerWith(t, "--arch=amd64"); err == nil || called || !strings.Contains(err.Error(), "applies only to --substrate=k8s") {
+		t.Fatalf("docker --arch: called=%v err=%v, want a refusal", called, err)
+	}
+	t.Setenv(archEnv, "arm64")
+	if sent, _, _, err := registerWith(t, k8s...); err != nil || sent.Arch != "arm64" {
+		t.Fatalf("arch sent from %s = %q, %v; want arm64", archEnv, sent.Arch, err)
+	}
+}
+
 // registerWith runs register with args against a server that records the request and answers it.
 func registerWith(t *testing.T, args ...string) (types.RunnerRegisterRequest, bool, string, error) {
 	t.Helper()
@@ -265,6 +287,33 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 	if sent, _, _, err := registerWith(t, "--total-disk", "100"); err != nil || sent.Limits.Total.DiskMiB != 100*1024 {
 		t.Fatalf("an unmeasured disk given = %+v, %v", sent.Limits, err)
+	}
+}
+
+// A missing token file is reported before the computer is measured (and so before any limit question).
+func TestRegisterReadsTheTokenFileBeforeMeasuring(t *testing.T) {
+	measured := false
+	measureHost = func(context.Context) (types.RunnerAmounts, error) { measured = true; return testHost, nil }
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	cmd := newRegisterCommand()
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetIn(strings.NewReader(""))
+	root := t.TempDir()
+	cmd.SetArgs([]string{"--org", "https://org.example", "--token-file", filepath.Join(root, "missing"), "--state-dir", filepath.Join(root, "identity")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "open registration token file") || measured {
+		t.Fatalf("err = %v, measured = %v; want the token file refused before the host was measured", err, measured)
+	}
+}
+
+// A host that cannot be measured says why, beside the "not measured" figures.
+func TestRegisterSaysWhyTheHostWasNotMeasured(t *testing.T) {
+	measureHost = func(context.Context) (types.RunnerAmounts, error) {
+		return types.RunnerAmounts{}, errors.New("docker did not answer")
+	}
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	_, called, out, err := registerWith(t)
+	if err == nil || called || !strings.Contains(out, "measuring this computer failed: docker did not answer") {
+		t.Fatalf("an unmeasurable host = %v (sent %v)\n%s", err, called, out)
 	}
 }
 

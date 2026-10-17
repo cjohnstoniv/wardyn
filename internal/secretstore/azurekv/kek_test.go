@@ -162,6 +162,21 @@ func TestKEK_BootRefusesUnfitKeys(t *testing.T) {
 	}
 }
 
+// A signing key that spells out the default port is in the wrapping key's vault:
+// the same-vault check compares origins, not host strings.
+func TestKEK_SameVaultIgnoresTheDefaultPort(t *testing.T) {
+	f := newFakeKV(t)
+	cfg := fakeKEKConfig(f, writeFile(t, "projected-sa-1\n"))
+	cfg.Key, cfg.SigningKey = "https://kv.vault.azure.net/keys/wrap", "https://kv.vault.azure.net:443/keys/sig"
+	if _, err := newKEK(cfg); err != nil {
+		t.Fatalf("newKEK with :443 on one key id = %v; want the same vault", err)
+	}
+	cfg.SigningKey = "https://kv.vault.azure.net:8443/keys/sig"
+	if _, err := newKEK(cfg); err == nil || !strings.Contains(err.Error(), "same vault") {
+		t.Fatalf("newKEK with another port = %v; want a same-vault refusal", err)
+	}
+}
+
 // Every wrapkey and unwrapkey sent is RSA-OAEP-256, every sign ES256:
 // RSA1_5 and RSA-OAEP (SHA-1) are never sent.
 func TestKEK_OnlyOAEP256AndES256(t *testing.T) {

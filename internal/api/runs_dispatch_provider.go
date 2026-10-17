@@ -646,12 +646,12 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
 	}, false); err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: loggedMsg(ctx, "could not author the model provider credential injection", err)}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	rule, err := injectionRuleFromScope(scope)
 	if err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not compile the model provider credential injection: " + err.Error()}, nil)
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: loggedMsg(ctx, "could not compile the model provider credential injection", err)}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	return runner.InjectionGrant{GrantID: grantID, Rule: rule}, true

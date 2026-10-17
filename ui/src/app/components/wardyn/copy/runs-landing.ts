@@ -121,6 +121,8 @@ export const RUNS_ROW_WORD = {
   RUNNING: "Running",
   STARTING: "Starting",
   QUEUED: "Queued",
+  /** The queued row's place in line. The same sentence as NR_LAUNCH.IN_LINE (the Launched screen), kept here because that copy is lazy-only. */
+  IN_LINE: (ordinal: string) => `${ordinal} in line`,
 } as const;
 
 export const RUNS_ROW_ACTION = {

@@ -33,4 +33,19 @@ type RunnerRegistrationToken struct {
 	// ProxyImage is the egress-proxy image this control plane runs its own sandboxes with. The mint answers
 	// carry it so a runner set up from the token can start the same one; omitted when none is configured.
 	ProxyImage string `json:"proxy_image,omitempty"`
+	// OwnerKind is org on a token a security operator minted on POST /runners/org-tokens (Owner is then
+	// empty), person otherwise. The runner that redeems it takes it.
+	OwnerKind RunnerOwnerKind `json:"owner_kind"`
+	// MintedByKind is human, or admin_token for the shared admin token. MintedByEmail is a human minter's
+	// email where the session carries one: the org claim compares it with the claimer's.
+	MintedByKind  string `json:"minted_by_kind"`
+	MintedByEmail string `json:"-"`
+	// BreakGlass marks an org token the admin token minted while WARDYN_GOVERNANCE_SECOND_HUMAN was on.
+	BreakGlass bool `json:"break_glass"`
 }
+
+// The two minters of a runner registration token.
+const (
+	RunnerMintedByHuman      = "human"
+	RunnerMintedByAdminToken = "admin_token"
+)

@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -159,6 +160,34 @@ func TestPG_PromoteQueueFIFOAndSkip(t *testing.T) {
 	}
 }
 
+// A run past its wait is never promoted, though the pass has room and its verdict admits it: only the
+// expiry sweep ends it. It keeps its row and stays QUEUED; a run still inside its wait starts (DR-0228).
+func TestPG_PromoteQueueSkipsARunPastItsWait(t *testing.T) {
+	ctx := context.Background()
+	pg := store.NewPG(runsPGPoolIsolated(t))
+	p := cappedPool(t, pg, 2)
+	now := time.Now().UTC()
+	late, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"),
+		store.RunQueueEntry{QueuedAt: now.Add(-3 * time.Hour), DeadlineAt: now.Add(-time.Minute)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := enqueue(t, pg, p, "bob", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := pg.PromoteRunQueue(ctx, pass(p), admitAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Run.ID != live.ID {
+		t.Fatalf("promoted %v, want only the run inside its wait", got)
+	}
+	if r := runState(t, pg, late.ID); r.State != types.RunQueued || queueRows(t, pgPool(t, pg), late.ID) != 1 {
+		t.Errorf("the run past its wait is %s with %d queue rows; it must stay for the sweep", r.State, queueRows(t, pgPool(t, pg), late.ID))
+	}
+}
+
 // A pool at its cap, a pool switched off, a pool that is gone and a deployment at its cap each promote
 // nothing and leave every waiting run in place.
 func TestPG_PromoteQueueRespectsEveryCap(t *testing.T) {
@@ -189,7 +218,7 @@ func TestPG_PromoteQueueRespectsEveryCap(t *testing.T) {
 	}
 
 	off := types.RunnerPoolDisabled
-	if _, err := pg.UpdateRunnerPool(ctx, roomy.ID, roomy.Revision, nil, &off, nil); err != nil {
+	if _, err := pg.UpdateRunnerPool(ctx, roomy.ID, roomy.Revision, nil, &off, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, err := pg.PromoteRunQueue(ctx, pass(roomy), admitAll); err != nil || len(got) != 0 {
@@ -414,7 +443,7 @@ func TestPG_DeletingAPoolCancelsItsWaitingRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	off := types.RunnerPoolDisabled
-	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil)
+	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +574,7 @@ func TestPG_CreateQueuedRunRefusals(t *testing.T) {
 		}
 	}
 	off := types.RunnerPoolDisabled
-	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil)
+	switched, err := pg.UpdateRunnerPool(ctx, p.ID, p.Revision, nil, &off, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,5 +647,35 @@ func TestPG_PromoteAndKillDoNotDeadlock(t *testing.T) {
 	}
 	if st := runState(t, pg, r.ID).State; st != types.RunKilled || queueRows(t, pool, r.ID) != 0 {
 		t.Errorf("the killed run is %s with %d queue rows", st, queueRows(t, pool, r.ID))
+	}
+}
+
+// The sweep of waiting runs pinned to a revoked runner lists only runs still QUEUED: a queue row left
+// behind by a run that already ended is not listed, so such rows cannot fill the scan window.
+func TestPG_QueueEntriesOfRevokedRunnersAreQueuedOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := cappedPool(t, pg, 1)
+	rid := claimedRunnerOf(t, pg, "alice")
+	if _, err := pg.RevokeRunner(ctx, rid, time.Now(), "security-admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	launch := json.RawMessage(`{"request":{"runner_id":"` + rid.String() + `"}}`)
+	waiting, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"), store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Launch: launch}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"), store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Launch: launch}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'KILLED' WHERE id = $1`, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := pg.QueueEntriesOfRevokedRunners(ctx, 10)
+	if err != nil || len(got) != 1 || got[0].RunID != waiting.ID {
+		t.Fatalf("entries = %+v, %v; want only the still-QUEUED run %s", got, err, waiting.ID)
 	}
 }

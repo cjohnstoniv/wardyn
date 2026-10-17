@@ -61,6 +61,16 @@ type Config struct {
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
 	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
 	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
+	// SelfLapse (k8s runners only) closes the proxy until its first renew and
+	// ends it, terminally, at the last successful renew's send time plus
+	// RunTokenTTL. Set exactly when DecisionSink is.
+	SelfLapse bool `json:"self_lapse,omitempty"`
+	// DecisionSink (k8s runners only) streams decisions to runnerd, the only
+	// spool writer, instead of a shared DecisionSpoolDir.
+	DecisionSink *DecisionSinkConfig `json:"decision_sink,omitempty"`
+	// HardDeny (k8s runners only) refuses in-cluster names and addresses before
+	// the InternalHosts lift, for agent egress.
+	HardDeny *HardDenyConfig `json:"hard_deny,omitempty"`
 	// MITMCACertPEM / MITMCAKeyPEM are the OPTIONAL TLS-MITM certificate authority
 	// (PEM). When both are set AND content inspection is enabled, the proxy
 	// TLS-terminates opaque CONNECT tunnels to known LLM hosts (Anthropic/OpenAI)
@@ -503,20 +513,16 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// ipguard.Liftable" at write time (validateInternalHosts, internal/api), so
 	// a failure here means a config file authored outside that path. Fail
 	// closed rather than silently drop a malformed entry.
-	for i, h := range c.InternalHosts {
-		for j, cidr := range h.CIDRs {
-			prefix, err := netip.ParsePrefix(cidr)
-			if err != nil {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
-			}
-			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
-				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
-			}) {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
-			}
-		}
+	if err := c.validateInternalHostCIDRs(); err != nil {
+		return err
 	}
 	if err := c.validateTerminatedGates(); err != nil {
+		return err
+	}
+	if err := c.validateDecisionSink(); err != nil {
+		return err
+	}
+	if err := c.validateHardDeny(); err != nil {
 		return err
 	}
 	if err := c.validateMCP(); err != nil {
@@ -533,6 +539,58 @@ func (c *Config) applyDefaultsAndValidate() error {
 		}
 	}
 	return c.validateChannelHosts()
+}
+
+// validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside
+// ipguard.Liftable.
+func (c *Config) validateInternalHostCIDRs() error {
+	for i, h := range c.InternalHosts {
+		for j, cidr := range h.CIDRs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
+			}
+			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
+				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
+			}) {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDecisionSink checks self_lapse and decision_sink come together, and the sink without a spool.
+func (c *Config) validateDecisionSink() error {
+	if c.SelfLapse != (c.DecisionSink != nil) {
+		return fmt.Errorf("config: self_lapse and decision_sink are set together (k8s runners), never one alone")
+	}
+	if c.DecisionSink != nil {
+		if c.DecisionSpoolDir != "" {
+			return fmt.Errorf("config: decision_sink and decision_spool_dir are exclusive")
+		}
+		if err := c.DecisionSink.validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
+}
+
+// DecisionSinkConfig reaches runnerd's decision sink: URL is tls://host:port,
+// SPKISHA256 the hex SHA-256 of the sink certificate's SubjectPublicKeyInfo
+// (the only trust), Key the run's 32-byte key in hex.
+type DecisionSinkConfig struct {
+	URL        string `json:"url"`
+	SPKISHA256 string `json:"spki_sha256"`
+	Key        string `json:"key"`
+}
+
+// HardDenyConfig is the in-cluster deny set: DNS suffixes, exact names or IP
+// literals, and CIDRs. IPs and CIDRs match the literal and every resolved address.
+type HardDenyConfig struct {
+	Suffixes []string `json:"suffixes,omitempty"`
+	Hosts    []string `json:"hosts,omitempty"`
+	CIDRs    []string `json:"cidrs,omitempty"`
 }
 
 // validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An

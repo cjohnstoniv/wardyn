@@ -6,7 +6,6 @@ package proxy
 import (
 	"crypto/x509"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,8 +40,10 @@ func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int
 }
 
 // redactErr is err's text as the sandbox may see it: secret-masked, with no
-// topology, and with no name off a configured gateway's certificate — the
-// names a hostname mismatch lists are the gateway's own, so topology too.
+// topology, and with no name off a certificate chain. A hostname mismatch
+// lists the gateway's own names (redacted for a configured gateway only, since
+// its Host says which); an unknown-authority hint and a name-constraint
+// refusal carry no Host, so their CA and constraint names go for every host.
 func (p *Proxy) redactErr(err error) string {
 	s := err.Error()
 	var mismatch x509.HostnameError
@@ -51,8 +52,18 @@ func (p *Proxy) redactErr(err error) string {
 			s = strings.Replace(s, "valid for "+certNames(mismatch)+", not ", "valid for "+redactedEndpoint+", not ", 1)
 		}
 	}
+	s = candidateAuthorityRe.ReplaceAllString(s, `${1}"`+redactedEndpoint+`"`)
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &invalid) && invalid.Detail != "" &&
+		(invalid.Reason == x509.CANotAuthorizedForThisName || invalid.Reason == x509.UnconstrainedName) {
+		s = strings.ReplaceAll(s, invalid.Detail, redactedEndpoint)
+	}
 	return p.redactTopology(string(maskDecisionBytes([]byte(s))))
 }
+
+// candidateAuthorityRe matches the quoted CA subject x509.UnknownAuthorityError
+// appends as its hint (its fields are unexported, so the text is all there is).
+var candidateAuthorityRe = regexp.MustCompile(`(while trying to verify candidate authority certificate )"(?:[^"\\]|\\.)*"`)
 
 // certNames is the name list x509.HostnameError's text prints: the IP SANs
 // for an IP host, else the DNS SANs.
@@ -200,8 +211,10 @@ func dialStage(err error) string {
 	case strings.Contains(msg, "tls:"), strings.Contains(msg, "x509:"), strings.Contains(msg, "remote error:"):
 		return "tls handshake"
 	}
-	// A connection that opened and then failed (a reset or close while the
-	// answer was awaited) is classifyUpstreamErr's upstream_error, never a dial.
+	// Only a dial, or a failure handshakeOver marks as connecting, is before
+	// the connection opened. Anything else broke an open connection (a reset,
+	// an idle close, an HTTP/2 GOAWAY or stream reset while the answer was
+	// awaited), which classifyUpstreamErr calls upstream_error.
 	var opErr *net.OpError
 	var connecting *connectStageError
 	switch {
@@ -209,10 +222,8 @@ func dialStage(err error) string {
 		return "tcp dial"
 	case errors.As(err, &connecting):
 		return "dial"
-	case opErr != nil && (opErr.Op == "read" || opErr.Op == "write"), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-		return "after connect"
 	}
-	return "dial"
+	return "after connect"
 }
 
 // causeSentence builds the stage-prefixed, masked, topology-redacted sentence

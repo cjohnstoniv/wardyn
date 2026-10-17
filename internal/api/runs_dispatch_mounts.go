@@ -771,16 +771,21 @@ func (s *Server) auditLostStart(ctx context.Context, runID uuid.UUID, ref string
 // starts with the run ("" when none does). Non-secret, and absent for a run
 // launched without the set, which an older image reads exactly as before.
 func applyHarnessSetEnv(sandboxEnv map[string]string, harnesses []types.RunHarness) {
-	if len(harnesses) == 0 {
-		return
-	}
+	// The "none" placeholder is stored with the selection but is no harness for the launcher: it
+	// has no agent-run, so naming it would make the image's PID 1 exit 1.
 	ids := make([]string, 0, len(harnesses))
 	start := ""
 	for _, h := range harnesses {
+		if h.Harness == noHarnessCLI {
+			continue
+		}
 		ids = append(ids, h.Harness)
 		if h.Starts {
 			start = h.Harness
 		}
+	}
+	if len(ids) == 0 {
+		return
 	}
 	sandboxEnv["WARDYN_HARNESSES"] = strings.Join(ids, " ")
 	sandboxEnv["WARDYN_START_HARNESS"] = start

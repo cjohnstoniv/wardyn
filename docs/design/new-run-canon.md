@@ -139,6 +139,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
 | `POOL_OPTION_REASON(pool, reason)` | mock | {pool} · {reason} |
 | `REASON_NO_ONLINE` | mock | No online runners |
+| `FIT_STARTS_NOW` | pending (W-55) | Starts now |
+| `FIT_WAITS` | pending (W-55) | Waits for a slot |
 | `REASON_SWITCHED_OFF` | pending (W-03) | Switched off |
 | `REASON_NO_RUNNERS` | pending (W-03) | No runners |
 | `REASON_BACKGROUND_ONLY` | pending (W-03) | Background only |
@@ -271,12 +273,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MAIN_TITLE` | mock | Main drive |
 | `MAIN_BODY` | deviation (DS-3 W3) | The sandbox's own disk: system, tools and /home/agent. Every run has one. |
 | `SIZE_LABEL` | mock | Size |
-| `UP_TO(cap)` | mock | Up to {cap} GiB in this pool |
-| `CLAMP_POOL(cap, pool)` | mock | Clamped to {cap} GiB by the {pool} pool. |
-| `CLAMP_PROFILE(cap, profile)` | pending (W-11) | Clamped to {cap} GiB by {profile}. |
-| `CLAMP_SERVER(cap)` | pending (W-11) | Clamped to {cap} GiB by this server. |
-| `CLAMP_POLICY(cap)` | pending (W-11) | Clamped to {cap} GiB by this run's policy. |
-| `CLAMP_ORG(cap)` | pending (W-11) | Clamped to {cap} GiB by your organisation's limits. |
+| `UP_TO(size)` | mock | Up to {size} in this pool |
+| `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
+| `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
+| `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
+| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
+| `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
 | `ENFORCED` | mock | Enforced |
 | `ENFORCED_TIP` | deviation (DS-3 W1) | Writes past this size fail. |
@@ -347,18 +350,18 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
-| `MOUNT_MAIN(n)` | mock | Main drive · {n} GiB |
+| `MOUNT_MAIN(size)` | mock | Main drive · {size} |
 | `MOUNT_ITEM(name)` | mock | ← {name} |
 | `MOUNT_STARTS` | mock | (Starts here) |
 | `MOUNT_READ_ONLY` | mock | (read-only) |
-| `SUMMARY_MAIN(n)` | mock | Main drive {n} GiB |
+| `SUMMARY_MAIN(size)` | mock | Main drive {size} |
 | `SUMMARY_STARTS(name)` | mock | starts in {name} |
 | `SUMMARY_KEPT_ONE(names)` | mock | {names} is kept |
 | `SUMMARY_KEPT_MANY(names)` | mock | {names} are kept |
 | `SUMMARY_DELETED` | mock | the main drive is deleted when the run ends |
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
-| `SUMMARY_NO_EXTRA(n, life)` | mock | Main drive {n} GiB · no extra files · {life}. |
+| `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
@@ -691,7 +694,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_NONE` | mock | No repositories or drives |
 | `WORK_ITEM_ONE` | mock | 1 item attached |
 | `WORK_ITEMS(n)` | mock | {n} items attached |
-| `MAIN_DRIVE(n)` | mock | Main drive · {n} GiB |
+| `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |
@@ -742,6 +745,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
+| `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |

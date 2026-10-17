@@ -25,9 +25,8 @@ func (s *Server) routes() chi.Router {
 	// audit source_ip (handlePostDecision / handleGroundtruthEvents). Trusting
 	// those headers would let any caller reaching the internal/groundtruth
 	// endpoints FORGE the source_ip in the audit log. We keep r.RemoteAddr as the
-	// real TCP peer instead. If Wardyn is ever fronted by a trusted reverse proxy,
-	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
-	// trusted proxy addresses.
+	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
+	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
 	r.Use(s.securityHeaders)
 
@@ -62,7 +61,7 @@ func (s *Server) routes() chi.Router {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
-			r.Use(s.humanOrAdminAuth)
+			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard)
 			// operatorOnly and securityOps are the two gate values over this one
 			// authenticated group (chi's With is what Group is built from):
 			// operatorOnly is the super-admin role gate (requireOperator, which reads
@@ -280,6 +279,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
+			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
@@ -918,10 +918,11 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 
 	// Recording upload: PUT /api/v1/internal/recordings/{runID}
 	// wardyn-rec POSTs the finished cast from inside the agent container.
-	if s.cfg.RecordingStore != nil {
-		r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
-		r.Put("/internal/recordings/{runID}/parts/{part}", s.handleUploadRecordingPart)
-	}
+	// Registered with no store too, so a relayed upload reaches internalAuth
+	// and the relay binding and is answered recording_off (saveRecording),
+	// never refused by the relay's route filter as an unknown route.
+	r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
+	r.Put("/internal/recordings/{runID}/parts/{part}", s.handleUploadRecordingPart)
 
 	// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
 	// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan

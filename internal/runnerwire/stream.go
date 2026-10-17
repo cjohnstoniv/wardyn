@@ -16,7 +16,28 @@ import (
 // ResetError is what a read or write on an aborted stream answers.
 type ResetError struct{ Code uint32 }
 
-func (e *ResetError) Error() string { return fmt.Sprintf("runnerwire: stream reset (code %d)", e.Code) }
+func (e *ResetError) Error() string {
+	return fmt.Sprintf("runnerwire: stream ended: %s (code %d)", resetReason(e.Code), e.Code)
+}
+
+// resetReason says in a sentence why a stream was reset, so the line a person reads is not a bare code.
+func resetReason(code uint32) string {
+	switch code {
+	case ResetCancelled:
+		return "it was cancelled"
+	case ResetReconnect:
+		return "the connection was replaced"
+	case ResetRefused:
+		return "it was refused"
+	case ResetInternal:
+		return "serving it failed"
+	case ResetNoSuchPeer:
+		return "the other side of the relay is not connected"
+	case ResetCapacity:
+		return "there is no room for another stream"
+	}
+	return "reason unknown"
+}
 
 // Stream is one byte stream: a pty, an exec's stdio, a relay or an output
 // copy. Read and Write may run in their own goroutines. A writer blocks on

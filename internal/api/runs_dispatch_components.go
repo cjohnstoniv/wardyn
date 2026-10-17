@@ -249,7 +249,7 @@ func firstCredentialCollision(hosts []credentialedHost) (first, second int, foun
 //     that redirect's token out, so there is one credential on the host.
 //
 // A grant whose scope names no host binds nothing and is not listed.
-func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, subject string) []credentialedHost {
+func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, repo, owner string) []credentialedHost {
 	var hosts []credentialedHost
 	add := func(host string) {
 		if strings.TrimSpace(host) != "" {
@@ -268,7 +268,7 @@ func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, sub
 			}
 		}
 	}
-	laneHosts := resolvedLaneHosts(resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject))
+	laneHosts := resolvedLaneHosts(resolveADOEntraRun(sc, spec.WorkspaceRepos, repo, owner))
 	for _, h := range laneHosts {
 		add(h)
 	}
@@ -326,7 +326,10 @@ const credentialHostCollisionRefusal = "Two of this run's credentials are bound 
 // included: the Azure DevOps lane and a redirect's token are credentials no
 // policy names, and they can land on one host between themselves (a package
 // feed on an Azure DevOps host that is also a redirect's target).
-func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec) *runRefusal {
+//
+// repo is the run's own repository (req.Repo), which the lane serves beside its
+// workspace repositories.
+func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec, repo string) *runRefusal {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		var err error
@@ -334,7 +337,7 @@ func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec
 			return runServerError("get site config", err)
 		}
 	}
-	hosts := admissionCredentialHosts(spec, sc, runIdentitySubject(r.Context(), principalFromRequest(r)))
+	hosts := admissionCredentialHosts(spec, sc, repo, adoLaneOwnerOf(r))
 	if _, _, found := firstCredentialCollision(hosts); !found {
 		return nil
 	}
@@ -352,7 +355,7 @@ func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec
 // The components' own grants are left out of the policy first, as the gate
 // asked before it added them; two of THEM on one host are two injection rules,
 // which credentialHostCollision finds.
-func componentHostCollision(c componentDispatch, site types.SiteConfig, policy types.RunPolicySpec, subject string,
+func componentHostCollision(c componentDispatch, site types.SiteConfig, policy types.RunPolicySpec, repo, owner string,
 	injections []runner.InjectionGrant,
 ) (grants []uuid.UUID, found bool) {
 	if len(c.HeaderHosts) == 0 {
@@ -361,7 +364,7 @@ func componentHostCollision(c componentDispatch, site types.SiteConfig, policy t
 	policy.EligibleGrants = slices.DeleteFunc(slices.Clone(policy.EligibleGrants), func(g types.GrantSpec) bool {
 		return g.Kind == types.GrantAPIKey && slices.ContainsFunc(c.HeaderHosts, func(h string) bool { return hostEqual(h, apiKeyGrantScopeHost(g.Scope)) })
 	})
-	others := credentialedDestinations(site, policy, subject)
+	others := credentialedDestinations(site, policy, repo, owner)
 	for _, host := range c.HeaderHosts {
 		d, err := types.ParseDestination(host)
 		if err == nil && !slices.ContainsFunc(others, d.OverlapsAtAnyPort) {
@@ -407,7 +410,7 @@ func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, 
 		return nil, false
 	}
 	p.Components.pruneUnpaired(injections)
-	grants, found := componentHostCollision(p.Components, site, policy, runIdentitySubject(ctx, run.CreatedBy), injections)
+	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), injections)
 	if !found {
 		grants, found = credentialHostCollision(injections, patGrants)
 	}

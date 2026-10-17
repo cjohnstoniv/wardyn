@@ -237,6 +237,17 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+// DescribeImage implements runner.ImageDescriber by delegating to the first wired substrate that
+// implements it, as ImagePresent does.
+func (o *Orchestrator) DescribeImage(ctx context.Context, ref string) (string, error) {
+	for _, s := range o.locals() {
+		if id, ok := s.(runner.ImageDescriber); ok {
+			return id.DescribeImage(ctx, ref)
+		}
+	}
+	return "", errors.New("orchestrator: no wired substrate has a local image store")
+}
+
 // ProbeDrive implements runner.DriveProber by delegating to the first wired
 // substrate that implements it — the same single-fan-out ImagePresent uses. A
 // drive's backend is already scoped to this deployment's dispatch target
@@ -426,7 +437,7 @@ func (o *Orchestrator) local(executor string) (substrate.Substrate, bool) {
 }
 
 // ExecutorFacts is the classes one configured executor can enforce now; false when it is not one of
-// this deployment's executors or cannot report.
+// this deployment's executors, or cannot report (with ProbeErr set).
 func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
 	sub, ok := o.local(executor)
 	if !ok {
@@ -434,11 +445,11 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 	}
 	cs, err := o.classesFor(ctx, sub)
 	if err != nil {
-		return runner.TargetFacts{}, false
+		return runner.TargetFacts{ProbeErr: err}, false
 	}
 	_, keeps := sub.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement,
-		KeepsEnded: keeps, UserDrives: cs.UserDrives}, true
+		KeepsEnded: keeps, UserDrives: cs.UserDrives, Records: cs.SessionRecording}, true
 }
 
 // MeasureExecutor implements runner.ExecutorMeasurer: what one configured executor has, when its
@@ -757,6 +768,20 @@ func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Selftest forwards a BYOI selftest to ref's substrate when it runs one of its
+// own (runner.Selftester).
+func (o *Orchestrator) Selftest(ctx context.Context, ref string) (int, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := s.(runner.Selftester)
+	if !ok {
+		return 0, runner.ErrSelftestUnsupported
+	}
+	return st.Selftest(ctx, ref)
 }
 
 // StartSandbox forwards a kept agent's restart to ref's substrate when it can

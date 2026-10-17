@@ -185,6 +185,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
 			s.projectRunnerFacts(r, runs)
+			redactRunRepos(runs)
 			return runs, nil
 		}, nil)
 		return
@@ -199,6 +200,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
 			s.projectRunnerFacts(r, runs)
+			redactRunRepos(runs)
 			return runs, nil
 		}
 	}
@@ -210,6 +212,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		s.projectRecordingMeta(r, runs)
 		s.projectStatusDetailFor(r, runs)
 		s.projectRunnerFacts(r, runs)
+		redactRunRepos(runs)
 		return runs, nil
 	})
 }
@@ -232,6 +235,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.projectRecordingMeta(r, runs)
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
+	redactRunRepos(runs)
 	run = runs[0]
 	// A local run's runner was named by projectRunnerFacts; a remote-hosted runner's name is read here.
 	if run.RunnerName == "" {
@@ -464,6 +468,7 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
 		spec := ceiling.Spec.Clone()
+		clampStoredFileSize(&spec, "the governance profile ceiling")
 		// A ceiling's azure_devops_capabilities and github_capabilities are
 		// bounds, not grants: handed to a member as their spec either would
 		// replace the row's default_profile with the widest list they may
@@ -482,7 +487,9 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		return types.RunPolicySpec{}, nil, policyOrigin{}, err
 	}
 	pid := p.ID
-	return p.Spec.Clone(), &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
+	spec := p.Spec.Clone()
+	clampStoredFileSize(&spec, "stored policy "+p.ID.String())
+	return spec, &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
 }
 
 // bestClass returns the strongest class a runner declares (slice is

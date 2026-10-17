@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -525,9 +526,29 @@ func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method
 	if idOf != nil {
 		approvalID = idOf(resp.StatusCode, respBody)
 	}
-	p.emitLocalDecision(r, decisionForStatus(resp.StatusCode), ruleSource, approvalID)
+	decision, cause := decisionForStatus(resp.StatusCode), ""
+	if ruleSource == ruleSourceRecordings && decision == egress.Deny {
+		// The organisation's own refusal reason (recording_off, relay_route_refused, ...), so the
+		// row says why a cast was not kept rather than only that the upload failed.
+		cause = orgRefusalReason(respBody)
+	}
+	p.emitLocalDecisionCause(r, decision, ruleSource, approvalID, cause)
 	passThrough(w, resp, respBody)
 }
+
+// orgRefusalReason is the reason token of a control-plane error body, "" when it carries none. Only a
+// snake_case token is kept: the body is the organisation's, and the row is no place for its prose.
+func orgRefusalReason(body []byte) string {
+	var m struct {
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal(body, &m) != nil || len(m.Reason) > 64 || !reasonToken.MatchString(m.Reason) {
+		return ""
+	}
+	return m.Reason
+}
+
+var reasonToken = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // approvalIDOn409 reads the approval id only out of a 409 (mint pending/denied).
 func approvalIDOn409(status int, body []byte) *uuid.UUID {
@@ -605,11 +626,16 @@ func extractApprovalID(body []byte) *uuid.UUID {
 // (emitGitDecision, emitPATDecision); logging those through here would make a
 // clone of one forge indistinguishable from a mint or another forge's clone.
 func (p *Proxy) emitLocalDecision(r *http.Request, decision egress.Decision, ruleSource string, approvalID *uuid.UUID) {
+	p.emitLocalDecisionCause(r, decision, ruleSource, approvalID, "")
+}
+
+// emitLocalDecisionCause is emitLocalDecision with the row's Cause.
+func (p *Proxy) emitLocalDecisionCause(r *http.Request, decision egress.Decision, ruleSource string, approvalID *uuid.UUID, cause string) {
 	if p.sink == nil {
 		return
 	}
 	host, port, _ := hostPortFromURL(p.controlPlaneURL)
 	log := decisionLog(p.reqOf(r, host, port), decision, ruleSource)
-	log.ApprovalID = approvalID
+	log.ApprovalID, log.Cause = approvalID, cause
 	p.sink.emit(log)
 }

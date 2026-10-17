@@ -87,3 +87,27 @@ func TestComponents_MethodsHitTheirRoutes(t *testing.T) {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
 }
+
+// A component reference's explicit empty mcp_harnesses ("on for no harness")
+// survives the SDK's encode and decode; absent stays absent.
+func TestComponentRef_EmptyMCPHarnessesSurviveCreateRunRequest(t *testing.T) {
+	id := uuid.New()
+	req := client.CreateRunRequest{Components: []client.ComponentRef{
+		{ID: &id, MCPHarnesses: []string{}},
+		{ID: &id},
+	}}
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back client.CreateRunRequest
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if got := back.Components[0].MCPHarnesses; got == nil || len(got) != 0 {
+		t.Errorf("explicit [] decoded as %#v, want an empty non-nil list", got)
+	}
+	if got := back.Components[1].MCPHarnesses; got != nil {
+		t.Errorf("absent decoded as %#v, want nil", got)
+	}
+}

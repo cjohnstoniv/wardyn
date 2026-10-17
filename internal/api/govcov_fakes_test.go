@@ -184,7 +184,7 @@ func (s *govCovStore) ListGovernanceProfiles(context.Context) ([]types.Governanc
 // WriteGovernanceProfile runs build over the stored profiles and, like the real store, returns what
 // build returned without storing anything when build refuses.
 func (s *govCovStore) WriteGovernanceProfile(_ context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
-	p, err := build(s.profiles)
+	p, err := build(s.profiles, s.assignments)
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}

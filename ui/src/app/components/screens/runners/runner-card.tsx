@@ -17,7 +17,7 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { OfflineNote, ResourceTable } from "./resource-table";
 import { runnerRes } from "./resources";
-import { RunnerChip } from "./runner-chip";
+import { RunnerChip, TrustChip } from "./runner-chip";
 import { timeLeft } from "./runner-display";
 
 /** A runner of either kind, as the Runners tab lists and searches them. */
@@ -97,6 +97,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           </button>
           <Chip>{self ? RUNNER_KIND.SELF : RUNNER_KIND.REMOTE}</Chip>
           {self ? <RunnerChip runner={self} /> : <Chip dot>{online ? RUNNER.ONLINE : RUNNER.OFFLINE}</Chip>}
+          {self && <TrustChip runner={self} />}
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>
@@ -113,7 +114,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           <Fact label={RUNNER_V6.MACHINE} data-machine>
             {self ? <><MachineText machine={self.machine_name} /><ArchText arch={self.arch} /></> : <span className="text-muted-foreground">{RUNNER_V6.NOT_APPLICABLE}</span>}
           </Fact>
-          <Fact label={RUNNER_V6.OWNER}>{self ? self.owner : RUNNER_V6.ORGANIZATION}</Fact>
+          <Fact label={RUNNER_V6.OWNER}>{self ? self.owner || RUNNER_V6.ORGANIZATION : RUNNER_V6.ORGANIZATION}</Fact>
           <Fact label={RUNNER_V6.POOLS} data-pools>
             <PoolLinks pools={pools} onOpenPool={onOpenPool} />
           </Fact>

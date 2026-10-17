@@ -51,7 +51,7 @@ func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.
 			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 	}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("set pool limits: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestRunCreateAuditCarriesAppliedResources(t *testing.T) {
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.ResourcesApplied == nil || *data.ResourcesApplied != *created.ResourcesApplied {
+	if data.ResourcesApplied == nil || !reflect.DeepEqual(data.ResourcesApplied, created.ResourcesApplied) {
 		t.Fatalf("run.create resources_applied = %+v, the 201 says %+v", data.ResourcesApplied, created.ResourcesApplied)
 	}
 	wantAmount(t, "audited cpu", data.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourcePool, "Small")

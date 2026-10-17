@@ -9,7 +9,7 @@
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
-import { CC_ORDER, type ConfinementClass, type GovernanceChange } from "../types";
+import { CC_ORDER, type ConfinementClass, type GovernanceChange, type SetupItem } from "../types";
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
 
@@ -47,6 +47,14 @@ export function getAuthGeneration(): number {
   return authGeneration;
 }
 
+// DR-0034: the person this tab last confirmed (/me), named on a draft's write
+// (asPerson) so a cookie another tab switched to someone else is refused by the
+// server (412, nothing written) rather than submitting this draft as the new person.
+let _expectedPrincipal = "";
+export function setExpectedPrincipal(principal: string): void {
+  _expectedPrincipal = principal;
+}
+
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
 // (another tab can have signed in as someone else) must never receive one
@@ -63,10 +71,13 @@ export function isSignedOutHold(): boolean {
 
 /** RequestInit plus `save`: the owning screen's id when this request is that
  *  screen's Save, so a refused one is named beside that Save and nowhere else;
- *  and `endsSession`: the logout, the one write the signed-out hold lets
+ *  `endsSession`: the logout, the one write the signed-out hold lets
  *  through — it ends a session and carries nothing of the page. Per request,
- *  never a global release: a Save clicked during the logout stays held. */
-export type WfetchInit = RequestInit & { save?: string; endsSession?: true };
+ *  never a global release: a Save clicked during the logout stays held; and
+ *  `asPerson` (DR-0034): the request submits a draft composed under the person
+ *  this tab confirmed, so it names them and the server refuses it if the shared
+ *  cookie now names someone else. */
+export type WfetchInit = RequestInit & { save?: string; endsSession?: true; asPerson?: true };
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and
@@ -159,6 +170,9 @@ export class HttpError extends Error {
   policy?: PolicyRef;
   /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
   declare retryAfter?: string;
+  /** A preflight model_credential refusal's setup rows (runs.preflightRunWire): the checklist the
+   *  server resolved before the provider refused, so Review keeps those blockers. */
+  declare setupItems?: SetupItem[];
   constructor(
     status: number,
     message: string,
@@ -278,7 +292,7 @@ async function drainBody(res: Response): Promise<void> {
 
 export async function wfetch(
   path: string,
-  { save, endsSession, ...init }: WfetchInit = {},
+  { save, endsSession, asPerson, ...init }: WfetchInit = {},
   timeoutMs: number = WFETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
@@ -294,6 +308,9 @@ export async function wfetch(
     headers.set("Content-Type", "application/json");
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
+  if (asPerson && _expectedPrincipal) {
+    headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
+  }
 
   let res: Response;
   const generation = authGeneration;

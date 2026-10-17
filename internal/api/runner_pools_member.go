@@ -171,6 +171,14 @@ func (s *Server) handlePutMyRunnerPoolDefaults(w http.ResponseWriter, r *http.Re
 		writePoolInvalid(w, personalBarrierDefaultMsg)
 		return
 	}
+	if d.Recording != "" {
+		writePoolInvalid(w, "recording is an organisation setting; an admin sets it")
+		return
+	}
+	if d.Revision != 0 {
+		writePoolInvalid(w, personalRevisionDefaultMsg)
+		return
+	}
 	rows, ok := s.poolCatalogue(w, r, ps, true)
 	if !ok || !checkDefaultPool(w, d, rows, false) {
 		return

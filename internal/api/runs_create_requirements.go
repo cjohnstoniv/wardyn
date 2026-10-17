@@ -110,6 +110,8 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // member mount gate does not allow (requirementWriteRefusal): the caller
 // answers it and neither persists nor dispatches the spec. The workspaces
 // folded here are the run's own attached ones: the record door's one workspace.
+// A workspace that is only in the run because it stores the same directory, and
+// whose write row is not enabled, leaves the mount alone (applyWriteNarrowing).
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
 	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
 }

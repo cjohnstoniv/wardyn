@@ -44,7 +44,7 @@ interface Seen {
 async function stub(page: Page, opts: { preflight: object | { status: number; body: object }; queued?: boolean }): Promise<Seen> {
   const seen: Seen = { preflight: [], create: [], killed: [] };
   // The full pool is in the list too: the Launched screen reads a waiting run's pool from it.
-  const ci = { ...SHARED, id: FULL.runner_pool!.id, name: FULL.runner_pool!.name, slots: { ...SHARED.slots!, used: 40, max: 40 } };
+  const ci = { ...SHARED, id: FULL.runner_pool!.id, name: FULL.runner_pool!.name, slots: { ...SHARED.slots!, used: 40, max: 40, verdict: "waits" as const } };
   const pools = [...SCENARIO_POOLS.admin.pools, ci].map((p) => ({
     ...p,
     run_types: ["background", "interactive"],
@@ -167,6 +167,19 @@ test.describe("New Run, placement: the pool a person picks", () => {
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
   }
 
+  test("each pool in the dropdown says whether a run starts now or waits for a slot", async ({ page }) => {
+    await stub(page, { preflight: SCENARIO_PREFLIGHT.member });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+    await press(page, NR_SHAPE.ENV_TITLE);
+    await expect(page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).locator("option")).toHaveText([
+      NR_RUN.POOL_OPTION_REASON(SHARED.name, NR_RUN.FIT_STARTS_NOW),
+      NR_RUN.POOL_OPTION_REASON(LAPTOPS.name, NR_RUN.FIT_STARTS_NOW),
+      NR_RUN.POOL_OPTION_REASON(FULL.runner_pool!.name, NR_RUN.FIT_WAITS),
+    ]);
+  });
+
   test("an untouched pool sends no runner_pool_id", async ({ page }) => {
     const seen = await stub(page, { preflight: SCENARIO_PREFLIGHT.member });
     await guidedEnvironment(page);
@@ -177,7 +190,7 @@ test.describe("New Run, placement: the pool a person picks", () => {
 
   test("a picked pool is named in the check and in the create", async ({ page }) => {
     const seen = await stub(page, { preflight: SCENARIO_PREFLIGHT.member });
-    await guidedEnvironment(page, LAPTOPS.name);
+    await guidedEnvironment(page, NR_RUN.POOL_OPTION_REASON(LAPTOPS.name, NR_RUN.FIT_STARTS_NOW));
     await nameAndLaunch(page, "picked pool");
     expect(JSON.parse(seen.create[0])).toMatchObject({ runner_pool_id: LAPTOPS.id });
     expect(JSON.parse(seen.preflight.at(-1)!)).toMatchObject({ runner_pool_id: LAPTOPS.id });

@@ -1,0 +1,21 @@
+wardyn-runnerd {{ include "runnerd.tag" . }} ({{ .Values.sandbox.arch }}) placing runs in namespace {{ .Values.runsNamespace }}.
+
+1. Read the runner's fingerprint:
+     kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "runnerd.fullname" . }} --all-containers
+2. A security operator compares it in Admin → Runners, claims the runner and adds it to an organisation pool.
+
+Runs land only on {{ .Values.sandbox.arch }} nodes (kubernetes.io/arch). For a mixed-arch cluster install a second
+release for the other arch, with its own release name, registration Secret and runs namespace.
+
+{{- if not .Values.rbac.create }}
+
+rbac.create is false: apply the ClusterRole, ClusterRoleBinding, both Roles and both RoleBindings BEFORE the
+image starts, and again before any upgrade that adds a verb. runnerd's boot access review refuses to start
+while a verb is missing. To see exactly what the chart would apply:
+     helm template {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} -f <your values> --set rbac.create=true --show-only templates/rbac.yaml
+{{- end }}
+
+The ClusterRole lets runnerd list every Node in the cluster (names, addresses, labels, taints, images), and the
+runs-namespace Role adds pods: patch to the control-plane chart's verbs.
+
+With apiServer.peers empty, runnerd's egress on TCP 443 and 6443 is open to any destination, including the pod network; set apiServer.peers to the control plane's address range to close it.

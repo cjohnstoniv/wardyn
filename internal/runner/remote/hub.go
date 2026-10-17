@@ -58,9 +58,14 @@ type HubConfig struct {
 	Verified func(context.Context, uuid.UUID) error
 	// Inactive, when set, says a claimed runner may hold no session now (its
 	// owner is deactivated), without revoking it. Such a connection is sent
-	// GOAWAY before admission, and the stored-row recheck ends a live session
-	// the same way, so a connection after reactivation is admitted again.
+	// GOAWAY (runner_owner_inactive) before admission, and the stored-row
+	// recheck ends a live session with GOAWAY (fresh_session_required), so a
+	// connection after reactivation is admitted again.
 	Inactive func(context.Context, types.Runner) (bool, error)
+	// ProxyImage, when set, names the proxy image the organisation runs for a claimed runner (chosen
+	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's
+	// upgrades. "" says nothing.
+	ProxyImage func(types.Runner) string
 }
 
 type hubSession struct {
@@ -109,7 +114,7 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	}
 	row, err := h.cfg.Lookup(ctx, id)
 	if err != nil || row.ID != id {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: no registered runner by that id, or it could not be read: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	auth, err := runnerwire.AuthenticateRunner(ctx, conn, row, h.cfg.OrgURL)
 	if err != nil {
@@ -122,10 +127,10 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	}
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: the registration changed or could not be read while the runner authenticated: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	if current.ClaimExpired(time.Now()) {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: the runner's claim has lapsed", runnerwire.ErrAuth)
 	}
 	if current.State == types.RunnerRevoked {
 		_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeRevoked, runnerwire.Reason{Reason: "runner_revoked"})
@@ -165,6 +170,15 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	a.Substrate.requireExecutionGeneration = true
 	a.Substrate.mu.Unlock()
 	return h.serveClaimed(ctx, conn, current, auth, a)
+}
+
+// readCause says why a registration read refused: the read's own error, or that the row read no longer
+// matches.
+func readCause(err error) string {
+	if err == nil {
+		return "the stored row no longer matches"
+	}
+	return err.Error()
 }
 
 func (h *Hub) lockSession(id uuid.UUID) (*hubSession, error) {
@@ -275,7 +289,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || current.State != types.RunnerClaimed ||
 		string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
-		return nil, runnerwire.ErrAuth
+		return nil, fmt.Errorf("%w: the runner was released, revoked or re-registered while it was being admitted: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	if s.peer != nil && s.peer.Online() {
 		return nil, errors.New("runner already has an active connection")
@@ -303,6 +317,9 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
+	if h.cfg.ProxyImage != nil {
+		ok.ProxyImage = h.cfg.ProxyImage(current)
+	}
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
 	}
@@ -488,20 +505,28 @@ func (h *Hub) ended(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 	})
 }
 
-// Close drops this replica's connections and timers at daemon shutdown.
+// Close drops this replica's connections and timers at daemon shutdown. A session that reported
+// Connected reports Disconnected here, each under a short bound, so the runner's disconnect is
+// recorded by this replica before it exits rather than never.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	h.closed = true
 	sessions := h.sessions
 	h.sessions = map[uuid.UUID]*hubSession{}
 	h.mu.Unlock()
-	for _, s := range sessions {
+	for id, s := range sessions {
 		s.mu.Lock()
 		if s.timer != nil {
 			s.timer.Stop()
 		}
 		if s.link != nil {
 			s.link.Close()
+		}
+		if s.connected && h.cfg.Disconnected != nil {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(h.ctx), time.Second)
+			_ = h.cfg.Disconnected(ctx, id)
+			cancel()
+			s.connected = false
 		}
 		s.mu.Unlock()
 	}

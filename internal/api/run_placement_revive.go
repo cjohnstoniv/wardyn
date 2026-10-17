@@ -41,13 +41,16 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if err != nil {
 		return err
 	}
+	if err := s.trustChangedRefusal(ctx, run, p.Trust); err != nil {
+		return err
+	}
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		return ref
 	}
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
 	cfg.UpstreamProxyURL, cfg.TrustedCAPEM = "", ""
-	cfg.UpstreamProxyNoProxy, cfg.LLMUpstreams = nil, nil
+	cfg.UpstreamProxyNoProxy = nil
 	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)
 	return nil
 }

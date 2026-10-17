@@ -83,13 +83,15 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 			retired = append(retired, g.Capability+"="+g.Value)
 		case err != nil || canonical != g.Value:
 			out[i].Inert = true
-			inert = append(inert, g.Capability+"="+g.Value)
+			if staged, ok := stagedFeatureAllow(g.Capability, g.Effect, g.Value); !ok || staged != g.Value {
+				inert = append(inert, g.Capability+"="+g.Value)
+			}
 		}
 	}
 	if len(inert) > 0 {
 		slog.WarnContext(r.Context(), "api: capability grants stored before the per-kind value rule can never match anything",
 			"grants", len(grants), "inert", len(inert), "values", strings.Join(inert, ", "),
-			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name")
+			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name — then delete the old row through DELETE /api/v1/permissions/grants/{id}, which the re-save leaves in place")
 	}
 	if len(retired) > 0 {
 		slog.WarnContext(r.Context(), "api: capability grants of a retired kind can never match anything",
@@ -147,6 +149,18 @@ func controlCharFree(s string) bool {
 	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
+// stagedFeatureAllow is the stored value of an allow naming a feature this version does not know, and
+// whether the row is one: a lowercase snake_case name, accepted so an administrator can stage the grant
+// before the upgrade that ships the feature. No door asks about such a value until then, so it grants
+// nothing here, and the Permissions read marks it inert. A deny is never staged: on this version it
+// would turn nothing off.
+func stagedFeatureAllow(capability string, effect types.CapabilityEffect, value string) (string, bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	ok := capability == capFeature && effect == types.CapabilityAllow && types.ASCIIOnlySubject(value) &&
+		v != "" && v[0] >= 'a' && v[0] <= 'z' && strings.Trim(v, "abcdefghijklmnopqrstuvwxyz0123456789_") == ""
+	return v, ok
+}
+
 // validateCapabilityGrant normalizes g in place (trims, lowercases the
 // subject to match how capabilitySubjects/sessionGroups normalize a caller's
 // own identity) and validates it against the closed kind set + the subject
@@ -175,6 +189,9 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 	// the resolver will be asked about is refused or folded here, never stored
 	// 201-Created to render as an active rule that protects nothing.
 	v, verr := canonicalGrantValue(g.Capability, g.Value)
+	if staged, ok := stagedFeatureAllow(g.Capability, g.Effect, g.Value); verr != nil && ok {
+		v, verr = staged, nil
+	}
 	if verr != nil {
 		return verr
 	}
@@ -278,7 +295,8 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //   - feature: LOWERCASED (ASCII guard first, as above), then held to the
 //     closed featureValues set. The mint doors and componentAttachRefusal ask
 //     about exactly those strings, so any other value is a row that can never
-//     match — a deny that turns nothing off.
+//     match — a deny that turns nothing off. (validateCapabilityGrant still
+//     stores an ALLOW of a well-formed unknown name: stagedFeatureAllow.)
 //
 //   - agent and image: STORED VERBATIM, and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary

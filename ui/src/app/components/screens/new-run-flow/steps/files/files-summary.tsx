@@ -21,7 +21,7 @@ const lifeFragment = (l: Lifecycle): string | undefined =>
   l.kind === "deleted" ? NR_FILES.SUMMARY_DELETED : l.kind === "noEnd" ? NR_FILES.SUMMARY_NO_END : l.kind === "kept" ? NR_FILES.SUMMARY_KEPT(l.grace) : undefined;
 
 export interface SummaryFacts {
-  /** The main drive's size in GiB, as shown. */
+  /** The main drive's size with its unit, as shown. */
   size: string;
   noExtra: boolean;
   /** Something is included. */

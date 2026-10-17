@@ -15,8 +15,10 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"net"
 	"net/http/httputil"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -495,6 +497,8 @@ type Config struct {
 	SecretKeyService string
 	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
 	SecretKeyServiceStaticKey bool
+	// SecretKeyServiceNodeRole: the key service is reached with the EC2 node's instance role; /setup/status words kek_service_static_key for it.
+	SecretKeyServiceNodeRole bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
 	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
@@ -518,6 +522,8 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
+	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
 	// TRUE) makes applyWorkspaceRequirements apply the same provenance gate
 	// to a scan_seeded EGRESS requirement that the SECRET side has always applied
@@ -879,6 +885,7 @@ type Server struct {
 	// ponytail: process-local, so per replica and per restart: a replica or a
 	// restarted process that has not seen the refusal grades the session live
 	// and passes Review until its own dispatch is refused and re-marks it.
+	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
@@ -974,8 +981,14 @@ const (
 // Audit failures must never block the primary operation (the Recorder owns
 // durability/retry); we swallow the error after the event is constructed.
 func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
+	_ = s.recordAuditDurably(ctx, ev)
+}
+
+// recordAuditDurably is recordAudit that says whether the row was durably accepted: written, or held by the
+// audit spool for its drain.
+func (s *Server) recordAuditDurably(ctx context.Context, ev types.AuditEvent) bool {
 	if s.cfg.Audit == nil {
-		return
+		return true
 	}
 	if ev.ID == uuid.Nil {
 		ev.ID = uuid.New()
@@ -986,10 +999,12 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	ev.Data = audit.StampRelay(ctx, ev.Data)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
+	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
 	// event to the durable local fallback so it is never silently lost — for every
 	// audit writer, not just this one. So there is no API-layer-only spool here.
-	_ = s.cfg.Audit.Record(ctx, ev)
+	err := s.cfg.Audit.Record(ctx, ev)
+	return err == nil || errors.Is(err, audit.ErrSpooled)
 }

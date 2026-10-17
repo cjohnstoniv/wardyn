@@ -30,14 +30,14 @@ type componentHostBounds struct {
 	credentialed []types.Destination
 }
 
-func (s *Server) newComponentHostBounds(r *http.Request, sc types.SiteConfig, spec types.RunPolicySpec,
+func (s *Server) newComponentHostBounds(r *http.Request, sc types.SiteConfig, spec types.RunPolicySpec, repo string,
 	ceiling governanceCeiling, wsRefs []types.Workspace,
 ) componentHostBounds {
 	return componentHostBounds{
 		deny:         slices.Concat(ceiling.Spec.DeniedDomains, spec.DeniedDomains, workspaceDeniedEgress(wsRefs)),
 		model:        modelServingDestinations(sc),
 		serving:      s.modelServingHosts(sc),
-		credentialed: credentialedDestinations(sc, spec, runIdentitySubject(r.Context(), principalFromRequest(r))),
+		credentialed: credentialedDestinations(sc, spec, repo, adoLaneOwnerOf(r)),
 	}
 }
 
@@ -87,10 +87,11 @@ func modelServingDestinations(sc types.SiteConfig) []types.Destination {
 // sign-in on a host no configuration names — the AWS access-portal host of a
 // Bedrock sign-in — is not visible here; dispatch compares again.
 //
-// subject is the run identity's subject, which the Azure DevOps lane resolves
-// from. The gate asks with the caller's; dispatch asks again with the run
-// owner's, over the site config it reads then (settleCredentialHosts).
-func credentialedDestinations(sc types.SiteConfig, spec types.RunPolicySpec, subject string) []types.Destination {
+// repo and owner are what the Azure DevOps lane resolves from beside the
+// workspace repositories: the run's own repository and adoLaneOwner's answer.
+// The gate asks with the request's; dispatch asks again with the run's, over
+// the site config it reads then (settleCredentialHosts).
+func credentialedDestinations(sc types.SiteConfig, spec types.RunPolicySpec, repo, owner string) []types.Destination {
 	var hosts []string
 	for _, g := range spec.EligibleGrants {
 		if g.Kind == types.GrantAPIKey {
@@ -98,7 +99,7 @@ func credentialedDestinations(sc types.SiteConfig, spec types.RunPolicySpec, sub
 		}
 	}
 	// The pair dispatch resolves the lane from (resolveRunAutonomy does too).
-	if ado, on := resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject); on {
+	if ado, on := resolveADOEntraRun(sc, spec.WorkspaceRepos, repo, owner); on {
 		hosts = append(hosts, ado.laneHosts()...)
 	}
 	// Both ends of a redirect: dispatch swaps the public hosts a redirect

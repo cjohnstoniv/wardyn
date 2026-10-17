@@ -157,7 +157,10 @@ Wardyn's published images are `linux/amd64` + `linux/arm64` indexes. A fleet wit
   docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>   # must list linux/amd64 and linux/arm64
   ```
 
-- The target runs `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile --push`. The Go helper binaries cross-compile, and the vendor CLI is fetched for each target architecture, so only the `apt`/`npm` steps need emulation (QEMU: `docker run --privileged --rm tonistiigi/binfmt --install all`). The corporate-build variables (`NPM_REGISTRY`, `HTTPS_PROXY`, `CLAUDE_INSTALL`, ...) pass through as for `agent-images-core`.
+- The target runs `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile --push`.
+- The Go helper binaries cross-compile and the vendor CLI is fetched per target architecture, so only the `apt`/`npm` steps need emulation (QEMU: `docker run --privileged --rm tonistiigi/binfmt --install all`).
+- A host-staged `claude-bin` is one architecture's binary, so the target refuses to run while one is staged.
+- The corporate-build variables (`NPM_REGISTRY`, `HTTPS_PROXY`, `CLAUDE_INSTALL`, ...) pass through as for `agent-images-core`.
 - Name the result in `WARDYN_AGENT_IMAGES='{"claude-code":"<your-registry>/agent-claude-code:<tag>"}'` and restart wardynd.
 
 ### Mirroring published images
@@ -184,7 +187,7 @@ If your mirror cannot hold an index, name each architecture. A run on an arm64 r
  "claude-code@arm64": "<mirror>/agent-claude-code:<tag>-arm64"}
 ```
 
-The emulation warning in the runner log, and the `runner_arch_images` row of `GET /api/v1/setup/status`, name the image and the fix. See also [Multi-arch images](../adoption/corp-image-authoring.md#multi-arch-images) for authoring images from our bases.
+The emulation warning and the `runner_arch_images` row of `GET /api/v1/setup/status` name the image, its digest and platform from the local image store, and whether the digest is an index (or that the store cannot tell). Both give the fix. See also [Multi-arch images](../adoption/corp-image-authoring.md#multi-arch-images) for authoring images from our bases.
 
 ## The image a run's harnesses start from
 

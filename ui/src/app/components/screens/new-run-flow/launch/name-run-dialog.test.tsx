@@ -175,6 +175,12 @@ describe("Name this run: summary", () => {
     expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: 36_000 })).toBe("General · 2 CPU · 2 hours");
     expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: undefined })).toBe("General · 2 CPU · 1 hour");
   });
+
+  it("says No end when it was asked for and the answer allows it, and the finite default when it does not (DR-0245)", () => {
+    const allowed = { ...CLEAR, limits: { lifetime_sec: LIFETIME, no_end_allowed: true } } as unknown as PreflightResult;
+    expect(summaryLine(allowed, { ...INTENT, ends_after_sec: undefined, no_end: true })).toBe("General · 2 CPU · No end");
+    expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: undefined, no_end: true })).toBe("General · 2 CPU · 1 hour");
+  });
 });
 
 describe("Name this run: why Launch is held", () => {

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -178,6 +180,31 @@ func TestAgentProvidersPut(t *testing.T) {
 		}
 	})
 
+	t.Run("a Save composed under another person is refused before the write", func(t *testing.T) {
+		before := fake.putSeen
+		put := func(who string) *httptest.ResponseRecorder {
+			return doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+				`{"agents":[{"id":"claude-code"}]}`,
+				map[string]string{expectedPrincipalHeader: who})
+		}
+		w := put(url.PathEscape("someone-else@example.com"))
+		if w.Code != http.StatusPreconditionFailed {
+			t.Fatalf("expected-principal mismatch = %d, want 412; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), expectedPrincipalMismatch) || !strings.Contains(w.Body.String(), `"reason":"site_config_stale"`) {
+			t.Errorf("412 body = %s, want the expected-principal sentence and the existing stale reason", w.Body.String())
+		}
+		if fake.putSeen != before {
+			t.Error("a refused Save reached the store")
+		}
+		if w = put("%zz"); w.Code != http.StatusPreconditionFailed {
+			t.Errorf("an undecodable value = %d, want 412", w.Code)
+		}
+		if w = put(url.PathEscape(adminTokenPrincipal)); w.Code != http.StatusOK {
+			t.Errorf("the caller's own principal = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("the GET's own ETag satisfies the PUT", func(t *testing.T) {
 		etag := do(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "").Header().Get("ETag")
 		w := doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
@@ -327,6 +354,27 @@ func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
 	cfg.MaskRegistry = secretmask.NewRegistry()
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg)
+}
+
+func TestRunCreateRefusesADraftFromAnotherPerson(t *testing.T) {
+	srv := agentRosterFixture(t, nil)
+	body := `{"task":"echo hi","agent":"claude-code"}`
+	w := doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
+	if w.Code != http.StatusPreconditionFailed || errorReason(w) != reasonSiteConfigStale ||
+		!strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
+		t.Fatalf("launch under another person = %d, want 412 site_config_stale with the expected-principal sentence; body=%s", w.Code, w.Body.String())
+	}
+	w = doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: adminTokenPrincipal})
+	if w.Code == http.StatusPreconditionFailed {
+		t.Fatalf("launch under the signed-in person was refused: %s", w.Body.String())
+	}
+	// A read never carries the header's meaning.
+	if w = doWithHeaders(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "",
+		map[string]string{expectedPrincipalHeader: "someone-else"}); w.Code != http.StatusOK {
+		t.Errorf("GET with a foreign header = %d, want 200", w.Code)
+	}
 }
 
 // TestAgentRosterRefusesRunCreate is the enforcement half, and its FIRST half is

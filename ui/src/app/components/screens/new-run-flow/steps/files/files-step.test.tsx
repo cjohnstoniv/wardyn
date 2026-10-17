@@ -309,6 +309,38 @@ describe("where the server starts a workspace (first target: folders before repo
   });
 });
 
+describe("an unnamed workspace start with some of its repositories cloned (DR-0253)", () => {
+  const TWO_REPOS: Workspace = {
+    ...SCENARIO_FILES_WORKSPACES.member[0], id: "ws-two", name: "pair", source: "github.com/acme/one",
+    sources: [
+      { type: "repo", source: "github.com/acme/one", ref: "main", clone_target: "/home/agent/work/one" },
+      { type: "repo", source: "github.com/acme/two", ref: "main", clone_target: "/home/agent/work/two" },
+    ],
+  };
+  const starting = (name: string) => within(card(name)).queryByText(NR_FILES.STARTS_HERE);
+
+  it("starts in the one repository cloned, though the workspace holds two", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, TWO_REPOS];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: [{ repo: "github.com/acme/two" }] }], start_folder: { kind: "attachment", attachment: "ws-two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("two")).toBeInTheDocument();
+  });
+
+  it("starts in the first of two cloned, and an explicit repository still wins", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, TWO_REPOS];
+    const both = [{ repo: "github.com/acme/one" }, { repo: "github.com/acme/two" }];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: both }], start_folder: { kind: "attachment", attachment: "ws-two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("one")).toBeInTheDocument();
+    expect(starting("two")).toBeNull();
+    cleanup();
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: both }], start_folder: { kind: "attachment", attachment: "ws-two", repo: "github.com/acme/two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("two")).toBeInTheDocument();
+    expect(starting("one")).toBeNull();
+  });
+});
+
 describe("drives (GET /me/drives)", () => {
   it("adds the person's drive by its catalogue id, at the path Wardyn assigns, narrowed to read-only when asked", async () => {
     show(BACKGROUND);
@@ -548,7 +580,7 @@ describe("mount map and summary", () => {
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
     expect(await within(map).findByText("└ /srv/checkout/payments")).toBeInTheDocument();
     expect(within(map).getByText(`${NR_FILES.MOUNT_ITEM("payments")} ${NR_FILES.MOUNT_STARTS}`)).toBeInTheDocument();
-    expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
+    expect(within(map).getByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
     expect(within(card("payments")).getByTitle("/srv/checkout/payments")).toBeInTheDocument();
   });
 
@@ -624,7 +656,7 @@ describe("choices and Continue", () => {
 
   it("holds Continue on Add until something is added or No extra files is chosen, with the empty error, then opens Tools and access", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.click(continueButton());
     expect(screen.getByRole("button", { name: NR_FILES.ADD_ARIA })).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
@@ -649,7 +681,7 @@ describe("choices and Continue", () => {
 
   it("asks for the pool's facts before anything is chosen, but never sends the prefilled size as a request", async () => {
     show();
-    await screen.findByText(NR_FILES.UP_TO(8));
+    await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     expect(size()).toHaveValue(4);
     await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(continueButton());

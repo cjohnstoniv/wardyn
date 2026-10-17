@@ -53,14 +53,18 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 			}
 			return BarrierNotAllowedMsg(a[0], types.ConfinementClass(a[1]), allowed)
 		},
-		"WAIT_AT_CAPACITY":         func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
-		"WAIT_NO_RUNNER_FREE":      func(a []string) string { return WaitNoRunnerFreeMsg(a[0]) },
-		"QUEUE_FULL":               func(a []string) string { n, _ := strconv.Atoi(a[1]); return QueueFullMsg(a[0], n) },
-		"FULL":                     func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
-		"NO_ONLINE_RUNNER":         func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
-		"RUNNER_AT_CAPACITY":       func(a []string) string { return RunnerAtCapacityMsg(a[0]) },
-		"RUNNER_LIMITS_UNSET":      func(a []string) string { return RunnerLimitsUnsetMsg(a[0]) },
-		"WAIT_RUNNERS_AT_CAPACITY": func(a []string) string { return WaitRunnersAtCapacityMsg(a[0]) },
+		"WAIT_AT_CAPACITY":              func(a []string) string { n, _ := strconv.Atoi(a[1]); return WaitAtCapacityMsg(a[0], n) },
+		"WAIT_NO_RUNNER_FREE":           func(a []string) string { return WaitNoRunnerFreeMsg(a[0]) },
+		"QUEUE_FULL":                    func(a []string) string { n, _ := strconv.Atoi(a[1]); return QueueFullMsg(a[0], n) },
+		"FULL":                          func(a []string) string { n, _ := strconv.Atoi(a[1]); return FullMsg(a[0], n) },
+		"NO_ONLINE_RUNNER":              func(a []string) string { return NoOnlineRunnerMsg(a[0]) },
+		"RUNNER_AT_CAPACITY":            func(a []string) string { return RunnerAtCapacityMsg(a[0]) },
+		"RUNNER_LIMITS_UNSET":           func(a []string) string { return RunnerLimitsUnsetMsg(a[0]) },
+		"RUNNER_RECORDING_OFF":          func(a []string) string { return RunnerRecordingOffMsg(a[0]) },
+		"RUNNER_RECORDING_OFF_UNPOOLED": func([]string) string { return RunnerRecordingOffUnpooledMsg() },
+		"RECORDING_STORE_OFF":           func([]string) string { return RecordingStoreOffMsg() },
+		"RECORDING_SAVE_STORE_OFF":      func([]string) string { return RecordingSaveStoreOffMsg() },
+		"WAIT_RUNNERS_AT_CAPACITY":      func(a []string) string { return WaitRunnersAtCapacityMsg(a[0]) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`

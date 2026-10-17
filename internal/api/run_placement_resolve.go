@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -111,6 +112,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		if f.req.RunnerPoolID != "" {
 			return runPlacement{}, runError(runnerpool.ReasonPoolsUnavailable.Status(), string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg())
 		}
+		if refusal := s.unpooledRecordingRefusal(ctx, *f.req); refusal != nil {
+			return runPlacement{}, refusal
+		}
 		// Unpooled: the deployment and governance still size the run.
 		limits, applied, refusal := s.runSize(ctx, f, nil, nil)
 		return runPlacement{limits: limits, applied: applied}, refusal
@@ -164,6 +168,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
 	demand := s.placementDemand(ctx, f)
 	demand.holdRunnerCapacity = !capped && !f.promoted
+	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
+		return runPlacement{}, refusal
+	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal
@@ -182,6 +189,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		decision = placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
 	}
 	if decision.Refusal != "" {
+		if err := probeFailure(kinds); err != nil {
+			return runPlacement{}, runError(http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", err))
+		}
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.Scope)
 	}
 	var choices []client.RunnerPoolChoice
@@ -196,6 +206,32 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// probeFailure is the first probe error among the run's candidates: a configured executor whose facts
+// could not be read might have taken the run, so a refusal cannot be decided and the answer is the logged
+// 503, never one that says the pool has no runner for it. A registered runner that is offline is no such
+// error.
+func probeFailure(kinds map[types.Placement][]poolTarget) error {
+	for _, kind := range kindOrder {
+		for _, t := range kinds[kind] {
+			if t.facts.ProbeErr != nil {
+				return fmt.Errorf("executor %s: %w", t.executor, t.facts.ProbeErr)
+			}
+		}
+	}
+	return nil
+}
+
+// poolRecordingDemand reports whether the organisation or the pool requires recording, refusing the
+// run outright when it does and this deployment has no recording store.
+func (s *Server) poolRecordingDemand(org types.RunnerPoolDefaults, pool types.RunnerPool) (bool, *runRefusal) {
+	required := org.Recording == types.RecordingRequired || pool.Recording == types.RecordingRequired
+	if required && s.cfg.RecordingStore == nil {
+		reason, msg := recordingRefusal(true, pool.Name)
+		return true, runError(reason.Status(), string(reason), msg)
+	}
+	return required, nil
 }
 
 // anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.
@@ -230,7 +266,7 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // kindTargets splits the pool's candidates by kind and keeps the kinds this run may use: the one its
 // request asks for (a pin asks for local), then none its owner's profile denies, since deny_placements
 // holds each kind, not the pool. A run with drives keeps only the remote-hosted kind when the pool has
-// it, as no drive mounts on a person's own runner; with none it stays on the person's own runners for
+// it, as no drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
 // (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
 // mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
@@ -256,6 +292,15 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
 	}
 	if _, remote := kinds[types.PlacementRemote]; remote && (f.drives || f.noLocal) {
+		// A pin names the person's own runner, which this run cannot use: say so, never route it elsewhere.
+		if pin := f.req.RunnerID; pin != "" && slices.ContainsFunc(kinds[types.PlacementLocal], func(t poolTarget) bool { return t.id == pin }) {
+			why := "it carries a drive, and no drive mounts on your own runner"
+			if !f.drives {
+				why = "your own runners cannot take it"
+			}
+			return nil, runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability),
+				"Your own runner is pinned for this run, but "+why+". Remove the pin to run it on a remote-hosted runner in "+pool.Name+".")
+		}
 		delete(kinds, types.PlacementLocal)
 	}
 	return kinds, nil
@@ -343,6 +388,7 @@ func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
 func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, denied []types.Placement) ([]client.RunnerPoolChoice, *runRefusal) {
 	out := make([]client.RunnerPoolChoice, 0, len(rows))
 	read := s.onceExecutorFacts(ctx)
+	var names map[uuid.UUID]string // the caller's runners' names, read on the first row that has any
 	for _, row := range rows {
 		st, refusal := s.poolAvailability(ctx, ps, row, denied)
 		if refusal != nil {
@@ -350,6 +396,14 @@ func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows
 		}
 		choice := st.choice(row)
 		choice.MainDrive = s.poolMainDriveFor(row, st.own, read)
+		if len(row.OwnRunnerIDs) > 0 {
+			if names == nil {
+				if names, refusal = s.callerRunnerNames(ctx); refusal != nil {
+					return nil, refusal
+				}
+			}
+			choice.MyRunners = s.myRunnersIn(row, names)
+		}
 		out = append(out, choice)
 	}
 	return out, nil
@@ -654,6 +708,8 @@ func targetRefusal(reason placement.Reason, pool string, scope types.RunnerPoolS
 		return runError(reason.Status(), string(reason), runnerpool.RunnerAtCapacityMsg(pool))
 	case placement.ReasonRunnerLimitsUnset:
 		return runError(reason.Status(), string(reason), runnerpool.RunnerLimitsUnsetMsg(pool))
+	case placement.ReasonRunnerRecordingOff:
+		return runError(reason.Status(), string(reason), runnerpool.RunnerRecordingOffMsg(pool))
 	}
 	return runError(reason.Status(), string(reason), "This run cannot be placed in "+pool+".")
 }
@@ -668,6 +724,9 @@ type placementDemand struct {
 	cpu, mem, disk int64
 	// holdRunnerCapacity refuses a runner with no room for the run now (fitRefusal).
 	holdRunnerCapacity bool
+	// requireRecording refuses a target that does not record a run on its organisation's word: the
+	// organisation or the pool requires recording.
+	requireRecording bool
 	// fits is each runner's declared limits and In use, by target id (runnerFits).
 	fits map[string]runnerFit
 }
@@ -706,6 +765,9 @@ func (d placementDemand) refusal(t poolTarget) placement.Reason {
 		if err != nil || (enforced != "" && !slices.Contains(t.facts.Classes, enforced)) {
 			return placement.ReasonPlacementCapability
 		}
+	}
+	if d.requireRecording && !t.facts.Records {
+		return placement.ReasonRunnerRecordingOff
 	}
 	return d.fitRefusal(t)
 }

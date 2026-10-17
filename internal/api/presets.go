@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -91,6 +92,26 @@ func presetView(p types.LaunchPreset) (client.Preset, error) {
 	return out, nil
 }
 
+// presetReadView is presetView for a read: a legacy request's repository URLs
+// are served without their credential. A launch reads presetView, so the door
+// still refuses such a row.
+func presetReadView(p types.LaunchPreset) (client.Preset, error) {
+	p.Request = redactRepoURLsInJSON(p.Request)
+	return presetView(p)
+}
+
+// presetForRead is presetReadView with the redaction every policy read applies to
+// the stored inline_policy, for the two reads a member reaches. Launch and the
+// write answers keep the unredacted view.
+func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Preset, error) {
+	v, err := presetReadView(p)
+	if err == nil && v.Request.InlinePolicy != nil {
+		spec := redactSpecForRead(*v.Request.InlinePolicy, s.isSecurityOperator(r.Context()))
+		v.Request.InlinePolicy = &spec
+	}
+	return v, err
+}
+
 func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListLaunchPresets(r.Context())
 	if err != nil {
@@ -102,7 +123,7 @@ func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 		if !s.presetOpenTo(r, p) {
 			continue
 		}
-		v, err := presetView(p)
+		v, err := s.presetForRead(r, p)
 		if err != nil {
 			writeServerError(w, r, "decode preset", err)
 			return
@@ -125,7 +146,7 @@ func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get preset", err)
 		return
 	}
-	v, err := presetView(p)
+	v, err := s.presetForRead(r, p)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
 		return
@@ -236,7 +257,7 @@ func (s *Server) handlePutPreset(w http.ResponseWriter, r *http.Request) {
 				"version": saved.Version, "user_types": saved.UserTypes, "request": saved.Request,
 			})))
 	}
-	v, err := presetView(saved)
+	v, err := presetReadView(saved)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
 		return
@@ -272,6 +293,12 @@ func (s *Server) decodeRunRequest(w http.ResponseWriter, r *http.Request, req *c
 		return false
 	}
 	recordAskedRequest(r, *req)
+	// A runner id in braces, urn:uuid: or 32-hex form parses but is not the form the revoke pass and the
+	// sweep match on a queued run, so it is queued in the canonical one. An id that does not parse is left
+	// for the placement gate to refuse.
+	if id, err := uuid.Parse(req.RunnerID); err == nil {
+		req.RunnerID = id.String()
+	}
 	// After the preset, which can bring its own request: a new client's carriers
 	// are refused or projected onto the legacy fields here, before any gate reads them.
 	return !applyRunMode(req).write(s, w, r)

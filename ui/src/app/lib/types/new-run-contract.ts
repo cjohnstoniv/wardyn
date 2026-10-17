@@ -50,10 +50,12 @@ export interface MainDriveApplied {
   soft: boolean;
 }
 
-/** The CPU and memory a run asked for and gets (Go: client.AppliedResources). */
+/** The CPU, memory and process limit a run asked for and gets (Go: client.AppliedResources). */
 export interface AppliedResources {
   cpu_millis: AppliedAmount;
   memory_mib: AppliedAmount;
+  /** The process limit: the run's policy asked, the ceiling bounded. Absent on a row written before the field existed. `source` is governance or deployment, when `capped`. */
+  pids_limit?: AppliedAmount;
 }
 
 /** One field of AppliedResources (Go: client.AppliedAmount). `source` names the limit that cut an over-ask when `capped`, else the one whose default an ask of 0 got; `source_name` is the pool's or the profile's name. */
@@ -190,6 +192,8 @@ export interface ManagedSettingsFact {
   path: string;
   /** The bytes agentpolicy.ForAgent returns. */
   document: string;
+  /** Whose document this is: the started agent's, else the first harness of the set that brings one. */
+  harness?: string;
   locked?: boolean;
   locked_by?: "profile" | "organisation";
   profile?: string;

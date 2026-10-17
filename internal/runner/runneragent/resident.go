@@ -108,6 +108,9 @@ const (
 // the org sent (owner ruling: at most 24 h).
 const residentCeiling = 24 * time.Hour
 
+// errNoDeleteAll is the backstop's failure on a keystore that has no DeleteAll.
+var errNoDeleteAll = errors.New("runner keystore has no DeleteAll")
+
 // backstopEvery is how often the DeleteAll backstop runs again while idle.
 const backstopEvery = time.Hour
 
@@ -327,8 +330,10 @@ func (r *Resident) register(a runnerwire.DeliverResidentArgs, account string) er
 	if _, erased := r.idx.Erased[a.RunID]; erased {
 		return runnerwire.Refuse("run %s was already erased on this runner; it takes no further resident value", a.RunID)
 	}
-	if err := r.keystore.Precheck(account, a.Value); err != nil {
-		return keystoreRefusal(err)
+	if r.keystore.Precheck != nil {
+		if err := r.keystore.Precheck(account, a.Value); err != nil {
+			return keystoreRefusal(err)
+		}
 	}
 	if err := r.admit(a.RunID); err != nil {
 		return err
@@ -671,7 +676,10 @@ func (r *Resident) backstop(ctx context.Context, now time.Time) error {
 	r.mu.Unlock()
 	done := make(chan error, 1)
 	go func() {
-		err := r.keystore.DeleteAll()
+		err := errNoDeleteAll
+		if r.keystore.DeleteAll != nil {
+			err = r.keystore.DeleteAll()
+		}
 		r.mu.Lock()
 		r.deleteAll = false
 		r.mu.Unlock()

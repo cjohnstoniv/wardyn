@@ -142,8 +142,8 @@
 - `X-Wardyn-Reason` carries the reason; so does the OpenAI `error.code`.
 - A brokered route answers in its own vendor's shape; an AWS host in the AWS one.
   A tunnel to a gateway both vendors share answers in plain text.
-  A plain request straight to that gateway is `uninspected_channel`
-  (channel `shared-gateway`), refused under fail-closed.
+  A POST, PUT or PATCH sent straight to that gateway (plain or through a tunnel)
+  is `uninspected_channel` (channel `shared-gateway`), refused under fail-closed.
 
 | Reason | Anthropic, OpenAI | AWS |
 |---|---|---|

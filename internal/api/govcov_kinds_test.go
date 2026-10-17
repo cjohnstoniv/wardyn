@@ -504,6 +504,10 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 		if d.Before != nil || d.After == nil || !reflect.DeepEqual(d.Changed, changedPaths(nil, profileDiffStored{Name: "fresh", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}})) {
 			t.Errorf("diff = %s", ch.Diff)
 		}
+		// R1-0098: the omission warning a direct save returns rides in the diff, for the proposer and the approver.
+		if len(d.Notes) != 2 || !strings.Contains(d.Notes[0], "omits 2 allowed domain(s)") {
+			t.Errorf("notes = %v, want the omission warning a direct save would have returned", d.Notes)
+		}
 		if _, err := govCovReplayPayload(ch); err != nil {
 			t.Errorf("the stored payload does not replay: %v", err)
 		}

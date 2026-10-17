@@ -61,5 +61,6 @@ func runnerCmd(client clientFn) *cobra.Command {
 	}}
 	mint.Flags().StringVar(&owner, "owner", "", "person's principal (operator only); omit for yourself")
 	cmd.AddCommand(claim, mint, runnerListCmd(client), runnerSetCmd(client), runnerTokensCmd(client), runnerPoolCmd(client), runnerRemoteCmd(client))
+	cmd.AddCommand(runnerOrgCmds(client)...)
 	return subcommandGroup(cmd)
 }

@@ -100,3 +100,89 @@ func TestSubstrateDispatchGateRefusesCreateBeforeTheWire(t *testing.T) {
 		t.Fatalf("create = %v after %d gate reads, want the gate's refusal after one", err, calls.Load())
 	}
 }
+
+// A Connected callback that fails (the runner row could not be read for the audit) refuses the
+// session: Serve returns that error and the runner never reads online.
+func TestHubConnectedFailureRefusesTheSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	errRead := errors.New("read runner")
+	var disconnected atomic.Bool
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Connected:    func(context.Context, uuid.UUID) error { return errRead },
+		Disconnected: func(context.Context, uuid.UUID) error { disconnected.Store(true); return nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	defer hub.Close()
+	served := make(chan error, 4)
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key,
+		Hooks: sessionHooks(make(chan *runnerwire.Peer, 4), make(chan bool, 4)),
+		Dial: func(context.Context) (runnerwire.Conn, error) {
+			org, run := runnerwire.Loopback()
+			go func() { served <- hub.Serve(ctx, org, row.ID) }()
+			return run, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = client.Connect(ctx) }()
+	if err := awaitValue(t, ctx, served); !errors.Is(err, errRead) {
+		t.Fatalf("Serve = %v, want the Connected error", err)
+	}
+	if hub.Online(row.ID) || link.Online() || disconnected.Load() {
+		t.Fatalf("a refused session reads online=%v link=%v or reported Disconnected=%v", hub.Online(row.ID), link.Online(), disconnected.Load())
+	}
+}
+
+// Closing the hub at daemon shutdown reports Disconnected for a session that reported Connected.
+func TestHubCloseReportsDisconnectedForAConnectedSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	var connected, disconnected atomic.Int32
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Connected:    func(context.Context, uuid.UUID) error { connected.Add(1); return nil },
+		Disconnected: func(context.Context, uuid.UUID) error { disconnected.Add(1); return nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key,
+		Hooks: sessionHooks(make(chan *runnerwire.Peer, 4), make(chan bool, 4)),
+		Dial: func(context.Context) (runnerwire.Conn, error) {
+			org, run := runnerwire.Loopback()
+			go func() { _ = hub.Serve(ctx, org, row.ID) }()
+			return run, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = client.Connect(ctx) }()
+	waitOnline(t, ctx, link)
+	hub.Close()
+	hub.Close() // a second Close reports nothing more
+	if connected.Load() != 1 || disconnected.Load() != 1 {
+		t.Fatalf("connected %d, disconnected %d; want 1 and 1", connected.Load(), disconnected.Load())
+	}
+}

@@ -445,3 +445,37 @@ func TestSCIMPurgeKeepsEmailRowsAnotherPrincipalHolds(t *testing.T) {
 		})
 	}
 }
+
+// A purge refused on an unproved form while neither the store nor the spool takes its denied row keeps the
+// row owed: every sweep tries it again, and once the audit write works exactly one row lands.
+func TestSCIMPurgeRefusalRowIsOwedUntilWritten(t *testing.T) {
+	e := newSCIMEnv(t)
+	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+	id := e.postUserID(e.a, purgeOID, purgeEmail, purgeEmail)
+	setFailing := func(v bool) {
+		e.a.audit.fail("person.deprovision/denied", v)
+		e.b.audit.fail("person.deprovision/denied", v)
+	}
+	tried := func() int { return e.a.audit.attempts("person.deprovision") + e.b.audit.attempts("person.deprovision") }
+	setFailing(true)
+	if w := e.del(e.a, id); w.Code != http.StatusInternalServerError {
+		t.Fatalf("DELETE = %d %s, want 500 (the purge refuses)", w.Code, w.Body.String())
+	}
+	before := tried()
+	for i := 1; i <= 2; i++ {
+		_ = e.sweepPastThePurgeDelay()
+		if rows := e.purgeRows(e.a, e.b); len(rows) != 0 {
+			t.Fatalf("sweep %d while the audit write fails: purge rows %+v, want none", i, rows)
+		}
+	}
+	if tried() <= before {
+		t.Errorf("the sweeps asked for %d writes, want the owed row tried again", tried()-before)
+	}
+	setFailing(false)
+	for range 2 {
+		_ = e.sweepPastThePurgeDelay()
+	}
+	if rows := e.purgeRows(e.a, e.b); len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["unproved"] != o.p {
+		t.Errorf("purge rows = %+v, want the owed denied row naming %s once", rows, o.p)
+	}
+}

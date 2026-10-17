@@ -24,6 +24,9 @@ import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, RUN_FACTS } from "../src/app/compon
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
+// Keep the first attempt's trace: the click-loss flake fails only there, and the config records a trace on retry only.
+test.use({ trace: "retain-on-first-failure" });
+
 const VIEWER = "bob@acme.example";
 const FAILED_TASK = "e2e fixture 6";
 

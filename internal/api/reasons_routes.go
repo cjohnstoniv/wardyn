@@ -517,7 +517,7 @@ const (
 	reasonAttachSessionCapReached = "attach_session_cap_reached" // this run already has the maximum number of live terminal sessions on this replica
 )
 
-// /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is
+// /api/v1/presets (presets.go): validatePresetRequest's whole check is
 // one cause bucket, the same grain as reasonSiteConfigInvalid. Deliberately
 // NOT split per arm (#656 final review round L2 considered it: the "user type
 // does not exist" and "unknown confinement_class" arms echo POST /runs' own
@@ -776,10 +776,10 @@ const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
 
 // PUT /internal/recordings/{runID} (recording.go).
 const (
-	reasonRecordingStoreUnavailable = "recording_store_unavailable"
-	reasonRecordingTooLarge         = "recording_too_large"
-	reasonRecordingErased           = "recording_erased"
-	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
+	reasonRecordingOff         = "recording_off"
+	reasonRecordingTooLarge    = "recording_too_large"
+	reasonRecordingErased      = "recording_erased"
+	reasonRecordingInvalidPart = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
 	// reasonRecordingPartLimit is recording.upload's ONLY name for a part
 	// above types.RecordingMaxParts — the wire reason AND the nested
 	// audit-detail field this refusal's own recording.upload row carries
@@ -970,6 +970,7 @@ const (
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
+	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

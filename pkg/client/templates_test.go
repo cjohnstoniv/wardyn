@@ -19,8 +19,8 @@ import (
 )
 
 // TestTemplateMethodsCallTheTemplateRoutes proves each typed method makes its
-// real call, and that the 501 the server answers until the store lands comes
-// back as an APIError carrying the reason.
+// real call, and that the 501 a server whose store holds no templates answers
+// comes back as an APIError carrying the reason.
 func TestTemplateMethodsCallTheTemplateRoutes(t *testing.T) {
 	type call struct{ method, path, body string }
 	var got call

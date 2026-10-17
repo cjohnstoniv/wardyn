@@ -553,3 +553,31 @@ func dispatchSubscriptionRouteThrough(t *testing.T, host, mitmEntry string) {
 			"gateway and scans none of its bodies, on a run that requires an inspectable model transport", cfg.LLMChannelHosts, host)
 	}
 }
+
+// TestPreflightCredentialRefusalKeepsSetupRows: Review's model_credential refusal carries the setup rows
+// resolved before it (here a missing sandbox backend), without a model-access row; create's does not.
+func TestPreflightCredentialRefusalKeepsSetupRows(t *testing.T) {
+	p := subProvider("claude")
+	for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+		srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(p)}, &capStore{}, nil)
+		srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+		srv.cfg.Runner = nil
+		w := do(t, srv, http.MethodPost, path, providerAdminToken(srv, "sub-admit-admin"), `{"agent":"claude-code","task":"t"}`)
+		var body preflightCredentialRefusal
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusUnprocessableEntity || body.Reason != llmRefusalAuditReason || body.Provider != "claude" {
+			t.Fatalf("%s = %d %s, want a model_credential 422 naming claude", path, w.Code, w.Body.String())
+		}
+		var kinds []string
+		for _, it := range body.SetupItems {
+			kinds = append(kinds, it.Kind+"="+it.Status)
+		}
+		want := []string{"backend=missing"}
+		if path == "/api/v1/runs" {
+			want = nil
+		}
+		if !slices.Equal(kinds, want) {
+			t.Errorf("%s setup_items = %v, want %v", path, kinds, want)
+		}
+	}
+}

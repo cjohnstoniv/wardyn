@@ -257,6 +257,11 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
   - and Wardyn stores the grant sealed in that person's own namespace.
 - Where consent was not captured there, the **Connect Azure DevOps** door in Settings does the same through a redirect to Azure DevOps' own login.
 - From then on, their clones and their Azure DevOps REST calls (a pull request, a work-item update, a build queued from a pipeline task) are authorised as *them*, not as a shared account.
+- A run's credential covers an onboarded workspace's repositories and the run's own `repo` alike.
+  - It never covers `devcontainer_repo`, which the server clones.
+  - `inline_policy.workspace_repos` naming a repository that is not onboarded is still refused.
+- A run that names an Azure DevOps repository but does not get the credential starts without it and says why, in its Credentials panel, `wardyn run get` and its clone failure line.
+- A run with no person behind it (an operator token, local mode or a service identity) starts without the credential; a device is still refused.
 - A person who has not connected cannot launch against the row:
   - the launch is refused ("you are not connected to Azure DevOps — connect and start the run again"),
   - and a run that reaches dispatch without a stored connection fails with "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
@@ -348,11 +353,11 @@ That has two consequences worth knowing before you hit them:
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
 | `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat`, `bearer` | Refused (`placement_credential`), opted in to `runner_resident` or not: a runner holds no Azure DevOps token | The organisation mints or holds the token |
+| `minted_pat`, `bearer` | Refused, opted in to `runner_resident` or not: `runner_posture_unmet` when the run's confinement floor or the runner's posture is not met, otherwise `placement_credential`; a runner holds no Azure DevOps token | The organisation mints or holds the token |
 
 - A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
 - The opt-in and `entra.runner_resident_sandbox` (which requires it) are stored and audited, but they change no run yet: placement refuses the token at delivery, "runner_resident delivery of this credential is not built yet".
-- `runner_resident` delivery covers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` only, so a run that needs an Azure DevOps token resident is still refused (`placement_credential`).
+- `runner_resident` delivery covers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` only, so a run that needs an Azure DevOps token resident is still refused (`runner_posture_unmet` when the confinement floor or the runner's posture is not met, otherwise `placement_credential`).
 - `TestLocalEligibility_ADOResidentIsOffByDefault` in [`internal/placement/resident_test.go`](../internal/placement/resident_test.go) pins both: refused without the opt-in, and held at delivery with it.
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
@@ -511,6 +516,7 @@ That has two consequences worth knowing before you hit them:
 | `ado_bearer.refused_mint_scopes` | A `bearer` row refused to inject a token that carries a token permission, or that reported no granted scope |
 | `ado_pat.own.store`, `ado_pat.own.delete` | A pasted PAT was stored or removed; a refusal (rejected, or another account's) is the `failure` outcome of the first |
 | `ado_shared_credential.retire` | The upgrade deleted a namespace's shared credentials |
+| `run.ado_lane.skip` | A run that names an Azure DevOps repository started without the per-person credential; `reason` is the code, `detail` the sentence (outcome `denied`) |
 
 - [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) has each action's fields.
 - Azure DevOps has its own audit events for the organisation: `Token.PatCreateEvent`, `Token.PatRevokeEvent`, `Token.PatExpiredEvent` and the others.
@@ -792,6 +798,10 @@ What differs:
 | Clones from an organisation fail after the upgrade | The upgrade turned its row off; the refusal names the row. `GET /site-config` also lists its host under `withheld_scm_hosts`, unless an enabled row names the same host (several organisations on `dev.azure.com`), when the list is empty | Choose how people connect and turn the row on ([Upgrading](#upgrading)) |
 | `ado_own_pat_identity_mismatch` on a pasted token | The token belongs to another account, or the person's sign-in has no email to match | Create the token while signed in to Azure DevOps as yourself; a sign-in with no email can't be matched |
 | `ado_own_pat_request_refused`: "Azure DevOps refused Wardyn's request, not your token. Ask your admin to report this." | Azure DevOps answered the identity check with a `400`: it refused the request itself, so nothing is known about the token and nothing was stored | Report it with the time and the organisation; the person's token is not the problem and needs no change |
+| *This run was not given an Azure DevOps credential* (audit `run.ado_lane.skip`) | The sentence and the row's `reason` say why: no person started the run, no row with the lane admits the address, the address names no organisation, or settings could not be read | Start the run as a person, or fix the row or the address |
+| `reason` `cross_repo_conflict` | The run's repositories span two organisations or rows, and one credential serves one | Use one run per organisation |
+| `credential_host_collision` on an `api_key` grant for `pkgs.dev.azure.com` or `feeds.dev.azure.com` | The run's Azure DevOps credential already serves those hosts, now also when its only Azure DevOps repository is its own `repo` | Drop the `api_key` grant |
+| A package redirect to those hosts is applied without its token | The run's Azure DevOps credential serves them | Nothing, unless the run declined the credential (above) |
 
 ---
 

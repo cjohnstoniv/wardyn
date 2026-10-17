@@ -151,8 +151,10 @@ type ComponentRef struct {
 	// Access is read or write; empty reads as read.
 	Access string `json:"access,omitempty"`
 	// MCPHarnesses are the included harnesses (tools[].id) an MCP component's
-	// server is turned on for. Absent means every harness that can take it.
-	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
+	// server is turned on for. Absent (nil) means every harness that can take
+	// it; an explicit empty list means none. omitzero, not omitempty, so the
+	// empty list survives every encode (a queued replay, a saved intent, the SDK).
+	MCPHarnesses []string `json:"mcp_harnesses,omitzero"`
 }
 
 // The built-in Git provider components a ComponentRef may name.
@@ -197,7 +199,7 @@ type RunComponent struct {
 	// MCPHarnesses are the harnesses an MCP component's server was turned on
 	// for at launch. Not personal data: it survives an erasure, so a revive
 	// still knows which harness reached which server.
-	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
+	MCPHarnesses []string `json:"mcp_harnesses,omitzero"`
 }
 
 var (

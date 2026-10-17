@@ -396,3 +396,15 @@ func TestTemplateRegistryFollowsTheOwnersAccessAndModeRulings(t *testing.T) {
 		}
 	}
 }
+
+// A placeholder is the word alone; a name or task that contains it is a value.
+func TestIsRedactedPlaceholder(t *testing.T) {
+	for s, want := range map[string]bool{
+		"<redacted>": true, "[REDACTED]": true, "<2 value(s) redacted>": true, "***redacted***": true, "redacted": true,
+		"unredacted notes": false, "Redacted report": false, "": false,
+	} {
+		if got := isRedactedPlaceholder(s); got != want {
+			t.Errorf("isRedactedPlaceholder(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

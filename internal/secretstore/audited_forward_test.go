@@ -20,6 +20,7 @@ func (c *capableStore) Revision(context.Context, string) (string, error) { retur
 func (c *capableStore) StoresExternally() string                         { return "vault://kv" }
 func (c *capableStore) KeyService() string                               { return "transit" }
 func (c *capableStore) KeyServiceStaticKey() bool                        { return true }
+func (c *capableStore) KeyServiceNodeRole() bool                         { return true }
 func (c *capableStore) MarkUsed(context.Context, string) error           { return nil }
 func (c *capableStore) Metadata(_ context.Context, names []string) ([]Meta, error) {
 	return make([]Meta, len(names)), nil
@@ -48,6 +49,9 @@ func TestAuditedForwardsTheCapabilitiesTheInnerStoreHas(t *testing.T) {
 	}
 	if !a.(interface{ KeyServiceStaticKey() bool }).KeyServiceStaticKey() {
 		t.Fatal("KeyServiceStaticKey = false, want the inner store's true")
+	}
+	if !a.(interface{ KeyServiceNodeRole() bool }).KeyServiceNodeRole() {
+		t.Fatal("KeyServiceNodeRole = false, want the inner store's true")
 	}
 	m := a.(MetaStore)
 	if err := m.MarkUsed(ctx, "n"); err != nil {
@@ -82,6 +86,9 @@ func TestAuditedAnswersHonestlyWhenTheInnerStoreLacksACapability(t *testing.T) {
 	}
 	if a.(interface{ KeyServiceStaticKey() bool }).KeyServiceStaticKey() {
 		t.Fatal("KeyServiceStaticKey = true, want false")
+	}
+	if a.(interface{ KeyServiceNodeRole() bool }).KeyServiceNodeRole() {
+		t.Fatal("KeyServiceNodeRole = true, want false")
 	}
 	m := a.(MetaStore)
 	if err := m.MarkUsed(ctx, "n"); !errors.Is(err, ErrNoMetadata) {
