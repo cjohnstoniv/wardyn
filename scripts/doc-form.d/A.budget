@@ -133,8 +133,8 @@
 # docs/AUDIT-ACTIONS.md 45802 measured after merging the Files-step seam lane (RP-3 and RP-4 runner words) into E6b-pdc over the member drives chain's 45601.
 # docs/AUDIT-ACTIONS.md 46204 adds 93 over 46111 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
 # docs/AUDIT-ACTIONS.md 46379 adds 175 over 46204 (0.9.1 L8), measured: 36 for the run.create placement and pool fields (L7), the rest the AWS SSO refusal fields code and description, the refused reauth reason and the me.runners.tokens target.
-# docs/AUDIT-ACTIONS.md 46483 adds 94 over 46389, measured: the direct deletes record what they removed, the go checksum opt-out on site_config.write, and the owner's reserved attach slot.
-docs/AUDIT-ACTIONS.md=46483 share=8
+# docs/AUDIT-ACTIONS.md 46470 adds 81 over 46389, measured: the direct deletes record what they removed and the go checksum opt-out on site_config.write.
+docs/AUDIT-ACTIONS.md=46470 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
