@@ -202,3 +202,34 @@ func TestRelayConn_RunnerSessionEndUnblocksAStalledWrite(t *testing.T) {
 		t.Fatal("stalled write returned nil after the session ended")
 	}
 }
+
+// TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote: the org's server writes its answer and closes the
+// connection at once (an error answer that ends the exchange). The runner reads the answer to its end;
+// closing the org's end must not reset the stream under bytes the runner has not read yet.
+func TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const answer = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\nfailed"
+	srv := relayRunner(t, func(_ string, c net.Conn) error {
+		go func() {
+			_, _ = c.Write([]byte(answer))
+			_ = c.Close()
+		}()
+		return nil
+	})
+	st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // the answer and the close both arrived before the first read
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(st); err != nil || string(b) != answer {
+		t.Fatalf("runner read %q, %v; want the whole answer then EOF, not a reset", b, err)
+	}
+	_ = st.CloseWrite()
+	select {
+	case <-st.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream did not finish once the runner closed its end too")
+	}
+}

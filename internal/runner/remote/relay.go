@@ -105,14 +105,31 @@ func (c relayConn) SetDeadline(t time.Time) error {
 	return c.SetWriteDeadline(t)
 }
 
-// Close stops the write deadline, then resets a stream that has not already ended;
-// one both ends closed gracefully has left the peer's table and needs no RESET.
+// relayCloseGrace is how long a closed relay waits for the runner to finish reading and close its end
+// before the stream is reset.
+const relayCloseGrace = 10 * time.Second
+
+// Close stops the write deadline and half-closes the stream, so the runner reads what the org wrote
+// (an error answer written and closed at once) to its end; resetting here would discard bytes the runner
+// has received and not yet read. A runner that never closes its end is reset after relayCloseGrace. A
+// stream that already ended needs nothing.
 func (c relayConn) Close() error {
 	c.armWrite(time.Time{})
 	select {
 	case <-c.Done():
 		return nil
 	default:
+	}
+	if err := c.Stream.CloseWrite(); err != nil {
 		return c.Stream.Close()
 	}
+	_ = c.Stream.SetReadDeadline(time.Now()) // a Read still waiting on this end returns, as on a closed conn
+	time.AfterFunc(relayCloseGrace, func() {
+		select {
+		case <-c.Done():
+		default:
+			_ = c.Stream.Close()
+		}
+	})
+	return nil
 }
