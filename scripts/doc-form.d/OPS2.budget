@@ -22,4 +22,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1747 adds 13 over 1734 (0.9.3 A1 fix), measured: certificate file note, rerun line.
 # docs/operations/hybrid-laptops.md 1761 adds 14 (0.9.3 A1 fix): the agent-image caveat for a merged bundle.
 # docs/operations/hybrid-laptops.md 1923 adds 162 over 1761 (0.9.3 C): the "Session recordings" section, measured.
-docs/operations/hybrid-laptops.md=1923 share=35
+# docs/operations/hybrid-laptops.md 1941 adds 18 over 1923 (0.9.3 K7): the line pointing at the organisation runner in a cluster, measured.
+docs/operations/hybrid-laptops.md=1941 share=35
