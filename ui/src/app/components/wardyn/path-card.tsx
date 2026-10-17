@@ -64,7 +64,7 @@ export function PathCard({
   );
   if (comingSoon) {
     return (
-      <article aria-disabled="true" aria-labelledby={titleId} className={cn(CARD, "hatch-unavailable")}>
+      <article aria-labelledby={titleId} className={cn(CARD, "hatch-unavailable")}>
         {body}
       </article>
     );

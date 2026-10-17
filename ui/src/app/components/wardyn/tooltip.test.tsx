@@ -72,6 +72,17 @@ describe("Tooltip", () => {
     spy.mockRestore();
   });
 
+  it("Esc during the pause cancels the pending open, so the bubble does not appear after it (FUG-L334)", async () => {
+    const spy = keyboardFocus();
+    const { user, trigger } = setup();
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await sleep(HOVER_OPEN_MS + 150);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    spy.mockRestore();
+  });
+
   it("adds to the control's own description instead of replacing it", async () => {
     const user = userEvent.setup({ delay: null });
     render(

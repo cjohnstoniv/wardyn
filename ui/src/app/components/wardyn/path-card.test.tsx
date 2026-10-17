@@ -19,10 +19,10 @@ describe("PathCard", () => {
     expect(screen.getByText("Fastest")).toBeVisible();
   });
 
-  it("a coming-soon card is aria-disabled, says so in words, and is not a button", () => {
+  it("a coming-soon card says so in words, is not a button, and sets no aria-disabled the article role does not allow (FR-0124)", () => {
     render(<PathCard title="AI composer" description="Soon" icon={icon} comingSoon onSelect={() => {}} />);
     expect(screen.getByText("Coming soon")).toBeVisible();
-    expect(screen.getByRole("article")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("article")).not.toHaveAttribute("aria-disabled");
     expect(screen.queryByRole("button")).toBeNull();
   });
 
