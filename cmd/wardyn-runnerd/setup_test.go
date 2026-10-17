@@ -423,6 +423,11 @@ func TestSetupRegistersOnceAndRewritesTheServiceEachTime(t *testing.T) {
 	if len(f.networks) != 2 {
 		t.Errorf("the network was not ensured on the second run: %v", f.networks)
 	}
+	// A rerun handed a new token says it kept the identity instead of passing for a new registration.
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil || f.count("POST /api/v1/runners/register") != 1 || !strings.Contains(out, "already registered, so the token in "+f.tokenFile+" was not used") {
+		t.Fatalf("a rerun with a token: registered %d times, %v\n%s", f.count("POST /api/v1/runners/register"), err, out)
+	}
 }
 
 func contains(list []string, want string) bool {

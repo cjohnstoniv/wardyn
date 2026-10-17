@@ -37,6 +37,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A runner that met a control-plane restart no longer stays offline, looping on `containment-only identity refuses
+  this action`: the end the restart queues for a run the runner keeps only for containment is refused with a receipt,
+  which closes it, so the runner reconnects with its local state untouched.
+- A computer registered again stops the proxies of the earlier registration's runs at its first start and moves that
+  registration's `offline/`, `spools/` and `output/` into `previous/` in the state directory, instead of refusing them
+  at every start. `setup` on a computer that is already registered says the token it was given was not used.
 - The Kubernetes proxy's NetworkPolicy DNS rule also admits the cluster DNS pods (`k8s-app=kube-dns` in `kube-system`),
   so a network plugin that selects pods by identity can match it. The address range and the cloud-metadata exclusion
   are unchanged.

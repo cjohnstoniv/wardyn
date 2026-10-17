@@ -133,3 +133,45 @@ func TestMissingIdentityRejectsForeignOrExecutableAction(t *testing.T) {
 		})
 	}
 }
+
+// TestContainmentOnlyRecordRefusesOtherActionsAcrossARestart: a record kept only for containment
+// answers an end (which every control-plane boot queues for a terminal run that kept its sandbox
+// ref) refused, with a receipt the org closes, after the runner restarts too, instead of failing
+// every session. It stays containment-only.
+func TestContainmentOnlyRecordRefusesOtherActionsAcrossARestart(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	kill := orphanAction(m, types.RunnerActionKill)
+	if res, err := m.apply(t.Context(), kill); err != nil || res.Outcome != types.RunnerActionSuccess {
+		t.Fatalf("orphan kill: %+v %v", res, err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The substrate can end a sandbox, so an end that got through would run (as a kill here).
+	reopened, err := New(m.dir, m.runnerID, endingSub{sub}, uuid.UUID.String, noOutput, noErase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Clock(runnerwire.Hello{ServerTime: org}, reopened.now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.BeforeReady(t.Context(), &runnerwire.Peer{}, false); err != nil {
+		t.Fatal(err)
+	}
+	end := kill
+	end.ID, end.Kind = uuid.New(), types.RunnerActionEnd
+	res, err := reopened.apply(t.Context(), end)
+	if sub.kills != 1 || !reopened.state.Runs[kill.RunID].ContainmentOnly {
+		t.Fatalf("an end ran on a containment-only record: kills %d, record %+v", sub.kills, reopened.state.Runs[kill.RunID])
+	}
+	if err != nil || res.ID != end.ID || res.Outcome != types.RunnerActionRefused || res.Reason != "containment-only identity refuses this action" {
+		t.Fatalf("end on a containment-only record: %+v %v", res, err)
+	}
+	if replay, err := reopened.apply(t.Context(), end); err != nil || replay != res {
+		t.Fatalf("refusal replay: %+v %v", replay, err)
+	}
+	if err := reopened.Lease(t.Context(), runnerwire.Lease{RunID: kill.RunID, TokenRenewedAt: org}); err == nil {
+		t.Fatal("a containment-only record took a lease")
+	}
+}

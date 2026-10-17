@@ -119,6 +119,9 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 				return err
 			}
 		}
+	} else if plan.tokenFile != "" {
+		// A rerun keeps the identity, and with it the runner's run state and its queue at the organisation.
+		fmt.Fprintf(out, "This computer is already registered, so the token in %s was not used.\n", plan.tokenFile)
 	}
 	start := h.startService
 	if plan.noService {

@@ -305,6 +305,10 @@ type runtimeExtras struct {
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (runnerRuntime, error) {
+	// A re-registered computer starts clean: the earlier registration's runs are contained, then set aside.
+	if err := offline.SetAsidePrevious(ctx, stateDir, identity.RunnerID, sub, ref); err != nil {
+		return runnerRuntime{}, err
+	}
 	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, runtimeExtras{})
 }
 
