@@ -64,10 +64,11 @@ export function identityCheckSettled(): void {
   for (const resume of waiting) resume();
 }
 
-async function writesMayLeave(): Promise<void> {
+/** Null when nothing is held, so an ordinary write does not wait a tick. */
+function writesMayLeave(): Promise<void> | null {
   const remaining = identityCheckUntil - Date.now();
-  if (remaining <= 0) return;
-  await new Promise<void>((resume) => {
+  if (remaining <= 0) return null;
+  return new Promise<void>((resume) => {
     identityCheckWaiters.push(resume);
     setTimeout(resume, remaining);
   });
@@ -329,7 +330,10 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
-  if (refused.write && !endsSession) await writesMayLeave();
+  if (refused.write && !endsSession) {
+    const held = writesMayLeave();
+    if (held) await held;
+  }
   if (refused.write && _signedOutHold && !endsSession) {
     _unauthorized?.(refused);
     throw new HttpError(401, "Unauthorized");

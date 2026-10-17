@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
+import { identityCheckSettled, SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
@@ -545,7 +545,11 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     resetAuthSyncForTest();
     seq = 0;
   });
-  afterEach(() => resetAuthSyncForTest());
+  afterEach(() => {
+    // A write held for an identity check must not outlive the test that held it.
+    identityCheckSettled();
+    resetAuthSyncForTest();
+  });
 
   async function mountWithDraft() {
     render(

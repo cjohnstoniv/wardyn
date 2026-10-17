@@ -269,11 +269,11 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   // `elsewhere` is whether the lapse that follows is the person's own sign-out in another tab.
   const phaseRef = React.useRef(reauth.phase);
   phaseRef.current = reauth.phase;
-  const heardSignOut = React.useRef(0);
+  const [heardSignOut, setHeardSignOut] = React.useState(0);
   React.useEffect(
     () =>
       onRemoteAuthChange((kind) => {
-        if (kind === "signed_out") heardSignOut.current = Date.now();
+        if (kind === "signed_out") setHeardSignOut(Date.now());
         // After the whole burst of listeners, so core's invalidation does not cancel the read.
         queueMicrotask(() => {
           if (phaseRef.current === "dialog" || phaseRef.current === "bar") recheck();
@@ -281,16 +281,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       }),
     [recheck],
   );
-  // Decided in the render that opens the lapse, so the dialog never shows the other sentence first.
-  const lapse = React.useRef({ phase: reauth.phase, elsewhere: false });
-  if (lapse.current.phase !== reauth.phase) {
-    const opening = lapse.current.phase === "none";
-    lapse.current = {
-      phase: reauth.phase,
-      elsewhere: reauth.phase !== "none" && (opening ? Date.now() - heardSignOut.current < ELSEWHERE_WINDOW_MS : lapse.current.elsewhere),
-    };
-  }
-  const elsewhere = lapse.current.elsewhere;
+  // When the current lapse began (0 when there is none). A sign-out heard shortly before it, or any
+  // time during it, is the reason for it: a request can 401 a moment before the event arrives.
+  const lapseOpenedAt = React.useRef(0);
+  if (reauth.phase === "none") lapseOpenedAt.current = 0;
+  else if (lapseOpenedAt.current === 0) lapseOpenedAt.current = Date.now();
+  const elsewhere = lapseOpenedAt.current > 0 && heardSignOut > lapseOpenedAt.current - ELSEWHERE_WINDOW_MS;
 
   React.useEffect(() => {
     if (!quiet) return;
