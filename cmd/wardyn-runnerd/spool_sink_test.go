@@ -357,3 +357,64 @@ func TestSpoolSinkRegrantsAtHalfByteCredit(t *testing.T) {
 		}
 	}
 }
+
+// TestSpoolSinkSucceedHandsTheRunToANewProxy (Docker revive): Succeed refuses
+// while the old proxy's producer is live; after ProducerGone the run is handed
+// to a new key, the old key no longer authenticates, and the new proxy's
+// instance starts at sequence 1 beside the old proxy's records.
+func TestSpoolSinkSucceedHandsTheRunToANewProxy(t *testing.T) {
+	ctx := t.Context()
+	h := newSinkHarness(t)
+	c := h.dial(h.key, inst)
+	acc := mustRead(t, c, proxy.FrameAccept)
+	mustRead(t, c, proxy.FrameGrant)
+	h.record(c, acc.Gen, 1, true)
+	key, hash, err := newSinkKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sink.Succeed(h.id, hash); err == nil {
+		t.Fatal("succeed handed over a run whose producer is live")
+	}
+	// The driver drains the old proxy, removes it, then settles it: exact, so nothing is lost.
+	go func() {
+		f, err := read(t, c)
+		if err == nil && f.T == proxy.FrameDrain {
+			_ = proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameDrained, Gen: acc.Gen, FinalSeq: 1, Consumed: 1})
+		}
+	}()
+	if _, err := h.sink.Drain(ctx, h.id); err != nil {
+		t.Fatal(err)
+	}
+	if loss, err := h.sink.ProducerGone(ctx, h.id); err != nil || loss.Count != 0 {
+		t.Fatalf("settle = %+v, %v; want exact and nothing lost", loss, err)
+	}
+	if err := h.sink.Succeed(h.id, hash); err != nil {
+		t.Fatal(err)
+	}
+	old := h.dial(h.key, inst)
+	if f, err := read(t, old); err == nil {
+		t.Fatalf("the old key still answered: %+v", f)
+	}
+	const next = "ffffffffffffffffffffffffffffffff"
+	c = h.dial(key, next)
+	acc = mustRead(t, c, proxy.FrameAccept)
+	mustRead(t, c, proxy.FrameGrant)
+	if acc.Seq != 0 {
+		t.Fatalf("new proxy accept %+v, want seq 0", acc)
+	}
+	if a := h.record(c, acc.Gen, 1, true); a.Disposition != string(runnerspool.Appended) {
+		t.Fatalf("new proxy ack %+v", a)
+	}
+	s := h.spool()
+	if depth, _, _, _ := s.Stats(ctx); depth != 2 {
+		t.Fatalf("depth %d, want both proxies' records and no loss row", depth)
+	}
+	if err := s.Replay(ctx, func(context.Context, []runnerspool.Record) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.Receipt(ctx)
+	if ok, err := s.Seal(ctx, r); ok || err != nil {
+		t.Fatalf("seal = %v, %v while the new proxy holds the writer lock", ok, err)
+	}
+}

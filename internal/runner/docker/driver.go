@@ -32,9 +32,12 @@ type Config struct {
 	// driver serves. The orphan sweep removes only sandboxes labelled with it,
 	// so an empty id never sweeps a runner's sandboxes.
 	RunnerID string
-	// RunnerStateDir enables a private per-run audit spool mounted only into
-	// the proxy. Set only by the registered runner daemon's local composition.
-	RunnerStateDir string
+	// DecisionSink and Evidence, set only by wardyn-runnerd, are its decision
+	// sink and its per-run record store. In runner mode (RunnerID set) every
+	// proxy sends its decisions to the sink with a key of its own, whose hash
+	// the run's record keeps; a create refuses while either is missing.
+	DecisionSink DecisionSink
+	Evidence     EvidenceStore
 	// ProxyImage is the OCI image for the wardyn-proxy sidecar. For v0 it may
 	// be a minimal image with the locally-built wardyn-proxy binary
 	// bind-mounted in via ProxyBinaryHostPath.

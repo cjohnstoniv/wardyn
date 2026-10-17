@@ -47,7 +47,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	stateDir := t.TempDir()
 	sub := runnertest.NewFake()
 	ref := func(id uuid.UUID) string { return "fake-" + id.String() }
-	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx), unsized)
+	runtime, err := runnerRuntimeWith(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := runtime.close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background()), unsized)
+	restarted, err := runnerRuntimeWith(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background()), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +159,8 @@ func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized)
+	runtime, err := runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +329,37 @@ func TestInspectEngine(t *testing.T) {
 	}
 }
 
+// An engine that takes the connection and never answers fails readyEngine at engineCheckBound, so
+// serve exits with a reason the service manager logs instead of waiting, silent, through every restart.
+func TestReadyEngineGivesUpOnAnEngineThatNeverAnswers(t *testing.T) {
+	prev := engineCheckBound
+	engineCheckBound = 100 * time.Millisecond
+	t.Cleanup(func() { engineCheckBound = prev })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(srv.URL, "http://"))
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := readyEngine(context.Background(), cli, "unreachable", "wardyn-internal", relayPair{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("readyEngine = %v, want the engine check deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("readyEngine still waits on an engine that never answers")
+	}
+}
+
 // readyEngine creates a missing proxy-sidecar bridge as the installer does,
 // leaves an existing one alone, and creates nothing for a refused bind.
 func TestReadyEngineCreatesTheMissingNetwork(t *testing.T) {
@@ -359,5 +390,38 @@ func TestReadyEngineCreatesTheMissingNetwork(t *testing.T) {
 	refused := &fakeEngine{os: "Docker Desktop"}
 	if err := ready(t, refused, "192.168.1.20"); err == nil || len(refused.created) != 0 {
 		t.Fatalf("a refused bind still touched the engine's networks: err=%v creates=%q", err, refused.created)
+	}
+}
+
+// After a restart the decision sink listens where it did before as soon as it is built, ahead of the
+// runtime's startup containment, so a run's proxy still running reaches it again and delivers what it
+// holds; new proxies are pointed at the same port.
+func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	lo := netip.MustParseAddr("127.0.0.1")
+	first, err := newDockerSink(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.use(lo); err != nil {
+		t.Fatal(err)
+	}
+	url := first.proxyURL()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := newDockerSink(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strings.TrimPrefix(url, "tls://host.docker.internal:")))
+	if err != nil {
+		t.Fatalf("nothing listens where the sink did before the restart (%s): %v", url, err)
+	}
+	_ = c.Close()
+	if err := again.use(lo); err != nil || again.proxyURL() != url {
+		t.Fatalf("after the restart new proxies get %q (%v), want %q", again.proxyURL(), err, url)
 	}
 }

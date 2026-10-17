@@ -420,7 +420,8 @@ func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
 	}))
 	defer cp.Close()
 	id := uuid.New()
-	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: filepath.Join(t.TempDir(), "spool"), DecisionBufferSize: 4}
+	dir := preparedTestSpool(t, id)
+	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: dir, DecisionBufferSize: 4}
 	s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), cp.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -441,4 +442,44 @@ func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
 		t.Fatalf("decision posted to %v with %v", path, auth)
 		return false
 	})
+}
+
+// preparedTestSpool is a run's spool as wardyn-runnerd leaves it before the proxy starts.
+func preparedTestSpool(t *testing.T, id uuid.UUID) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "spool")
+	runnerd, err := runnerspool.Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runnerd.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// decision_spool_dir is an older wardyn-runnerd's spool, prepared and mounted before the proxy starts. A
+// directory without its state.json (nothing mounted, or an empty one an engine made up) stops the proxy at
+// start, naming the directory and the upgrade, instead of an audit wardyn-runnerd never reads.
+func TestConfiguredSpoolRefusesADirectoryRunnerdDidNotPrepare(t *testing.T) {
+	id := uuid.New()
+	for name, dir := range map[string]string{"nothing mounted": filepath.Join(t.TempDir(), "spool"), "an empty directory": t.TempDir()} {
+		cfg := &Config{RunID: id, ControlPlaneURL: "http://127.0.0.1:9", DecisionSpoolDir: dir}
+		s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), nil, nil)
+		if err == nil {
+			_ = s.close(context.Background())
+			t.Fatalf("%s: the proxy accepted a spool directory wardyn-runnerd did not prepare", name)
+		}
+		if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "Upgrade wardyn-runnerd") {
+			t.Errorf("%s: %v; want the directory named and the fix", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "state.json")); err == nil {
+			t.Errorf("%s: the proxy made a spool of its own", name)
+		}
+	}
+	s, err := configuredDecisionSink(&Config{RunID: id, ControlPlaneURL: "http://127.0.0.1:9", DecisionSpoolDir: preparedTestSpool(t, id)}, newTokenSource("run-tok"), nil, nil)
+	if err != nil || s.local == nil {
+		t.Fatalf("a prepared spool: %v", err)
+	}
+	_ = s.close(context.Background())
 }

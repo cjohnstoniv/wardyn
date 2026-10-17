@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -132,6 +133,8 @@ type Spool struct {
 	root  *os.Root
 	lock  *os.File
 	runID uuid.UUID
+	// dir is the path Open was given, which names the spool in an error (inDir).
+	dir string
 
 	// Group commit (append): appenders queue under qmu, and whichever holds commitMu writes every
 	// queued record under one manifest write. Each appender returns once the manifest covering its
@@ -172,7 +175,7 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 	lock, err := root.OpenFile("lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		root.Close()
-		return nil, err
+		return nil, inDir(dir, err)
 	}
 	st, statErr := lock.Stat()
 	link, linkErr := root.Lstat("lock")
@@ -181,7 +184,7 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		root.Close()
 		return nil, errors.New("unsafe spool lock file")
 	}
-	s := &Spool{sem: make(chan struct{}, 1), root: root, lock: lock, runID: runID}
+	s := &Spool{sem: make(chan struct{}, 1), root: root, lock: lock, runID: runID, dir: dir}
 	// After the checks above: only a regular 0600 file that is the name's own (and, in Keep, has no
 	// other link) is ever handed to the spool's owner.
 	if err := spoolowner.Keep(root, lock); err != nil {
@@ -218,6 +221,20 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// inDir puts dir in front of the name an os.Root error carries, which is relative to the spool, so the
+// error says which directory it could not use: "openat /var/lib/wardyn/decision-spool/state.json".
+func inDir(dir string, err error) error {
+	var pe *os.PathError
+	if errors.As(err, &pe) && !filepath.IsAbs(pe.Path) {
+		pe.Path = filepath.Join(dir, pe.Path)
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) && !filepath.IsAbs(le.Old) {
+		le.Old, le.New = filepath.Join(dir, le.Old), filepath.Join(dir, le.New)
+	}
+	return err
 }
 
 // Close releases this process's handles; it never deletes pending decisions.
@@ -377,7 +394,7 @@ func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
 				read.Drops = m.Drops
 				err = errors.Join(err, s.writeManifest(read))
 			}
-			return err
+			return inDir(s.dir, err)
 		}
 		m.Last = r.Seq
 		m.Bytes += int64(len(b))
@@ -523,8 +540,8 @@ type Session struct {
 }
 
 // Accept starts a session for instance at a new generation and, in the same
-// write, issues its grant or re-issues the outstanding one no lower. One
-// instance owns a spool for life; a settled producer is never reopened.
+// write, issues its grant or re-issues the outstanding one no lower. A settled
+// producer is never reopened; only Succeed opens the spool to a new instance.
 func (s *Spool) Accept(ctx context.Context, instance string) (out Session, err error) {
 	if !validInstance(instance) {
 		return out, ErrProducer

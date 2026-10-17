@@ -96,14 +96,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// startProxy's own exit-watch failure deliberately leaves the container behind so its logs
 		// still name the cause; it holds no config, so on CREATE nothing needs it kept, and THIS
 		// caller removes it before rolling back the rest.
-		if proxyID != "" {
-			_, _ = d.cli.ContainerRemove(context.Background(), proxyID, client.ContainerRemoveOptions{Force: true})
-		}
+		_ = d.removeProxy(context.Background(), spec.RunID)
 		return fail(err)
 	}
-	rollback = append(rollback, func() {
-		_, _ = d.cli.ContainerRemove(context.Background(), proxyID, client.ContainerRemoveOptions{Force: true})
-	})
+	rollback = append(rollback, func() { _ = d.removeProxy(context.Background(), spec.RunID) })
 
 	// Resolve the proxy's IP on the per-run internal network so the agent can reach it via a static
 	// /etc/hosts entry instead of Docker's embedded DNS: gVisor's netstack (CC2/runsc) does NOT
@@ -351,29 +347,25 @@ func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 }
 
 // stopProxy stops the agent ref's proxy sidecar, escalating to SIGKILL when the graceful stop
-// fails, then removes it: the graceful stop first lets it flush its last decisions, and nothing a
-// revive needs is kept in the container. A kill refused because the proxy is already stopped is
-// that stop confirmed; a missing proxy is already gone. A failed remove is an error to retry.
+// fails, then removes it: a drain (on a runner) and the graceful stop first let it deliver its last
+// decisions, and nothing a revive needs is kept in the container. A kill refused because the proxy is
+// already stopped is that stop confirmed; a missing proxy is already gone. A failed remove is an
+// error to retry. Once the container is gone, its decisions are settled (removeProxy).
 func (d *Driver) stopProxy(ctx context.Context, ref string) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {
 		return err
 	}
 	name := proxyContainerName(id)
+	d.drainSink(ctx, id)
 	timeout := int(stopTimeout.Seconds())
 	_, err = d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
-	if isNotFound(err) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !isNotFound(err) {
 		if _, kerr := d.cli.ContainerKill(ctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
 			return fmt.Errorf("docker: stop proxy: %w; kill proxy: %w", err, kerr)
 		}
 	}
-	if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove stopped proxy: %w", err)
-	}
-	return nil
+	return d.removeProxy(ctx, id)
 }
 
 // proxyRunID resolves the run id of the agent ref's proxy sidecar: from the
@@ -518,8 +510,9 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: teardown of agent %s: %w", agentRef, errTeardownUnresolved)
 	}
 
-	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
-		return fmt.Errorf("docker: remove proxy: %w", err)
+	d.drainSink(ctx, id)
+	if err := d.removeProxy(ctx, id); err != nil {
+		return err
 	}
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("docker: remove internal network: %w", err)

@@ -255,7 +255,16 @@ what to set for the old behaviour.
   registration's `offline/`, `spools/` and `output/` into `previous/` in the state directory, instead of refusing them
   at every start; decisions still spooled there are kept, not delivered. `setup` on a computer that is already
   registered says the token it was given was not used.
-  <!-- pending merge: SPOOL -->
+- macOS and other VM-backed engines no longer refuse requests with `audit_spool_unavailable`, because the proxy no
+  longer shares a directory with the runner: it sends its decisions to wardyn-runnerd, the spool's only writer, as a
+  Kubernetes runner's proxy does. Upgrade the organisation first: an unpinned runner takes the organisation's proxy
+  image, and one from an older release refuses the new configuration, so the run does not start; a pinned runner needs
+  an image at least as new as its own release. A spool error names
+  its directory (`openat <dir>/state.json`), and macOS runners get their state directory as `--state-dir` in the
+  LaunchAgent, as Linux units always have.
+- A runner whose organisation link stalls no longer waits in silence: a stream dial that is never answered fails after
+  30 seconds, as does a Docker engine that never answers `serve` at start or a resumed session's containment, and a
+  runner with no session logs `runner still offline, retrying` at most once a minute.
 - A refused sandbox create no longer leaves its output sink registered, and an adopted run registers its sink before
   the runner is asked for its output.
 - An organization pool's member list (`GET /runner-pools/{id}/members`, the console's pool sheet) now shows the

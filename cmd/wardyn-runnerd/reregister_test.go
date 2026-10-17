@@ -42,7 +42,7 @@ func TestReRegisteredRunnerStartsWithItsEarlierRunStateSetAside(t *testing.T) {
 		t.Fatal(err)
 	}
 	sub := earlierSandboxes{Fake: runnertest.NewFake(), runnerID: earlier.String()}
-	rt, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, stateDir, sub, ref, newLocalRelay(ctx), unsized)
+	rt, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, stateDir, sub, ref, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatalf("the re-registered runner did not start: %v", err)
 	}

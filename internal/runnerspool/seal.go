@@ -181,6 +181,32 @@ func (s *Spool) SettleLoss(ctx context.Context, drained *Drained) (loss Loss, er
 	return
 }
 
+// Succeed opens the spool to a new producer once the last one is settled: a
+// Docker runner's revive starts a new proxy process, which is a new instance.
+// The settled producer's pending loss stays until EmitLoss. A producer still
+// holding a grant is refused, so the new one never overlaps it. The caller
+// hands the run to the new proxy under a new key, so the settled instance
+// cannot come back.
+func (s *Spool) Succeed(ctx context.Context) error {
+	return s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil {
+			return err
+		}
+		if m.Sealed {
+			return ErrSealed
+		}
+		if m.Producer == nil {
+			return nil
+		}
+		if m.Grant != nil {
+			return ErrProducer
+		}
+		m.Producer = nil
+		return s.writeManifest(m)
+	})
+}
+
 // EmitLoss turns pending_loss into one ordinary builtin:spool-lost row in the
 // loss reserve, clearing pending_loss in the same write. Unreported Drops never
 // refuse it; while an earlier unacknowledged row still fills the reserve it

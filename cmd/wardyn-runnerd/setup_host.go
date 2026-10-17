@@ -395,6 +395,7 @@ func renderLaunchAgent(plan setupPlan) string {
 	return strings.NewReplacer(
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_ORG_URL__", html.EscapeString(plan.org),
+		"__WARDYN_RUNNER_STATE_DIR__", html.EscapeString(plan.paths.stateDir),
 		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.pinnedImage()),
 		"__WARDYN_TRUSTED_CA_FILE__", html.EscapeString(plan.trustedCAFile),
 		"__WARDYN_PROXY_IMAGE_PINNED__", plan.pinMarker(),

@@ -60,14 +60,16 @@ type Config struct {
 	Listen string `json:"listen,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
-	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
+	// DecisionSpoolDir is a spool directory shared with runnerd, absent on org substrates. No runner
+	// sets it since runners send decisions to DecisionSink; a runnerd from before that change still
+	// does, with this proxy image when it follows the organisation's.
 	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
 	// SelfLapse (k8s runners only) closes the proxy until its first renew and
 	// ends it, terminally, at the last successful renew's send time plus
-	// RunTokenTTL. Set exactly when DecisionSink is.
+	// RunTokenTTL. Set only with DecisionSink.
 	SelfLapse bool `json:"self_lapse,omitempty"`
-	// DecisionSink (k8s runners only) streams decisions to runnerd, the only
-	// spool writer, instead of a shared DecisionSpoolDir.
+	// DecisionSink (runners) streams decisions to runnerd, the only spool
+	// writer, instead of a shared DecisionSpoolDir.
 	DecisionSink *DecisionSinkConfig `json:"decision_sink,omitempty"`
 	// HardDeny (k8s runners only) refuses in-cluster names and addresses before
 	// the InternalHosts lift, for agent egress.
@@ -561,10 +563,11 @@ func (c *Config) validateInternalHostCIDRs() error {
 	return nil
 }
 
-// validateDecisionSink checks self_lapse and decision_sink come together, and the sink without a spool.
+// validateDecisionSink checks self_lapse comes only with decision_sink (k8s runners; a Docker
+// runner's proxy has the sink alone), and the sink without a spool.
 func (c *Config) validateDecisionSink() error {
-	if c.SelfLapse != (c.DecisionSink != nil) {
-		return fmt.Errorf("config: self_lapse and decision_sink are set together (k8s runners), never one alone")
+	if c.SelfLapse && c.DecisionSink == nil {
+		return fmt.Errorf("config: self_lapse needs decision_sink (k8s runners)")
 	}
 	if c.DecisionSink != nil {
 		if c.DecisionSpoolDir != "" {

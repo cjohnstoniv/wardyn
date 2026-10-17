@@ -423,6 +423,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Laptop → organisation (evidence) | The organisation writes every row; the content is `runner_asserted` | #73, #74 |
 | An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort | #75, #76 |
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
+| Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
 
 - B1–B11 are unchanged for a run placed `remote`.
@@ -2673,7 +2674,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - No governed run is created while a runner's link is down (`runner_offline`), and a run in flight is never torn down by a drop.
     - The laptop proxy enforces its cached policy and raises nothing, so a first-use host is denied. Every decision goes to a durable per-run spool ([design §5.3](../docs/design/0.9/PLAN.md#53-spool-bound)).
     - Past `runTokenLapseAfter` (`1h5m`), timed on the runner's monotonic clock from the last lease, the runner stops the proxy and keeps the agent and its files. It never grants, approves or mints offline.
-    - On a runner that runs as root beside the non-root proxy, every spool file is handed to the spool directory's owner through its open handle, and a file with more than one link is refused (`spoolowner.Keep`).
+    - The proxy shares no directory with the runner. It sends each decision over TLS pinned to runnerd's key, under a key of its own, to runnerd's decision sink on the relay address, and runnerd alone writes the spool (`dockerSink`, [`cmd/wardyn-runnerd/production_docker.go`](../cmd/wardyn-runnerd/production_docker.go)). Something on the host that reaches the sink's port still needs a run's key to write that run's decisions.
+    - A decision a stopped or crashed proxy never delivered is written off as one `egress.deny` (`builtin:spool-lost`) carrying the count, exact after a drain and an upper bound otherwise.
     - The spool holds `50,000` records or `32 MiB` per run. On overflow the proxy refuses new egress until it drains, and replay starts with an `egress.deny` (`builtin:spool-full`) carrying the count.
     - After pending actions, retained audit history replays before READY, chained in arrival order with `data.observed_at` and `data.spooled`; its content is self-reported (#73).
     - A verified owning, claimed, non-revoked runner may replay a killed run's retained audit history (`IngestRunnerDecision`). This is audit only: it cannot revive the run or restore credentials.
