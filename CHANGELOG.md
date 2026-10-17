@@ -129,6 +129,11 @@ what to set for the old behaviour.
 - Console session lifetime settings, each off by default: `WARDYN_OIDC_SESSION_RENEW_CAP`,
   `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`, `WARDYN_OIDC_SILENT_REAUTH`, `WARDYN_OIDC_LOGIN_HINT` and
   `WARDYN_OIDC_BROWSER_SESSION_COOKIE`. See docs/ENV.md.
+- Session renewal and the idle timeout count reading the console and typing in its terminal as use: a request sent
+  within a minute of the person's own keyboard, pointer or wheel input renews the session and resets the idle clock.
+  With renewal on, the expiry warning and open terminals follow a renewal instead of ending at the expiry the page
+  loaded with. docs/operations/who-gets-in.md compares the three session shapes; with `WARDYN_OIDC_SESSION_TTL` unset
+  a session ends with the identity provider's ID token, about an hour on Entra ID.
 - An Interactive run is idle-stopped on its pool's idle stop when its policy sets none. The New Run pool list says
   whether a run starts now or waits, and `GET /runner-pools` rows carry each pool's state, revision and limits.
 - Console: Admin → Runners shows and edits the trust class; sign-out, sign-in and a mode switch in one tab reach the

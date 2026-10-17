@@ -7,6 +7,7 @@ import type { Page, Request } from "@playwright/test";
 import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, newRunHeading, test } from "./fixtures";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_RENEW } from "../src/app/lib/reauth-copy";
+import { SESSION_EXPIRES_HEADER } from "../src/app/lib/api/session-activity";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 // #483 — a session that ends mid-page keeps the page. A real screen with a
@@ -226,6 +227,26 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page).toHaveURL(/\/providers$/);
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+  });
+});
+
+// While the server renews sessions it names the cookie's expiry in a header on every answer, this /me's
+// included. The banner follows that, not the /me body: the same body without the header draws the
+// banner (draftUnderAnExpiringSession above).
+test.describe("the expiry banner follows the expiry the server names", () => {
+  test("a renewed expiry in the header clears the banner the /me body alone would draw", async ({ page }) => {
+    const reads = meReads(page);
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const headers = { ...response.headers(), [SESSION_EXPIRES_HEADER.toLowerCase()]: inMinutes(60) };
+      delete headers["content-length"];
+      await route.fulfill({ response, headers, json: { ...(await response.json()), session_expires_at: inMinutes(2) } });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/admin/providers");
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await expect.poll(() => reads.count).toBeGreaterThanOrEqual(1);
+    await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
   });
 });
 

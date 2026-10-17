@@ -276,8 +276,9 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   - the admin token always authenticates as admin (one shared credential, no per-human identity to demote), which is the recovery path if a role-map typo ever locks every human out.
 - Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes) against an EXISTING OIDC-only install to turn on RBAC for the first time;
   - it takes effect on each user's next login (a session signed before the role map existed carries no role and is never treated as authenticated).
-- By default a console session ends at the identity provider's ID token expiry.
+- By default a console session ends at the identity provider's ID token expiry, about an hour on Entra ID.
 - To make it last longer (or shorter), set `env.WARDYN_OIDC_SESSION_TTL` (a duration, at most `24h`; boot refuses more).
+- For a session that lasts while it is used, set `env.WARDYN_OIDC_SESSION_RENEW_CAP` and `env.WARDYN_OIDC_SESSION_IDLE_TIMEOUT` instead ([who-gets-in.md](../../../docs/operations/who-gets-in.md#how-long-a-console-session-lasts)).
 - Pair a longer session with `env.WARDYN_ROLE_STAMP_TTL`: nothing else re-checks the identity provider during a session, so a person disabled only there keeps the console until the session TTL runs out.
 - See [docs/ENV.md](../../../docs/ENV.md).
 - **`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**

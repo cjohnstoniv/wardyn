@@ -29,19 +29,29 @@ const deviceMarkerMaxAge = 30 * 24 * time.Hour
 // maxLoginHint bounds the login_hint read back from the hint cookie.
 const maxLoginHint = 256
 
-// sessionActivity reports whether a request counts as the person using the console: a write (any
-// method but GET, HEAD and OPTIONS) the browser labels same-origin. Sec-Fetch-Site is set by the
-// browser and no page script can set it, so neither the console's background reads nor a forged
-// cross-site request renews a session or resets its idle clock.
-//
-// ponytail: writes only, so a person who only reads meets the idle timeout; pairing this check
-// with a console-declared activity signal is the upgrade.
+// activityHeader is set, to "1", by the console on a request it sends within a minute of the
+// person's own keyboard, pointer or wheel input, so reading and typing in a terminal count as use.
+const activityHeader = "X-Wardyn-Activity"
+
+// sessionExpiresHeader carries the session's expiry (RFC 3339) on every answer while
+// SessionRenewCap is on: the cookie is HttpOnly, so it is how the console sees a renewal.
+const sessionExpiresHeader = "X-Wardyn-Session-Expires"
+
+// sessionActivity reports whether a request counts as the person using the console: one the browser
+// labels same-origin that is a write (any method but GET, HEAD and OPTIONS) or carries
+// activityHeader. Sec-Fetch-Site is set by the browser and no page script can set it, so neither a
+// forged cross-site or same-site request nor the console's background reads, which carry no
+// activityHeader, renew a session or reset its idle clock. Nor does a WebSocket or EventSource
+// request: a browser sends no custom header on either.
 func sessionActivity(r *http.Request) bool {
-	switch r.Method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	if r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 		return false
 	}
-	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return r.Header.Get(activityHeader) == "1"
+	}
+	return true
 }
 
 // lastActive is when the session last saw console activity: LastActive, else IssuedAt.
@@ -92,6 +102,14 @@ func (a *Authenticator) touchSession(w http.ResponseWriter, r *http.Request, ses
 	}
 	http.SetCookie(w, cookie)
 	return next
+}
+
+// announceExpiry writes sessionExpiresHeader for a live session while SessionRenewCap is on, on
+// every answer rather than only a renewing one, so a tab learns of a renewal another tab's request made.
+func (a *Authenticator) announceExpiry(w http.ResponseWriter, sess Session) {
+	if a.cfg.SessionRenewCap > 0 {
+		w.Header().Set(sessionExpiresHeader, sess.Expiry.UTC().Format(time.RFC3339))
+	}
 }
 
 // renewedExpiry is the later expiry SessionRenewCap gives a session past half its span, and that

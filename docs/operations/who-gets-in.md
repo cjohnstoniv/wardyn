@@ -2,7 +2,7 @@
 
 # Who gets in, and with which role
 
-Who may sign in, which role a session derives, and which surfaces decide that.
+Who may sign in, which role a session derives, which surfaces decide that, and how long a session lasts.
 This is the access half of what the multi-user section used to carry: the merged role map, the
 chart/console/IdP split, and the derivation rules behind a signed cookie.
 
@@ -99,3 +99,22 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
 - The chart entry, always.
 - A console write that would collide with a chart key or an operator-allowlist email is refused outright (400).
 - A *later* helm upgrade that introduces one anyway leaves the existing console row inert with a "Shadowed" badge instead of silently dropping it.
+
+## How long a console session lasts
+
+A console session is a signed cookie: nothing re-contacts the identity provider after sign-in.
+
+| Shape | Set | Ends |
+|---|---|---|
+| Identity-provider bound (default) | nothing | at the ID token's expiry, which the provider chooses: about an hour on Entra ID |
+| Fixed | `WARDYN_OIDC_SESSION_TTL`, for example `8h` | that long after sign-in, used or not |
+| Sliding | `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`, for example `12h` and `30m` | after the idle time with no use, and never later than the cap after sign-in |
+
+- Use is a write the console makes, or a request within a minute of the person's own keyboard, pointer or wheel input; a tab left open with nobody at it is not use.
+- A renewal, made once a session is past half its original length, sets its expiry to that length from the request.
+  - So keep the idle timeout at most half that length (`WARDYN_OIDC_SESSION_TTL`, or the ID token's lifetime when it is unset), or a session can expire inside its idle time.
+- Boot refuses a session TTL or a renewal cap above `24h`.
+- Revocation and sign-out end a session at once in every shape: renewal never moves the sign-in time they are measured from.
+- Pair a long session with `WARDYN_ROLE_STAMP_TTL`, or a person disabled only at the identity provider keeps the console until the session ends.
+- The console never renews a session with the provider's refresh token; `WARDYN_OIDC_SILENT_REAUTH` signs a returning browser in without interaction instead, where the provider allows `prompt=none`.
+- Every setting is in [ENV.md](../ENV.md#wardyn_oidc_session_ttl).

@@ -13,6 +13,7 @@ import { CC_ORDER, type ConfinementClass, type GovernanceChange, type SetupItem 
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
 import { announceAuthChange, noteIdentityRead, onRemoteAuthChange, type AuthEventKind } from "./auth-sync";
+import { ACTIVITY_HEADER, noteSessionExpiry, recentlyActive, SESSION_EXPIRES_HEADER } from "./session-activity";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -326,7 +327,9 @@ function deadlineSignal(caller: AbortSignal | null | undefined, timeoutMs: numbe
 //  (a) attaches Bearer token when a wardyn_admin_token is set,
 //  (b) always sends the OIDC session cookie (credentials: 'include'),
 //  (c) routes HTTP 401 to the module-level onUnauthorized handler,
-//  (d) bounds the request — see WFETCH_TIMEOUT_MS.
+//  (d) bounds the request — see WFETCH_TIMEOUT_MS,
+//  (e) marks a request the person's own input led to, and reads the session
+//      expiry the answer names — see session-activity.ts.
 // drainBody — read and discard a response body no caller will ever read.
 //
 // A fetch Response whose body is never consumed leaves its stream open, so the
@@ -374,6 +377,7 @@ export async function wfetch(
   if (asPerson && _expectedPrincipal) {
     headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
   }
+  if (recentlyActive()) headers.set(ACTIVITY_HEADER, "1");
 
   let res: Response;
   const generation = authGeneration;
@@ -387,6 +391,8 @@ export async function wfetch(
       signal: deadlineSignal(init.signal, timeoutMs),
     });
     answered = true;
+    // Optional: a test's stand-in Response may carry no headers.
+    noteSessionExpiry(res.headers?.get(SESSION_EXPIRES_HEADER));
   } catch (e) {
     // A caller's OWN abort stays an abort (it is their control flow, not a
     // failure); only the deadline is reported as the unreachable-daemon case.

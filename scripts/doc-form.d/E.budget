@@ -67,4 +67,6 @@
 # docs/ENV.md 37693 adds 38 over 37655 (0.9.3 LIFE review): the idle-timeout turn-on and rollout-stamp sentences; measured.
 # docs/ENV.md 38442 = 37868 + 574 (LIFE), measured at the wave-B merge.
 # docs/ENV.md 38569 = 38442 + 127, measured: WARDYN_K8S_READ_NODES also shortens a start wait for a placement no healthy node allows.
-docs/ENV.md=38569 share=5
+# docs/ENV.md 38704 adds 135 over 38569, measured: the Entra hour under WARDYN_OIDC_SESSION_TTL, the pointer to the sliding shape, and the activity and expiry headers under the renewal and idle settings (0.9.3 console session lifetime).
+# docs/ENV.md 38722 adds 18 over 38704, counted from the diff: a renewal sets the expiry from the request, and the proxy hint for Sec-Fetch-Site (0.9.3 console session lifetime, review).
+docs/ENV.md=38722 share=5

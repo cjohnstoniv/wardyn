@@ -16,6 +16,7 @@ import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
 import { getToken, listenForOtherTabs, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
@@ -454,6 +455,7 @@ export default function App() {
   // console when someone is signed in now. The same question on focus covers a sign-in that happened
   // in a way no tab announced (a full-page SSO login).
   React.useEffect(() => listenForOtherTabs(), []);
+  React.useEffect(() => listenForInput(), []);
   React.useEffect(() => {
     if (auth !== "unauthed") return;
     let alive = true;
