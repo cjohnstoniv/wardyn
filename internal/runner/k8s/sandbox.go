@@ -8,6 +8,7 @@ package k8s
 import (
 	"cmp"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -137,7 +138,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ProxyImage == "" {
 		return runner.Sandbox{}, errProxyImageUnset
 	}
-	if d.runnerMode() && d.cfg.DecisionSink == nil {
+	if d.runnerMode() && d.cfg.Sink == nil {
 		return runner.Sandbox{}, errDecisionSinkUnwired
 	}
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
@@ -732,11 +733,34 @@ func (d *Driver) runnerProxyConfig(ctx context.Context, runID uuid.UUID, b []byt
 	if err != nil {
 		return nil, fmt.Errorf("k8s: proxy trusted CA: %w", err)
 	}
-	sink, err := d.cfg.DecisionSink(ctx, runID)
+	sink, err := d.openSink(runID)
 	if err != nil {
-		return nil, fmt.Errorf("k8s: decision sink: %w", err)
+		return nil, err
 	}
 	return runner.WithProxyConfigKeys(b, map[string]any{"self_lapse": true, "decision_sink": sink, "hard_deny": d.hardDeny})
+}
+
+// openSink makes the run's sink key, persists its hash in the run's record, then registers it with
+// the sink, all before the proxy pod exists. A failed save stops the create. The key itself is
+// never stored: it goes only into the proxy's config Secret.
+func (d *Driver) openSink(runID uuid.UUID) (any, error) {
+	if d.cfg.Sink == nil {
+		return nil, errDecisionSinkUnwired
+	}
+	key, hash, err := d.cfg.Sink.NewKey()
+	if err != nil {
+		return nil, fmt.Errorf("k8s: decision sink key: %w", err)
+	}
+	if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		ev.SinkKeyHash = hex.EncodeToString(hash[:])
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := d.cfg.Sink.Register(runID, hash); err != nil {
+		return nil, fmt.Errorf("k8s: decision sink register: %w", err)
+	}
+	return d.cfg.Sink.ProxyConfig(key), nil
 }
 
 // withRunnerTrustedCA appends runnerd's own CA bundle to a sandbox's CA trust (runner mode); it

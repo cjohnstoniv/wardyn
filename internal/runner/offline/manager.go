@@ -62,6 +62,7 @@ type Manager struct {
 	selfLapse    bool
 	observer     runner.ProxyObserver
 	lastObserved time.Time
+	tick         func(context.Context)
 }
 
 // Options are the manager's substrate-specific behaviours.
@@ -69,6 +70,9 @@ type Options struct {
 	// ProxySelfLapses: the substrate's proxies lapse themselves (design K1 §6.2); the substrate must
 	// implement runner.ProxyObserver.
 	ProxySelfLapses bool
+	// Tick runs first on each containment tick, before lapses and retirement: the k8s runner's
+	// decision sink regrants and retries loss rows there.
+	Tick func(context.Context)
 }
 
 type deadline struct {
@@ -426,6 +430,12 @@ func (m *Manager) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		m.mu.Lock()
+		tick := m.tick
+		m.mu.Unlock()
+		if tick != nil {
+			tick(safety)
+		}
 		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
 		done()
 		if err != nil {
@@ -497,6 +507,7 @@ func (m *Manager) clearPending() {
 func (m *Manager) SetOptions(o Options) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.tick = o.Tick
 	if !o.ProxySelfLapses {
 		m.selfLapse, m.observer = false, nil
 		return nil
@@ -646,6 +657,20 @@ func (m *Manager) SaveEvidence(runID uuid.UUID, b []byte) error {
 		return err
 	}
 	return nil
+}
+
+// SinkRunIDs lists the runs whose decision sink is registered again at startup: those holding a
+// substrate evidence record that are neither retired nor erased, so a spool is never reopened.
+func (m *Manager) SinkRunIDs() []uuid.UUID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for _, id := range m.runIDs() {
+		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired && !r.EvidenceErased {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // EvidenceRunIDs lists the runs holding a substrate evidence record, for the relay's fence replay.

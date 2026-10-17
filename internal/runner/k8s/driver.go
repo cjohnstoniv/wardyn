@@ -128,11 +128,9 @@ type Config struct {
 	Fence func(runID uuid.UUID, proxyIP string)
 	// IPFenced reports a proxy IP another run's fence refuses (Fable L5).
 	IPFenced func(ip string) bool
-	// DrainSink asks the run's proxy to drain its decisions (lane K9); bounded at 5 s by the caller.
-	DrainSink func(ctx context.Context, runID uuid.UUID) error
-	// DecisionSink returns the run's decision_sink proxy config (lane K9). Runner mode refuses to
-	// create a sandbox without one: a proxy pod has no spool runnerd can read.
-	DecisionSink func(ctx context.Context, runID uuid.UUID) (any, error)
+	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
+	// refuses to create a sandbox while it is nil (the sink did not start).
+	Sink DecisionSink
 	// HardDeny is written into every proxy config as hard_deny (design K1 §5.3).
 	HardDeny *HardDeny
 }
@@ -143,6 +141,17 @@ type RunnerdPeer struct {
 	PodLabels map[string]string
 	RelayPort int32
 	SinkPort  int32
+}
+
+// DecisionSink is the part of runnerd's decision sink the driver drives: a per-run key whose hash
+// is persisted in the run's record before Register, the proxy's decision_sink value, the drain
+// before a delete, and the producer's settlement on completion evidence only.
+type DecisionSink interface {
+	NewKey() (key string, hash [32]byte, err error)
+	Register(runID uuid.UUID, hash [32]byte) error
+	ProxyConfig(key string) any
+	Drain(ctx context.Context, runID uuid.UUID) error
+	ProducerGone(ctx context.Context, runID uuid.UUID) error
 }
 
 // EvidenceStore is the manager's per-run evidence persistence: Load returns the run's last saved

@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -181,12 +182,14 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 	}
 	pe := ev.Pods[component]
 	if pe != nil && pe.Witness != nil && pe.FinalizerOff {
-		return true, nil
+		return d.settled(ctx, runID, component) // a crash may have come before the settlement
 	}
 	if pe == nil || pe.DeleteAt == nil {
-		if drain && d.cfg.DrainSink != nil {
+		if drain && d.cfg.Sink != nil {
+			// Drain before the delete: the proxy stops reserving and flushes, at most 5 s.
+			// Containment proceeds whatever it answers.
 			dctx, cancel := context.WithTimeout(ctx, sinkDrainBound)
-			_ = d.cfg.DrainSink(dctx, runID) // containment proceeds regardless
+			_ = d.cfg.Sink.Drain(dctx, runID)
 			cancel()
 		}
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
@@ -194,7 +197,7 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 		case isNotFound(gerr):
 			if pe == nil || pe.UID == "" {
 				// No object was ever held under the finalizer, so no process can be running.
-				return true, nil
+				return d.settled(ctx, runID, component)
 			}
 		case gerr != nil:
 			return false, fmt.Errorf("k8s: read %s before delete: %w", name, gerr)
@@ -237,7 +240,70 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 			return false, err
 		}
 	}
-	return d.awaitEvidence(ctx, runID, component, name, bound)
+	done, err := d.awaitEvidence(ctx, runID, component, name, bound)
+	if !done {
+		return false, err
+	}
+	return d.settled(ctx, runID, component)
+}
+
+// settled finishes a pod that has completion evidence: for the proxy, its producer is settled.
+func (d *Driver) settled(ctx context.Context, runID uuid.UUID, component string) (bool, error) {
+	if component != componentProxy {
+		return true, nil
+	}
+	return d.settleProducer(ctx, runID)
+}
+
+// settleProducer writes off the proxy's sink liability, once, and only here: after completion
+// evidence for the proxy pod is persisted and its finalizer removed (lane K9: never on a NotFound
+// alone, termination unknown or a lapsed frame).
+func (d *Driver) settleProducer(ctx context.Context, runID uuid.UUID) (bool, error) {
+	ev, err := d.loadEvidence(runID)
+	if err != nil {
+		return false, err
+	}
+	if ev.ProducerGone || ev.SinkKeyHash == "" || d.cfg.Sink == nil {
+		return true, nil
+	}
+	if err := d.cfg.Sink.ProducerGone(ctx, runID); err != nil {
+		return false, fmt.Errorf("k8s: settle the proxy's decision producer: %w", err)
+	}
+	_, err = d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		ev.ProducerGone = true
+		return true, nil
+	})
+	return err == nil, err
+}
+
+// ReregisterSinks registers each run's persisted sink key hash again. runnerd calls it at startup
+// before Online, so a proxy reconnecting after a restart authenticates.
+func (d *Driver) ReregisterSinks(runIDs []uuid.UUID) error {
+	if d.cfg.Sink == nil {
+		return nil
+	}
+	var errs []error
+	for _, id := range runIDs {
+		ev, err := d.loadEvidence(id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if ev.SinkKeyHash == "" {
+			continue
+		}
+		b, err := hex.DecodeString(ev.SinkKeyHash)
+		if err != nil || len(b) != 32 {
+			errs = append(errs, fmt.Errorf("k8s: run %s: malformed sink key hash", id))
+			continue
+		}
+		var h [32]byte
+		copy(h[:], b)
+		if err := d.cfg.Sink.Register(id, h); err != nil {
+			errs = append(errs, fmt.Errorf("k8s: re-register run %s with the decision sink: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ownPod refuses a pod that does not carry this runner's and this run's labels.
@@ -389,7 +455,7 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 	if grace != nil {
 		bound = time.Duration(*runnerGrace(grace)) * time.Second
 	}
-	proxyDone, perr := d.containPod(ctx, runID, componentProxy, proxyPodName(runID), grace, bound+teardownPollSlack, false)
+	proxyDone, perr := d.containPod(ctx, runID, componentProxy, proxyPodName(runID), grace, bound+teardownPollSlack, true)
 	agentDone, aerr := d.containPod(ctx, runID, componentAgent, agentPodName(runID), grace, bound+teardownPollSlack, false)
 	if !proxyDone || !agentDone {
 		if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {

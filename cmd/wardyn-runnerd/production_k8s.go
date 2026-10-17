@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -94,7 +96,31 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	relay := newK8sRelay(ctx, env.podIP, uint16(env.relayPort), uint16(env.relayServicePort), clusterIP)
 	ev := &evidenceForwarder{}
 	runnerID := identity.RunnerID.String()
-	drv, err := k8s.NewRunner(substrate.Deps{ProxyImage: opts.proxyImage, ConfinementRuntimes: env.confinement, Record: record}, func(c *k8s.Config) {
+	var drv *k8s.Driver
+	// The decision sink. If it cannot start, the runner still boots to contain what it holds, but
+	// Sink stays nil and every sandbox create is refused.
+	sink, sinkErr := startDecisionSink(ctx, stateDir, env, clusterIP, spoolSinkOptions{
+		OnLapsed: onSinkLapsed(func(id uuid.UUID) error { return drv.NoteValidatedLapse(id) }, func(id uuid.UUID, e string) error {
+			if ev.m == nil {
+				return errors.New("offline state not ready")
+			}
+			return ev.m.ProxyExited(id, e)
+		}),
+		// A session end is not evidence: it only brings the next proxy list forward.
+		OnSessionEnd: func(uuid.UUID) {
+			if m := ev.m; m != nil {
+				go func() {
+					lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+					defer cancel()
+					_ = m.ObserveProxies(lctx)
+				}()
+			}
+		},
+	})
+	if sinkErr != nil {
+		slog.ErrorContext(ctx, "decision sink did not start; this runner refuses new runs", "error", sinkErr)
+	}
+	drv, err = k8s.NewRunner(substrate.Deps{ProxyImage: opts.proxyImage, ConfinementRuntimes: env.confinement, Record: record}, func(c *k8s.Config) {
 		c.Namespace = opts.runsNamespace
 		c.RunnerID = runnerID
 		c.ControlPlaneRelay = relay.Ensure
@@ -105,11 +131,12 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		c.Fence = relay.Fence
 		c.IPFenced = relay.IPFenced
 		c.HardDeny = hardDeny
-		// DecisionSink and DrainSink stay unset until the remote decision sink is wired: a runner
-		// then refuses every sandbox create rather than start a proxy with no decision record.
+		if sink != nil {
+			c.Sink = sinkAdapter{s: sink, url: fmt.Sprintf("tls://%s", net.JoinHostPort(clusterIP, fmt.Sprint(env.sink)))}
+		}
 	})
 	if err != nil {
-		return runnerRuntime{}, errors.Join(err, relay.Close())
+		return runnerRuntime{}, errors.Join(err, relay.Close(), closeSink(sink))
 	}
 	relay.lookup = drv.ProxyRunByIP
 	ks := keystore.NewK8s(drv.Clientset(), ownNS, runnerID)
@@ -117,6 +144,11 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		ev.m = m
 		// Every fence, with its IP refusal, is in the relay before Online can set its peer (R4-M1).
 		if err := drv.ReplayFences(m.EvidenceRunIDs()); err != nil {
+			return err
+		}
+		// Every non-retired run's sink key is registered again before Online, so its proxy
+		// reconnects after the restart.
+		if err := drv.ReregisterSinks(m.SinkRunIDs()); err != nil {
 			return err
 		}
 		// A restart lists the proxies first: an exited or stuck one gets its obligation, the rest a
@@ -129,15 +161,20 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		m.ProvisionalDeadlines()
 		return nil
 	}
+	var tick func(context.Context)
+	if sink != nil {
+		tick = sink.Tick
+	}
 	rt, err := runnerRuntimeWith(ctx, identity, stateDir, drv, k8s.SandboxRef, relay, unknownCapacity, runtimeExtras{
 		keystore:  runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete},
 		noPosture: true,
 		arch:      opts.arch,
-		options:   offline.Options{ProxySelfLapses: true},
+		options:   offline.Options{ProxySelfLapses: true, Tick: tick},
 		started:   started,
+		closeAlso: func() error { return closeSink(sink) },
 	})
 	if err != nil {
-		return runnerRuntime{}, errors.Join(err, relay.Close())
+		return runnerRuntime{}, errors.Join(err, relay.Close(), closeSink(sink))
 	}
 	checks := errors.Join(
 		drv.CheckRunnerAccess(ctx, ownNS),
@@ -154,6 +191,36 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	}
 	slog.InfoContext(ctx, "k8s runner ready to connect", "runs_namespace", opts.runsNamespace, "relay", clusterIP, "listen", env.podIP)
 	return rt, nil
+}
+
+// startDecisionSink loads the sink's key (stable across restarts, so its pin is), and serves the
+// sink on the pod IP at the sink port.
+func startDecisionSink(ctx context.Context, stateDir string, env k8sEnv, clusterIP string, opts spoolSinkOptions) (*spoolSink, error) {
+	cert, _, err := loadOrCreateSinkCert(filepath.Join(stateDir, "decision-sink.key"))
+	if err != nil {
+		return nil, err
+	}
+	opts.Cert = cert
+	opts.SpoolDir = func(id uuid.UUID) string { return filepath.Join(stateDir, "spools", id.String()) }
+	opts.ActivityDir = opts.SpoolDir
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(env.podIP, uint16(env.sink)).String())
+	if err != nil {
+		return nil, fmt.Errorf("decision sink: %w", err)
+	}
+	s := newSpoolSink(opts)
+	go func() {
+		if err := s.Serve(ln); err != nil {
+			slog.ErrorContext(ctx, "decision sink stopped", "error", err)
+		}
+	}()
+	return s, nil
+}
+
+func closeSink(s *spoolSink) error {
+	if s == nil {
+		return nil
+	}
+	return s.Close()
 }
 
 // unknownCapacity: a k8s runner advertises no engine capacity; its limits are the registered ones.

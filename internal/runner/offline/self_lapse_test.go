@@ -191,3 +191,49 @@ func TestEvidenceStoreAtomic(t *testing.T) {
 		t.Fatalf("EvidenceRunIDs %v", ids)
 	}
 }
+
+// TestSubstrateTickRunsEachTick: Options.Tick runs on the containment tick.
+func TestSubstrateTickRunsEachTick(t *testing.T) {
+	m, _, _, _ := managerFixture(t)
+	ticked := make(chan struct{}, 1)
+	if err := m.SetOptions(Options{Tick: func(context.Context) {
+		select {
+		case ticked <- struct{}{}:
+		default:
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	<-ticked
+	cancel()
+	<-done
+}
+
+// TestSinkRunIDsSkipRetiredAndErased: startup re-registers the sink only for live evidence, never
+// for a retired or erased run whose spool is gone; the fence replay still sees all three.
+func TestSinkRunIDsSkipRetiredAndErased(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	live, retired, erased := createLocal(t, m, org), createLocal(t, m, org), createLocal(t, m, org)
+	for _, id := range []uuid.UUID{live, retired, erased} {
+		if err := m.SaveEvidence(id, []byte(`{"a":1}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.mu.Lock()
+	r := m.state.Runs[retired]
+	r.Retired = true
+	m.state.Runs[retired] = r
+	r = m.state.Runs[erased]
+	r.EvidenceErased = true
+	m.state.Runs[erased] = r
+	m.mu.Unlock()
+	if got := m.SinkRunIDs(); len(got) != 1 || got[0] != live {
+		t.Fatalf("sink runs %v, want only %v", got, live)
+	}
+	if got := m.EvidenceRunIDs(); len(got) != 3 {
+		t.Fatalf("fence runs %v", got)
+	}
+}

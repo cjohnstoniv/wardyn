@@ -299,6 +299,8 @@ type runtimeExtras struct {
 	// the startup containment pass (the k8s runner's fence replay and first proxy list).
 	options offline.Options
 	started func(context.Context, *offline.Manager) error
+	// closeAlso runs when the runtime closes (the k8s decision sink).
+	closeAlso func() error
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (runnerRuntime, error) {
@@ -414,5 +416,11 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		go resident.SweepExpired(ctx, time.Minute)
 		return manager.Run(ctx)
 	}
-	return runnerRuntime{hooks: hooks, run: run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
+	return runnerRuntime{hooks: hooks, run: run, close: func() error {
+		err := errors.Join(manager.Close(), relay.Close())
+		if extra.closeAlso != nil {
+			err = errors.Join(err, extra.closeAlso())
+		}
+		return err
+	}}, nil
 }

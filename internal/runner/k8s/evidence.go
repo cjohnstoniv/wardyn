@@ -160,6 +160,10 @@ type runEvidence struct {
 	// the NetworkPolicies and the producer's loss still wait for terminal status or a fence.
 	Lapsed       bool       `json:"lapsed,omitempty"`
 	PendingSince *time.Time `json:"pending_since,omitempty"`
+	// SinkKeyHash is the hex sha256 of the run's decision sink key, re-registered at startup.
+	SinkKeyHash string `json:"sink_key_hash,omitempty"`
+	// ProducerGone marks the sink producer settled on the proxy's completion evidence.
+	ProducerGone bool `json:"producer_gone,omitempty"`
 }
 
 func decodeEvidence(b []byte) (*runEvidence, error) {

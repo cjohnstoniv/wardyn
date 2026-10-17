@@ -845,9 +845,7 @@ func TestRunnerProxyConfigKeys(t *testing.T) {
 	if _, err := h.d.CreateSandbox(ctx, runner.SandboxSpec{RunID: h.runID}); !errors.Is(err, errDecisionSinkUnwired) {
 		t.Fatalf("CreateSandbox with no decision sink: %v", err)
 	}
-	h.d.cfg.DecisionSink = func(context.Context, uuid.UUID) (any, error) {
-		return map[string]string{"url": "tls://10.96.0.40:9443"}, nil
-	}
+	h.d.cfg.Sink = &fakeSink{h: h}
 	b, err := h.d.runnerProxyConfig(ctx, h.runID, []byte(`{"run_id":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -856,7 +854,7 @@ func TestRunnerProxyConfigKeys(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["self_lapse"] != true || got["decision_sink"] == nil || got["hard_deny"] == nil || got["run_id"] != "x" {
+	if got["self_lapse"] != true || fmt.Sprint(got["decision_sink"]) != "map[key:key-1 spki_sha256:pin url:tls://10.96.0.40:9443]" || got["hard_deny"] == nil || got["run_id"] != "x" {
 		t.Fatalf("proxy config %s", b)
 	}
 	hd := got["hard_deny"].(map[string]any)
