@@ -281,6 +281,10 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Admission records the class the run was admitted at; a revive holds the runner to it.
+	if err := f.st.SetRunRunnerTrustClass(f.ctx, run.ID, types.RunnerTrustPersonal); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET token_renewed_at = now() - $2::interval WHERE id = $1`, run.ID, stampAge.String()); err != nil {
 		t.Fatal(err)
 	}
