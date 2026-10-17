@@ -144,8 +144,10 @@ func TestARMScope_SemicolonTable(t *testing.T) {
 		base + "/resourceGroups/a;b/",
 	}
 	for _, path := range admitted {
-		if err := scope(false).Admit(http.MethodGet, path, nil); err != nil {
-			t.Errorf("GET %s = %v, want admitted", path, err)
+		for _, write := range []bool{false, true} {
+			if err := scope(write).Admit(http.MethodGet, path, nil); err != nil {
+				t.Errorf("write=%v GET %s = %v, want admitted", write, path, err)
+			}
 		}
 	}
 	refused := []string{
@@ -156,6 +158,8 @@ func TestARMScope_SemicolonTable(t *testing.T) {
 		base + "/..;/x", base + "/.;/x", base + "/..%3B/x", base + "/.%3b/x", base + "/..;x=1/x", base + "/...;/x",
 		base + "/%2e%2e;/x", base + "/%2E;/x", base + "/%2e%2e%3b/x", base + "/..%253b/x",
 		base + "/%E2%80%A4;/x", base + "/%EF%BC%8E%EF%BC%8E;/x", base + "/..%E2%80%8B;/x",
+		// A blank or dot-ended head, and a second layer of encoding after a real name.
+		base + "/resourceGroups/%20;x", base + "/resourceGroups/x.;y", base + "/resourceGroups/rg%253Bx",
 		// Nothing before the semicolon.
 		base + "/;x", base + "/%3Bx", base + "/%3b", base + "/resourceGroups/;rev=2", base + "/resourceGroups/rg/;",
 		// The marks that were always refused, beside a semicolon.
