@@ -331,6 +331,9 @@ func caseNormalStop(t *testing.T, e *env) {
 	if err := d.StopSandbox(bg, ref(id)); err != nil {
 		t.Fatalf("StopSandbox: %v", err)
 	}
+	if e.fences.fenced(p.PodIP) {
+		t.Errorf("StopSandbox after StopProxy re-applied the released IP refusal for %s", p.PodIP)
+	}
 	e.waitRunGone(t, id, goneWait)
 	if n := e.sink.goneCount(id); n != 1 {
 		t.Errorf("producer settled %d times, want once", n)
