@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -702,6 +703,9 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 			if err != nil {
 				return err
 			}
+			if err := checkReasonLength(reason); err != nil {
+				return err
+			}
 			opts := sdk.DecisionOpts{Scope: types.ApprovalScope(scope)}
 			if until != "" {
 				t, err := parseDecisionUntil(until)
@@ -724,6 +728,17 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 	cmd.Flags().StringVar(&until, "until", "",
 		"expiry for --scope=until: a duration (e.g. 2h) or an RFC3339 timestamp; requires --scope=until, rejected otherwise")
 	return cmd
+}
+
+// maxReasonLen is the longest --reason the server records, in characters (maxGovernanceRejectReasonLen).
+const maxReasonLen = 512
+
+// checkReasonLength refuses an over-long --reason before the request, instead of at the server's 400.
+func checkReasonLength(reason string) error {
+	if n := utf8.RuneCountInString(reason); n > maxReasonLen {
+		return fmt.Errorf("--reason is %d characters; at most %d are recorded", n, maxReasonLen)
+	}
+	return nil
 }
 
 // parseDecisionUntil parses --until as either a duration relative to now

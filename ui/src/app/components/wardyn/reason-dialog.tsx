@@ -178,6 +178,8 @@ export function ReasonDialog({
             id="reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
+            // The server refuses a reason over 512 characters (approvals.go); stop typing there instead of at a 400.
+            maxLength={512}
             rows={3}
             placeholder={approve ? "Verified scope is minimal and time-boxed…" : "Domain not on allowlist…"}
           />
