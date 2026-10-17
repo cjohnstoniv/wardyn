@@ -582,7 +582,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete persisted run output older than N days, by a sweep every minute on the elected leader (flag `-run-output-retention-days`); `0` keeps it forever.
 - A run that ended longer ago than this, with no row, answers `410` (`run_output_expired`).
 - Recovery cannot recreate output past this deadline.
-- Boot refuses a negative value, and one above `106751` days (use `0` to keep output forever).
+- Boot refuses a negative value or one above `106751` days.
 
 ### `WARDYN_EXEC_OUTPUT_TAIL_TTL`
 
