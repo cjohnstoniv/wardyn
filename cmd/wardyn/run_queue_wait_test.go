@@ -81,7 +81,7 @@ func runWithStderr(t *testing.T, args ...string) (string, error) {
 }
 
 // --max-wait sets max_wait_sec; with --wait and no --max-wait the server is told --timeout minus 60s
-// (at least 60s, or half of a --timeout under 2m), so a run that waits too long fails with queue_timeout before the CLI's own 124.
+// (half of --timeout under 2m), so a run that waits too long should fail with queue_timeout before the CLI's own 124.
 func TestRunCmd_MaxWaitSecSent(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
 	for _, tc := range []struct {

@@ -271,7 +271,7 @@ func runCmd(client clientFn) *cobra.Command {
 	mode.bind(cmd.Flags())
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
-	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). With --wait and no --max-wait: --timeout minus 60s (at least 60s, or half of a --timeout under 2m), so queue_timeout (exit 1) lands before --timeout (exit 124)")
+	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 
@@ -316,9 +316,10 @@ func applyQueueWait(body *sdk.CreateRunRequest, given bool, maxWait time.Duratio
 }
 
 // queueWaitSec is the max_wait_sec to send: --max-wait when given, else with --wait the --timeout minus
-// 60s (at least 60s, but half of a --timeout under 2m), so the server ends a run that waits too
-// long (queue_timeout, exit 1) before the CLI gives up on it (exit 124). nil sends nothing and leaves the
-// server's default.
+// 60s for a --timeout of 2m or more (so never under 60s), and half of --timeout (at least 1s) for a
+// shorter one. The aim is for the server to end a run that waits too long (queue_timeout, exit 1)
+// before the CLI gives up on it (exit 124); it is only the limit asked of the server. nil sends
+// nothing and leaves the server's default.
 func queueWaitSec(maxWait time.Duration, wait bool, timeout time.Duration) *int {
 	d := maxWait
 	switch {
