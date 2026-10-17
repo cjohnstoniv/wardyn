@@ -479,6 +479,9 @@ func (b *accessBuilder) repositoryRow(fact componentFact) {
 			cred.Owner, cred.Delivery, cred.AfterEnd = credOwnerOwn, deliveryProxy, afterEndGone
 		case grant == nil:
 			cred = nil // create drops the lane: no credential, no host
+			if row.Status == accessReady {
+				row.Status, row.Reason = accessNeedsSetup, reasonRepoNoCredential
+			}
 		default:
 			if grant.OwnerOnly {
 				cred.Owner = credOwnerOwn
