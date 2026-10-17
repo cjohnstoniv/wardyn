@@ -667,8 +667,8 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
     renderScreen();
     await ask();
     await screen.findByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_USER_TYPE));
-    const picker = screen.getByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
-    expect(picker).toHaveTextContent("Standard user");
+    const picker = await screen.findByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
+    await waitFor(() => expect(picker).toHaveTextContent("Standard user"));
     await userEvent.click(picker);
     await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
     expect(screen.queryByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_USER_TYPE))).not.toBeInTheDocument();
