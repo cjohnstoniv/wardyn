@@ -421,7 +421,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// stamp is retryable, like a store blip on the read above; a run marked
 	// lost since that read is refused.
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
-		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
+		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID, id.JTI, claims.JTI)
 		if serr != nil {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, loggedMsg(r.Context(), "stamp run token renewed", serr))
 			return
