@@ -231,6 +231,33 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
   }, path);
 }
 
+// Resolves once `target` has not moved for `frames` animation frames in a row. The shell's banners are lazy
+// chunks that push the page down when they arrive, so a control can be visible and stable for Playwright's own
+// two frames and still be somewhere else by the time the pointer is released over it; a click that follows
+// this lands where the person would see the control.
+export async function layoutSettled(target: Locator, frames = 30): Promise<void> {
+  await target.evaluate(
+    (el, n) =>
+      new Promise<void>((resolve) => {
+        let top = el.getBoundingClientRect().top;
+        let still = 0;
+        const tick = () => {
+          const now = el.getBoundingClientRect().top;
+          if (now === top) {
+            still += 1;
+            if (still >= n) return resolve();
+          } else {
+            top = now;
+            still = 0;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    frames,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // New Run, the guided flow: Start, then Shape, Run, Harnesses, Files, Tools
 // and access, Review, the Name dialog and the Launched screen. Every string is
