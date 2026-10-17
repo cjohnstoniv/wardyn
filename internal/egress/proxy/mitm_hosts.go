@@ -7,6 +7,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 )
 
 // The MITM-eligibility seam: how one Options.MITMHosts entry is read, and what it decides
@@ -36,18 +38,24 @@ func parseMITMHostPort(entry string) (host string, port int, plaintext bool) {
 	}
 	if h, ps, err := net.SplitHostPort(entry); err == nil {
 		if p, perr := strconv.Atoi(ps); perr == nil && p > 0 && p < 65536 {
-			return h, p, plaintext
+			return hostKey(h), p, plaintext
 		}
 	}
-	return entry, 0, plaintext
+	return hostKey(entry), 0, plaintext
 }
+
+// hostKey is the one spelling the proxy's host-keyed tables (MITM eligibility, ports and scheme,
+// model channels, injection rules) use at compile time and at every lookup: domainmatch.CanonHost,
+// so two spellings of one IP literal (dotted and IPv4-mapped, compressed and expanded IPv6) share
+// a key, as they do in the egress policy. A host name is only lower-cased and dot-trimmed.
+func hostKey(h string) string { return domainmatch.CanonHost(strings.TrimSpace(h)) }
 
 // mitmPlaintextUpstream reports whether the MITM'd origin for host serves plain HTTP, so
 // forwardInspectedLLM re-originates in cleartext instead of TLS. Explicit and positive,
 // never derived from the injection rule's require_tls — that bool zero-values to false, so
 // inverting it would default to cleartext at real TLS origins.
 func (p *Proxy) mitmPlaintextUpstream(host string, port int) bool {
-	return p.mitmPlaintext[plaintextKey(strings.ToLower(strings.TrimSuffix(host, ".")), port)]
+	return p.mitmPlaintext[plaintextKey(hostKey(host), port)]
 }
 
 // plaintextKey is the one spelling of the plaintext set's key; a port of 0 is the legacy

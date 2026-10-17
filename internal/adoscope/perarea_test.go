@@ -112,7 +112,7 @@ var perAreaCases = []perAreaCase{
 	{name: "package client DELETE", req: onHost("pkgs.dev.azure.com", http.MethodDelete, "/acme/_packaging/feed/npm/registry/pkg/-/pkg-1.0.0.tgz", ""), want: "packaging_manage"},
 	{name: "package version PATCH", req: onHost("pkgs.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/npm/p/versions/1", `{}`), want: "packaging_write"},
 	{name: "package version DELETE", req: onHost("pkgs.dev.azure.com", http.MethodDelete, "/acme/_apis/packaging/feeds/f/npm/p/versions/1", ""), want: "packaging_manage"},
-	{name: "package recycle bin restore PATCH", req: onHost("pkgs.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/npm/recyclebin/packages/p/versions/1", `{}`), want: "packaging_write"},
+	{name: "package recycle bin restore PATCH", req: onHost("pkgs.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/npm/recyclebin/packages/p/versions/1", `{}`), want: "packaging_manage"},
 	{name: "feed create POST", req: onHost("feeds.dev.azure.com", http.MethodPost, "/acme/_apis/packaging/feeds", `{}`), want: "packaging_manage"},
 	{name: "feed DELETE", req: onHost("feeds.dev.azure.com", http.MethodDelete, "/acme/_apis/packaging/feeds/f", ""), want: "packaging_manage"},
 	{name: "feed permissions PATCH", req: onHost("feeds.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/permissions", `{}`), want: "packaging_manage"},

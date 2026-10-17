@@ -98,7 +98,11 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
         setLoadFailed("");
         setLoaded(true);
       })
-      .catch((e: unknown) => setLoadFailed(getErrorMessage(e)));
+      .catch((e: unknown) => {
+        setLoadFailed(getErrorMessage(e));
+        // After the first load the form is on screen, so a failed re-read (Reload after a stale save) says so there.
+        setTop(POOL_FORM.RELOAD_FAILED);
+      });
   }, [id]);
   React.useEffect(() => {
     void load();
@@ -147,8 +151,16 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
     return (
       <div className={wrap}>
         {loadFailed ? (
-          <div role="alert" className="rounded-lg border border-danger bg-danger-subtle p-3 text-body">
-            {POOLS.ERROR_BODY}
+          <div className="space-y-3">
+            <div role="alert" className="rounded-lg border border-danger bg-danger-subtle p-3 text-body">
+              {POOLS.ERROR_BODY}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" type="button" onClick={() => void load()}>
+                {POOL_FORM.RELOAD}
+              </Button>
+              {backButton}
+            </div>
           </div>
         ) : (
           <div role="status" aria-label={POOLS.LOADING}>

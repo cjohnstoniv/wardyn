@@ -96,6 +96,11 @@ func (s *evictionApprovalStore) ListApprovals(_ context.Context, state types.App
 	return out, nil
 }
 
+// ListExpiredPendingApprovals returns nothing: no test here runs the expiry sweep over this store.
+func (s *evictionApprovalStore) ListExpiredPendingApprovals(context.Context, time.Time, time.Time, uuid.UUID, int) ([]types.ApprovalRequest, error) {
+	return nil, nil
+}
+
 func (s *evictionApprovalStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

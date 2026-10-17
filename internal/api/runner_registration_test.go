@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -316,6 +317,21 @@ func TestRunnerRegistrationUnsetOrgURLFailsClosed(t *testing.T) {
 	}
 }
 
+// The per-peer limiter runs before the site-config read: a caller past its burst is answered 429 without
+// the store being asked, even while the store cannot answer.
+func TestRunnerRegistrationLimiterRunsBeforeTheSiteConfigRead(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	f.configErr = errors.New("store down")
+	for i := range int(enrolBurst) {
+		if w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", "{}"); w.Code != 503 {
+			t.Fatalf("attempt %d inside the burst = %d, want 503 (the config read)", i, w.Code)
+		}
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", "{}"); w.Code != 429 {
+		t.Fatalf("attempt past the burst = %d %s, want 429 before the config read", w.Code, w.Body.String())
+	}
+}
+
 func TestRunnerRegistrationBoundTokenRefusalDoesNotConsume(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
 	raw := newBearer("wdr_")
@@ -564,5 +580,28 @@ func TestRunnerTokenMintProxyImageFollowsThePerArchConfig(t *testing.T) {
 		if w.Code != http.StatusCreated || has != (byArch == nil) || strings.Contains(w.Body.String(), "mirror.example.com") {
 			t.Fatalf("%s: mint = %d %s", name, w.Code, w.Body.String())
 		}
+	}
+}
+
+// A person mints ten runner registration tokens for themself in an hour; the eleventh is 429 with the
+// reason and a Retry-After, and nobody else's mints are counted against them.
+func TestRunnerTokenSelf_TheEleventhInAnHourIs429(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleAdmin, false)
+	for i := range 10 {
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", alice, "{}"); w.Code != 201 {
+			t.Fatalf("mint %d = %d %s, want 201", i+1, w.Code, w.Body.String())
+		}
+	}
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", alice, "{}")
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "360" || !strings.Contains(w.Body.String(), "runner_token_rate_limited") {
+		t.Fatalf("the eleventh mint = %d %q %s, want 429, Retry-After 360 and runner_token_rate_limited", w.Code, w.Header().Get("Retry-After"), w.Body.String())
+	}
+	if len(f.tokens) != 10 {
+		t.Errorf("%d tokens stored, want 10", len(f.tokens))
+	}
+	bob := memberModeSSOSession(t, "bob", "bob@example.com", oidc.RoleAdmin, false)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", bob, "{}"); w.Code != 201 {
+		t.Errorf("another person's mint = %d %s, want 201", w.Code, w.Body.String())
 	}
 }

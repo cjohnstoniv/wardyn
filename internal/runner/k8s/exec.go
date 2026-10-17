@@ -91,7 +91,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	}
 
 	cmd := argv
-	if d.cfg.Record {
+	if d.recordsPod(pod) {
 		runID := uuid.Nil
 		if id, perr := uuid.Parse(pod.Labels[labelRun]); perr == nil {
 			runID = id

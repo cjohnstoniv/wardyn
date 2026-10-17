@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
+import { RouteFallback } from "./components/wardyn/route-fallback";
 import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
@@ -14,7 +15,9 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, listenForOtherTabs, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { listenForInput } from "./lib/api/session-activity";
+import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 import { deriveReadiness } from "./lib/readiness";
@@ -200,22 +203,6 @@ const GettingStarted = React.lazy(() =>
     default: m.GettingStarted,
   })),
 );
-
-// Shown while a lazy route's chunk is in flight. Deliberately the same mark +
-// spinner as the auth probe above, so a slow chunk reads as the console still
-// connecting rather than as a broken screen.
-function RouteFallback() {
-  return (
-    <div
-      className="flex min-h-[60vh] flex-col items-center justify-center gap-3"
-      role="status"
-      aria-live="polite"
-    >
-      <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      <span className="sr-only">Loading…</span>
-    </div>
-  );
-}
 
 function suspend(screen: React.ReactNode) {
   return <React.Suspense fallback={<RouteFallback />}>{screen}</React.Suspense>;
@@ -462,6 +449,35 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
+  // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
+  // console when someone is signed in now. The same question on focus covers a sign-in that happened
+  // in a way no tab announced (a full-page SSO login).
+  React.useEffect(() => listenForOtherTabs(), []);
+  React.useEffect(() => listenForInput(), []);
+  React.useEffect(() => {
+    if (auth !== "unauthed") return;
+    let alive = true;
+    const reprobe = () => {
+      if (signingOutRef.current) return;
+      void probeAuth().then((probe) => {
+        if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
+        setSignedOut(false);
+        setAuth("authed");
+      });
+    };
+    const onVisible = () => document.visibilityState === "visible" && reprobe();
+    const stop = onRemoteAuthChange(reprobe);
+    window.addEventListener("focus", reprobe);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      stop();
+      window.removeEventListener("focus", reprobe);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [auth]);
 
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.

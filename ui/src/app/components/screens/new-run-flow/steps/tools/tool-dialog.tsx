@@ -10,6 +10,7 @@
 import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../../ui/dialog";
+import { MY_COMPONENTS } from "../../../../wardyn/copy/components";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 
 export interface ToolDialogProps {
@@ -61,3 +62,19 @@ export function ToolField({ id, label, error, children }: { id: string; label: s
 
 export const SELECT_CLASS =
   "h-9 w-full rounded-md border border-input bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
+
+/** Saved secret names that could not be read: the answer's own words and a retry, never a quiet empty list. */
+export interface NamesFailure {
+  message: string;
+  retry: () => void;
+}
+
+export function NamesFailed({ failure }: { failure?: NamesFailure }) {
+  if (!failure) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+      <span>{failure.message}</span>
+      <Button type="button" variant="outline" size="sm" onClick={failure.retry}>{MY_COMPONENTS.RETRY}</Button>
+    </div>
+  );
+}

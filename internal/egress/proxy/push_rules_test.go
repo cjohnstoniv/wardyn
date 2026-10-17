@@ -308,6 +308,44 @@ func TestPushRulesRefuseWhatCannotBeInspected(t *testing.T) {
 		}
 	})
 
+	// A tip the pack carries but cannot be read as a commit is refused as blind, not waved
+	// through: a blob where a commit belongs, and a tag object that does not parse.
+	for _, tc := range []struct {
+		name    string
+		typ     byte
+		typName string
+		payload string
+	}{
+		{"a ref whose tip is a blob", 3, "blob", "not a commit\n"},
+		{"a ref whose tip is a malformed tag", 4, "tag", "this is not a tag object\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := newGitBrokerUpstream(t, "gh-inst-token")
+			p, sink := newGitBrokerProxyWithSpec(t,
+				map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv), anyBranch)
+
+			payload := []byte(tc.payload)
+			pack := []byte("PACK")
+			pack = binary.BigEndian.AppendUint32(pack, 2)
+			pack = binary.BigEndian.AppendUint32(pack, 1)
+			pack = append(pack, packObjHeader(tc.typ, int64(len(payload)))...)
+			pack = append(pack, storedZlib(payload)...)
+			sum := sha1.Sum(pack)
+			cmd := zeroOID + " " + gitObjectID(tc.typName, payload) + " refs/heads/topic" + firstCaps
+			rec := postPush(t, p, pkt(cmd)+"0000"+string(pack)+string(sum[:]))
+
+			if rec.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415 (body %q)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGitPackBlind+`"`) {
+				t.Errorf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitPackBlind)
+			}
+			if up.mintCalls != 0 {
+				t.Errorf("a refused push minted %d credentials, want 0", up.mintCalls)
+			}
+		})
+	}
+
 	t.Run("a body in a content-coding", func(t *testing.T) {
 		up := newGitBrokerUpstream(t, "gh-inst-token")
 		p, sink := newGitBrokerProxyWithSpec(t,

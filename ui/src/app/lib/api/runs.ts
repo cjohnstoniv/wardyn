@@ -293,14 +293,23 @@ export const runs = {
   // structurally an AgentRun. #125/#121: the default deadline, not LAUNCH_DEADLINE_MS, because
   // POST /runs dispatches asynchronously and no longer blocks through CreateSandbox.
   async createRunWire(body: object): Promise<CreateRunResult> {
-    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
+    const res = await wfetch("/runs", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
   },
   // Preflight (POST /runs/preflight) is a dry run of create's resolution and gating. It keeps
   // LAUNCH_DEADLINE_MS because that resolution (mounts, grants, the blast-radius raise) is synchronous.
   async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
-    return asJson<PreflightResult>(res);
+    const copy = res.ok ? null : res.clone();
+    try {
+      return await asJson<PreflightResult>(res);
+    } catch (e) {
+      if (copy && isCredentialRefusal(e)) {
+        const rows = await copy.json().then((j: { setup_items?: unknown }) => j.setup_items, () => undefined);
+        (e as HttpError).setupItems = Array.isArray(rows) ? rows : [];
+      }
+      throw e;
+    }
   },
   async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
     const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });
@@ -344,6 +353,7 @@ export const runs = {
   async setTitle(id: string, title: string): Promise<{ id: string; title: string }> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/title`, {
       method: "PATCH",
+      asPerson: true,
       body: JSON.stringify({ title }),
     });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
@@ -371,7 +381,7 @@ export const runs = {
     const body: Record<string, unknown> = {};
     if ("endsAt" in change) body.ends_at = change.endsAt;
     if (change.waitBudgetSec != null) body.wait_budget_sec = change.waitBudgetSec;
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) });
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", asPerson: true, body: JSON.stringify(body) });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<RunEndWaitResult>(res);
   },

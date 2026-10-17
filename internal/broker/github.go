@@ -165,12 +165,7 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	}
 	tok, _, err := client.Apps.CreateInstallationToken(ctx, instID, opts)
 	if err != nil {
-		if isStaleInstallation(err) {
-			// Dead cached installation id: drop it so the NEXT mint re-resolves.
-			m.mu.Lock()
-			delete(m.installByOrg, owner)
-			m.mu.Unlock()
-		}
+		m.dropStaleInstallation(owner, err)
 		return "", time.Time{}, fmt.Errorf("broker: create installation token: %w", err)
 	}
 	exp := time.Now().Add(defaultMaxTTL)
@@ -286,6 +281,7 @@ func (m *githubMinter) InstallationPermissions(ctx context.Context, repo string)
 	}
 	inst, _, err := client.Apps.GetInstallation(ctx, instID)
 	if err != nil {
+		m.dropStaleInstallation(owner, err)
 		return nil, githubRefusal(fmt.Errorf("broker: read installation for %s: %w", owner, err))
 	}
 	b, err := json.Marshal(inst.GetPermissions())
@@ -334,6 +330,16 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	m.installByOrg[owner] = id
 	m.mu.Unlock()
 	return id, nil
+}
+
+// dropStaleInstallation forgets owner's cached installation id when err says it no longer
+// resolves, so the NEXT call re-resolves it.
+func (m *githubMinter) dropStaleInstallation(owner string, err error) {
+	if isStaleInstallation(err) {
+		m.mu.Lock()
+		delete(m.installByOrg, owner)
+		m.mu.Unlock()
+	}
 }
 
 // isStaleInstallation reports whether err is a GitHub 401/404 response — what

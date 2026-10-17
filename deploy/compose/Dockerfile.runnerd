@@ -1,0 +1,70 @@
+# wardyn-runnerd for the Kubernetes runner substrate (deploy/helm/wardyn-runnerd):
+# an organisation-owned runner that places runs as pods. The builder stage is
+# Dockerfile.proxy's; only the build line and the runtime labels differ.
+# Runs on the BUILDER's arch and cross-compiles to $TARGETARCH (pure Go,
+# CGO_ENABLED=0) — a linux/arm64 image needs no QEMU for the compile.
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
+
+WORKDIR /build
+
+# Corporate build support (no-ops on an OSS build): GOTOOLCHAIN=local skips the
+# pinned-toolchain self-upgrade fetch (blocked behind a TLS-MITM proxy); the
+# optional corp CA (host-staged deploy/images/corp-ca.pem, gitignored) is added to
+# the system trust so `go mod download` can verify the module proxy through
+# corporate MITM. The README.md companion makes the COPY succeed when the
+# corp-ca.pem* glob matches nothing. Base is Alpine here, so the CA tooling comes
+# from the `ca-certificates` apk package rather than Debian's.
+ENV GOTOOLCHAIN=local
+# Corporate Go module mirror (Athens/Artifactory/Nexus). Empty is identical to
+# unset: the go command falls back to $GOROOT/go.env (https://proxy.golang.org,direct).
+# GOSUMDB is deliberately not exposed — every mainstream mirror proxies /sumdb/;
+# add the same two lines if one ever does not.
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
+COPY deploy/images/README.md deploy/images/corp-ca.pem* /corp-ca/
+# Fails closed (exit 1) when a corp CA is staged but the regenerated bundle
+# does not actually contain MORE certificates than the corp CA alone: the
+# runtime stage below is distroless (no update-ca-certificates) and copies
+# this bundle VERBATIM, so a bare corp CA here would silently become the
+# proxy's entire runtime trust store — replacing public roots rather than
+# joining them, and taking every vendor dial down in a shape that looks like
+# a network fault, not a config error.
+RUN apk add --no-cache ca-certificates && \
+    if [ -f /corp-ca/corp-ca.pem ]; then \
+        mkdir -p /usr/local/share/ca-certificates && \
+        cp /corp-ca/corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt && \
+        update-ca-certificates && \
+        corp_certs=$(grep -c 'BEGIN CERTIFICATE' /corp-ca/corp-ca.pem) && \
+        bundle_certs=$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt) && \
+        if [ "$bundle_certs" -le "$corp_certs" ]; then \
+            echo "FATAL: corp CA staged (deploy/images/corp-ca.pem) but the regenerated trust bundle ($bundle_certs cert(s)) is no larger than the corp CA alone ($corp_certs cert(s)) -- refusing to ship a runtime image whose trust store is a bare corporate CA instead of system roots + corporate CA" >&2; \
+            exit 1; \
+        fi; \
+    fi
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+ARG TARGETARCH
+# RELEASE_BUILD=true (release.yml's and nightly.yml's staged row) stamps the bare
+# release into version.String(), as for wardynd; the org compares runner versions.
+ARG RELEASE_BUILD=false
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags docker,k8s -trimpath -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardyn-runnerd ./cmd/wardyn-runnerd
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
+COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
+
+# Distroless static plus a pure-Go binary: Apache-2.0 alone is an accurate declaration.
+LABEL org.opencontainers.image.title="wardyn-runnerd" \
+      org.opencontainers.image.description="Wardyn organisation runner for Kubernetes" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \
+      org.opencontainers.image.documentation="https://github.com/cjohnstoniv/wardyn/blob/main/THIRD-PARTY-NOTICES.md"
+
+COPY --from=builder /out/wardyn-runnerd /usr/local/bin/wardyn-runnerd
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+ENTRYPOINT ["/usr/local/bin/wardyn-runnerd"]

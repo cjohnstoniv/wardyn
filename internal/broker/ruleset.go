@@ -158,22 +158,13 @@ type refRuleState struct {
 	rulesets                   []int64
 }
 
-// readRefRules reads the rules in force for one branch name.
+// maxRulePages bounds the pages of one branch's rules read; a list that runs past it is an
+// error, never a partial answer graded confined.
+const maxRulePages = 10
+
+// readRefRules reads the rules in force for one branch name, across every page GitHub returns.
 func readRefRules(ctx context.Context, c *gh.Client, owner, repo, branch string) (refRuleState, error) {
-	// branch may contain slashes (refProbeInside does); GitHub reads the whole
-	// path remainder as the branch name, so it needs no escaping.
-	rules, _, err := c.Repositories.ListRulesForBranch(ctx, owner, repo, branch, nil)
-	if err != nil {
-		return refRuleState{}, fmt.Errorf("broker: read branch rules for %s/%s@%s: %w", owner, repo, branch, err)
-	}
-	if rules == nil {
-		return refRuleState{}, nil
-	}
-	st := refRuleState{
-		creation: len(rules.Creation) > 0,
-		update:   len(rules.Update) > 0,
-		deletion: len(rules.Deletion) > 0,
-	}
+	var st refRuleState
 	// A rule with no ruleset_id decodes as 0 and is kept, not skipped —
 	// skipping would grade "confined" on a rule whose bypass nobody checked.
 	seen := make(map[int64]bool)
@@ -183,16 +174,34 @@ func readRefRules(ctx context.Context, c *gh.Client, owner, repo, branch string)
 			st.rulesets = append(st.rulesets, id)
 		}
 	}
-	for _, r := range rules.Creation {
-		add(r.GetRulesetID())
+	opts := &gh.ListOptions{PerPage: 100}
+	for range maxRulePages {
+		// branch may contain slashes (refProbeInside does); GitHub reads the whole
+		// path remainder as the branch name, so it needs no escaping.
+		rules, resp, err := c.Repositories.ListRulesForBranch(ctx, owner, repo, branch, opts)
+		if err != nil {
+			return refRuleState{}, fmt.Errorf("broker: read branch rules for %s/%s@%s: %w", owner, repo, branch, err)
+		}
+		if rules != nil {
+			st.creation = st.creation || len(rules.Creation) > 0
+			st.update = st.update || len(rules.Update) > 0
+			st.deletion = st.deletion || len(rules.Deletion) > 0
+			for _, r := range rules.Creation {
+				add(r.GetRulesetID())
+			}
+			for _, r := range rules.Update {
+				add(r.GetRulesetID())
+			}
+			for _, r := range rules.Deletion {
+				add(r.GetRulesetID())
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			return st, nil
+		}
+		opts.Page = resp.NextPage
 	}
-	for _, r := range rules.Update {
-		add(r.GetRulesetID())
-	}
-	for _, r := range rules.Deletion {
-		add(r.GetRulesetID())
-	}
-	return st, nil
+	return refRuleState{}, fmt.Errorf("broker: branch rules for %s/%s@%s run past %d pages", owner, repo, branch, maxRulePages)
 }
 
 // bypassableRulesets names the rulesets among ids whose current_user_can_bypass

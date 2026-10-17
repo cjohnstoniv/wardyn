@@ -24,6 +24,7 @@ func residentPlan(cp ClassPolicy, posture *types.RunnerPosture) LocalPlan {
 		Origins:  map[string]CredentialOrigin{secretEnvPath: {Class: ClassOperator, Delivery: ClassEnvSecret}},
 		Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: cp}},
 		Posture:  posture,
+		Trust:    types.RunnerTrustPersonal,
 	}
 }
 
@@ -77,6 +78,7 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 		CredentialIntents: []CredentialIntent{{Field: adoPath, Origin: origin}},
 		Delivery:          DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}},
 		Posture:           &types.RunnerPosture{OS: "linux"},
+		Trust:             types.RunnerTrustPersonal,
 	}
 }
 
@@ -111,6 +113,7 @@ func TestLocalEligibility_ResidentValueMustBeItsPlaceholder(t *testing.T) {
 			Spec:     runner.SandboxSpec{ManagedFiles: []runner.ManagedFile{{Path: "/run/secret", AgentOwned: true, Content: []byte(content)}}},
 			Origins:  map[string]CredentialOrigin{filePath: {Class: ClassOperator, Delivery: ClassFileSecret}},
 			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassFileSecret: cp}},
+			Trust:    types.RunnerTrustPersonal,
 		}
 	}
 	if _, r := LocalEligibility(file("an-inline-file")); r == nil || r.Reason != ReasonPlacementCredential || r.Field != filePath {
@@ -140,15 +143,25 @@ func TestLocalEligibility_GitHubTokenIsNeverResident(t *testing.T) {
 }
 
 // The grant-record call shape H12's via_org admission (ViaOrgGrant) uses: a
-// nil answer must never stand for a resident grant, under any posture, or a
-// resident-configured class would be stamped via_org.
-func TestClassifyCredential_ResidentGrantRecordIsNeverAdmitted(t *testing.T) {
+// nil answer must never stand for via_org under a resident policy. A record of
+// a class whose resident delivery is not built stays refused under any
+// posture; a built class's record is admitted resident and is still never
+// via_org.
+func TestClassifyCredential_ResidentGrantRecordNeverStandsForViaOrg(t *testing.T) {
 	healthy := &types.RunnerPosture{MDMManaged: true, DiskEncrypted: true, OS: "linux"}
 	for _, class := range []string{ClassAPIKey, ClassEnvSecret} {
 		origin := CredentialOrigin{Class: ClassOperator, Delivery: class, GrantKind: types.GrantKind(classGrantKind[class]), Stored: true}
-		p := LocalPlan{Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}, Posture: healthy}
-		if r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{}); r == nil || r.Reason != ReasonPlacementCredential {
+		policy := DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}
+		p := LocalPlan{Delivery: policy, Posture: healthy, Trust: types.RunnerTrustPersonal}
+		r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{})
+		switch {
+		case !residentBuilt[class] && (r == nil || r.Reason != ReasonPlacementCredential):
 			t.Errorf("%s resident grant record: %+v, want %s", class, r, ReasonPlacementCredential)
+		case residentBuilt[class] && r != nil:
+			t.Errorf("%s resident grant record of a built class: %+v, want admitted", class, r)
+		}
+		if ViaOrgGrant(origin, policy, types.RunnerTrustPersonal) {
+			t.Errorf("%s resident grant record answered via_org", class)
 		}
 	}
 }
@@ -161,17 +174,70 @@ func TestViaOrgGrant_RequiresTheViaOrgMode(t *testing.T) {
 	policy := func(m Mode) DeliveryPolicy {
 		return DeliveryPolicy{Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: m}}}
 	}
-	if !ViaOrgGrant(origin, policy(ModeViaOrg)) {
+	if !ViaOrgGrant(origin, policy(ModeViaOrg), types.RunnerTrustPersonal) {
 		t.Fatal("an operator api_key under a via_org policy is not via_org")
 	}
 	saved := slices.Clone(Table)
 	t.Cleanup(func() { Table = saved })
 	Table = append([]Entry{{Struct: StructGrantKind, Field: "api_key", Variant: "test allow", Class: ClassOperator, Rule: RuleAllow, Delivery: ClassAPIKey}}, saved...)
 	for _, m := range []Mode{ModeRefuse, ModeRunnerResident} {
-		if ViaOrgGrant(origin, policy(m)) {
+		if ViaOrgGrant(origin, policy(m), types.RunnerTrustPersonal) {
 			t.Errorf("an admitted operator api_key under a %s policy answered via_org", m)
 		}
 	}
 }
 
 var classGrantKind = map[string]string{ClassAPIKey: "api_key", ClassEnvSecret: "env_secret"}
+
+// ResidentAdmits across the design's matrix (§4.2.2, §7.4): class, policy
+// mode, the Azure DevOps opt-in, the blast-radius floor and posture. Every
+// env_secret case under a resident policy also goes through LocalEligibility,
+// which must reach the same answer: the dispatch classify and the org's
+// delivery re-check are one function.
+func TestResidentAdmits_Matrix(t *testing.T) {
+	healthy := &types.RunnerPosture{MDMManaged: true, DiskEncrypted: true, OS: "darwin", OSVersion: "15.2"}
+	req := &PostureRequirement{MDMManaged: true, DiskEncrypted: true, OSMin: map[string]string{"darwin": "15.1"}}
+	env := CredentialOrigin{Class: ClassOperator, Delivery: ClassEnvSecret}
+	resident := ClassPolicy{Mode: ModeRunnerResident}
+	for _, tc := range []struct {
+		name    string
+		origin  CredentialOrigin
+		cp      ClassPolicy
+		floor   types.ConfinementClass
+		posture *types.RunnerPosture
+		reason  Reason // "" admits
+		detail  string
+	}{
+		{"resident, no requirement, no posture", env, resident, "", nil, "", ""},
+		{"resident, requirement met", env, ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req}, "", healthy, "", ""},
+		{"policy refuses the class", env, ClassPolicy{Mode: ModeRefuse}, "", healthy, ReasonPlacementCredential, "not delivered runner_resident"},
+		{"no policy for the class", env, ClassPolicy{}, "", healthy, ReasonPlacementCredential, "not delivered runner_resident"},
+		{"class is never resident", CredentialOrigin{Class: ClassBrokered, Delivery: ClassGitHubToken}, resident, "", healthy, ReasonPlacementCredential, "never runner_resident"},
+		{"Azure DevOps without the opt-in", CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT}, resident, "", healthy, ReasonPlacementCredential, "opted in"},
+		{"Azure DevOps opted in", CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}, resident, "", healthy, "", ""},
+		{"CC3 floor", env, resident, types.CC3, healthy, ReasonRunnerPostureUnmet, "confinement_class"},
+		{"requirement, no posture reported", env, ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req}, "", nil, ReasonRunnerPostureUnmet, "posture"},
+		{"requirement, disk not encrypted", env, ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req},
+			"", &types.RunnerPosture{MDMManaged: true, OS: "darwin", OSVersion: "15.2"}, ReasonRunnerPostureUnmet, "disk_encrypted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := residentPlan(ClassPolicy{}, tc.posture)
+			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{tc.origin.Delivery: tc.cp}}
+			p.ConfinementFloor = tc.floor
+			r := ResidentAdmits(tc.origin, p, "runner_resident."+tc.origin.Delivery)
+			switch {
+			case tc.reason == "" && r != nil:
+				t.Fatalf("refused: %+v", r)
+			case tc.reason != "" && (r == nil || r.Reason != tc.reason || !strings.Contains(r.Detail, tc.detail) || r.Field != "runner_resident."+tc.origin.Delivery):
+				t.Fatalf("refusal = %+v, want %s naming %q", r, tc.reason, tc.detail)
+			}
+			if tc.origin.Delivery != ClassEnvSecret || tc.cp.Mode != ModeRunnerResident {
+				return // classify reaches the gate only for a class its policy makes resident
+			}
+			_, lr := LocalEligibility(p)
+			if (lr == nil) != (r == nil) || (lr != nil && (lr.Reason != r.Reason || lr.Detail != r.Detail)) {
+				t.Fatalf("LocalEligibility = %+v, ResidentAdmits = %+v: the two doors disagree", lr, r)
+			}
+		})
+	}
+}

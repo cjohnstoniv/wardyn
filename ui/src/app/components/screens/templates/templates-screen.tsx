@@ -5,7 +5,7 @@
 
 // The Templates screen: the saved starting points the caller can see, with Use, Rename and Delete where the
 // server says they may write (`writable`). The same screen serves the User view (/templates) and the Admin
-// view (/admin/templates); the Admin view adds Publish to organisation for an organisation administrator.
+// view (/admin/templates); the Admin view adds Publish to organization for an organization administrator.
 // Every sentence is a constant of copy/new-run/templates.ts, and the server's own sentence for a refusal.
 import * as React from "react";
 import { LayoutTemplate, SearchX } from "lucide-react";
@@ -26,6 +26,7 @@ import {
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { useConsoleMode } from "../../wardyn/console-view";
+import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { Notice } from "../../wardyn/notice";
 import { Segmented } from "../../wardyn/segmented";
@@ -62,6 +63,7 @@ export function TemplatesScreen() {
   const [query, setQuery] = React.useState("");
   const [renaming, setRenaming] = React.useState<TemplateSummary | null>(null);
   const [deleting, setDeleting] = React.useState<TemplateSummary | null>(null);
+  const [publishing, setPublishing] = React.useState<TemplateSummary | null>(null);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
@@ -112,6 +114,7 @@ export function TemplatesScreen() {
     setBusyId(t.id);
     try {
       await templatesApi.publishToOrg(t.id);
+      toast.success(T.PUBLISHED(t.name));
     } catch (e) {
       toast.error(getErrorMessage(e));
     } finally {
@@ -171,7 +174,7 @@ export function TemplatesScreen() {
                 setDeleteError(null);
                 setDeleting(t);
               }}
-              onPublish={() => void publish(t)}
+              onPublish={() => setPublishing(t)}
             />
           ))}
         </ul>
@@ -210,6 +213,8 @@ export function TemplatesScreen() {
         />
       </div>
 
+      {data?.publish.groups_unverified && <Notice tone="warning">{T.GROUPS_UNVERIFIED}</Notice>}
+
       <section aria-label={T.LIST_ARIA} className="overflow-hidden rounded-xl border border-border bg-card">
         {body}
       </section>
@@ -229,6 +234,26 @@ export function TemplatesScreen() {
           onStale={load}
         />
       )}
+
+      <AlertDialog open={!!publishing} onOpenChange={(open) => !open && setPublishing(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{publishing ? T.PUBLISH_TITLE(publishing.name) : ""}</AlertDialogTitle>
+            <AlertDialogDescription>{NR_SAVE.SHARED_DISCLOSURE}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{T.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (publishing) void publish(publishing);
+                setPublishing(null);
+              }}
+            >
+              {T.PUBLISH}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleting} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>

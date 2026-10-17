@@ -286,7 +286,7 @@ func managedFilesTar(files []runner.ManagedFile, agentUID uint64) (*bytes.Buffer
 // before the daemon holds a single object for this run — leaving the host
 // exactly as it found it, work CreateSandbox's rollback never has to undo.
 func (d *Driver) preflightSpec(spec runner.SandboxSpec) error {
-	if d.cfg.ProxyImage == "" {
+	if d.proxyImage() == "" {
 		return errProxyImageUnset
 	}
 	// An unusable managed-file path, or a mode the agent could write, must

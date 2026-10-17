@@ -287,6 +287,9 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := checkReasonLength(reason); err != nil {
+				return err
+			}
 			ch, err := client().RejectGovernanceChange(cmd.Context(), id, reason)
 			if err != nil {
 				return err

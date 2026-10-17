@@ -347,7 +347,10 @@ export function DoorDialog({
   const doorKey = target ? `${target.kind}:${target.provider.id}` : null;
   const mountedKey = React.useRef<string | null>(null);
   const latched = doorKey !== null && mountedKey.current === doorKey;
-  const unreadable = rawUnreadable && !latched;
+  // Closed, the dialog keeps what it last showed through the fade-out: a latched door must not turn into "Could not check".
+  const shownUnreadable = React.useRef(false);
+  const unreadable = target ? rawUnreadable && !latched : shownUnreadable.current;
+  if (target) shownUnreadable.current = unreadable;
   React.useEffect(() => {
     mountedKey.current = unreadable ? null : doorKey;
   }, [doorKey, unreadable]);

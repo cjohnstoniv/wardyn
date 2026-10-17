@@ -131,7 +131,7 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 // TestCreateSandbox_TrustedCAPEM proves the WARDYN_TRUSTED_CA_FILE forward
 // leg reaches BOTH k8s objects CreateSandbox builds from the spec dispatch
 // already staged: the agent pod's env (spec.Env, mutated by
-// installSandboxTrustedCA in internal/api BEFORE CreateSandbox is called —
+// runner.InstallSandboxTrustedCA (called from internal/api) BEFORE CreateSandbox is called —
 // this test supplies it pre-mutated, matching what dispatch hands the
 // driver) via envVars(spec.Env), and the proxy config Secret's JSON payload
 // (spec.ProxyConfig.TrustedCAPEM, commit 3) via runner.BuildProxyConfig. No
@@ -144,7 +144,7 @@ func TestCreateSandbox_TrustedCAPEM(t *testing.T) {
 	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
-	spec.Env["WARDYN_MITM_CA_PEM"] = "run-ca-pem\ncorp-ca-pem" // installSandboxTrustedCA's append shape
+	spec.Env["WARDYN_MITM_CA_PEM"] = "run-ca-pem\ncorp-ca-pem" // runner.InstallSandboxTrustedCA's append shape
 	spec.ProxyConfig.TrustedCAPEM = "corp-ca-pem"
 
 	sb, err := d.CreateSandbox(context.Background(), spec)

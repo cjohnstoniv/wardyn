@@ -87,3 +87,25 @@ func TestRetirementKeepsUnsettledOutput(t *testing.T) {
 		t.Fatal("retirement released unacknowledged output")
 	}
 }
+
+// A retirement whose receipt was saved but whose release never ran (a crash between the two) releases the
+// output when the org replays the action.
+func TestRetirementReplayReleasesOutputTheCrashLeft(t *testing.T) {
+	m, _, id, _, a := retirementFixture(t)
+	s, dir := retainedOutput(t, id, 4)
+	m.outputSettled = s.OutputSettled
+	a.Retirement.OutputEnd = 4
+	if got, err := m.apply(t.Context(), a); err != nil || got.Outcome != "success" {
+		t.Fatalf("retire: %+v %v", got, err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("output gone before the hook was wired: %v", err)
+	}
+	m.ReleaseSettledOutput(s.ReleaseOutput)
+	if got, err := m.apply(t.Context(), a); err != nil || got.Outcome != "success" {
+		t.Fatalf("replay: %+v %v", got, err)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("the replayed retirement left the output on disk")
+	}
+}

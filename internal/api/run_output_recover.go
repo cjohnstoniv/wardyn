@@ -139,6 +139,10 @@ func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) 
 		reason = "unrecoverable"
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sandbox_gone"
+	case errors.Is(err, runner.ErrRunnerOffline):
+		// A runner that cannot be reached read nothing: a gap, which a later
+		// recovery (a recording's, on the replica that holds the runner) replaces.
+		reason = "runner_offline"
 	case err != nil:
 		slog.Warn("wardynd: could not recover a run's output from the substrate; the row will be incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -154,7 +158,7 @@ func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) 
 // recoveryDrainErr is the error a recovery's drain ends with: none for a gap
 // (the finisher resolves it as one), the read's own error otherwise.
 func recoveryDrainErr(err error) error {
-	if errors.Is(err, runner.ErrOutputUnrecoverable) || errors.Is(err, runner.ErrSandboxGone) {
+	if errors.Is(err, runner.ErrOutputUnrecoverable) || errors.Is(err, runner.ErrSandboxGone) || errors.Is(err, runner.ErrRunnerOffline) {
 		return nil
 	}
 	return err
@@ -167,7 +171,7 @@ func recoveryDrainErr(err error) error {
 // keeps no log, gets nothing here and a capture gap when it ends.
 func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref string) {
 	st := s.runOutputStore()
-	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || ref == "" || s.tailFor(runID) != nil || s.execOutputUncaptured(ctx) {
+	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || ref == "" || s.tailFor(runID) != nil {
 		return
 	}
 	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
@@ -175,7 +179,7 @@ func (s *Server) resumeRunOutput(ctx context.Context, runID uuid.UUID, ref strin
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
+	if err != nil || run.Interactive || runIsUnrecordable(run) || s.execOutputUncaptured(ctx, run) || !s.recoveryOwed(ctx, st, run) || !s.maskCovered(ctx, runID) {
 		return
 	}
 	tw := s.openRecoveryTail(run)

@@ -32,6 +32,15 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 	deleted := 0
 	var errs []error
 	for _, o := range owned {
+		refused, err := s.memberDriveOwnerStarting(ctx, ms, o, memberDriveByAdmin)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("member drive %q: %w", o.Name, err))
+			continue
+		}
+		if refused {
+			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", o.Name))
+			continue
+		}
 		d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, o.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -51,6 +60,8 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			errs = append(errs, fmt.Errorf("member drive %q is in use or not reclaimable and was kept: %w", d.Name, res.driverErr))
 		case res.reason == reasonMemberDriveDeleteUnavailable:
 			errs = append(errs, fmt.Errorf("member drive %q was kept: this server cannot delete its storage", d.Name))
+		case res.reason == reasonMemberDriveInUse:
+			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", d.Name))
 		case res.reason != "":
 			errs = append(errs, fmt.Errorf("member drive %q was kept: deleting its storage failed", d.Name))
 		default:

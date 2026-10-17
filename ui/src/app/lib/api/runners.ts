@@ -16,9 +16,12 @@ import type {
   RunnerRevokeAnswer,
   RunnerSettingsRequest,
   RunnerTokenRequest,
+  RunnerTrustClass,
+  RunnerTrustRequest,
   RunnerUpdateRequest,
   RunnerView,
 } from "../types/runners";
+import type { RunContainment, RunNodeRecord, RunNodeRecordRequest } from "../types/run-containment";
 import type { RunnerSettings } from "../types/site";
 import { asJson, asNoContent, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
@@ -40,7 +43,7 @@ async function readAll<T>(path: string): Promise<T[]> {
 }
 
 const post = <T>(path: string, body?: unknown) =>
-  wfetch(path, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body ?? {}) }).then((r) => asJson<T>(r));
+  wfetch(path, { method: "POST", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify(body ?? {}) }).then((r) => asJson<T>(r));
 
 export const runners = {
   /** GET /runners?state= (security tier): every person's runners, owner named. Default filter is active. */
@@ -57,9 +60,24 @@ export const runners = {
     post<RunnerRegistration>(`/me/runners/${seg(id)}/claim`, { fingerprint } satisfies RunnerClaimRequest),
   /** PUT /me/runners/{id}: the owner declares its limits; a total past what the computer reports is refused 422. */
   updateMine: (id: string, limits: RunnerLimits) =>
-    wfetch(`/me/runners/${seg(id)}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ limits } satisfies RunnerUpdateRequest) }).then((r) =>
+    wfetch(`/me/runners/${seg(id)}`, { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ limits } satisfies RunnerUpdateRequest) }).then((r) =>
       asJson<RunnerView>(r),
     ),
+  /**
+   * PUT /runners/{id}/trust (security tier): a person's runner, personal or managed_device, with the reason
+   * the audit keeps. Held for a second person it answers 202, which throws PendingChangeError.
+   */
+  setTrust: (id: string, trust_class: RunnerTrustClass, reason: string) =>
+    wfetch(`/runners/${seg(id)}/trust`, { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ trust_class, reason } satisfies RunnerTrustRequest) }).then((r) =>
+      asJson<RunnerView>(r),
+    ),
+  /** GET /runs/{id}/containment (the run's owner or an admin): whether its Kubernetes runner holds it as containment pending. */
+  runContainment: (runId: string) => wfetch(`/runs/${seg(runId)}/containment`, { method: "GET" }).then((r) => asJson<RunContainment>(r)),
+  /**
+   * POST /runs/{id}/node-record (security tier): a node record naming the tuple the form showed. A record that needs
+   * a second person answers 202, which throws PendingChangeError.
+   */
+  recordNode: (runId: string, body: RunNodeRecordRequest) => post<RunNodeRecord>(`/runs/${seg(runId)}/node-record`, body),
   /** DELETE /runners/{id} (security tier). */
   revoke: (id: string) => wfetch(`/runners/${seg(id)}`, { method: "DELETE" }).then((r) => asJson<RunnerRevokeAnswer>(r)),
   /** DELETE /me/runners/{id}; `notMine` marks a runner the person did not register, so security tooling can tell it apart. */
@@ -71,7 +89,7 @@ export const runners = {
   settings: () => wfetch("/runners/settings", { method: "GET" }).then((r) => asJson<RunnerSettings>(r)),
   /** PUT /runners/settings (super admin). Turning on is refused 409 until the organisation URL is HTTPS. */
   setEnabled: (enabled: boolean) =>
-    wfetch("/runners/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ enabled } satisfies RunnerSettingsRequest) }).then((r) =>
+    wfetch("/runners/settings", { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ enabled } satisfies RunnerSettingsRequest) }).then((r) =>
       asJson<RunnerSettings>(r),
     ),
 };

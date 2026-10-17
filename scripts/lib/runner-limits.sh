@@ -24,11 +24,13 @@
 #   reports and half of its free disk, Runs at once half its CPUs, per run the total divided by that.
 #
 # The free disk is, in order: WARDYN_SETUP_RUNNER_DISK_GB when set; what the runner reports; for the
-# Docker runner, the free space under Docker's data root when this shell's docker is a local engine that
-# is not Docker Desktop; on a terminal, what the person types (there is no default). With none of these
+# Docker runner, the free space under Docker's data root when the engine this shell's docker CLI uses (its
+# selected context, DOCKER_CONTEXT or DOCKER_HOST) is a unix socket here and is not Docker Desktop; on a terminal, what the person types (there is no default). With none of these
 # it fails and names the variable. On a terminal, with no variable given, the person is shown the
 # proposal and may accept it or type each amount. A runner that reports no CPU or memory has no
-# proposal: only WARDYN_SETUP_RUNNER_LIMITS (or a person at `wardyn runner set`) gives it limits. A runner that already has limits is left as it is. It returns non-zero when a runner
+# proposal: only WARDYN_SETUP_RUNNER_LIMITS (or a person at `wardyn runner set`) gives it limits. A runner that already has limits is left as it is,
+# including limits an administrator declared while a proposal waited (`wardyn runner set --if-unset`), and so is a row that is not set up on
+# this server. It returns non-zero when a runner
 # is left without limits; the caller decides whether that ends it.
 
 _rl_say() { printf '  runner limits: %s\n' "$*" >&2; }
@@ -36,12 +38,20 @@ _rl_say() { printf '  runner limits: %s\n' "$*" >&2; }
 # _rl_interactive: a person is at the keyboard (every prompt here is written to stderr).
 _rl_interactive() { [ -t 0 ] && [ -t 2 ]; }
 
+# _rl_is_socket PATH: PATH is a unix socket on this host.
+_rl_is_socket() { [ -S "$1" ]; }
+
 # _rl_host_free_disk_gb ID: the GB free under Docker's data root, when this shell can see the engine's
-# own disk; fails (and prints nothing) when it cannot.
+# own disk; fails (and prints nothing) when it cannot. The engine is the one the docker CLI talks to:
+# `docker context inspect` with no name answers for the context the CLI would use, so DOCKER_CONTEXT, a
+# selected context and DOCKER_HOST are weighed the way the CLI weighs them. Only a unix socket that is
+# there on this host counts as a local engine.
 _rl_host_free_disk_gb() {
   [ "$1" = docker ] || return 1
   command -v docker >/dev/null 2>&1 || return 1
-  case "${DOCKER_HOST:-}" in "" | unix://*) ;; *) return 1 ;; esac
+  _rl_ep="$(docker context inspect -f '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
+  case "${_rl_ep}" in unix://?*) ;; *) return 1 ;; esac
+  _rl_is_socket "${_rl_ep#unix://}" || return 1
   _rl_os="$(docker info -f '{{.OperatingSystem}}' 2>/dev/null)" || return 1
   # Docker Desktop's data root is a path inside its VM, never this host's.
   if [ -z "${_rl_os}" ] || [ "${_rl_os}" = "Docker Desktop" ]; then return 1; fi
@@ -135,22 +145,41 @@ _rl_set() {
   _rl_opts=$-
   set -f
   # shellcheck disable=SC2086 # the flags are words: --flag value pairs
-  if wardyn runner set "$1" ${_rl_flags} </dev/null >&2; then _rl_rc=0; else _rl_rc=$?; fi
+  if wardyn runner set "$1" --if-unset ${_rl_flags} </dev/null >&2; then _rl_rc=0; else _rl_rc=$?; fi
   case "${_rl_opts}" in *f*) ;; *) set +f ;; esac
   if [ "${_rl_rc}" -ne 0 ]; then
+    # --if-unset loses to a limit declared between the list and the set: then the runner has limits, just
+    # not these.
+    if _rl_still="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null 2>/dev/null)" &&
+      ! printf '%s\n' "${_rl_still}" | grep -qx -- "$1"; then
+      # Gone from the no-limits list is not yet "someone set limits": the runner may have been removed.
+      if _rl_every="$(wardyn runner remote list --ids </dev/null 2>/dev/null)" &&
+        ! printf '%s\n' "${_rl_every}" | grep -qx -- "$1"; then
+        _rl_say "$1: it was removed from the server meanwhile; nothing was set"
+        return 0
+      fi
+      _rl_say "$1: limits were set meanwhile by someone else; they are kept and these were not applied"
+      return 0
+    fi
     _rl_say "$1: these limits were not set; it takes no run until they are"
     return 1
   fi
 }
 
 wardyn_ensure_runner_limits() {
-  _rl_list="$(wardyn runner remote list --no-limits </dev/null)" || {
+  # Ids, one per line (--ids): a name may hold spaces, so no table is parsed. A row that is not set up on
+  # this server is another computer's or cluster's: it cannot take a run here, so it is left out.
+  _rl_all="$(wardyn runner remote list --no-limits --ids </dev/null)" &&
+    _rl_ids="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null)" || {
     _rl_say "could not list the server's remote-hosted runners (wardyn runner remote list --no-limits)"
     return 1
   }
-  _rl_ids="$(printf '%s\n' "${_rl_list}" | awk 'NR > 1 && NF {print $1}')"
+  for _rl_id in ${_rl_all}; do
+    printf '%s\n' "${_rl_ids}" | grep -qx -- "${_rl_id}" ||
+      _rl_say "${_rl_id}: not set up on this server, so it takes no run here and is left as it is"
+  done
   if [ -z "${_rl_ids}" ]; then
-    _rl_say "every remote-hosted runner already has its limits; nothing changed"
+    _rl_say "every remote-hosted runner set up here already has its limits; nothing changed"
     return 0
   fi
   for _rl_id in ${_rl_ids}; do

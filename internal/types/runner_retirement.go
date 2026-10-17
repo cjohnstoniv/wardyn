@@ -16,10 +16,14 @@ type RunnerSpoolReceipt struct {
 // RunnerRetirement is an org-issued settlement receipt, never authority inferred
 // from a runner's staged exit ACK. Its action separately binds runner/run/ref.
 type RunnerRetirement struct {
-	ID         uuid.UUID          `json:"id"`
-	Generation uuid.UUID          `json:"generation"`
-	ExecID     string             `json:"exec_id"`
-	ExitHash   string             `json:"exit_hash"`
-	OutputEnd  int64              `json:"output_end"`
-	Spool      RunnerSpoolReceipt `json:"spool"`
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+	ExecID     string    `json:"exec_id"`
+	ExitHash   string    `json:"exit_hash"`
+	OutputEnd  int64     `json:"output_end"`
+	// NoOutput says the org never asked the runner to keep this run's output:
+	// the runner settles it at 0 only when it holds no output buffer for the
+	// run and recorded no output capture at create. OutputEnd is then 0.
+	NoOutput bool               `json:"no_output,omitempty"`
+	Spool    RunnerSpoolReceipt `json:"spool"`
 }

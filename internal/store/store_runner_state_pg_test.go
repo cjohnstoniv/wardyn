@@ -121,7 +121,7 @@ func TestPG_RunnerLossClaimRechecksAuthority(t *testing.T) {
 			}
 			switch scenario {
 			case "renewed":
-				_, err = st.StampRunTokenRenewed(ctx, run.ID)
+				_, err = st.StampRunTokenRenewed(ctx, run.ID, "", "")
 			case "revoked":
 				_, err = pool.Exec(ctx, `UPDATE runners SET state='revoked',revoked_at=now() WHERE id=$1`, rn.ID)
 			case "foreign-owner":

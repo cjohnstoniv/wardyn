@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -129,10 +130,37 @@ func TestRunnerSetMockLines(t *testing.T) {
 		t.Fatalf("remote limits sent %+v, %v", remoteSent, err)
 	}
 
+	// --if-unset on a runner that has none behaves as an ordinary set; on one that declared limits
+	// meanwhile it leaves them, and an ordinary set still overwrites.
+	whole := []string{"--max-runs", "6", "--total-cpu", "24", "--total-memory", "96", "--total-disk", "1000", "--per-run-cpu", "4", "--per-run-memory", "16", "--per-run-disk", "160"}
+	if out, err := run(append([]string{"runner", "set", "sandbox-cluster", "--if-unset"}, whole...)...); err != nil || !strings.Contains(out, "limits for sandbox-cluster updated") {
+		t.Fatalf("--if-unset on an unlimited runner = %q, %v", out, err)
+	}
+	if _, ok := srv.wrote()["PUT /api/v1/remote-runners/sandbox-cluster"]; !ok {
+		t.Fatal("--if-unset on an unlimited runner wrote nothing")
+	}
+	declared := remote
+	declared.Limits = &sdk.RunnerLimits{RunsAtOnce: 2, Total: sdk.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 102400}, PerRun: sdk.RunnerAmounts{CPUMillis: 2000, MemoryMiB: 4096, DiskMiB: 20480}}
+	srv = newLimitsServer(t, desk, declared, sdk.RunnerPool{})
+	if out, err := run(append([]string{"runner", "set", "sandbox-cluster", "--if-unset"}, whole...)...); err != nil || !strings.Contains(out, "already has limits; left as they are") {
+		t.Fatalf("--if-unset on a runner that declared limits = %q, %v", out, err)
+	}
+	if w := srv.wrote(); len(w) != 0 {
+		t.Fatalf("--if-unset overwrote declared limits: %v", w)
+	}
+	if _, err := run(append([]string{"runner", "set", "sandbox-cluster"}, whole...)...); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := srv.wrote()["PUT /api/v1/remote-runners/sandbox-cluster"]; !ok {
+		t.Fatal("an ordinary set no longer overwrites declared limits")
+	}
+
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
+		{[]string{"runner", "set", "desk-2", "--max-runs", "2", "--if-unset"}, "--if-unset is for a remote-hosted runner"},
+		{[]string{"runner", "set", "sandbox-cluster", "--if-unset"}, "--if-unset goes with the limit flags"},
 		{[]string{"runner", "set", "desk-2", "--per-run-memory", "64", "--total-memory", "32"}, "per-run memory (64) can't be more than total memory (32)"},
 		{[]string{"runner", "set", "desk-2"}, "name something to change: --max-runs, a --total-* or --per-run-* flag"},
 		{[]string{"runner", "set", "desk-2", "--max-runs", "0"}, "--max-runs is a whole number, 1 or more"},
@@ -251,23 +279,24 @@ func TestRunnerListResourceColumns(t *testing.T) {
 	usage := func(runs int, c, m, d int64) sdk.RunnerUsage {
 		return sdk.RunnerUsage{InUse: sdk.RunnerTally{Runs: runs, CPUMillis: c * 1000, MemoryMiB: m * 1024, DiskMiB: d * 1024}}
 	}
+	seen := time.Date(2026, 10, 17, 9, 30, 0, 0, time.UTC)
 	own := []sdk.RunnerView{
-		{Name: "laptop-7", State: types.RunnerClaimed, Online: true, Limits: limits(3, 6, 12, 200, 2, 4, 50), Usage: usage(2, 4, 8, 100)},
-		{Name: "desk-2", State: types.RunnerClaimed, Limits: limits(4, 12, 48, 800, 4, 16, 100), Usage: usage(0, 0, 0, 0)},
-		{Name: "fresh", State: types.RunnerUnclaimed},
+		{ID: uuid.MustParse("11111111-1111-4111-8111-111111111111"), KeyFingerprint: "SHA256:aaa", LastSeenAt: &seen, Name: "laptop-7", MachineName: "alice-mbp.corp", Arch: "arm64", State: types.RunnerClaimed, Online: true, Limits: limits(3, 6, 12, 200, 2, 4, 50), Usage: usage(2, 4, 8, 100)},
+		{ID: uuid.MustParse("22222222-2222-4222-8222-222222222222"), KeyFingerprint: "SHA256:bbb", Name: "desk-2", State: types.RunnerClaimed, Limits: limits(4, 12, 48, 800, 4, 16, 100), Usage: usage(0, 0, 0, 0)},
+		{ID: uuid.MustParse("33333333-3333-4333-8333-333333333333"), KeyFingerprint: "SHA256:ccc", Name: "fresh", State: types.RunnerUnclaimed},
 	}
-	remote := []sdk.RemoteRunnerView{{RemoteRunner: types.RemoteRunner{Name: "shared-docker", Limits: limits(6, 24, 96, 1000, 4, 16, 100)}, Online: true, Usage: usage(1, 4, 16, 100)}}
+	remote := []sdk.RemoteRunnerView{{RemoteRunner: types.RemoteRunner{ID: "docker", Name: "shared-docker", Limits: limits(6, 24, 96, 1000, 4, 16, 100)}, Online: true, Usage: usage(1, 4, 16, 100)}}
 	wide := regexp.MustCompile(`  +`)
 	normal := func(out string) string { return wide.ReplaceAllString(strings.TrimSpace(out), "|") }
 
 	url, paths := listRunnersServer(t, own, remote, http.StatusOK)
 	out, err := execCmdCapture(t, "runner", "list", "--url", url, "--token", "t")
 	want := strings.Join([]string{
-		"NAME|KIND|STATE|RUNS|CPU (use/total, per run)|MEMORY GB|DISK GB",
-		"laptop-7|self-hosted|online|2/3|4/6, 2|8/12, 4|100/200, 50",
-		"desk-2|self-hosted|offline|0/4|0/12, 4|0/48, 16|0/800, 100",
-		"fresh|self-hosted|unclaimed|-|-|-|-",
-		"shared-docker|remote-hosted|online|1/6|4/24, 4|16/96, 16|100/1000, 100",
+		"ID|NAME|MACHINE|ARCH|KIND|STATE|LAST SEEN|FINGERPRINT|RUNS|CPU (use/total, per run)|MEMORY GB|DISK GB",
+		"11111111-1111-4111-8111-111111111111|laptop-7|alice-mbp.corp|arm64|self-hosted|online|2026-10-17T09:30:00Z|SHA256:aaa|2/3|4/6, 2|8/12, 4|100/200, 50",
+		"22222222-2222-4222-8222-222222222222|desk-2|-|-|self-hosted|offline|never|SHA256:bbb|0/4|0/12, 4|0/48, 16|0/800, 100",
+		"33333333-3333-4333-8333-333333333333|fresh|-|-|self-hosted|unclaimed|never|SHA256:ccc|-|-|-|-",
+		"docker|shared-docker|-|-|remote-hosted|online|-|-|1/6|4/24, 4|16/96, 16|100/1000, 100",
 	}, "\n")
 	if err != nil || normal(out) != want {
 		t.Fatalf("list = %v\n%s\nwant\n%s", err, normal(out), want)

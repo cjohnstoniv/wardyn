@@ -47,7 +47,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	stateDir := t.TempDir()
 	sub := runnertest.NewFake()
 	ref := func(id uuid.UUID) string { return "fake-" + id.String() }
-	runtime, err := localRunnerRuntime(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx), unsized)
+	runtime, err := runnerRuntimeWith(ctx, identity, stateDir, sub, ref, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 	if err := runtime.close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := localRunnerRuntime(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background()), unsized)
+	restarted, err := runnerRuntimeWith(context.Background(), identity, stateDir, sub, ref, newLocalRelay(context.Background()), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +159,8 @@ func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
-		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized)
+	runtime, err := runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
+		func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, runtimeExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +181,7 @@ func unsized(context.Context) placement.Capacity { return placement.Capacity{} }
 // image exist.
 type fakeEngine struct {
 	os, name   string
+	arch       string // the engine's reported Architecture; "" omits it
 	iface      string // the default bridge's interface; "" is one no host has
 	network    bool
 	createCode int
@@ -198,7 +199,7 @@ func (f *fakeEngine) start(t *testing.T) {
 		case path == "/_ping":
 			w.Header().Set("Api-Version", "1.44")
 		case path == "/info":
-			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os, "Name": f.name})
+			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os, "Name": f.name, "Architecture": f.arch})
 		case path == "/networks/bridge":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "bridge", "Id": "b", "Driver": "bridge",
 				"IPAM":    map[string]any{"Config": []map[string]string{{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}}},
@@ -237,6 +238,12 @@ func (f *fakeEngine) start(t *testing.T) {
 // info (RD 1.19.3): its bridge lives in the VM, not on this host.
 func rancherLima() *fakeEngine {
 	return &fakeEngine{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", network: true, image: true}
+}
+
+// rancherLimaV324Arm64 is the same VM on an Apple-silicon Mac with the newer
+// Alpine base: a different OperatingSystem string, still not Docker Desktop.
+func rancherLimaV324Arm64() *fakeEngine {
+	return &fakeEngine{os: "Alpine Linux v3.24", name: "lima-rancher-desktop", arch: "aarch64", network: true, image: true}
 }
 
 // serveWith runs productionRunnerHooks against engine.
@@ -302,6 +309,7 @@ func TestInspectEngine(t *testing.T) {
 		{"native", &fakeEngine{os: "Ubuntu 24.04 LTS", name: "laptop", iface: "lo"}, true, ""},
 		{"Docker Desktop beside a host bridge", &fakeEngine{os: "Docker Desktop", name: "docker-desktop", iface: "lo"}, false, "Docker Desktop"},
 		{"VM-backed", rancherLima(), false, "its bridge interface is not on this host"},
+		{"VM-backed, Alpine v3.24 on arm64", rancherLimaV324Arm64(), false, "its bridge interface is not on this host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.engine.start(t)
@@ -318,6 +326,37 @@ func TestInspectEngine(t *testing.T) {
 				t.Fatalf("engine = %+v, want native=%v why %q", eng, tc.native, tc.why)
 			}
 		})
+	}
+}
+
+// An engine that takes the connection and never answers fails readyEngine at engineCheckBound, so
+// serve exits with a reason the service manager logs instead of waiting, silent, through every restart.
+func TestReadyEngineGivesUpOnAnEngineThatNeverAnswers(t *testing.T) {
+	prev := engineCheckBound
+	engineCheckBound = 100 * time.Millisecond
+	t.Cleanup(func() { engineCheckBound = prev })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(srv.URL, "http://"))
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := readyEngine(context.Background(), cli, "unreachable", "wardyn-internal", relayPair{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("readyEngine = %v, want the engine check deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("readyEngine still waits on an engine that never answers")
 	}
 }
 
@@ -351,5 +390,51 @@ func TestReadyEngineCreatesTheMissingNetwork(t *testing.T) {
 	refused := &fakeEngine{os: "Docker Desktop"}
 	if err := ready(t, refused, "192.168.1.20"); err == nil || len(refused.created) != 0 {
 		t.Fatalf("a refused bind still touched the engine's networks: err=%v creates=%q", err, refused.created)
+	}
+}
+
+// After a restart the decision sink listens where it did before as soon as it is built, ahead of the
+// runtime's startup containment, so a run's proxy still running reaches it again and delivers what it
+// holds; new proxies are pointed at the same port.
+func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	lo := netip.MustParseAddr("127.0.0.1")
+	first, err := newDockerSink(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.use(lo); err != nil {
+		t.Fatal(err)
+	}
+	url := first.proxyURL()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := newDockerSink(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strings.TrimPrefix(url, "tls://host.docker.internal:")))
+	if err != nil {
+		t.Fatalf("nothing listens where the sink did before the restart (%s): %v", url, err)
+	}
+	_ = c.Close()
+	if err := again.use(lo); err != nil || again.proxyURL() != url {
+		t.Fatalf("after the restart new proxies get %q (%v), want %q", again.proxyURL(), err, url)
+	}
+}
+
+// TestEvidenceForwarderBeforeTheManagerHoldsNoRecord: before the manager exists, the only proxies the
+// driver stops are an earlier registration's (SetAsidePrevious), so a read finds no record and the stop
+// settles nothing, while a write is still refused.
+func TestEvidenceForwarderBeforeTheManagerHoldsNoRecord(t *testing.T) {
+	var ev evidenceForwarder
+	if b, err := ev.LoadEvidence(uuid.New()); err != nil || b != nil {
+		t.Fatalf("read before the manager = %q, %v; want no record and no error", b, err)
+	}
+	if err := ev.SaveEvidence(uuid.New(), []byte("{}")); err == nil {
+		t.Fatal("a write before the manager was accepted")
 	}
 }

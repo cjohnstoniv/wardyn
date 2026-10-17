@@ -608,7 +608,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
       ["MaxConfigSchemaFields", "maxFields"],
       ["MaxConfigSchemaGroups", "maxGroups"],
       ["MaxConfigOptions", "maxOptions"],
-      ["MaxConfigListItems", "maxListItems"],
       ["MaxConfigLabelRunes", "maxLabelRunes"],
       ["MaxConfigDescriptionRunes", "maxDescriptionRunes"],
       ["MaxConfigOptionValueRunes", "maxOptionValueRunes"],

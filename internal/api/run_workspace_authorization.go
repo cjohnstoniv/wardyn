@@ -18,6 +18,9 @@ import (
 
 func (s *Server) repoAdmissionRefusal(r *http.Request, repos ...string) *runRefusal {
 	repos = presentRepos(repos)
+	if refusal := repoURLUserinfoRefusal(repos...); refusal != nil {
+		return refusal // in every provider mode, before anything reads or echoes the URL
+	}
 	if len(repos) == 0 || s.cfg.Store == nil {
 		return nil
 	}

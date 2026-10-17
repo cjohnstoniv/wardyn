@@ -61,6 +61,7 @@ import {
   newRunHeading,
   nextStep,
   openNameDialog,
+  chooseProvider,
   providerPicker,
   runTitleField,
   startGuided,
@@ -465,7 +466,7 @@ test("act 5 — a real run", async () => {
   if (!SHELL_ACT5) {
     const provider = providerPicker(page, "claude-code");
     await spotlight(page, provider);
-    await provider.selectOption({ index: 1 }, { timeout: 60_000 });
+    await chooseProvider(provider, 60_000);
     await spotlight(page, null);
   }
 
@@ -480,15 +481,15 @@ test("act 5 — a real run", async () => {
   // Network — the load-bearing part of the whole run.
   await caption(page, "This is the part that matters.");
 
-  // The totals list what the run will be allowed to reach: the model host.
-  // OPEN: an Application sandbox has no harness, so nothing brings MODEL_HOST
-  // there (the old Minimal policy always listed it); this assertion is kept
-  // unconditional for that variant, to be decided.
-  await expect(reach.getByText(MODEL_HOST).first()).toBeVisible({ timeout: 60_000 });
+  // The totals list what the run will be allowed to reach: the model host. An Application
+  // sandbox has no harness, so nothing brings MODEL_HOST there (GAP-RULINGS E8a).
+  if (!SHELL_ACT5) {
+    await expect(reach.getByText(MODEL_HOST).first()).toBeVisible({ timeout: 60_000 });
 
-  // The harness brings the model host, so it is on the list without anyone adding it.
-  await caption(page, `${MODEL_HOST} is already on the list — without it the agent has no model at all.`);
-  await beat(page, PACE.read);
+    // The harness brings the model host, so it is on the list without anyone adding it.
+    await caption(page, `${MODEL_HOST} is already on the list — without it the agent has no model at all.`);
+    await beat(page, PACE.read);
+  }
   await spotlight(page, null);
   // DIALOG-STALE(old UI): "Allow ${MODEL_HOST} and nothing else — without it
   // the agent has no model at all." narrated clicking the deleted model-host

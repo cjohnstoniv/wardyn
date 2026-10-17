@@ -272,19 +272,56 @@ func azureDevOpsHost(h string) bool {
 // the service will serve.
 func isPathSeparator(c rune) bool { return c == '/' || c == '\\' }
 
-// decodeSegments splits rawPath into decoded, lowercased, non-empty segments,
-// refusing the shapes parseRoute documents. Each segment is decoded by
-// UnescapeName (names.go), shared by every door that reads an Azure DevOps name.
+// decodeSegments splits rawPath into decoded, lowercased segments, refusing the
+// shapes parseRoute documents. One leading and one trailing separator are
+// allowed; any other empty part ("/org//_apis") is refused, as ghscope refuses
+// it, because a service that collapses it reads a different path. Each segment
+// is decoded by UnescapeName (names.go), shared by every door that reads an
+// Azure DevOps name.
 func decodeSegments(rawPath string) ([]string, error) {
+	rest := rawPath
+	if r, ok := cutSeparator(rest, true); ok {
+		rest = r
+	}
+	if rest == "" {
+		return nil, nil
+	}
+	if r, ok := cutSeparator(rest, false); ok {
+		if rest = r; rest == "" {
+			return nil, fmt.Errorf("adoscope: path %q has an empty segment", rawPath)
+		}
+	}
 	var out []string
-	for _, raw := range strings.FieldsFunc(rawPath, isPathSeparator) {
-		seg, err := UnescapeName(raw)
+	start := 0
+	for i := 0; i <= len(rest); i++ {
+		if i < len(rest) && !isPathSeparator(rune(rest[i])) {
+			continue
+		}
+		if i == start {
+			return nil, fmt.Errorf("adoscope: path %q has an empty segment", rawPath)
+		}
+		seg, err := UnescapeName(rest[start:i])
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, strings.ToLower(seg))
+		start = i + 1
 	}
 	return out, nil
+}
+
+// cutSeparator drops one path separator from the front (or the back) of s.
+func cutSeparator(s string, front bool) (string, bool) {
+	if s == "" {
+		return s, false
+	}
+	if front && isPathSeparator(rune(s[0])) {
+		return s[1:], true
+	}
+	if !front && isPathSeparator(rune(s[len(s)-1])) {
+		return s[:len(s)-1], true
+	}
+	return s, false
 }
 
 // pinOrg checks the request's organisation against the row's and returns the
@@ -455,7 +492,7 @@ func packagingWrite(method string, r route) Capability {
 		case "feedrecyclebin", "globalpermissions":
 			return CapPackagingManage
 		case "feeds":
-			if r.at(3) == "" || !slices.Contains(packageProtocols, r.at(4)) {
+			if r.at(3) == "" || !slices.Contains(packageProtocols, r.at(4)) || r.at(5) == "recyclebin" {
 				return CapPackagingManage
 			}
 		}

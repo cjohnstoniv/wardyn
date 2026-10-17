@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"iter"
 	"strconv"
@@ -28,14 +29,28 @@ import (
 )
 
 // fakePullResponse adapts an io.ReadCloser to client.ImagePullResponse (the v29
-// ImagePull return type). PullImage only drains the reader, so the extra
-// progress helpers are inert no-ops.
+// ImagePull return type). Wait reads the JSON progress stream and returns an error message in it, as
+// the real client does; the progress iterator is an inert no-op.
 type fakePullResponse struct{ io.ReadCloser }
 
 func (fakePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
 	return nil
 }
-func (fakePullResponse) Wait(context.Context) error { return nil }
+func (r fakePullResponse) Wait(context.Context) error {
+	dec := json.NewDecoder(r)
+	for {
+		var m jsonstream.Message
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if m.Error != nil {
+			return errors.New(m.Error.Message)
+		}
+	}
+}
 
 // fakeEnvbuilderDocker is an in-memory envbuilderDockerAPI for unit tests.
 // It simulates a Docker daemon without requiring one to be present.

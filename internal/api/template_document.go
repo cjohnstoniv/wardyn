@@ -301,8 +301,16 @@ func validateTemplateContentDecoded(doc client.TemplateDocument) []client.Templa
 		d.checkCoverage(doc, req)
 	}
 	d.checkDependencies(doc)
+	shape := req
+	// A template's agent task may leave its prompt for use time, as the older task field can: the run's
+	// text is written per run (templateFullGaps). The run door still requires it.
+	if w := req.Workload; doc.Kind != client.RunDocumentKind && w != nil && w.Kind == client.WorkloadAgentTask && w.Task == "" {
+		filled := *w
+		filled.Task = "written at use"
+		shape.Workload = &filled
+	}
 	for _, check := range append([]func(createRunRequest) *runRefusal{runModeConflictRefusal}, runContractShapeChecks...) {
-		if refusal := check(req); refusal != nil {
+		if refusal := check(shape); refusal != nil {
 			d.add("intent", refusal.body.Reason, refusal.body.Error)
 		}
 	}

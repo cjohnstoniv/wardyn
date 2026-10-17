@@ -61,6 +61,7 @@ const poolSelect = async () => {
   await waitFor(() => expect(select).toBeEnabled());
   return select;
 };
+const tally = (runs: number) => ({ runs, cpu_millis: 0, memory_mib: 0, disk_mib: 0 });
 const optionLabels = (select: HTMLElement) => within(select).getAllByRole("option").map((o) => o.textContent);
 const list = (pools: RunnerPoolCatalogueEntry[], over: Partial<RunnerPoolList> = {}): RunnerPoolList => ({ ...MEMBER, pools, ...over });
 const barrierRadio = (barrier: string) => screen.getAllByRole("radio", { name: barrier }).find((r) => !isInaccessible(r)) as HTMLInputElement;
@@ -75,11 +76,20 @@ describe("Run step: pool select", () => {
     const hidden = unavailablePool({ ...SHARED, id: "gone", name: "Gone" }, "runner_pool_not_found");
     show(AGENT, list([SHARED, TEAM_LAPTOPS, hidden], { default: { pool_id: SHARED.id, selection: "organisation_default" } }));
     const select = await poolSelect();
-    expect(optionLabels(select)).toEqual(["Shared pool", "Team laptops"]);
+    expect(optionLabels(select)).toEqual([NR_RUN.POOL_OPTION_REASON("Shared pool", NR_RUN.FIT_STARTS_NOW), NR_RUN.POOL_OPTION_REASON("Team laptops", NR_RUN.FIT_STARTS_NOW)]);
     expect(select).toHaveValue(SHARED.id);
     expect(intentNow().runner_pool_id).toBeUndefined();
     await userEvent.selectOptions(select, TEAM_LAPTOPS.id);
     expect(intentNow().runner_pool_id).toBe(TEAM_LAPTOPS.id);
+  });
+
+  it("says so on the step when the draft's pool is no longer in the list, and not when the person simply has none yet", async () => {
+    show({ ...AGENT, runner_pool_id: "gone" }, list([SHARED, TEAM_LAPTOPS]));
+    expect(await screen.findByText(RUNNER_POOL_REFUSAL.NOT_FOUND())).toBeInTheDocument();
+    cleanup();
+    show(AGENT, list([SHARED, TEAM_LAPTOPS]));
+    await poolSelect();
+    expect(screen.queryByText(RUNNER_POOL_REFUSAL.NOT_FOUND())).not.toBeInTheDocument();
   });
 
   it.each([
@@ -92,6 +102,22 @@ describe("Run step: pool select", () => {
     show(AGENT, list([SHARED, unavailablePool(TEAM_LAPTOPS, reason)]));
     const option = await screen.findByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Team laptops", label) });
     expect(option).toBeDisabled();
+  });
+
+  it("says on each usable pool whether a run starts now or waits, and nothing where the list says neither", async () => {
+    const full = { ...SHARED, id: "full", name: "CI pool", slots: { used: 10, waiting: 3, max: 10, verdict: "waits" as const } };
+    const noRoom = {
+      ...TEAM_LAPTOPS, id: "busy", name: "Busy laptops",
+      capacity: { total: tally(2), in_use: tally(2), available: tally(0), largest_per_run: { cpu_millis: 2000, memory_mib: 4096, disk_mib: 0 }, runners: 1, runners_online: 1 },
+    };
+    const unknown = { ...SHARED, id: "quiet", name: "Quiet pool", slots: undefined };
+    show(AGENT, list([SHARED, full, noRoom, unknown]));
+    expect(optionLabels(await poolSelect())).toEqual([
+      NR_RUN.POOL_OPTION_REASON("Shared pool", NR_RUN.FIT_STARTS_NOW),
+      NR_RUN.POOL_OPTION_REASON("CI pool", NR_RUN.FIT_WAITS),
+      NR_RUN.POOL_OPTION_REASON("Busy laptops", NR_RUN.FIT_WAITS),
+      "Quiet pool",
+    ]);
   });
 
   it("names the run type the pool does not take, from the type asked", async () => {
@@ -146,11 +172,11 @@ describe("Run step: pool select", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
     await waitFor(() => expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal)));
     answers.background(list([{ ...SHARED, name: "Background pool" }]));
-    expect(await screen.findByRole("option", { name: "Background pool" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Background pool", NR_RUN.FIT_STARTS_NOW) })).toBeInTheDocument();
     answers.interactive(list([{ ...SHARED, name: "Interactive pool" }]));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByRole("option", { name: "Interactive pool" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Background pool" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Interactive pool", NR_RUN.FIT_STARTS_NOW) })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Background pool", NR_RUN.FIT_STARTS_NOW) })).toBeInTheDocument();
   });
 
   it("with no default and no choice, Continue focuses the pool and says one is required", async () => {
@@ -179,7 +205,7 @@ describe("Run step: pool select", () => {
 describe("Run step: pool summary", () => {
   it("shows total capacity as a meter against the pool's maximum, and the maximum", async () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 3, waiting: 0, max: 10, verdict: "starts_now" } }]));
-    const meter = await screen.findByRole("meter", { name: NR_RUN.CAPACITY_LABEL });
+    const meter = await screen.findByRole("meter", { name: NR_RUN.CAPACITY_ARIA });
     expect(meter).toHaveAttribute("aria-valuetext", NR_RUN.USED_OF_MAX(3, 10));
     expect(screen.getByText(NR_RUN.MAX_RUNS(10))).toBeInTheDocument();
   });
@@ -188,7 +214,7 @@ describe("Run step: pool summary", () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 4, waiting: 0, verdict: "starts_now" } }]));
     expect(await screen.findByText(NR_RUN.RUNNING_ONLY(4))).toBeInTheDocument();
     expect(screen.getByText(NR_RUN.POOL_LIMIT_FROM_RUNNERS)).toBeInTheDocument();
-    expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_LABEL })).not.toBeInTheDocument();
+    expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_ARIA })).not.toBeInTheDocument();
   });
 
   it("hides total capacity and the waiting cell until the server sends slots", async () => {
@@ -200,7 +226,7 @@ describe("Run step: pool summary", () => {
 
   it("counts the allowance across all pools, singular and plural, and says when there is no personal limit", async () => {
     show(AGENT, list([SHARED], { allowance: { active: 1, max: 5 } }));
-    const meter = await screen.findByRole("meter", { name: NR_RUN.ALLOWANCE_LABEL });
+    const meter = await screen.findByRole("meter", { name: NR_RUN.ALLOWANCE_ARIA });
     expect(meter).toHaveAttribute("aria-valuetext", NR_RUN.ALLOWANCE_USED(1, 5));
     expect(screen.getByText(NR_RUN.ALLOWANCE_INCLUDES_ONE)).toBeInTheDocument();
     cleanup();
@@ -266,6 +292,13 @@ describe("Run step: pool summary", () => {
     expect(within(cell("drive")).getByText(NR_SHARED.GIB("10"))).toBeInTheDocument();
     expect(within(cell("drive")).getByText(NR_RUN.LIMIT_EXTRA_DRIVES)).toBeInTheDocument();
     expect(within(cell("drive")).getByText(NR_RUN.SET_BY_POOL)).toBeInTheDocument();
+  });
+
+  it("says a limit the deployment bounds is set by this server", async () => {
+    const limits = effectiveLimits("interactive", { memory_mib: { default: { value: 1024 }, cap: { value: 4096 }, cap_source: "deployment" } });
+    show(AGENT, list([{ ...SHARED, limits: [limits] }]));
+    await screen.findByText(NR_RUN.LIMITS_LABEL);
+    expect(within(document.querySelector('[data-limit="memory"]') as HTMLElement).getByText(NR_RUN.SET_BY_SERVER)).toBeInTheDocument();
   });
 
   it("reads the limits of the run type asked, not the pool's other type", async () => {

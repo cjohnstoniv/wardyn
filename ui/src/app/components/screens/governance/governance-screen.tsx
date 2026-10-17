@@ -37,7 +37,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange } from "../../../lib/types";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { CHANGES, DELIVERY, GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
+import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -60,6 +60,7 @@ import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "..
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
+import { EgressBaselineTab } from "./egress-baseline";
 import { Note, noteClass, question, withMono } from "./display";
 import { limitChips } from "./limit-chips";
 import { BaseChip, childrenOf } from "./profile-overlay";
@@ -92,13 +93,20 @@ export function GovernanceScreen() {
   // A profile write the server held for a second person (202): the note stands until the next write.
   const [submitted, setSubmitted] = React.useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  // Runner credentials is the security operators' tab: anyone else is on Profiles, whatever the URL says.
+  // Runner credentials and Baseline hosts are the security operators' tabs: anyone else is on Profiles,
+  // whatever the URL says.
   const asked = searchParams.get("tab");
-  const tab: "profiles" | "runner-credentials" | "changes" =
-    asked === "changes" ? "changes" : asked === "runner-credentials" && securityOperator ? "runner-credentials" : "profiles";
+  const tab: "profiles" | "runner-credentials" | "egress-baseline" | "changes" =
+    asked === "changes"
+      ? "changes"
+      : (asked === "runner-credentials" || asked === "egress-baseline") && securityOperator
+        ? asked
+        : "profiles";
   // Mounted on first visit and then kept, hidden, so an edit in progress survives a look at another tab.
   const [deliveryVisited, setDeliveryVisited] = React.useState(false);
   if (tab === "runner-credentials" && !deliveryVisited) setDeliveryVisited(true);
+  const [baselineVisited, setBaselineVisited] = React.useState(false);
+  if (tab === "egress-baseline" && !baselineVisited) setBaselineVisited(true);
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -193,6 +201,7 @@ export function GovernanceScreen() {
           <TabsList>
             <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
             {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
+            {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
             <TabsTrigger value="changes">
               {changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB}
             </TabsTrigger>
@@ -203,6 +212,12 @@ export function GovernanceScreen() {
       {status !== "forbidden" && status !== "error" && deliveryVisited && securityOperator && (
         <div hidden={tab !== "runner-credentials"}>
           <RunnerCredentials onSubmitted={load} />
+        </div>
+      )}
+
+      {status !== "forbidden" && status !== "error" && baselineVisited && securityOperator && (
+        <div hidden={tab !== "egress-baseline"}>
+          <EgressBaselineTab onSubmitted={load} />
         </div>
       )}
 
@@ -252,7 +267,7 @@ export function GovernanceScreen() {
             </div>
 
             {/* Q6's adopted variant: the server's omission list, rendered after
-                a successful save, verbatim and in response order — never
+                a save or a held write, verbatim and in response order — never
                 blocking, because narrowing by omission IS what a profile is
                 for. Each warning is its own item; they are never joined. */}
             {omission.length > 0 && (
@@ -393,9 +408,9 @@ export function GovernanceScreen() {
                   setSubmitted(false);
                   load();
                 }}
-                onSubmitted={() => {
+                onSubmitted={(notes) => {
                   setEditing(null);
-                  setOmission([]);
+                  setOmission(notes);
                   setSubmitted(true);
                   load();
                 }}

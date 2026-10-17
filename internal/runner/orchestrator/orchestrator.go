@@ -237,6 +237,19 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+var _ runner.ImageDescriber = (*Orchestrator)(nil)
+
+// DescribeImage implements runner.ImageDescriber by delegating to the first wired substrate that
+// implements it, as ImagePresent does.
+func (o *Orchestrator) DescribeImage(ctx context.Context, ref string) (string, error) {
+	for _, s := range o.locals() {
+		if id, ok := s.(runner.ImageDescriber); ok {
+			return id.DescribeImage(ctx, ref)
+		}
+	}
+	return "", errors.New("orchestrator: no wired substrate has a local image store")
+}
+
 // ProbeDrive implements runner.DriveProber by delegating to the first wired
 // substrate that implements it — the same single-fan-out ImagePresent uses. A
 // drive's backend is already scoped to this deployment's dispatch target
@@ -426,7 +439,7 @@ func (o *Orchestrator) local(executor string) (substrate.Substrate, bool) {
 }
 
 // ExecutorFacts is the classes one configured executor can enforce now; false when it is not one of
-// this deployment's executors or cannot report.
+// this deployment's executors, or cannot report (with ProbeErr set).
 func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
 	sub, ok := o.local(executor)
 	if !ok {
@@ -434,11 +447,11 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 	}
 	cs, err := o.classesFor(ctx, sub)
 	if err != nil {
-		return runner.TargetFacts{}, false
+		return runner.TargetFacts{ProbeErr: err}, false
 	}
 	_, keeps := sub.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement,
-		KeepsEnded: keeps, UserDrives: cs.UserDrives}, true
+		KeepsEnded: keeps, UserDrives: cs.UserDrives, Records: cs.SessionRecording, ExecOutputUncaptured: cs.ExecOutputUncaptured}, true
 }
 
 // MeasureExecutor implements runner.ExecutorMeasurer: what one configured executor has, when its
@@ -487,16 +500,34 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 	if spec.RunnerID != "" {
 		sub, err = o.substrateForRunner(spec.RunnerID)
 	} else {
-		class := spec.ConfinementClass
-		if class == "" {
-			class = types.CC1
-		}
-		sub, err = o.substrateFor(ctx, class)
+		sub, err = o.substrateFor(ctx, spec.ConfinementClass)
 	}
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
 	return o.createOn(ctx, sub, spec)
+}
+
+// ExecOutputUncapturedFor implements runner.ExecOutputReporter. Once the
+// sandbox exists the substrate that holds ref answers; before the create, the
+// substrate CreateSandbox routes class to (substrateFor, the same first match).
+// known is false when that substrate cannot be named or its capabilities read.
+func (o *Orchestrator) ExecOutputUncapturedFor(ctx context.Context, ref string, class types.ConfinementClass) (uncaptured, known bool) {
+	var sub substrate.Substrate
+	var err error
+	if ref != "" {
+		sub, err = o.subForRef(ctx, ref)
+	} else {
+		sub, err = o.substrateFor(ctx, class)
+	}
+	if err != nil {
+		return false, false
+	}
+	cs, err := o.classesFor(ctx, sub)
+	if err != nil {
+		return false, false
+	}
+	return cs.ExecOutputUncaptured, true
 }
 
 // createOn creates the sandbox on sub and records ref->substrate.
@@ -528,9 +559,13 @@ func (o *Orchestrator) substrateForRunner(runnerID string) (substrate.Substrate,
 	return nil, fmt.Errorf("%w: runner %s is not registered", runner.ErrRunnerOffline, runnerID)
 }
 
-// substrateFor returns the first substrate that advertises the class. Fails
-// closed when none can enforce it (never silently downgrade).
+// substrateFor returns the first substrate that advertises the class (CC1 when
+// none is named). Fails closed when none can enforce it (never silently
+// downgrade).
 func (o *Orchestrator) substrateFor(ctx context.Context, class types.ConfinementClass) (substrate.Substrate, error) {
+	if class == "" {
+		class = types.CC1
+	}
 	var probeErrs []error
 	for _, s := range o.locals() {
 		cs, err := o.classesFor(ctx, s)
@@ -759,6 +794,20 @@ func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
 	return nil
 }
 
+// Selftest forwards a BYOI selftest to ref's substrate when it runs one of its
+// own (runner.Selftester).
+func (o *Orchestrator) Selftest(ctx context.Context, ref string) (int, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := s.(runner.Selftester)
+	if !ok {
+		return 0, runner.ErrSelftestUnsupported
+	}
+	return st.Selftest(ctx, ref)
+}
+
 // StartSandbox forwards a kept agent's restart to ref's substrate when it can
 // start one again (runner.SandboxStarter). The route is kept.
 func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {
@@ -868,10 +917,15 @@ func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 // containers keyed by the wardyn.run-id label. This makes the Orchestrator
 // satisfy the sweeper interface even though the concrete implementation is
 // build-tagged behind a substrate.
+//
+// Runners are swept too, under the same rule and age: a run whose create died
+// with runnerd leaves its proxy pod on the runner, and nothing else reaches it.
+// The runner lists only what it created and removes only the ids the org names;
+// an offline runner is skipped.
 func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	var total int
 	var errs []error
-	for _, s := range o.locals() {
+	for _, s := range o.snapshot() {
 		sw, ok := s.(interface {
 			SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
 		})
@@ -880,7 +934,7 @@ func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.D
 		}
 		n, err := sw.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
 		total += n
-		if err != nil {
+		if err != nil && !errors.Is(err, runner.ErrRunnerOffline) {
 			errs = append(errs, err)
 		}
 	}

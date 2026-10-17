@@ -116,6 +116,8 @@ var splitExceptions = map[string]string{
 	"feed DELETE":            "packaging_manage",
 	"feed permissions PATCH": "packaging_manage",
 	"feed recycle bin PATCH": "packaging_manage",
+	// A package version restored from the recycle bin is a manage operation too.
+	"package recycle bin restore PATCH": "packaging_manage",
 	// Analytics is OData on a host no run reaches and has no capability.
 	"analytics GET": "unclassified_read",
 	// Only the three documented search resources classify.

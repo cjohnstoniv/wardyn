@@ -65,8 +65,15 @@ func TestPG_RunLost(t *testing.T) {
 	}
 
 	// A renew landing before the mark wins: the stamp clears the lapse.
-	if ok, err := pg.StampRunTokenRenewed(ctx, lapsed.ID); err != nil || !ok {
+	if ok, err := pg.StampRunTokenRenewed(ctx, lapsed.ID, "jti-new", "jti-presented"); err != nil || !ok {
 		t.Fatalf("StampRunTokenRenewed = %v, %v; want true", ok, err)
+	}
+	// The stamp keeps the new token's id and the presented one's, and a run never stamped has none.
+	if got, err := pg.RunTokenJTIs(ctx, lapsed.ID); err != nil || !slices.Equal(got, []string{"jti-new", "jti-presented"}) {
+		t.Errorf("RunTokenJTIs after a stamp = %v, %v; want [jti-new jti-presented]", got, err)
+	}
+	if got, err := pg.RunTokenJTIs(ctx, fresh.ID); err != nil || len(got) != 0 {
+		t.Errorf("RunTokenJTIs of a run never renewed = %v, %v; want none", got, err)
 	}
 	if got := listed(); slices.Contains(got, lapsed.ID) {
 		t.Error("a just-renewed run is still listed as lapsed")
@@ -94,7 +101,7 @@ func TestPG_RunLost(t *testing.T) {
 	if got := listed(); slices.Contains(got, lapsed.ID) {
 		t.Error("a kept run is still listed as lapsed")
 	}
-	if ok, err := pg.StampRunTokenRenewed(ctx, lapsed.ID); err != nil || ok {
+	if ok, err := pg.StampRunTokenRenewed(ctx, lapsed.ID, "", ""); err != nil || ok {
 		t.Errorf("StampRunTokenRenewed of a kept run = %v, %v; want false — a lost run never renews", ok, err)
 	}
 

@@ -9,9 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -302,17 +300,15 @@ func idleCPUSignalCheck(off bool) SetupCheck {
 	}
 }
 
-// DRAFT (M2 canon pending) — the fix a mechanism principal's provider row
+// The fix a mechanism principal's provider row
 // carries.
 const (
-	// DRAFT (M2 canon pending)
 	bedrockMechanismFix = "Sign in to the console (or use your own wdn_ API token) to see your own model access."
 	// internalHostsCheckLabel names internalHostsCheck's dedicated row.
 	// Detail is internalHostsDeclaredSentence
 	// (site_config.go), reused verbatim from the write-time log, so it is
 	// not repeated here.
 	//
-	// DRAFT (M2 canon pending)
 	internalHostsCheckLabel = "Internal hosts (SSRF guard override)"
 )
 
@@ -433,101 +429,6 @@ func platformSplitCheck(keyService string, separate bool) SetupCheck {
 		c.Fix = "Set WARDYN_VAULT_TRANSIT_KEY_PLATFORM and WARDYN_VAULT_ROLE_PLATFORM to a second Transit key and role, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
 	}
 	return c
-}
-
-// keyCustody is what the three key-custody rows are graded from.
-type keyCustody struct {
-	Domains       []string // the declared domain names, sorted
-	PrincipalKeys bool
-	RootKeyCreds  int // person-owned credentials still under the credential key
-	ExternalCreds int // person-owned credentials kept in an external secret store, which no principal key seals
-	Changes       keydomain.Changes
-	Now           time.Time
-}
-
-// keyCustodyChecks are the key_domains, principal_keys and key_domain_changes rows (M5 S5). The
-// changes row is amber while any assignment changed in the last 30 days: it is the mitigation for a
-// database writer moving where a person's next keys are made.
-func keyCustodyChecks(k keyCustody) []SetupCheck {
-	domains := SetupCheck{ID: "key_domains", Label: "Key domains", Status: "info",
-		Detail: "Only default: everyone's keys use this deployment's credential key."}
-	if n := len(k.Domains); n > 0 {
-		noun := "key domains, each proven at boot: "
-		if n == 1 {
-			noun = "key domain, proven at boot: "
-		}
-		domains.Status = "ok"
-		domains.Detail = fmt.Sprintf("%d %s%s.", n, noun, strings.Join(k.Domains, ", "))
-	}
-	pk := SetupCheck{ID: "principal_keys", Label: "Per-person keys"}
-	switch {
-	case !k.PrincipalKeys:
-		pk.Status = "info"
-		pk.Detail = "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way."
-	case k.RootKeyCreds > 0:
-		pk.Status = "info"
-		pk.Detail = fmt.Sprintf("On. %d stored credentials still use this deployment's key.", k.RootKeyCreds)
-		pk.Fix = "Run wardynd -rewrap-principal-keys to re-seal them."
-	case k.ExternalCreds > 0:
-		verb := "are"
-		if k.ExternalCreds == 1 {
-			verb = "is"
-		}
-		pk.Status = "ok"
-		pk.Detail = fmt.Sprintf("On. Every stored credential held here is sealed under its owner's key. %d %s kept in the external secret store instead, outside these keys.", k.ExternalCreds, verb)
-	default:
-		pk.Status = "ok"
-		pk.Detail = "On. Every stored credential is sealed under its owner's key."
-	}
-	ch := SetupCheck{ID: "key_domain_changes", Label: "Key domain changes", Status: "ok",
-		Detail: "No key-domain assignment changed in the last 30 days."}
-	if n := k.Changes.Count; n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		ch.Status = "warn"
-		ch.Detail = fmt.Sprintf("%d key-domain assignment change%s in the last 30 days, the latest %s by %s. Each one moves where that person's next keys are made.",
-			n, s, keyChangeWhen(k.Now, k.Changes.Latest), k.Changes.LatestBy)
-		ch.Fix = "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete."
-	}
-	return []SetupCheck{domains, pk, ch}
-}
-
-// keyChangeWhen says how long ago t was, in days.
-func keyChangeWhen(now, t time.Time) string {
-	switch d := int(now.Sub(t) / (24 * time.Hour)); {
-	case d <= 0:
-		return "today"
-	case d == 1:
-		return "1 day ago"
-	default:
-		return fmt.Sprintf("%d days ago", d)
-	}
-}
-
-// keyCustodyRows reads the key-custody inputs for a security-tier caller: a member's checks are
-// discarded, so they are not read for one. A read that fails leaves its row out rather than showing a
-// guess.
-func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
-	svc := s.cfg.KeyDomains
-	if svc == nil || !s.isSecurityOperator(ctx) {
-		return nil
-	}
-	now := s.cfg.Now()
-	k := keyCustody{Domains: svc.Declared(), PrincipalKeys: s.cfg.PrincipalKeys, Now: now}
-	n, err := svc.RootKeyCredentials(ctx)
-	if err != nil {
-		return nil
-	}
-	k.RootKeyCreds = n
-	if k.ExternalCreds, err = svc.ExternalCredentials(ctx); err != nil {
-		return nil
-	}
-	if k.Changes, err = svc.ChangesSince(ctx, now.Add(-30*24*time.Hour)); err != nil {
-		return nil
-	}
-	return keyCustodyChecks(k)
 }
 
 // credentialStorageMode names the kind of store this deployment keeps
@@ -923,6 +824,13 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 		len(sc.EgressRedirects), strings.Join(parts, "; "))
 	if tokened > 0 {
 		detail += fmt.Sprintf(" %d with a token injected proxy-side.", tokened)
+	}
+	if off := goChecksumDBOffHosts(sc.EgressRedirects); len(off) > 0 {
+		return SetupCheck{
+			ID: "artifact_repo", Label: "Egress redirection", Status: "warn",
+			Detail: detail + " Go checksum-database verification is OFF for " + strings.Join(off, ", ") + " (go_checksum_db_off): modules that mirror serves are not checked against sum.golang.org.",
+			Fix:    "Make the mirror proxy /sumdb/sum.golang.org and clear go_checksum_db_off on that redirect.",
+		}
 	}
 	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }

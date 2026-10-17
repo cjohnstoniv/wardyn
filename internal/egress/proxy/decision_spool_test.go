@@ -52,7 +52,7 @@ func TestLocalSpoolAdmitsMoreThan32OrdinaryRequestsInFlight(t *testing.T) {
 	p := &Proxy{sink: s}
 	for i := range 64 {
 		w := httptest.NewRecorder()
-		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/x", nil)); admitted == nil {
+		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/x", nil), ""); admitted == nil {
 			t.Fatalf("request %d of 64 in flight refused: %d", i+1, w.Code)
 		}
 	}
@@ -144,7 +144,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 	const asked = 24
 	var tickets []uuid.UUID
 	for range asked {
-		if admitted, _ := p.admitSpoolHTTP(httptest.NewRecorder(), r.Clone(ctx)); admitted != nil {
+		if admitted, _ := p.admitSpoolHTTP(httptest.NewRecorder(), r.Clone(ctx), ""); admitted != nil {
 			tickets = append(tickets, spoolTicket(admitted.Context()))
 		}
 	}
@@ -166,6 +166,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 }
 
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
+	// Every refusal of a spool held full by the admitted reservations is counted.
 	ctx := context.Background()
 	id := uuid.New()
 	dir := filepath.Join(t.TempDir(), "spool")
@@ -186,7 +187,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 			defer wg.Done()
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest("GET", "http://allowed.test/"+maxReservationPath, nil)
-			admitted, release := p.admitSpoolHTTP(w, r)
+			admitted, release := p.admitSpoolHTTP(w, r, "")
 			mu.Lock()
 			defer mu.Unlock()
 			if admitted != nil {
@@ -232,12 +233,66 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 		t.Fatalf("history rows%d admitted%d", rows, len(tickets))
 	}
 	w := httptest.NewRecorder()
-	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/again", nil))
+	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/again", nil), "")
 	if r == nil {
 		t.Fatal("drain did not reopen admission")
 	}
 	release()
 }
+
+func TestLocalSpoolCountsOnlyAFullSpoolsRefusal(t *testing.T) {
+	// A full spool's refusal is counted once. A request whose admission deadline ran out or whose client
+	// hung up is refused with a 503 but not counted: a count would put the whole run's egress into
+	// overflow, and the next request must still be admitted.
+	ctx := context.Background()
+	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	p := &Proxy{sink: s}
+	drops := func() uint64 {
+		t.Helper()
+		_, _, d, err := s.local.Stats(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	expired, cancelExpired := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancelExpired()
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	for name, c := range map[string]context.Context{"deadline": expired, "cancel": cancelled} {
+		w := httptest.NewRecorder()
+		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(c), ""); admitted != nil || w.Code != 503 {
+			t.Fatalf("%s: admitted %v, status %d, want a 503 refusal", name, admitted != nil, w.Code)
+		}
+		if d := drops(); d != 0 {
+			t.Fatalf("%s: drops %d, want an uncounted refusal", name, d)
+		}
+	}
+	w := httptest.NewRecorder()
+	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/next", nil), "")
+	if r == nil {
+		t.Fatalf("a timed-out or cancelled admission closed admission: status %d", w.Code)
+	}
+	release()
+
+	s.mu.Lock()
+	s.heldBytes = runnerspool.MaxBytes
+	s.mu.Unlock()
+	w = httptest.NewRecorder()
+	short, cancelShort := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelShort()
+	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(short), ""); admitted != nil || w.Code != 503 {
+		t.Fatalf("full spool: admitted %v, status %d, want a 503 refusal", admitted != nil, w.Code)
+	}
+	if d := drops(); d != 1 {
+		t.Fatalf("full spool: drops %d, want the refusal counted once", d)
+	}
+}
+
 func TestLocalSpoolSingleWriterAndSecretMask(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.New()
@@ -365,7 +420,8 @@ func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
 	}))
 	defer cp.Close()
 	id := uuid.New()
-	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: filepath.Join(t.TempDir(), "spool"), DecisionBufferSize: 4}
+	dir := preparedTestSpool(t, id)
+	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: dir, DecisionBufferSize: 4}
 	s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), cp.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -386,4 +442,44 @@ func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
 		t.Fatalf("decision posted to %v with %v", path, auth)
 		return false
 	})
+}
+
+// preparedTestSpool is a run's spool as wardyn-runnerd leaves it before the proxy starts.
+func preparedTestSpool(t *testing.T, id uuid.UUID) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "spool")
+	runnerd, err := runnerspool.Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runnerd.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// decision_spool_dir is an older wardyn-runnerd's spool, prepared and mounted before the proxy starts. A
+// directory without its state.json (nothing mounted, or an empty one an engine made up) stops the proxy at
+// start, naming the directory and the upgrade, instead of an audit wardyn-runnerd never reads.
+func TestConfiguredSpoolRefusesADirectoryRunnerdDidNotPrepare(t *testing.T) {
+	id := uuid.New()
+	for name, dir := range map[string]string{"nothing mounted": filepath.Join(t.TempDir(), "spool"), "an empty directory": t.TempDir()} {
+		cfg := &Config{RunID: id, ControlPlaneURL: "http://127.0.0.1:9", DecisionSpoolDir: dir}
+		s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), nil, nil)
+		if err == nil {
+			_ = s.close(context.Background())
+			t.Fatalf("%s: the proxy accepted a spool directory wardyn-runnerd did not prepare", name)
+		}
+		if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "Upgrade wardyn-runnerd") {
+			t.Errorf("%s: %v; want the directory named and the fix", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "state.json")); err == nil {
+			t.Errorf("%s: the proxy made a spool of its own", name)
+		}
+	}
+	s, err := configuredDecisionSink(&Config{RunID: id, ControlPlaneURL: "http://127.0.0.1:9", DecisionSpoolDir: preparedTestSpool(t, id)}, newTokenSource("run-tok"), nil, nil)
+	if err != nil || s.local == nil {
+		t.Fatalf("a prepared spool: %v", err)
+	}
+	_ = s.close(context.Background())
 }

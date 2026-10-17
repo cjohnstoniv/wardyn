@@ -28,6 +28,23 @@ func (s localPlanTestStore) ListRunComponents(_ context.Context, runID uuid.UUID
 	return s.snapshots[runID], nil
 }
 
+// reviveTrustStore adds the trust facts a local revive re-reads (trustChangedRefusal): the bound
+// runner's stored class and the class the run was admitted at, both personal. A store with neither
+// refuses every revive, so the revive tests below bind their run to a runner and use this store.
+type reviveTrustStore struct{ localPlanTestStore }
+
+func (reviveTrustStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	return types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal}, nil
+}
+
+func (reviveTrustStore) RunRunnerTrustClass(context.Context, uuid.UUID) (types.RunnerTrustClass, error) {
+	return types.RunnerTrustPersonal, nil
+}
+
+func (reviveTrustStore) SetRunRunnerTrustClass(context.Context, uuid.UUID, types.RunnerTrustClass) error {
+	return nil
+}
+
 func TestLocalResolvedInjectionRequiresExactScopePinsAndStoredOwnerOnly(t *testing.T) {
 	f := newComponentFixture(t)
 	f.srv.cfg.Store = localPlanTestStore{f.st}
@@ -70,14 +87,15 @@ func TestLocalResolvedInjectionRequiresExactScopePinsAndStoredOwnerOnly(t *testi
 
 func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) {
 	f := newComponentFixture(t)
-	f.srv.cfg.Store = localPlanTestStore{f.st}
+	f.srv.cfg.Store = reviveTrustStore{localPlanTestStore{f.st}}
 	f.srv.cfg.Secrets = previewSecretsSpy{Store: f.srv.cfg.Secrets, t: t}
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal}
+	runnerID := uuid.New()
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, RunnerID: &runnerID}
 	for _, secretRef := range []string{"corporate-secret", ""} {
 		f.st.siteConfig.UpstreamProxySecretRef = secretRef
 		f.st.siteConfig.InternalHosts = []types.InternalHost{{HostSuffix: "corp"}}
 		// "removed" was declared at dispatch and has since been deleted: a revive must not keep lifting it.
-		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}, {HostSuffix: "removed"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
+		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}, {HostSuffix: "removed"}}}
 		ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
 		// An own plan revives; the organisation's upstream proxy secret is never sent to a runner.
 		if secretRef != "" && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
@@ -86,7 +104,7 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		if secretRef == "" && ref != nil {
 			t.Fatalf("revive of an own plan = %v, want it admitted", ref)
 		}
-		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.LLMUpstreams) != 0 || len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp") {
+		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp") {
 			t.Fatal("revive retained organisation network configuration")
 		}
 	}
@@ -149,7 +167,7 @@ func TestLocalReviveClassifiesOwnADOAndAzureLanesAsDispatchDoes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newComponentFixture(t)
-			f.srv.cfg.Store = localPlanTestStore{f.st}
+			f.srv.cfg.Store = reviveTrustStore{localPlanTestStore{f.st}}
 			f.st.siteConfig = adoSite(ownPATTestRow())
 			f.st.siteConfig.ModelProviders = &types.ModelProviders{Providers: []types.ModelProvider{foundry()}}
 			secrets := f.srv.cfg.Secrets.(*memSecrets)
@@ -160,7 +178,8 @@ func TestLocalReviveClassifiesOwnADOAndAzureLanesAsDispatchDoes(t *testing.T) {
 			if tc.drift != nil {
 				tc.drift(&f.st.siteConfig, owned, other)
 			}
-			run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, Agent: azureMessagesHarness, ModelProviderID: "foundry"}
+			runnerID := uuid.New()
+			run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, RunnerID: &runnerID, Agent: azureMessagesHarness, ModelProviderID: "foundry"}
 			cfg := tc.cfg(run.ID)
 			ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
 			if tc.admit && ref != nil {

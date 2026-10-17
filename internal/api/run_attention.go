@@ -217,7 +217,9 @@ func (s *Server) handleMeAttention(w http.ResponseWriter, r *http.Request) {
 	if adminView {
 		owner = ""
 	}
-	runs, err := runsPager.ListRunsFiltered(r.Context(), store.RunFilter{Owner: owner, Statuses: []string{"active"}}, store.Page{})
+	runs, err := runsPager.ListRunsFiltered(r.Context(), store.RunFilter{Owner: owner, Statuses: []string{"active"},
+		// The runs of the service identities a person sponsors are in their GET /runs list, so in their count.
+		WithSponsored: owner != "" && !delegatedRequest(r.Context())}, store.Page{})
 	if err != nil {
 		writeServerError(w, r, "list", err)
 		return

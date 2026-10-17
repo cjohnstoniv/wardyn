@@ -162,9 +162,9 @@ type RunnerPoolLimits struct {
 	MaxConcurrentRuns *int `json:"max_concurrent_runs,omitempty"`
 }
 
-// Validate refuses limits a pool cannot keep: no run type, no barrier, an
-// unknown or repeated barrier, a default past its cap, a value out of range or a
-// concurrency cap below 1.
+// Validate refuses limits a pool cannot keep: no run type, an unknown or
+// repeated barrier (an empty list is valid: every barrier), a default past its
+// cap, a value out of range or a concurrency cap below 1.
 func (l RunnerPoolLimits) Validate() error {
 	if l.Background == nil && l.Interactive == nil {
 		return errors.New("a pool allows at least one run type: set background, interactive or both")

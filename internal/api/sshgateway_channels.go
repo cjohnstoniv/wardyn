@@ -321,7 +321,10 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 				g.capAudited = true
 				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
 			}
-			_ = req.Reply(false, nil)
+			// Acked, then ended with the reason and exit 1, as a refused directory is (sshgateway_sync.go): the
+			// client stops on a false reply before it reads the channel's stderr.
+			_ = req.Reply(true, nil)
+			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
 		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv) }
@@ -511,10 +514,10 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	}
 	// The web lane's per-run session cap, shared with it (attach_slots.go): reserved before the
 	// recorder is built, held until finishRecording below has returned.
-	releaseSlot, ok := s.reserveAttachSlot(runID)
-	if !ok {
-		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, map[string]any{"transport": "ssh"})
-		sendChannelError(channel, "wardyn: "+attachSessionCapMsg)
+	releaseSlot, refused := s.reserveAttachSlotOrSay(run, principal)
+	if refused != "" {
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, map[string]any{"transport": "ssh"})
+		sendChannelError(channel, "wardyn: "+refused)
 		return
 	}
 	defer releaseSlot()

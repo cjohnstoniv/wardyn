@@ -403,3 +403,20 @@ func TestLaunchRecordRun_UnassignedPrincipalIsUnchanged(t *testing.T) {
 		t.Errorf("an unassigned principal's record session changed shape: allow_all=%v denied=%v", got.AllowAllEgress, got.DeniedDomains)
 	}
 }
+
+// TestApplySandboxSize_CutsARunThatSetNoSize: a policy with no resources block runs at the platform default,
+// so a profile maximum below that default also bounds a run that set no size.
+func TestApplySandboxSize_CutsARunThatSetNoSize(t *testing.T) {
+	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
+	runner.SetDefaultLimits(2000, 4096)
+	policy := types.RunPolicySpec{}
+	applySandboxSize(context.Background(), types.AgentRun{ID: uuid.New()}, &policy, dispatchCeiling{maxCPUMillis: 500})
+	if policy.Resources == nil || policy.Resources.CPUMillis != 500 {
+		t.Fatalf("resources = %+v, want the 500-CPU maximum applied to a run with no size", policy.Resources)
+	}
+	policy = types.RunPolicySpec{}
+	applySandboxSize(context.Background(), types.AgentRun{ID: uuid.New()}, &policy, dispatchCeiling{maxCPUMillis: 8000})
+	if policy.Resources != nil {
+		t.Errorf("resources = %+v, want none: the default sits under the maximum", policy.Resources)
+	}
+}

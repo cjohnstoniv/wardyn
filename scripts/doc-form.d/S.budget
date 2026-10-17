@@ -109,7 +109,50 @@
 # docs/sdk.md 17629 adds 69 over 17560 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/sdk.md 17560 measured after merging the Files-step seam lane (RP-3 runner limits reasons) into E6b-pdc over the member drives chain's 17473.
 # docs/sdk.md 17645 adds 16 over 17629 (0.9 release text for the fix sets merged at release); measured.
-docs/sdk.md=17645 share=21
+# docs/sdk.md 17669 adds 24 over 17645 (0.9.3 D), measured: the runner_pool_run_type_missing reason.
+# docs/sdk.md 17736 adds 91 (0.9.3 C): runner_recording_off, recording_store_off and recording_off, measured.
+# docs/sdk.md 17760 = 17669 (rc.1 batch) + 91 (C), measured at the rc.2 merge.
+# docs/sdk.md 17760 adds 91 (0.9.3 lane C): recording required/preferred and not_recorded.
+# docs/sdk.md 17898 adds 138 over 17760, measured (0.9.3 ADO): ado_lane_declined on policy preview and the governance 405 line.
+# docs/sdk.md 17898 = 17760 + 138 (ADO), measured at the rc.2 merge.
+# docs/sdk.md 17686 adds 17 over 17669 (0.9.3 Fo), measured: a preflight model_credential 422 carries setup_items.
+# docs/sdk.md 17914 = 17898 + 16 (Fo), measured at the wave-A merge.
+# docs/sdk.md 17904 adds 235 over 17669 (0.9.3 RV5), measured: the four pool refusal reasons, the import size note, the access-block harnesses fact, runner_not_found and approval-body limits.
+# docs/sdk.md 18149 = 17914 + 235 (RV5), measured at the wave-A merge.
+# 0.9.3 UIb: docs/sdk.md 17675 adds 6 over 17669 for the credential_delivery_stale reason on PUT /governance/credential-delivery.
+# docs/sdk.md 18155 = 18149 + 6 (UIb), measured at the wave-A merge.
+# docs/sdk.md 17713 adds 44 over 17669 (0.9.3 RV3D): 37 for runner_capabilities_unavailable at the three pool doors when a remote-hosted runner cannot report, 7 for the runner revoke in the lock_unavailable row; measured.
+# docs/sdk.md 18199 = 18155 + 44 (RV3D), measured at the wave-A merge.
+# docs/sdk.md 17760 adds 91 over 17669 (0.9.3 C): runner_recording_off, recording_store_off and recording_off, measured.
+# docs/sdk.md 18199 = 18199 + 0 (K2), measured at the wave-A merge.
+# docs/sdk.md 17708 adds 39 over 17669, measured (0.9.3 K3a): the runner_trust_invalid reason row.
+# docs/sdk.md 18238 = 18199 + 39 (K3a), measured at the wave-A merge.
+# docs/sdk.md 17936 adds 38 (0.9.3 C2), measured: recording_off for a declining runner's run; the org-defaults PUT keeps an omitted recording.
+# docs/sdk.md 18276 = 18238 + 38 (C2), measured at the rc.2 into final merge.
+# docs/sdk.md 17742 adds 73 over 17669 (0.9.3 SEC3), measured: the repo_url_credentials reason, its Azure DevOps and ssh:// rules and the reads it redacts.
+# docs/sdk.md 18349 = 18276 + 73 (SEC3), measured at the wave-B merge.
+# docs/sdk.md 17679 adds 10 over 17669, measured (0.9.3 RV4a FU090-L20): the erasure_in_progress sentence on a queued launch.
+# docs/sdk.md 18359 = 18349 + 10 (RV4a), measured at the wave-B merge.
+# K4 (0.9.3): docs/sdk.md 17786 measured, +78 for the runner_trust_changed row and the trust class on the placement_credential and credential_delivery_invalid rows.
+# docs/sdk.md 18437 = 18359 + 78 (K4), measured at the wave-B merge.
+# docs/sdk.md 17942 adds 6 over 17936, measured (0.9.3 RV6 merge of UIM into batch/093): the credential_delivery_stale reason UIb added.
+# docs/sdk.md 18437 = 18437 + 0 (RV6), measured at the wave-C merge.
+# docs/sdk.md 18477 = 18437 + 40 (CIFIX), measured: the runner_keystore_unavailable row the resident delivery answers.
+# docs/sdk.md 18489 = 18477 + 12 (FIN-G), measured at the wave-1 merge: the per-run Secret and NetworkPolicies named in the namespace_quota_exceeded row.
+# docs/sdk.md 18471 adds 34 over 18437, measured (FIN-A2b): the policy preview grades no autonomy, and an SSH-address repository lists no branches.
+# docs/sdk.md 18523, measured at the FIN-A2b merge into the final train (both sides' sentences).
+# docs/sdk.md 18450 adds 13 over 18437 (0.9.3 FIN-E), measured: the delegated-portal secret refusal and the runner row lock.
+# docs/sdk.md 18476 = 18450 + 26, measured: a credential's label and an organisation component's description.
+# docs/sdk.md 18562, measured at the FIN-E2 merge into the final train (both sides' sentences).
+# docs/sdk.md 18501 adds 64: the mint refusal reasons and the harnesses/seed_auto_tools line (0.9.3 FIN-B2).
+# docs/sdk.md 18632 = 18626 + 6, measured: organization pools take organization runners, and AddRunnerPoolRunner.
+# docs/sdk.md 18640 adds 14 over 18626, measured: the run policy sits under spec (0.9.3 ASK-6).
+# docs/sdk.md 18657 adds 17 over 18640, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6 review).
+# docs/sdk.md 18663 measured after merging the organization-runner pool wording with the ASK-6 notes.
+# docs/sdk.md 18880 adds 217 over 18663, measured: the node-loss containment wording after merging the runner sweep.
+# docs/sdk.md 18908 = 18880 + 28, measured: merge of the run output source fields.
+docs/sdk.md=18908 share=21
+# docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

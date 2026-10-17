@@ -176,6 +176,14 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
+	// The gateway table is the organisation's network and is never sent; a run
+	// that needs it is refused rather than left to dial the vendor host.
+	"ProxyConfig.LLMUpstreams": func(p LocalPlan) *Refusal {
+		if len(p.Spec.ProxyConfig.LLMUpstreams) != 0 {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.LLMUpstreams", "credential variant has no permitted local rule")
+		}
+		return nil
+	},
 	// The Resource Manager token is redeemed and held on the organisation's side.
 	"ProxyConfig.AzureARM": func(p LocalPlan) *Refusal {
 		if p.Spec.ProxyConfig.AzureARM != nil {

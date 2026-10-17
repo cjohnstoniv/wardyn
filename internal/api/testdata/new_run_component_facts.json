@@ -18,6 +18,7 @@
       },
       "managed_settings": {
         "path": "/etc/claude-code/managed-settings.json",
+        "harness": "claude-code",
         "document": "{\n  \"permissions\": {\n    \"defaultMode\": \"default\",\n    \"disableBypassPermissionsMode\": \"disable\",\n    \"disableAutoMode\": \"disable\"\n  },\n  \"allowManagedHooksOnly\": true,\n  \"allowManagedPermissionRulesOnly\": true\n}\n"
       }
     }

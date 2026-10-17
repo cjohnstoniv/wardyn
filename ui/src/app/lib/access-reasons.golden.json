@@ -72,6 +72,10 @@
     "text": "Your policy {asks first for|blocks} {tool}. A run can only be stricter."
   },
   {
+    "key": "repo_no_credential",
+    "text": "No credential is set up for this repository, so the run starts without one."
+  },
+  {
     "key": "resident_off",
     "text": "Your organisation has turned off environment-variable and file delivery. Use a request header."
   },

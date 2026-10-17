@@ -80,6 +80,7 @@ import {
   NEW_RUN_HEADING,
   newRunHeading,
   openNameDialog,
+  chooseProvider,
   providerPicker,
   runDescriptionField,
   runTitleField,
@@ -383,14 +384,12 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // A model provider must be chosen here before launch, and it is the same
   // fact the old "No model provider is connected" notice stood for: a picker
   // with nothing to choose is disabled, and the run could not do its task.
-  // OPEN: index 1 is the first provider after the "Choose a model provider"
-  // placeholder. Lead: is that V01's provider on the recording stack?
   const provider = providerPicker(page, "claude-code");
   await expect(
     provider,
     "no model provider is connected — V01's model step did not stick, and this run cannot do its task",
   ).toBeEnabled({ timeout: 20_000 });
-  await provider.selectOption({ index: 1 });
+  await chooseProvider(provider);
   const reach = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
   // The read view lists what the run will be allowed to reach: the one host.
   await expect(reach.getByText("api.anthropic.com", { exact: true }).first()).toBeVisible({ timeout: 20_000 });

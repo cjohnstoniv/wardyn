@@ -8,10 +8,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -20,10 +22,14 @@ import (
 // embed store.Store would otherwise route these calls to a nil interface;
 // the api layer type-asserts, and production is always PG.
 type RunLoser interface {
-	// StampRunTokenRenewed records id's token renewal at the database's clock.
+	// StampRunTokenRenewed records id's token renewal at the database's clock,
+	// with the renewal's new token id and the id of the token it presented.
 	// false means the run is already kept (lost/ended), so the renew must be
 	// refused — a lost run's identity must never carry forward.
-	StampRunTokenRenewed(ctx context.Context, id uuid.UUID) (bool, error)
+	StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error)
+	// RunTokenJTIs returns the non-empty ids StampRunTokenRenewed last recorded
+	// for id: the tokens a revive must revoke beside the one it replaces.
+	RunTokenJTIs(ctx context.Context, id uuid.UUID) ([]string, error)
 	// ListLapsedTokenRuns returns every RUNNING, not-kept run whose token was
 	// last renewed more than life ago, by the database's clock.
 	ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error)
@@ -40,14 +46,32 @@ type RunLoser interface {
 var _ RunLoser = PG{}
 
 // StampRunTokenRenewed — see RunLoser.
-func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID) (bool, error) {
+func (s PG) StampRunTokenRenewed(ctx context.Context, id uuid.UUID, jti, prevJTI string) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET token_renewed_at = now()
-		WHERE id=$1 AND lost_at IS NULL`, id)
+		UPDATE agent_runs SET token_renewed_at = now(), token_jti = $2, token_prev_jti = $3
+		WHERE id=$1 AND lost_at IS NULL`, id, jti, prevJTI)
 	if err != nil {
 		return false, fmt.Errorf("store: stamp run token renewed: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// RunTokenJTIs — see RunLoser. It reads only the two columns, so runCols and scanRun are untouched.
+func (s PG) RunTokenJTIs(ctx context.Context, id uuid.UUID) ([]string, error) {
+	var jti, prev *string
+	if err := s.Pool.QueryRow(ctx, `SELECT token_jti, token_prev_jti FROM agent_runs WHERE id=$1`, id).Scan(&jti, &prev); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: read run token ids: %w", err)
+	}
+	var out []string
+	for _, j := range []*string{jti, prev} {
+		if j != nil && *j != "" {
+			out = append(out, *j)
+		}
+	}
+	return out, nil
 }
 
 // ListLapsedTokenRuns — see RunLoser. Both sides use the database's clock, so

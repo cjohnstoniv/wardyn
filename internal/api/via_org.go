@@ -349,8 +349,13 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
 	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.ADOGrant, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM = nil, nil, nil, nil, nil, nil
+	cfg.ResidentMints = nil // the runner answers these; the organisation holds none of their values
 	cfg.MITMHosts, cfg.MITMLLM, cfg.MITMCACertPEM, cfg.MITMCAKeyPEM = slices.Compact(slices.Sorted(slices.Values(hosts))), false, "", ""
 	cfg.DecisionSpoolDir, cfg.LLMUpstreams = "", nil
+	// The k8s runner's own sidecar settings: the org engine never lapses with a runner's renew,
+	// streams no decision to runnerd, and is not inside the runner's cluster. No writer stores them on
+	// a via_org run today; cleared so one never reaches the org side.
+	cfg.SelfLapse, cfg.DecisionSink, cfg.HardDeny = false, nil, nil
 	cfg.InternalHosts = viaOrgInternalHosts(proxyInternalHosts(sc.InternalHosts), hosts)
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil)

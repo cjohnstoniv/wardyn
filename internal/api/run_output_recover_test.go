@@ -30,6 +30,7 @@ import (
 type recoveringRunner struct {
 	*outputRunner
 	log      string
+	gap      int64 // when set, the copy is marked as starting after gap discarded bytes
 	tail     string
 	err      error
 	follow   chan struct{}
@@ -53,6 +54,9 @@ func (r *recoveringRunner) RecoverOutput(ctx context.Context, _ string, w io.Wri
 	r.rmu.Unlock()
 	if r.err != nil {
 		return r.err
+	}
+	if g, ok := w.(runner.OutputGapMarker); ok && r.gap > 0 {
+		g.OutputGap(r.gap)
 	}
 	_, _ = io.WriteString(w, r.log)
 	switch {
@@ -262,7 +266,8 @@ func TestRecoverRunOutput_EndlessLogIsCutAtTheBound(t *testing.T) {
 			shape(rr)
 			t.Cleanup(func() { close(rr.release) })
 			f, brk := recoveryFixture(t, rr)
-			f.srv.runOutputRecoverWaitOverride = 60 * time.Millisecond
+			// Room for the first read of "partial\n" to land before the deadline under load; the bound is 10s.
+			f.srv.runOutputRecoverWaitOverride = 500 * time.Millisecond
 			start := time.Now()
 			f.srv.reconcileFinalize(t.Context(), f.run.ID, types.RunFailed, "sbx-out", "reconciled exit")
 			if took := time.Since(start); took > 10*time.Second {

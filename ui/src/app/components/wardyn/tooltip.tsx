@@ -39,6 +39,11 @@ export function useHoverOpen(open: boolean, setOpen: (open: boolean) => void) {
       hoverOpened.current = false;
       setOpen(next);
     },
+    /** Esc while a bubble is still pending (closed, so Radix is not listening): drop the pending open. */
+    cancelPending() {
+      clear();
+      clearTimeout(focusTimer.current);
+    },
     /** Keyboard focus shows the bubble after the same pause as a hover, not at once. */
     openOnFocus() {
       clearTimeout(focusTimer.current);
@@ -120,6 +125,9 @@ export function Tooltip({
           onPointerLeave: both(child.onPointerLeave, hover.triggerProps.onPointerLeave),
           onFocus: both(child.onFocus, (e: React.FocusEvent) => {
             if (focusIsVisible(e.currentTarget)) hover.openOnFocus();
+          }),
+          onKeyDown: both(child.onKeyDown, (e: React.KeyboardEvent) => {
+            if (e.key === "Escape") hover.cancelPending();
           }),
           onBlur: both(child.onBlur, () => hover.onOpenChange(false)),
         })}

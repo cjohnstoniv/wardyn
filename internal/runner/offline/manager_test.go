@@ -24,6 +24,7 @@ type localSub struct {
 	stops, kills int
 	statuses     int
 	stopErr      error
+	killErr      error
 	// foreign is what ProveRunnerSandbox answers: a container the runner did
 	// not create when set.
 	foreign   error
@@ -57,7 +58,7 @@ func (s *localSub) KillSandbox(context.Context, string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.kills++
-	return nil
+	return s.killErr
 }
 func (s *localSub) Status(context.Context, string) (runner.Status, error) {
 	s.mu.Lock()

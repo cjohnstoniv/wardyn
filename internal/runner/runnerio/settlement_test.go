@@ -7,6 +7,8 @@ import (
 	"errors"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
@@ -105,5 +107,46 @@ func TestEraseOutputDeletesRetainedOutput(t *testing.T) {
 	}
 	if restarted.outputs[id] != nil {
 		t.Fatal("erased output came back after restart")
+	}
+}
+
+// A failed new run's output and an erased run's output are both deleted through
+// the hidden tombstone name, so a leftover tombstone of an earlier delete that
+// failed partway neither blocks the next delete nor survives it, and no
+// partial run directory is left in place for a restart to refuse.
+func TestForgetAndEraseOutputDiscardThroughATombstone(t *testing.T) {
+	for name, discard := range map[string]func(*Server, uuid.UUID) error{
+		"forget": (*Server).ForgetOutput,
+		"erase":  (*Server).EraseOutput,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := New(runnertest.NewFake(), uuid.NewString(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := uuid.New()
+			if _, err := s.Output(id); err != nil {
+				t.Fatal(err)
+			}
+			left := filepath.Join(dir, "output", releasedPrefix+id.String())
+			if err := os.MkdirAll(filepath.Join(left, "partial"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := discard(s, id); err != nil {
+				t.Fatal(err)
+			}
+			// Each delete has its own tomb, so the earlier one is left for New.
+			entries, err := os.ReadDir(filepath.Join(dir, "output"))
+			if err != nil || len(entries) != 1 || entries[0].Name() != releasedPrefix+id.String() {
+				t.Fatalf("output directory holds %v %v after the delete, want only the earlier tomb", entries, err)
+			}
+			if _, err := New(runnertest.NewFake(), uuid.NewString(), dir); err != nil {
+				t.Fatalf("restart after the delete: %v", err)
+			}
+			if entries, err := os.ReadDir(filepath.Join(dir, "output")); err != nil || len(entries) != 0 {
+				t.Fatalf("output directory holds %v %v after the restart, want nothing", entries, err)
+			}
+		})
 	}
 }

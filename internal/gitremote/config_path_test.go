@@ -40,6 +40,14 @@ func TestResolveConfigPath(t *testing.T) {
 	}
 
 	abs := filepath.Join(root, "modules", "abs")
+	for _, d := range []string{filepath.Join(root, "modules", "rel"), abs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "modules", "out")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		content string
 		want    string
@@ -47,6 +55,8 @@ func TestResolveConfigPath(t *testing.T) {
 		"relative pointer":          {"gitdir: modules/rel\n", filepath.Join(root, "modules", "rel", "config")},
 		"absolute pointer inside":   {"gitdir: " + abs + "\n", filepath.Join(abs, "config")},
 		"pointer climbing out":      {"gitdir: ../../../etc\n", ""},
+		"pointer through a link":    {"gitdir: modules/out\n", ""},
+		"pointer to a missing dir":  {"gitdir: modules/missing\n", ""},
 		"absolute pointer outside":  {"gitdir: " + outside + "\n", ""},
 		"a file that is no pointer": {"[remote \"origin\"]\n", ""},
 		"an empty file":             {"", ""},

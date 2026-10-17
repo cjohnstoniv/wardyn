@@ -74,10 +74,16 @@ func (s *Server) handleGetCredentialDelivery(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "get credential delivery policy", err)
 		return
 	}
+	// The ETag is the hash a held change records as its base (applyCredentialDeliveryChange), so a console that
+	// sends it back as If-Match is judged against the very state an approval would be.
+	if p, err := deliveryPolicyOf(doc.Policy); err == nil {
+		w.Header().Set("ETag", computeETag(p))
+	}
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// handlePutCredentialDelivery replaces the whole document. securityOps (routes.go).
+// handlePutCredentialDelivery replaces the whole document. securityOps (routes.go). If-Match is optional
+// optimistic concurrency against GET's ETag, as PUT /governance/egress-baseline does.
 func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.cfg.Store.(store.RunnerStore)
 	if !ok {
@@ -109,6 +115,11 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "get credential delivery policy", err)
 		return
 	}
+	if !ifMatchSatisfied(r, computeETag(before)) {
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonCredentialDeliveryStale,
+			"If-Match does not match the current credential delivery policy — GET /governance/credential-delivery again and retry")
+		return
+	}
 	if mode == govQueue {
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindCredentialDelivery, op: "replace", key: govCredentialDeliveryKey, payload: after,
@@ -126,6 +137,7 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindCredentialDelivery, govCredentialDeliveryKey, "success", nil)
 	}
+	w.Header().Set("ETag", computeETag(after))
 	writeJSON(w, http.StatusOK, stored)
 }
 

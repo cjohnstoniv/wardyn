@@ -15,6 +15,7 @@ const term = {
   mouse: "none" as "none" | "any",
   wheel: null as ((e: WheelEvent) => boolean) | null,
   resizes: [] as Array<[number, number]>,
+  fit: { cols: 80, rows: 24 },
 };
 
 vi.mock("@xterm/xterm", () => {
@@ -54,7 +55,7 @@ vi.mock("@xterm/addon-fit", () => {
   class FitAddon {
     fit() {}
     proposeDimensions() {
-      return { cols: 80, rows: 24 };
+      return { ...term.fit };
     }
   }
   return { FitAddon };
@@ -112,6 +113,7 @@ beforeEach(() => {
   term.mouse = "none";
   term.wheel = null;
   term.resizes = [];
+  term.fit = { cols: 80, rows: 24 };
   rafs = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => rafs.push(cb));
@@ -140,10 +142,40 @@ describe("AttachTerminal — observer grid", () => {
     expect(ws.sent.some((m) => typeof m === "string" && m.includes('"resize"'))).toBe(true);
   });
 
-  it("sends no resize frame while pinned", () => {
+  const resizeFrames = (ws: FakeWebSocket) =>
+    ws.sent.filter((s): s is string => typeof s === "string" && s.includes('"resize"')).map((s) => JSON.parse(s) as { cols: number; rows: number });
+
+  it("while pinned, reports the client's real fit, never the pinned grid", () => {
+    term.fit = { cols: 100, rows: 30 };
     const { ws } = open();
+    expect(resizeFrames(ws)).toEqual([]);
     mode(ws, frame(true, 120, 40));
-    expect(ws.sent.filter((s) => typeof s === "string" && s.includes("resize") && s.includes("120"))).toEqual([]);
+    expect(term.resizes.at(-1)).toEqual([120, 40]);
+    expect(resizeFrames(ws).filter((f) => f.cols === 120)).toEqual([]);
+    expect(resizeFrames(ws).at(-1)).toMatchObject({ cols: 100, rows: 30 });
+    // The same real fit again (the writer resized) is not re-sent.
+    const before = resizeFrames(ws).length;
+    mode(ws, frame(true, 140, 50));
+    expect(resizeFrames(ws)).toHaveLength(before);
+  });
+
+  it("a reconnect while pinned carries the real fit on the attach URL", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"], shouldAdvanceTime: true });
+    try {
+      term.fit = { cols: 100, rows: 30 };
+      const { ws } = open();
+      mode(ws, frame(true, 120, 40));
+      act(() => ws.onclose?.({ code: 1006, reason: "" }));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      const next = FakeWebSocket.instances[1];
+      expect(next).toBeDefined();
+      expect(new URL(next.url, "http://x").searchParams.get("cols")).toBe("100");
+      expect(new URL(next.url, "http://x").searchParams.get("rows")).toBe("30");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

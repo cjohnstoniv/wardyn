@@ -207,7 +207,7 @@ func TestAuthorADOEntraInjection_ServerRow(t *testing.T) {
 	// The proxy's gate: the one host, the collection, the git lane's set.
 	st := &adoTestStore{site: adoSite(adoServerTestRow("https://" + adoServerHost + "/tfs/DefaultCollection"))}
 	srv := &Server{cfg: Config{Store: st, Audit: &memAudit{}, Now: time.Now}}
-	ado, on := resolveADOEntraRun(st.site, []string{"https://" + adoServerHost + "/tfs/DefaultCollection/proj/_git/app"}, capSub)
+	ado, on := resolveADOEntraRun(st.site, nil, "https://"+adoServerHost+"/tfs/DefaultCollection/proj/_git/app", capSub)
 	lane, ok := srv.authorADOEntraLane(context.Background(), types.AgentRun{ID: f.runID}, ado, on, adoEntraUngraded(),
 		adoStandingBound{}, dispatchLLMPlan{mitmCACertPEM: "CERT", mitmCAKeyPEM: "KEY"}, &types.RunPolicySpec{}, map[string]string{}, nil)
 	if !ok || lane.gate == nil || lane.gate.Organization != "tfs/defaultcollection" ||
@@ -329,7 +329,7 @@ func TestADOServerLane_ProxyContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ado, on := resolveADOEntraRun(f.st.site, []string{collectionURL + "/proj/_git/app"}, capSub)
+	ado, on := resolveADOEntraRun(f.st.site, nil, collectionURL+"/proj/_git/app", capSub)
 	policy := types.RunPolicySpec{}
 	env := map[string]string{}
 	lane, ok := f.srv.authorADOEntraLane(context.Background(), types.AgentRun{ID: f.runID}, ado, on, adoEntraUngraded(),

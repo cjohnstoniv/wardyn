@@ -148,6 +148,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
 | `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine |
 | `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine |
+| `WARDYN_RUNNERD_RELAY_PORT` | port | (required) | **`wardyn-runnerd serve --substrate k8s`**, set by the `wardyn-runnerd` chart: the container port the run relay listens on, on the pod IP; must differ from the sink port |
+| `WARDYN_RUNNERD_RELAY_SERVICE_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the relay Service's port, which run proxies dial at its ClusterIP |
+| `WARDYN_RUNNERD_SINK_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the decision sink's port, on the pod IP and on the relay Service; each proxy's `decision_sink.url` names it |
+| `WARDYN_RUNNERD_CLUSTER_DOMAIN` | DNS name | (required) | **`serve --substrate k8s`**, chart-set: the cluster DNS suffix every proxy hard-denies |
+| `WARDYN_RUNNERD_APISERVER_PEERS` | JSON list | (unset) | **`serve --substrate k8s`**, chart-set from `apiServer.peers`: NetworkPolicy peers whose `ipBlock.cidr` every proxy hard-denies |
+| `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
+| `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
+| `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
 | `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB` | int | `0` (= `4096`) | memory limit (MiB) for a sandbox whose policy sets none, same sites as `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` (flag `-sandbox-default-memory-mib`). The Helm chart sets `2048` (`runner.sandbox.defaultResources.memoryMiB`) |
@@ -192,6 +200,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_USER_DESKTOP` | bool | `false` | **user desktop**: asserts that the human using this daemon is a **user**; boot is **refused** unless local mode is off and OIDC is configured (flag `-member-mode`). Set `WARDYN_ORG_URL` to enrol, see [Enrolling into an org control plane](DESKTOP.md#enrolling-into-an-org-control-plane). [Details](#wardyn_user_desktop) |
 | `WARDYN_ORG_URL` | string | (unset) | Desktop enrolment URL (`-org-url`); unset disables hybrid posture. Requires `WARDYN_USER_DESKTOP`; failed enrolment refuses boot. [Details](#wardyn_org_url) |
 | `WARDYN_RUNNER_ORG_URL` | string | (unset) | Public runner identity binding (`-runner-org-url`); invalid/unset refuses registration/streams. HTTPS or loopback HTTP; no userinfo/query/fragment. Never inferred from headers. |
+| `WARDYN_RUNNER_STATE_DIR` | path | (unset) | **`wardyn-runnerd setup`** writes it into the service's env file ([`setup_host.go`](../cmd/wardyn-runnerd/setup_host.go)), the private directory holding the runner's identity (`runner.json`). The Linux unit passes it, and the macOS LaunchAgent that directory, as `serve --state-dir`; `wardyn-runnerd` never reads the variable. |
+| `WARDYN_TRUSTED_PROXIES` | string (CIDR list) | (unset) | Reverse proxies whose `X-Forwarded-For` names the client (`-trusted-proxies`), read right to left to the first unlisted address; a bad chain keeps the peer, kept in audit as `data.proxy_peer`. `/0` refuses boot. [Details](operations/hybrid-laptops.md#trusted-proxies) |
 | `WARDYN_ORG_ENROLMENT_TOKEN` 🔒 | string | (unset) | Secret enrolment token this device presents to `WARDYN_ORG_URL`. Setting it with `WARDYN_ORG_URL` unset is **refused** at boot; it is required on first boot (flag `-org-enrolment-token`). [Details](#wardyn_org_enrolment_token) |
 | `WARDYN_ORG_ENROLMENT_TOKEN_FILE` | string (path) | (unset) | File holding `WARDYN_ORG_ENROLMENT_TOKEN`'s value, read once at boot. Setting it together with `WARDYN_ORG_ENROLMENT_TOKEN` refuses boot (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../cmd/wardynd/secret_file.go)). [Details](#wardyn_org_enrolment_token_file) |
 | `WARDYN_SCIM_TOKEN` 🔒 | string | (unset = **no SCIM route is mounted**) | The bearer the SCIM 2.0 Users routes accept: at least 32 bytes. Set, boot is **refused** unless OIDC is configured on an Entra issuer naming one tenant (`https://login.microsoftonline.com/<tenant id>/v2.0`); on a database outage every sign-in fails closed (flag `-scim-token`). [Details](#wardyn_scim_token) |
@@ -239,6 +249,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GIT_PAT_BROKER` | string | `on` | Never-resident `git_pat` lane: `on` (default since 0.7) mints a non-GitHub forge's PAT proxy-side, so the credential never enters the sandbox; only the literal `off` disables it (flag `-git-pat-broker`). [Details](#wardyn_git_pat_broker) |
 | `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` | bool | `false` (**off**) | Opt in to the Bitbucket Server forge API door; with it off, a policy or governance write that sets it answers `400`. A garbage value exits 2 at boot. [Details](#wardyn_git_pat_api_bitbucket_server) |
 | `WARDYN_GIT_PAT_BROKER_HOSTS` | string (space-separated) | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The hosts `agent-run` must route through the git_pat broker. Host names only — it carries no grant id, so it cannot be used to mint anything |
+| `WARDYN_ADO_LANE_DECLINED` | string | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The reason code, set only when the run names an Azure DevOps repository but was not given the per-person credential. `agent-run` names it on a clone failure |
 | `WARDYN_GITHUB_REQUIRE_REF_RULESET` | bool | `false` (**off**) | Opt in to refusing a `github_token` mint whose repo is not confined by a GitHub repository ruleset; default off. No flag. [Details](#wardyn_github_require_ref_ruleset) |
 | `WARDYN_ENVBUILD` | bool | **binary: `false`**; compose: `true` | enable devcontainer image builds for create-run (`-tags docker`) (flag `-envbuild`). Gates BOTH the BYOI wrap and the devcontainer-build lane — see [OPERATIONS.md](operations/build-images.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #13 |
 | `WARDYN_ENVBUILD_IMAGE` | string | (unset = upstream) | envbuilder OCI image override (flag `-envbuild-image`) |
@@ -247,6 +258,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) |
+| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image. Unmarked, the registration image and this project's release images are not pins: they follow the organisation's answer at connect |
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
@@ -265,6 +277,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | whether a captured AWS SSO session is injected **proxy-side** or written into the sandbox (flag `-aws-sso-proxy-inject`); on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
+| `WARDYN_AWS_SSO_REFRESH_SKEW` | duration | `10m` | how long before a captured AWS SSO session's access token expires Wardyn renews it, at dispatch and for a live run (flag `-aws-sso-refresh-skew`); `5m` to `30m`. [Details](#wardyn_aws_sso_refresh_skew) |
+| `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR` | duration | `2m` | the validity an AWS SSO access token must keep to be served while another renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`); `30s` to `10m`, below the skew. [Details](#wardyn_aws_sso_refresh_serve_floor) |
+| `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY` | duration | `400ms` | the pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`); `100ms` to `10s`. [Details](#wardyn_aws_sso_refresh_retry_delay) |
+| `WARDYN_AWS_SSO_REFRESH_TIMEOUT` | duration | `10s` | the bound on one AWS SSO token request (flag `-aws-sso-refresh-timeout`); `2s` to `1m`. [Details](#wardyn_aws_sso_refresh_timeout) |
 | `WARDYN_ALLOW_TEST_ENDPOINTS` | bool | `false` | override: acknowledge that this deployment is a **test** deployment (flag `-allow-test-endpoints`); it unlocks exactly two things, one being `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` (`resolveAWSSSOEndpointOverride`, [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)). [Details](#wardyn_allow_test_endpoints) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
 | `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)). [Details](#wardyn_ssh_listen) |
@@ -276,7 +292,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
-| `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
+| `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry, about an hour on Entra ID. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
+| `WARDYN_OIDC_SESSION_RENEW_CAP` | duration | (unset = off) | renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`). Unset or `0` changes nothing. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_renew_cap) |
+| `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` | duration | (unset = off) | ends a console session after this long with no console activity (flag `-oidc-session-idle-timeout`). Unset or `0` changes nothing. [Details](#wardyn_oidc_session_idle_timeout) |
+| `WARDYN_OIDC_SILENT_REAUTH` | bool | `false` | a browser that signed in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`). `false` changes nothing. [Details](#wardyn_oidc_silent_reauth) |
+| `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
+| `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -284,6 +305,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
 | `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing file or one with no parseable certificate refuses boot. [Details](#wardyn_trusted_ca_file) |
+| `WARDYN_UPSTREAM_PROXY` | string (URL) | (unset) | **`wardyn-runnerd serve`** (flag `--upstream-proxy`): this runner's own corporate upstream proxy, `http://[user:pass@]host[:port]`, that every run's proxy chains its egress through. Checked at startup with the proxy's own rule; never sent to the organisation. [Details](#wardyn_upstream_proxy) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -465,7 +487,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
 - Reached through `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE`, in the `wardynd -rewrap` modes too.
 - `AWS_CA_BUNDLE` (or a profile's `ca_bundle`) is honoured too: with `WARDYN_TRUSTED_CA_FILE` unset it replaces the system roots (AWS CLI semantics), and with both set it is added to them.
-- Reached with the AWS SDK's default credential chain; a long-lived access key boots but raises the amber `kek_service_static_key` row.
+- Reached with the AWS SDK's default credential chain; a long-lived access key, or the EC2 node's instance role, boots but raises the amber `kek_service_static_key` row.
 - Each wrap is bound to its row by a hash in the encryption context, so CloudTrail shows no owner or credential name.
 - Its row `kek_id` is `awskms:<key ARN>`.
 
@@ -529,6 +551,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Recording store seam — `pg` (Postgres-backed, visible to every replica), `fs` (legacy per-pod on-disk store) or `off` (no recording, no replay) (flag `-recording-store`).
 - Recording is **on** with the default `pg`: every PTY asciicast is persisted into the control-plane database, and `WARDYN_RECORDING_RETENTION_DAYS` defaults to keep-forever.
 - **The off switch is `WARDYN_RECORDING_STORE=off`** (what the Helm chart ships when `persistence.enabled=false`).
+- Turning a store on moves the output of runs on this deployment's Kubernetes runner from `source` `stdout` to `recording`, since the session recorder leaves no stdout to keep; a laptop run on Docker keeps `stdout` (OPERATIONS.md "Run output").
 - An EMPTY env value keeps the compiled default here as everywhere (0.7), so the pre-0.7.1 recipe `fs` + `WARDYN_RECORDING_DIR=""` disables nothing — it kept `./data/recordings` and crash-looped the stock chart on its read-only root FS.
 
 ### `WARDYN_RECORDING_RETENTION_DAYS`
@@ -580,7 +603,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete persisted run output older than N days, by a sweep every minute on the elected leader (flag `-run-output-retention-days`); `0` keeps it forever.
 - A run that ended longer ago than this, with no row, answers `410` (`run_output_expired`).
 - Recovery cannot recreate output past this deadline.
-- Boot refuses a negative value.
+- Boot refuses a negative value or one above `106751` days.
 
 ### `WARDYN_EXEC_OUTPUT_TAIL_TTL`
 
@@ -682,6 +705,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - List the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`).
 - Needs `list` on `nodes` (a ClusterRole; chart: `k8s.readNodes`).
 - It compares requests to node allocatable, honouring `WARDYN_K8S_SANDBOX_PLACEMENT`, which is size and not free capacity: other namespaces' pods are invisible, and the scheduler stays the authority.
+- It also shortens a start wait. A pod the scheduler reports `Unschedulable` normally waits `WARDYN_SANDBOX_CAPACITY_WAIT`.
+  - With the read on, it fails at `WARDYN_SANDBOX_START_TIMEOUT` instead when a Ready, schedulable node exists and no node passes the placement's selector, required affinity and taints.
+  - So a mistyped `nodeSelector` is not a 15-minute wait.
+  - Node-lifecycle taints (cordon, not ready, unreachable, pressure) and the autoscalers' deletion taints are not counted, so a pool that is only draining or cordoned keeps waiting.
+  - Zero nodes, or no Ready node, keeps the wait too.
+  - A pool an autoscaler scales up from zero nodes reads as no match while other nodes are healthy.
+  - Leave the flag off for such a cluster, or its runs fail at the start timeout instead of waiting for the new node.
 - The runs namespace's ResourceQuota read needs no flag and no env.
 - Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
 
@@ -1201,7 +1231,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
 - A run kept after a control-plane outage whose agent's stop is not recorded is covered the same way.
-- A run kept with its agent's stop recorded, or kept after its end or a reboot, is left to its files grace. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
+- The reaper does not touch a run kept with its agent's stop recorded, or kept after its end or a reboot; [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
 - The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.
@@ -1320,6 +1350,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Pulled only by `PrewarmImages` in the background at boot.
 - `ProbeDrive` itself only CHECKS presence and fails the probe (open, never a refusal — see `WARDYN_PROXY_IMAGE`'s sibling budget note at `driveShareProbeTimeout`) rather than pulling inline on a request.
 - So an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`).
+- Unset, the probe runs the pinned `busybox@sha256:...` default from docker.io (a multi-arch index, so it runs on either laptop architecture). An air-gapped estate cannot pull it: the boot pull fails with a warning, `ProbeDrive` finds no image, and the readability check fails open and unanswered (`wardyn_drive_probe_errors_total` rises). Mirror busybox with every platform and set this variable to the mirrored ref.
 
 ### `WARDYN_ALLOW_AGENT_TELEMETRY`
 
@@ -1451,6 +1482,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `on` (the default): the sandbox's SSO token cache holds an inert placeholder.
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
+- A live run's session is renewed before it lapses (`WARDYN_AWS_SSO_REFRESH_SKEW`, below). So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
   - A `bedrock_sso` run cannot be placed on a person's own runner with it off: it is refused at Review, preflight and create (`placement_credential`).
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
@@ -1463,6 +1495,35 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **Corporate-proxy stopgap:** on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed exactly like every other dial failure (`builtin:dial-failed`, no detail).
 - Unless `WARDYN_TRUSTED_CA_FILE` below is ALSO staged onto the `wardyn-proxy` sidecar.
 - Flipping this switch `off` is the sanctioned stopgap while that is sorted out, at the cost of the sandbox residency this switch exists to avoid — see [docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md).
+
+### `WARDYN_AWS_SSO_REFRESH_SKEW`
+
+- How long before a captured AWS SSO session's access token expires Wardyn renews it, with the stored refresh token (flag `-aws-sso-refresh-skew`, default `10m`).
+- It applies at dispatch and at create, to the proxy's resolve for a live run, and to the AWS SSO renewer.
+- A session AWS refused to renew reads `expiring` on the model-access grade inside the same window.
+- The renewer runs on the sweeper leader every minute. It renews a live run's session inside this window while the token still works, so a quiet run never reaches the sign-in hold for a session a renewal could keep.
+- A live run is pending, starting, running or waiting, and not paused, lost or revoked. The broker would still mint its grant, and its provider or AWS CLI row is unchanged since dispatch.
+- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it.
+- A renewal that fails is retried on the next pass while the token is valid. A refresh token AWS refused or retired is not retried; the run's next request holds for a sign-in as before.
+- `5m` to `30m`; a value outside refuses boot. A skew near the token's own lifetime would renew on every pass.
+
+### `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR`
+
+- The validity an AWS SSO access token must keep to be served while another replica's renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`, default `2m`).
+- Below it, a caller waits for that renewal instead of handing a run a token that lapses under it.
+- `30s` to `10m`, and below `WARDYN_AWS_SSO_REFRESH_SKEW`; anything else refuses boot.
+
+### `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY`
+
+- The pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`, default `400ms`).
+- A refused or retired refresh token is never retried.
+- `100ms` to `10s`; anything else refuses boot.
+
+### `WARDYN_AWS_SSO_REFRESH_TIMEOUT`
+
+- The bound on one AWS SSO `CreateToken` request (flag `-aws-sso-refresh-timeout`, default `10s`).
+- A create waiting on another replica's renewal waits twice this plus the retry delay and one second.
+- `2s` to `1m`; anything else refuses boot.
 
 ### `WARDYN_ALLOW_TEST_ENDPOINTS`
 
@@ -1535,11 +1596,58 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - How long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`).
 - Unset or `0`, a session ends at the identity provider's ID token expiry (one hour when the token carries none), as before.
+  - On Entra ID that is about an hour, so a person working in the console signs in again hourly.
+  - That is the identity provider's lifetime, not one Wardyn chose; set this for a session Wardyn owns.
 - Set, the session cookie and `/me`'s `session_expires_at` end that long after sign-in, whether the ID token expires sooner or later.
 - Boot refuses a negative value or one above `24h`.
 - The ID token's expiry is today the only identity-provider-driven bound on a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default.
 - Pair a longer session with a role-stamp TTL, or a person disabled only at the identity provider keeps the console until this TTL runs out.
 - Attach tickets, the per-identity gate and sign-out are unaffected.
+- For a session that lasts while it is used, set `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` instead; [who-gets-in.md](operations/who-gets-in.md#how-long-a-console-session-lasts) compares the three shapes.
+
+### `WARDYN_OIDC_SESSION_RENEW_CAP`
+
+- Renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`).
+- Off by default; the owner chooses a default after measuring real Entra sessions.
+- Console activity is a request the browser marks `Sec-Fetch-Site: same-origin` that is a write (any method but `GET`, `HEAD` and `OPTIONS`) or carries `X-Wardyn-Activity: 1`.
+  - The console sends that header only within a minute of the person's own keyboard, pointer or wheel input, so reading and typing in a terminal count, and background polls never do.
+  - If sessions never renew behind a proxy, check that it passes `Sec-Fetch-Site` to wardynd unchanged.
+- While it is on, every answer to a live session names its expiry in `X-Wardyn-Session-Expires`, so the console's expiry warning and open terminals follow a renewal.
+- A session past half its length is renewed to that length from the request, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
+- Renewal moves only the expiry: revocation, suspension and sign-out end a renewed cookie exactly as before.
+- Boot refuses a negative value or one above `24h`.
+
+### `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`
+
+- Ends a console session after this long with no console activity, as defined under `WARDYN_OIDC_SESSION_RENEW_CAP` (flag `-oidc-session-idle-timeout`).
+- Off by default; the owner chooses a default after measuring real Entra sessions.
+- The server refuses the idle session as expired (`auth.fail` reason `expired_session`), so the person signs in again.
+- It bounds a browser left unattended, not a copied cookie, which its holder can keep active up to the session's end.
+- A tab left open with no input meets it; a session can end up to a tenth of it early.
+- On its own it only shortens a session; pair it with `WARDYN_OIDC_SESSION_RENEW_CAP` so use also extends one.
+- Turning it on ends, at their next request, sessions signed in more than the timeout ago with no activity since: their cookies carry no activity stamp.
+- During a mixed-version rollout an older replica neither renews nor enforces it, and a cookie it re-signs (a view switch) loses its activity stamp.
+
+### `WARDYN_OIDC_SILENT_REAUTH`
+
+- A browser that completed a sign-in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`).
+- Off by default; turn it on only after measuring the provider's `prompt=none` behaviour, including under third-party-cookie blocking.
+- When the provider refuses, the same window continues once with the ordinary interactive sign-in, so a refusal never strands the person.
+- A completed sign-in sets an `HttpOnly` marker cookie for 30 days; signing out clears it, so the next sign-in on that browser is interactive.
+- Nothing is replayed: a draft from before the lapse is not resubmitted.
+
+### `WARDYN_OIDC_LOGIN_HINT`
+
+- A browser that completed a sign-in sends that account (`preferred_username`, else `email`) as `login_hint` on its next sign-in (flag `-oidc-login-hint`).
+- Off by default; it spares an Entra browser holding several accounts the account picker.
+- The account rides in an `HttpOnly` cookie for 30 days; signing out clears it.
+- The hint only preselects an account: the identity provider still authenticates.
+
+### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
+
+- Sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`).
+- Off by default; a browser that restores its last session may keep the cookie anyway.
+- The server still ends the session at its expiry.
 
 ### `WARDYN_UI_SANDBOX_LISTEN`
 
@@ -1626,6 +1734,25 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - See [OPERATIONS.md § Network](OPERATIONS.md#network-upstream-proxy-and-egress-redirects)
 - Needs an agent image that installs the bundle (`install_mitm_ca` in `agent-run-lib.sh`; every published image from 0.7 does, including `agent-base`).
 - A BYOI image that never calls it sees the REPLACE-vars point at a missing file.
+- **On a laptop runner** (`wardyn-runnerd serve`, flag `--trusted-ca-file`) the organisation's bundle never reaches the run's proxy; the runner's own does ([`cmd/wardyn-runnerd/trusted_ca.go`](../cmd/wardyn-runnerd/trusted_ca.go)).
+- Never read from `SSL_CERT_FILE` or `SSL_CERT_DIR`; run `setup --trusted-ca-file "$SSL_CERT_FILE"` to use one.
+- Same validation as `wardynd`, read at startup only; a bad file (named) refuses startup.
+- It becomes every proxy's `trusted_ca_pem` (create and revive, on stdin) and is written to `<state dir>/trusted-ca.pem`, which every sandbox mounts read-only at `/etc/wardyn-trusted-ca.pem`.
+- Over 64 KiB refuses startup: with nothing staged, the sandbox trusts it only through `WARDYN_MITM_CA_PEM`.
+- Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
+- On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
+- `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
+
+### `WARDYN_UPSTREAM_PROXY`
+
+- **On a laptop runner** (`wardyn-runnerd serve`, flag `--upstream-proxy`) it is the runner's own corporate proxy for run egress.
+- The organisation's `upstream_proxy_url` is never sent to a runner; this takes its place.
+- Form: `http://[user:pass@]host[:port]`. Only `http` is supported, the proxy's own rule, checked at startup; a bad value (not repeated, it may hold a credential) refuses startup.
+- It becomes every proxy's `upstream_proxy_url` (create and revive, on stdin) beside the runner's CA bundle ([`cmd/wardyn-runnerd/serve.go`](../cmd/wardyn-runnerd/serve.go)).
+- Traffic to the organisation (the run's control-plane relay) does not traverse it.
+- Prefer the variable to the flag when it holds a credential: a flag shows in the process list.
+- `setup` does not write it: add it to the service's environment, and again after a setup rerun, which rewrites that file.
+- On macOS do not put a credential in the LaunchAgent: its plist is mode `0644`. Use a URL without one, or `--no-service` with a `0600` environment file.
 
 ### `WARDYN_DAEMON_PROXY_URL`
 
@@ -1916,7 +2043,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
-| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go)). [Details](#wardyn_mitm_ca_pem) |
+| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go)). [Details](#wardyn_mitm_ca_pem) |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
@@ -1952,7 +2079,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_MITM_CA_PEM`
 
-- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go))
+- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go))
 - A run with neither active never has this key at all.
 - `install_mitm_ca` (`agent-run-lib.sh`) treats it as an opaque PEM bundle, so multiple concatenated certificates work.
 

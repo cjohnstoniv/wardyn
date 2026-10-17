@@ -11,6 +11,12 @@ import (
 )
 
 func validateRetirementState(r localRun) error {
+	if r.Tombstone {
+		if !r.Retired || r.Retirement != nil {
+			return errors.New("runner tombstone is not a compacted retired run")
+		}
+		return nil
+	}
 	p := r.Retirement
 	if p == nil {
 		if r.Retired {

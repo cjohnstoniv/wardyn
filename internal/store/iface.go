@@ -468,11 +468,15 @@ type MemberDriveStore interface {
 	ListMemberDrivesOf(ctx context.Context, owner string) ([]types.UserDrive, error)
 	// GetMemberDriveOf returns drive id only if owner owns it, else ErrNotFound.
 	GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error)
+	// GetMemberDrive returns member drive id whoever owns it (the admin route), or ErrNotFound.
+	GetMemberDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error)
 	// BeginMemberDriveDelete tombstones owner's drive and returns the tombstone:
 	// ErrNotFound when not owned, ErrMemberDriveBusy while another delete holds it.
 	BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error)
 	// BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner's drive.
 	BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// MemberDriveOwnerStarting reports whether owner has a run in STARTING.
+	MemberDriveOwnerStarting(ctx context.Context, owner string) (bool, error)
 	// AbortMemberDriveDelete clears only the tombstone started names.
 	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
 	// FinishMemberDriveDelete removes the row only while it carries started.

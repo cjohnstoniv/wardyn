@@ -80,6 +80,23 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	if opts.Cols > 0 && opts.Rows > 0 {
 		_ = stream.resize(opts.Cols, opts.Rows) // seed the initial PTY size
 	}
+	// The exec connects in the background. Return only once it has produced its
+	// first bytes or ended, so ctx (the caller's prepare timeout) bounds a hung
+	// apiserver or kubelet upgrade instead of leaving a ready-looking session
+	// whose stream never speaks.
+	select {
+	case <-stream.ready:
+	case <-ctx.Done():
+		_ = stream.close()
+		return nil, fmt.Errorf("k8s: attach: exec did not connect: %w", ctx.Err())
+	}
+	select {
+	case <-stream.done:
+		if stream.exitErr != nil {
+			return nil, stream.exitErr
+		}
+	default:
+	}
 	return &k8sSession{stream: stream}, nil
 }
 
@@ -243,6 +260,10 @@ type k8sStream struct {
 	sizeQ   *termSizeQueue
 	cancel  context.CancelFunc
 	done    chan struct{}
+	// ready closes when the exec has written its first output byte or ended,
+	// whichever comes first: the point where Attach knows the stream connected.
+	ready     chan struct{}
+	readyOnce sync.Once
 
 	// Set once, before done closes; safe to read after <-done (happens-before
 	// via the channel).
@@ -268,12 +289,13 @@ func newK8sStream(ctx context.Context, exec remotecommand.Executor, tty bool) *k
 		sizeQ:   newTermSizeQueue(),
 		cancel:  cancel,
 		done:    make(chan struct{}),
+		ready:   make(chan struct{}),
 	}
 
 	go func() {
 		opts := remotecommand.StreamOptions{
 			Stdin:             stdinR,
-			Stdout:            stdoutW,
+			Stdout:            readySignal{stdoutW, s.markReady},
 			Tty:               tty,
 			TerminalSizeQueue: s.sizeQ,
 		}
@@ -299,8 +321,24 @@ func newK8sStream(ctx context.Context, exec remotecommand.Executor, tty bool) *k
 			_ = stderrW.CloseWithError(streamErr)
 		}
 		close(s.done)
+		s.markReady()
 	}()
 	return s
+}
+
+func (s *k8sStream) markReady() { s.readyOnce.Do(func() { close(s.ready) }) }
+
+// readySignal passes writes to w, calling signal before the first one: the pipe
+// write blocks until the session's reader takes it, which happens only after
+// Attach has returned, so the signal has to come first.
+type readySignal struct {
+	w      io.Writer
+	signal func()
+}
+
+func (r readySignal) Write(p []byte) (int, error) {
+	r.signal()
+	return r.w.Write(p)
 }
 
 // wait blocks until the exec ends and returns its exit code (0 with a

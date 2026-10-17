@@ -41,10 +41,11 @@ describe("Start screen", () => {
     expect(screen.getByText(NR_START.TRUST_LINE)).toBeInTheDocument();
   });
 
-  it("holds the AI composer as Coming soon: disabled, says so in words, and nothing to press", async () => {
+  it("holds the AI composer as Coming soon: says so in words, and nothing to press", async () => {
     show();
     const card = (await screen.findByText(NR_START.AI_TITLE)).closest("article");
-    expect(card).toHaveAttribute("aria-disabled", "true");
+    // No aria-disabled: the article role does not allow it (FR-0124); the words and the missing button say it.
+    expect(card).not.toHaveAttribute("aria-disabled");
     expect(card).toHaveTextContent(NR_SHARED.COMING_SOON);
     expect(card?.querySelector("button")).toBeNull();
   });

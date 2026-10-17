@@ -12,7 +12,7 @@
 |---|---|---|
 | Self-hosted runner | A person's own registered computer. It takes only its owner's runs. | Its owner |
 | Remote-hosted runner | The server's own Docker host or Kubernetes cluster. | Admins |
-| Organization pool | Remote-hosted runners only. Everyone who may launch remote runs may use it until a use policy narrows it. | Admins |
+| Organization pool | Remote-hosted runners and the organization's own runners. Everyone who may launch remote runs may use it until a use policy narrows it. | Admins |
 | User pool | One person's pool: their own runners, and the remote-hosted runners made available to them. Only its owner uses it. | Its owner, up to `10` pools |
 
 - A pool never claims or transfers a runner, and a user pool never makes another person's runner a candidate (`stepPlacement`, [`internal/api/run_fold_steps.go`](../../internal/api/run_fold_steps.go)).
@@ -22,9 +22,9 @@
 
 | Task | Command |
 |---|---|
-| List the pools you may use | `wardyn runner pool list` |
+| List the pools you may use | `wardyn runner pool list`; BARRIERS marks the default barrier with `*` |
 | Create a pool | `wardyn runner pool create --name <name>`; an admin adds `--scope organization` |
-| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...` |
+| Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; an admin may add organization runners; each refused runner gets its own line and the command exits non-zero |
 | Rename, switch off or re-limit a pool | `wardyn runner pool update <pool>` with `--name`, `--switch on\|off` or the limit flags |
 | Delete a pool | `wardyn runner pool delete <pool> --yes`: its runners leave it and runs waiting for it end; running runs are not touched |
 
@@ -48,7 +48,8 @@
 
 - A pool takes background tasks, interactive environments or both: its limits carry a `background` block, an `interactive` block or both (`--run-type`).
 - The pool list answers `run_types` and `run_types_source`: `pool` when the pool's own limits name them, `none` for a pool with no limits, which takes both.
-- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. So is a request with no run type, by any pool that has limits (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
+- A pool's limits, once set, are edited, never removed: `{"background":{},"interactive":{},"barriers":[]}` takes both run types and bounds nothing, though a request with no run type is then refused.
+- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. A request with no run type (an older client) is refused `runner_pool_run_type_missing` (`422`) by any pool that has limits: pass `--experience background|interactive` or upgrade the client (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
 
 ## Limits: the strictest wins
 
@@ -98,7 +99,8 @@ The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `
 
 - A pool with an empty `barriers` list allows every barrier its runners offer.
 - A launch that names no barrier gets the organization's default barrier when it is available (`default_source: organisation`), otherwise the strongest available one (`default_source: server`).
-- An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the whole document, so one that leaves `barrier` out clears it.
+- An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the document, so one that leaves `barrier` out clears it; one that leaves `recording` out keeps it.
+- The organization's default has a `revision` (migration `0185_runner_pool_org_default_revision`). A `PUT` naming a revision that has moved on is refused `runner_pool_stale` (409); one naming none writes unconditionally.
 - A person's own default names a pool only; it cannot set a barrier.
 
 ## The queue
@@ -125,6 +127,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 ## Your own pools
 
 - You create, edit and delete your user pools, and nobody else sees or uses them; an admin lists them read-only with their owner.
+- That admin list holds at most 1,000 pools: the organisation's, then the admin's own, then everyone else's by name, with `X-Wardyn-Truncated` set when more exist.
 - You put in only your own claimed runners and the remote-hosted runners available to you. No route adds another person's runner.
 - A user pool whose runners are all yours is available while one of them is online. With none online the pool list says `runner_pool_no_online_runner`, and a launch is refused `runner_offline`: "None of your runners in {pool} is online."
 - A remote-hosted runner stops taking your runs as soon as its people policy no longer admits you.

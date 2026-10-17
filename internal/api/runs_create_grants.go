@@ -80,7 +80,7 @@ type grantDeliveryRecord struct {
 // line an operator is already reading. delivery is the credential delivery
 // policy a local run's plan was judged on; a remote run never reads it.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement, delivery placement.DeliveryPolicy) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec, runPlacement types.Placement, delivery localJudgement) (grantWiring, bool) {
 	if !remotePlacement(runPlacement) && runPlacement != types.PlacementLocal {
 		writeErrorReason(w, placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), "unclassified stored run placement")
 		return grantWiring{}, false
@@ -90,6 +90,11 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 		var refusal *runRefusal
 		spec, deliveries, refusal = s.ownLocalGrantSpecs(r, spec, delivery)
 		if refusal.write(s, w, r) {
+			return grantWiring{}, false
+		}
+		// The class the plan was admitted at, before any grant: a revive holds the runner to it.
+		if err := s.recordRunTrust(ctx, runID, delivery.trust); err != nil {
+			writeServerError(w, r, "record run trust class", err)
 			return grantWiring{}, false
 		}
 	}

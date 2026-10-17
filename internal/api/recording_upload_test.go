@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // fakeRecordingStore is a hand-rolled recording.Store used by the upload tests.
@@ -281,5 +283,46 @@ func TestUploadRecording_AbortingStoreNoLeak(t *testing.T) {
 			t.Fatalf("handler leaked a masking goroutine: before=%d now=%d", before, runtime.NumGoroutine())
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// cancelingRecordingStore cancels the upload request's context and then fails, as a client that hangs up
+// mid-body does.
+type cancelingRecordingStore struct {
+	*fakeRecordingStore
+	cancel context.CancelFunc
+}
+
+func (c cancelingRecordingStore) SaveCast(context.Context, string, io.Reader) error {
+	c.cancel()
+	return errors.New("fake store: client gone")
+}
+
+// ctxCheckedAudit refuses a row whose context is already cancelled, as a database write does.
+type ctxCheckedAudit struct{ *recRecorder }
+
+func (a ctxCheckedAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return a.recRecorder.Record(ctx, ev)
+}
+
+// TestUploadRecording_FailureRowSurvivesAHungUpClient: an upload that fails after the client's context was
+// cancelled still records its recording.upload failure row.
+func TestUploadRecording_FailureRowSurvivesAHungUpClient(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newRecordingHarness(t, cancelingRecordingStore{&fakeRecordingStore{}, cancel}, nil)
+	cfg := h.srv.cfg
+	cfg.Audit = ctxCheckedAudit{h.audit}
+	h.srv = New(cfg)
+	runID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/internal/recordings/"+runID.String(), strings.NewReader("x")).WithContext(ctx)
+	req.Host, req.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
+	req.Header.Set("Authorization", "Bearer "+h.mintRunToken(t, runID))
+	panicFails(t, h.srv.Handler()).ServeHTTP(deadlineRecorder{httptest.NewRecorder()}, req)
+	if event := lastAuditEvent(t, h.audit.snapshot(), "recording.upload"); event.Outcome != "failure" {
+		t.Fatalf("upload outcome = %q, want failure", event.Outcome)
 	}
 }

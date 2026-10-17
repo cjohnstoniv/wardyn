@@ -35,13 +35,22 @@ export const NR_RUN = {
   APP_SERVER: "Application / server",
   APP_SERVER_BODY: "App servers and MCP servers.",
   COMMAND_LABEL: "Command",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
+  COMMAND_REQUIRED: "A command run needs a command to run.",
   COMMAND_HELP: "Run verbatim in the sandbox. The run ends when the command exits.",
   WHERE_LABEL: "Where should it run?",
   POOL_LABEL: "Pool",
   POOL_HELP:
     "A pool is required. Pools you can use stay visible, with the reason when one can't take this run.",
+  /** The pool select's two kinds of pool (M-POOLS v6 words); the select does not group by them yet. */
+  POOLS_ORG: "Organization pools",
+  POOLS_USER: "User pools",
   POOL_OPTION_REASON: (pool: string | number, reason: string | number) => `${pool} · ${reason}`,
   REASON_NO_ONLINE: "No online runners",
+  /** pending W-55: the recommended text until the owner answers. */
+  FIT_STARTS_NOW: "Starts now",
+  /** pending W-55: the recommended text until the owner answers. */
+  FIT_WAITS: "Waits for a slot",
   /** pending W-03: the recommended text until the owner answers. */
   REASON_SWITCHED_OFF: "Switched off",
   /** pending W-03: the recommended text until the owner answers. */
@@ -87,6 +96,8 @@ export const NR_RUN = {
   SET_BY_RUNNERS: "Set by your runners",
   /** pending W-03: the recommended text until the owner answers. */
   SET_BY_ORG: "Set by your organisation",
+  /** pending W-03: the recommended text until the owner answers. */
+  SET_BY_SERVER: "Set by this server",
   LIMITS_LABEL: "Per-run limits",
   LIMITS_NOTE: (profile: string | number) => `Strictest of this pool, ${profile} and this server applies`,
   LIMITS_NOTE_UNGOVERNED: "Strictest of this pool and this server",

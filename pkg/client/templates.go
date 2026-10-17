@@ -462,13 +462,12 @@ type (
 
 // The schema's closed field kinds and binding targets.
 const (
-	ConfigKindString     = types.ConfigKindString
-	ConfigKindBoolean    = types.ConfigKindBoolean
-	ConfigKindInteger    = types.ConfigKindInteger
-	ConfigKindNumber     = types.ConfigKindNumber
-	ConfigKindEnum       = types.ConfigKindEnum
-	ConfigKindStringList = types.ConfigKindStringList
-	ConfigKindSecretRef  = types.ConfigKindSecretRef
-	ConfigBindConfig     = types.ConfigBindConfig
-	ConfigBindSecret     = types.ConfigBindSecret
+	ConfigKindString    = types.ConfigKindString
+	ConfigKindBoolean   = types.ConfigKindBoolean
+	ConfigKindInteger   = types.ConfigKindInteger
+	ConfigKindNumber    = types.ConfigKindNumber
+	ConfigKindEnum      = types.ConfigKindEnum
+	ConfigKindSecretRef = types.ConfigKindSecretRef
+	ConfigBindConfig    = types.ConfigBindConfig
+	ConfigBindSecret    = types.ConfigBindSecret
 )

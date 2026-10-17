@@ -44,9 +44,9 @@ an operator follows to turn one on and run the queue.
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
   - Profile, assignment, grant, enforcement, availability and user-type priority changes are proposed on the security tier, so a security admin or a super admin approves; a security admin may approve a super admin's change.
-  - A role mapping is written on the super-admin tier, so only a super admin approves one:
+  - A role mapping, and an organization pool's remote-hosted runner add or removal that the table below marks, is written on the super-admin tier, so only a super admin approves one:
     - a security admin who tries is refused `403` `authz.denied` reason `admin_surface` (target `governance.change`),
-    - and role-mapping changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
+    - and those changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
   - The predicate is evaluated again inside the approval transaction:
     - an API token that was revoked after it authenticated, one cut off by a session revocation, or one whose role no longer passes is refused and the change stays pending.
 - **Distinct human.**
@@ -160,6 +160,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Remote-hosted runner people policy set, delete | always | security admin or super admin |
 | Remote-hosted runner added to an organization pool | the runner is in another pool that carries a use policy | **super admin only** |
 | Remote-hosted runner removed from an organization pool | the pool carries a use policy | **super admin only** |
+| Runner trust class change (`PUT /runners/{id}/trust`) | the class changes | security admin or super admin |
 
 Exempt, so applied directly:
 
@@ -220,9 +221,9 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 
 **6. One super admin.**
 
-- Role mappings are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
-- A deployment with a single super admin therefore cannot change a role mapping while the switch is on, except through the admin token (audited as a bypass).
-- Add a second super admin before you enable the switch, or accept the token as the path for mapping changes.
+- Role mappings, and a held remote-hosted runner add to or removal from an organization pool, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
+- A deployment with a single super admin therefore cannot change a role mapping or a held pool membership while the switch is on, except through the admin token (audited as a bypass).
+- Add a second super admin before you enable the switch, or accept the token as the path for those changes.
 - The lockout guard is judged against the **approver's** own roles at apply, so the approver cannot be the person whose mapping change would strip their own admin.
 
 **7. What stays single-human.**

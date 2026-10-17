@@ -17,6 +17,9 @@
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
 # WARDYN_TEST_REPORT_NAME renames the report directory only (the suite name still scopes the skip floor).
 # WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
+# test/go-quarantine.txt (WARDYN_GO_QUARANTINE overrides the path) lists the flaky Go tests every suite
+# skips with `go test -skip`; the file is validated first and an expired or malformed entry exits 1.
+# Its format and rules are the ones in ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -29,7 +32,34 @@ if [ ${#PKGS[@]} -eq 0 ]; then PKGS=("./..."); fi
 OUT="$ROOT/test/reports/go/${WARDYN_TEST_REPORT_NAME:-$SUITE}"
 mkdir -p "$OUT"
 
-echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
+# ── flaky-test quarantine ────────────────────────────────────────────────────
+# Validated before anything runs: a list that is expired, malformed or unreadable
+# fails the suite, so a quarantine can never silently outlive its 14 days.
+# Entries: <package> | <TestName[/subtest]> | #issue | @owner | YYYY-MM-DD. The name
+# is matched by `go test -skip` across every package of the run (the package field
+# is for the reader), each /-separated element anchored: Test$ skips Test and its
+# subtests, Test/sub skips only that subtest.
+. "$ROOT/scripts/lib/e2e-quarantine.sh"
+QUARANTINE_FILE="${WARDYN_GO_QUARANTINE:-$ROOT/test/go-quarantine.txt}"
+quarantine_validate "$QUARANTINE_FILE" "$(date -u +%F)" >&2 || exit 1
+QUARANTINED="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { for (i = 1; i <= 5; i++) gsub(/^[ \t]+|[ \t]+$/, "", $i); print $1 " " $2 " " $3 " " $4 " until " $5 }' "$QUARANTINE_FILE")"
+SKIP_ARGS=()
+if [ -n "$QUARANTINED" ]; then
+  SKIP_RE="$(awk -F' [|] ' '$0 !~ /^[ \t]*#/ && NF == 5 { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2 }' "$QUARANTINE_FILE" \
+    | while IFS= read -r name; do
+        out=""
+        IFS=/ read -ra parts <<<"$name"
+        for part in "${parts[@]}"; do
+          out="$out/^$(printf '%s' "$part" | sed 's/[][\.*^$+?(){}|]/\\&/g')\$"
+        done
+        printf '%s|' "${out#/}"
+      done)"
+  SKIP_ARGS=(-skip "${SKIP_RE%|}")
+  echo ">> QUARANTINED, skipped by go test -skip (fix the test and delete the line, ${QUARANTINE_FILE#"$ROOT"/}):"
+  printf '>>   %s\n' "$QUARANTINED"
+fi
+
+echo ">> running suite '$SUITE': go test -json $(echo "${PKGS[*]}" | cut -c1-300)"
 # -coverprofile with atomic mode; -coverpkg=./... so coverage counts calls
 # from any package in the module, not just calls from within the same
 # package as the covered code (module-wide instrumentation regardless of
@@ -42,9 +72,9 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # The job's timeout-minutes is the real bound; a suite's own -timeout in PKGS comes later and wins.
 if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
   rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
-  go test -json -timeout 40m "${PKGS[@]}" > "$OUT/test-output.json"
+  go test -json -timeout 40m ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json"
 else
-  go test -json -timeout 40m -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" > "$OUT/test-output.json"
+  go test -json -timeout 40m -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"} "${PKGS[@]}" > "$OUT/test-output.json"
 fi
 GO_EXIT=$?
 
@@ -198,13 +228,15 @@ esac
 # default-off shape. WARDYN_TEST_REPORT_SKIP_FLOOR silences this floor too.
 # Exact names, not a pattern: EVERY one must pass (checked below), so dropping
 # or renaming one case reddens the job even while the others still match.
+# The PlacementRouting cases cannot skip here: these substrates advertise CC1 only (no gVisor or Kata on
+# CI; the k8s suite sets no ConfinementRuntimes), and the remote suite supplies the offline runner.
 REQUIRE_ALL=""
 if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval'
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally'
   fi
   if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives'
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured'
   fi
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
@@ -348,5 +380,16 @@ if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
   fi
 fi
 
+# The PG api shard runs only the tests scripts/pg-test-select.sh picks. The unit run
+# (DSN unset) is the independent proof it misses none: a test that skipped here
+# naming WARDYN_TEST_PG, and is not in that selection, would run in no PG shard.
+if [ "$SUITE" = unit ] && [ -s "$OUT/test-output.json" ] && grep -qF WARDYN_TEST_PG "$OUT/test-output.json"; then
+  "$ROOT/scripts/pg-test-select.sh" --guard "$OUT/test-output.json" || GO_EXIT=1
+fi
+
+if [ -n "$QUARANTINED" ]; then
+  echo ">> QUARANTINED tests were skipped in this run:"
+  printf '>>   %s\n' "$QUARANTINED"
+fi
 echo ">> reports in $OUT"
 exit $GO_EXIT

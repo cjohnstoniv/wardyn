@@ -6,6 +6,7 @@ package placement
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -149,40 +150,98 @@ type ClassPolicy struct {
 }
 
 // DeliveryPolicy is the `local_credential_delivery` governance document. A class
-// absent from it means refuse.
+// absent from it means refuse. ByTrust overrides a class for runners of one trust
+// class (types.RunnerTrustClass, stored and written only by a security operator);
+// a class it does not name falls back to Classes, for every trust class.
 type DeliveryPolicy struct {
+	Classes map[string]ClassPolicy                 `json:"classes"`
+	ByTrust map[types.RunnerTrustClass]TrustPolicy `json:"by_trust,omitempty"`
+}
+
+// TrustPolicy is one trust class's overrides of the global classes.
+type TrustPolicy struct {
 	Classes map[string]ClassPolicy `json:"classes"`
 }
 
 // ErrInvalidPolicy marks a delivery policy a writer must refuse (a 400).
 var ErrInvalidPolicy = errors.New("placement: invalid credential delivery policy")
 
-// Validate checks every class key and mode against design §7.2 and §7.5.
+// Validate checks every class key and mode against design §7.2 and §7.5, and each
+// trust class's overrides against the same bounds. via_org is never trust-gated: its
+// credential never reaches the runner, so an override may neither deliver a class
+// via_org nor override a class the global row delivers via_org. require_posture
+// under org_cluster is refused: posture is a laptop's self-report.
 func (p DeliveryPolicy) Validate() error {
-	for _, class := range sortedKeys(p.Classes) {
-		cp := p.Classes[class]
-		if _, known := classModes[class]; !known {
-			return fmt.Errorf("%w: unknown class %q", ErrInvalidPolicy, class)
+	if err := validateClasses(p.Classes, ""); err != nil {
+		return err
+	}
+	for _, trust := range slices.Sorted(maps.Keys(p.ByTrust)) {
+		tp := p.ByTrust[trust]
+		if !trust.Valid() {
+			return fmt.Errorf("%w: unknown trust class %q", ErrInvalidPolicy, trust)
 		}
-		if !Writable(class) {
-			return fmt.Errorf("%w: class %q is not configurable", ErrInvalidPolicy, class)
+		if err := validateClasses(tp.Classes, "by_trust."+string(trust)+"."); err != nil {
+			return err
 		}
-		if !slices.Contains(classModes[class], cp.Mode) {
-			return fmt.Errorf("%w: class %q cannot be delivered as %q (allowed: %s)", ErrInvalidPolicy, class, cp.Mode, joinModes(classModes[class]))
-		}
-		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident {
-			return fmt.Errorf("%w: class %q has require_posture without mode %q", ErrInvalidPolicy, class, ModeRunnerResident)
+		for _, class := range sortedKeys(tp.Classes) {
+			cp := tp.Classes[class]
+			switch {
+			case cp.Mode == ModeViaOrg:
+				return fmt.Errorf("%w: by_trust.%s.%s: via_org is never set per trust class", ErrInvalidPolicy, trust, class)
+			case p.Classes[class].Mode == ModeViaOrg:
+				return fmt.Errorf("%w: by_trust.%s.%s: the class is delivered via_org, which is never trust-gated", ErrInvalidPolicy, trust, class)
+			case cp.RequirePosture != nil && trust == types.RunnerTrustOrgCluster:
+				return fmt.Errorf("%w: by_trust.%s.%s: require_posture does not apply to an org_cluster runner", ErrInvalidPolicy, trust, class)
+			}
 		}
 	}
 	return nil
 }
 
-// For is the configured policy of a class: refuse when absent.
-func (p DeliveryPolicy) For(class string) ClassPolicy {
-	if cp, ok := p.Classes[class]; ok {
+func validateClasses(classes map[string]ClassPolicy, prefix string) error {
+	for _, name := range sortedKeys(classes) {
+		cp, class := classes[name], name
+		name = prefix + name
+		if _, known := classModes[class]; !known {
+			return fmt.Errorf("%w: unknown class %q", ErrInvalidPolicy, name)
+		}
+		if !Writable(class) {
+			return fmt.Errorf("%w: class %q is not configurable", ErrInvalidPolicy, name)
+		}
+		if !slices.Contains(classModes[class], cp.Mode) {
+			return fmt.Errorf("%w: class %q cannot be delivered as %q (allowed: %s)", ErrInvalidPolicy, name, cp.Mode, joinModes(classModes[class]))
+		}
+		if cp.RequirePosture != nil && cp.Mode != ModeRunnerResident {
+			return fmt.Errorf("%w: class %q has require_posture without mode %q", ErrInvalidPolicy, name, ModeRunnerResident)
+		}
+	}
+	return nil
+}
+
+// ForTrust is a class's policy on a runner of trust class trust: the trust class's
+// override when it names the class, else the global row, else refuse. A class the
+// global row delivers via_org is the same on every runner (Validate keeps overrides
+// off it); any other class on an unknown trust class refuses.
+func (p DeliveryPolicy) ForTrust(class string, trust types.RunnerTrustClass) ClassPolicy {
+	global, ok := p.Classes[class]
+	if ok && global.Mode == ModeViaOrg {
+		return global
+	}
+	if !trust.Valid() {
+		return ClassPolicy{Mode: ModeRefuse}
+	}
+	if cp, found := p.ByTrust[trust].Classes[class]; found {
 		return cp
 	}
+	if ok {
+		return global
+	}
 	return ClassPolicy{Mode: ModeRefuse}
+}
+
+// TrustClassesByRank is the closed trust set, highest rank first.
+func TrustClassesByRank() []types.RunnerTrustClass {
+	return []types.RunnerTrustClass{types.RunnerTrustOrgCluster, types.RunnerTrustManagedDevice, types.RunnerTrustPersonal}
 }
 
 func sortedKeys(m map[string]ClassPolicy) []string {

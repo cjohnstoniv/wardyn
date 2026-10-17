@@ -37,7 +37,7 @@ func TestRepoTransportCharset_PolicyWriteDoor(t *testing.T) {
 		{"a mount path with a space", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/dev/my work", Target: "/home/agent/my work"}}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validatePolicyWorkspaces(tc.spec)
+			err := validatePolicyWorkspaces(tc.spec, true)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Errorf("refused: %v", err)
@@ -123,6 +123,16 @@ func TestRepoTransportCharset_DispatchDrops(t *testing.T) {
 				t.Errorf("warnings = %v, want one saying %q", warns, tc.wantWarn)
 			}
 		})
+	}
+}
+
+// A run repo that names no clone URL has no record to withhold the legacy pair
+// for: it keeps its slug (the withhold fires only when a dropped record named it).
+func TestRepoTransportCharset_UnclonableRunRepoKeepsItsSlug(t *testing.T) {
+	env := map[string]string{}
+	applyRepoCloneEnv(env, types.AgentRun{Repo: "acme"}, types.RunPolicySpec{})
+	if env["WARDYN_REPO_SLUG"] != "acme" || env["WARDYN_REPO_URL"] != "" || env["WARDYN_REPOS"] != "" {
+		t.Errorf("env = %v, want only WARDYN_REPO_SLUG=acme", env)
 	}
 }
 

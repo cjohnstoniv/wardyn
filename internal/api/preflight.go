@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -188,10 +191,11 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 // resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
 // image/devcontainer_repo XOR violation surfaced by a workspace's base_image,
 // target collision), the onboarded-workspace gate, the workspace
-// credential-binding fold, and the confinement floor check below. Not
+// credential-binding fold, the agent-required, reserved-task and
+// interactive-hold 400s, and the confinement floor check below. Not
 // reproduced (unreachable via the wizard body this endpoint serves): the
-// agent-required 400, the BYOI image/devcontainer 400s, and the cloud_sts
-// identity-provider 422 — launch still enforces all of them.
+// BYOI image/devcontainer 400s and the cloud_sts identity-provider 422 —
+// launch still enforces both.
 // TestPreflightMirrorsLaunchGates now scans THROUGH decodeAndValidateCreateRun
 // rather than excepting the whole wrapper, so this inventory is executable gate
 // by gate instead of wrapper by wrapper.
@@ -228,11 +232,19 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Surfaced by narrowing this pair's parity exception rather than by a
 	// second field report. With no AgentProviders block agentRosterRefusal
 	// short-circuits to "" and Review is byte-for-byte what it was.
+	if msg := agentRequirementError(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonAgentRequired, msg)
+		return
+	}
 	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
 		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
+		return
+	}
+	if reservedRunTasks[req.Task] {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -263,6 +275,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)
 		return
 	}
+	// Launch's closed enums (confinement_class, task_mode, interactive_start, tool_approvals) and the
+	// codex-cli hold refusal: the same function, so Review refuses what launch 400s.
+	if _, refusal := runRequestEnums(req); refusal.write(s, w, r) {
+		return
+	}
 	// Same free-text field caps + control-character check launch runs over every
 	// caller-supplied string on this body (runs_create_fields.go): one loop, one
 	// 400 shape, shared so Review never previews a request the create door 400s.
@@ -273,6 +290,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// Review never previews a request launch refuses.
 	if req.IntegrationID != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
+		return
+	}
+	// Create's no-task coercion, then its interactive/hold conflict, before the derivation below.
+	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
+		req.Interactive = true
+	}
+	if msg := interactiveToolApprovalsError(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
 		return
 	}
 	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
@@ -299,19 +324,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		clampWarnings = append(clampWarnings, f.adoNarrowed)
 	}
+	if f.adoDecline != "" {
+		clampWarnings = append(clampWarnings, f.adoDecline.sentence())
+	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
 	// run at (post-floor/raise), matching launch.
-	runInput := composer.RunInput{
-		Agent:            req.Agent,
-		Repo:             req.Repo,
-		Task:             req.Task,
-		ConfinementClass: string(enforced),
-		Interactive:      req.Interactive,
-		DevcontainerRepo: req.DevcontainerRepo,
-		Baseline:         f.baseline,
-	}
+	runInput := preflightRunInput(&req, enforced, f.baseline)
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
 	// call compose.go runs for the AI Run Composer's Review, on the SAME
@@ -346,6 +366,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
+	if e := f.source.edits; e != nil {
+		items = overrideSecretItems(items, e.missingSecrets)
+	}
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
@@ -353,6 +376,20 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
+	// The autonomy gate's own sentences, as create carries them (runs.go), so Review shows a derived hold.
+	warnings = append(warnings, f.autonomyWarns...)
+	// …and create's managed-settings sentence. A pooled run is read as the queued path reads it, against
+	// every runner it could take; otherwise against the runner create would bind: the named one, or the
+	// deployment's executor.
+	var bound *types.AgentRun
+	if !f.place.pooled {
+		bound = &types.AgentRun{}
+		if id := requestRunnerID(req); id != uuid.Nil {
+			bound.RunnerID = &id
+		}
+	}
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
@@ -389,7 +426,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// workspace-resolved together, the same two sets requestRepoProviderRefusals
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
-	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	if !adoServiceCaller(ctx) {
+		resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	}
 	resp.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, harnesses: f.harnesses, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,
@@ -403,4 +442,33 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Access = access
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// preflightRunInput is the RunInput deriveSetupItems keys off: the scalar create-run fields, at the
+// enforced class.
+func preflightRunInput(req *createRunRequest, enforced types.ConfinementClass, baseline composer.Baseline) composer.RunInput {
+	return composer.RunInput{
+		Agent:            req.Agent,
+		Repo:             req.Repo,
+		Task:             req.Task,
+		ConfinementClass: string(enforced),
+		Interactive:      req.Interactive,
+		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         baseline,
+	}
+}
+
+// credentialSetupWriter is preflight's writer for stepModelProvider: writeProviderRefusalAs answers a
+// model_credential refusal written through it with preflightCredentialRefusal, so Review keeps the
+// setup rows resolved before the refusal while Launch opens the sign-in door.
+type credentialSetupWriter struct {
+	http.ResponseWriter
+	setup func() []SetupItem
+}
+
+// preflightCredentialRefusal is preflight's model_credential 422: the envelope, and the setup rows
+// the fold resolved before the provider refused.
+type preflightCredentialRefusal struct {
+	errorBody
+	SetupItems []SetupItem `json:"setup_items,omitempty"`
 }

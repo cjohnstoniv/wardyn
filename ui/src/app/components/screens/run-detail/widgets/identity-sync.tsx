@@ -16,6 +16,8 @@ import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { RUN_SYNC } from "../../../wardyn/copy/runners";
 
 const MAX_DIRS = 3;
+/** While a run is live its sync rows are read again this often: a session can open and close between two of the page's polls. */
+export const SYNC_REREAD_MS = 15_000;
 
 interface DirSync {
   dir: string;
@@ -86,11 +88,19 @@ function useSshOn(enabled: boolean): boolean {
 /**
  * The run's sync rows read by action, as the page reads its endings: the page's trail stops at its row cap,
  * so a long run's syncs fall past it. Read again when a session ends (it leaves `sync.open` as its row is
- * written). Null until read, and after a failed read, so the empty row never speaks off a partial trail.
+ * written) and every SYNC_REREAD_MS while the run is live. Null until a read has succeeded, so the empty row never speaks off a partial trail; a later failed read keeps the last good one.
  */
 function useSyncAudit(run: RunDetail, enabled: boolean): AuditEvent[] | null {
-  const [rows, setRows] = React.useState<AuditEvent[] | null>(null);
+  const [read, setRead] = React.useState<{ id: string; rows: AuditEvent[] } | null>(null);
   const openKey = (run.sync?.open ?? []).map((o) => `${o.dir}@${o.opened_at}`).join("|");
+  // Bumped on a timer while the run is live, so a session that opened and ended between two polls is still read.
+  const [tick, setTick] = React.useState(0);
+  const live = run.state === "RUNNING";
+  React.useEffect(() => {
+    if (!enabled || !live) return;
+    const id = setInterval(() => setTick((n) => n + 1), SYNC_REREAD_MS);
+    return () => clearInterval(id);
+  }, [enabled, live]);
   React.useEffect(() => {
     if (!enabled) return;
     let alive = true;
@@ -98,13 +108,13 @@ function useSyncAudit(run: RunDetail, enabled: boolean): AuditEvent[] | null {
       auditApi.listAudit(run.id, { action: "ssh.sync.transfer" }),
       auditApi.listAudit(run.id, { action: "ssh.sftp.transfer" }),
     ])
-      .then(([sync, sftp]) => alive && setRows([...sync, ...sftp]))
-      .catch(() => alive && setRows(null));
+      .then(([sync, sftp]) => alive && setRead({ id: run.id, rows: [...sync, ...sftp] }))
+      .catch(() => {}); // a re-read that fails keeps what the last good read found
     return () => {
       alive = false;
     };
-  }, [enabled, run.id, run.state, openKey]);
-  return rows;
+  }, [enabled, run.id, run.state, openKey, tick]);
+  return read?.id === run.id ? read.rows : null;
 }
 
 export function SyncRows({ run, audit, onGoAudit }: { run: RunDetail; audit: AuditEvent[]; onGoAudit: () => void }) {

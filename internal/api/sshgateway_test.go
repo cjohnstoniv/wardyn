@@ -1295,12 +1295,26 @@ func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 	if !sshSessionRefused(t, client) {
 		t.Errorf("session over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
 	}
+	// The cap is shared by every way a session channel starts, not just the shell.
+	if !sshSessionRefusedBy(t, client, func(s *ssh.Session) error { return s.Start("true") }) {
+		t.Errorf("exec over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
+	}
+	if !sshSessionRefusedBy(t, client, func(s *ssh.Session) error { return s.RequestSubsystem("sftp") }) {
+		t.Errorf("sftp over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
+	}
 }
 
 // sshSessionRefused reports whether one more shell on client is refused: the
 // channel open (shared cap full, no sync slot) or, because a session channel
 // over the shared cap is admitted for a possible wardyn-sync, its shell request.
 func sshSessionRefused(t *testing.T, client *ssh.Client) bool {
+	t.Helper()
+	return sshSessionRefusedBy(t, client, (*ssh.Session).Shell)
+}
+
+// sshSessionRefusedBy is sshSessionRefused for any first request on the channel
+// (shell, exec, a subsystem): it reports whether the open or that request is refused.
+func sshSessionRefusedBy(t *testing.T, client *ssh.Client, start func(*ssh.Session) error) bool {
 	t.Helper()
 	sess, err := client.NewSession()
 	if err != nil {
@@ -1310,7 +1324,7 @@ func sshSessionRefused(t *testing.T, client *ssh.Client) bool {
 	if _, err := sess.StdinPipe(); err != nil {
 		t.Fatalf("stdin pipe: %v", err)
 	}
-	return sess.Shell() != nil
+	return start(sess) != nil
 }
 
 // TestSSHGateway_MaxConnectionsEnforced pins the total concurrent-connection
@@ -1692,5 +1706,58 @@ func TestSSHAuditAuthFailure_KeyMapIsCapped(t *testing.T) {
 	}
 	if got := len(audit.snapshot()); got != 1+int(authFailedBurst) {
 		t.Errorf("rows = %d, want alice's 1 plus bob's %d from the shared bucket", got, int(authFailedBurst))
+	}
+}
+
+// FUG-L750 N4: the gateway probes an established connection, and closes one whose client stops
+// answering, so a dead SSH shell frees the attach slot it holds; a client that answers is left alone.
+func TestSSHGateway_ClosesAConnectionThatStopsAnswering(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	prev := setSSHKeepaliveEvery(100 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &ssh.ClientConfig{User: run.ID.String(), Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.FixedHostKey(h.hostPub), Timeout: 3 * time.Second}
+
+	// A client that answers every probe stays up well past several intervals.
+	live, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer live.Close()
+
+	// A client that reads its requests and never replies is a dead peer.
+	nc, err := net.DialTimeout("tcp", h.addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	deadConn, chans, _, err := ssh.NewClientConn(nc, h.addr, cfg)
+	if err != nil {
+		t.Fatalf("dial the silent client: %v", err)
+	}
+	go func() {
+		for ch := range chans {
+			_ = ch.Reject(ssh.Prohibited, "test")
+		}
+	}()
+	gone := make(chan error, 1)
+	go func() { gone <- deadConn.Wait() }()
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway kept a connection whose client never answered its keepalive")
+	}
+
+	time.Sleep(350 * time.Millisecond) // three more intervals
+	if _, _, err := live.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Errorf("the gateway closed a client that answers its probes: %v", err)
 	}
 }

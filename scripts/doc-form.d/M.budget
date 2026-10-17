@@ -6,7 +6,10 @@
 # docs/USERS.md 4394 adds 23 over 4371 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/USERS.md 4432 adds 38 over 4394: 0.9 final docs pass 3, measured: the pool and runner policy changes in who approves a governance change.
 # docs/USERS.md 4433 adds 1 over 4432: offboarding merge, measured: the runner, invitation and sponsor sentence beside the docs pass.
-docs/USERS.md=4433 share=35
+# docs/USERS.md 4629 adds 196 over 4433 (0.9.3 RV5), measured: new section on how long a session lasts and what sign-out cuts and leaves.
+# docs/USERS.md 4653 adds 24 over 4629, measured: a person's stored preferences are erased with the runner_pools scope and by a SCIM purge.
+# docs/USERS.md 4681 adds 28 over 4653, measured: the renewal bullet: use keeps the session going and a terminal reconnects across a renewal (0.9.3 console session lifetime).
+docs/USERS.md=4681 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -19,10 +22,26 @@ docs/USERS.md=4433 share=35
 # docs/SSH.md 5662 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
 # docs/SSH.md 5683 adds 21 (the per-run cap of eight sessions per replica).
 # docs/SSH.md 5691 measured at merge: the terminal session cap's own bullet and the session.attach max field.
-docs/SSH.md=5691 share=35
+# docs/SSH.md 5706 adds 15 over 5691 (RV1 round 2, #1974): `wardyn run ssh` refuses plain-http, non-loopback servers.
+# docs/SSH.md 5707 adds 16 over 5691 (0.9.3 RV5), measured: per-key authentication cap and refusals being rate-bound.
+# docs/SSH.md 5722 = 5706 + 16 (RV5), measured at the wave-A merge.
+docs/SSH.md=5722 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
-docs/UI-SANDBOXES.md=5341 share=35
+# docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
+# docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
+# docs/UI-SANDBOXES.md 5492 adds 15 (0.9.3 DR-0236): where the policy attribution rides on each lane.
+# docs/UI-SANDBOXES.md 5523 adds 31 (0.9.3 lane B round 4, measured on top of DR-0236): the route-shape line and three more reasons.
+# docs/UI-SANDBOXES.md 5544 adds 21 (0.9.3 DR-0255): the audit-refusal message form and the shared-gateway plain answer.
+# docs/UI-SANDBOXES.md 5558 adds 14 (0.9.3 lane B round 5): a plain request straight to a shared gateway is uninspected_channel.
+# docs/UI-SANDBOXES.md 5566 adds 8 (0.9.3 DR-0265): which methods the shared-gateway refusal covers.
+docs/UI-SANDBOXES.md=5566 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
-docs/NEW-RUN.md=2915 share=35
+# docs/NEW-RUN.md 2935 adds 20 over 2915: the Name dialog keeps Launch available when its check fails or is rate-limited (FR-0100), measured.
+# docs/NEW-RUN.md 2946 adds 31 over 2915: UIN lane (FUG-L369): the repo_no_credential bullet beside the resident_off one, measured.
+# docs/NEW-RUN.md 2966 = 2935 + 31 (UIN), measured at the wave-C merge.
+# docs/NEW-RUN.md 3032 adds 66 over 2966, measured: the repository .mcp.json bullet and the shared-user MCP address bullet.
+# docs/NEW-RUN.md 2990 adds 24 over 2966 (0.9.3 FIN-E), measured: the AWS CLI region note on a Bedrock-provider run.
+# docs/NEW-RUN.md 3056, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/NEW-RUN.md=3056 share=35

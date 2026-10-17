@@ -164,7 +164,7 @@ func TestLocalPersistRunGrantsOnPostgresForcesOwnerOnlyAndWritesNothingOnFallbac
 	spec := types.RunPolicySpec{EligibleGrants: localGrantKindsForOwner("person-secret")}
 	runID := uuid.New()
 	f.createRun(t, runID, "alice", types.PlacementLocal)
-	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.h.srv)); !ok {
+	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, types.PlacementLocal, personalJudgement(storedPolicy(t, f.h.srv))); !ok {
 		t.Fatal("alice's own local grants were refused")
 	}
 	rows, err := st.ListGrantsByRun(ctx, runID)
@@ -182,7 +182,7 @@ func TestLocalPersistRunGrantsOnPostgresForcesOwnerOnlyAndWritesNothingOnFallbac
 	f.createRun(t, bobRun, "bob", types.PlacementLocal)
 	bobSpec := types.RunPolicySpec{EligibleGrants: append(localGrantKindsForOwner("person-secret")[:2:2], localGrantKindsForOwner(localCorpSecret)[2:]...)}
 	rec := httptest.NewRecorder()
-	if _, ok := f.h.srv.persistRunGrants(ctx, rec, localMemberRequest("bob"), bobRun, time.Now().UTC(), bobSpec, types.PlacementLocal, storedPolicy(t, f.h.srv)); ok {
+	if _, ok := f.h.srv.persistRunGrants(ctx, rec, localMemberRequest("bob"), bobRun, time.Now().UTC(), bobSpec, types.PlacementLocal, personalJudgement(storedPolicy(t, f.h.srv))); ok {
 		t.Fatal("bob has no own row of that name but was admitted")
 	}
 	if got, _ := st.ListGrantsByRun(ctx, bobRun); len(got) != 0 {
@@ -197,7 +197,7 @@ func TestLocalPersistRunGrantsOnPostgresForcesOwnerOnlyAndWritesNothingOnFallbac
 	// A remote run is unchanged: no namespace proof, no forced OwnerOnly.
 	remoteRun := uuid.New()
 	f.createRun(t, remoteRun, "bob", types.PlacementRemote)
-	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), remoteRun, time.Now().UTC(), bobSpec, types.PlacementRemote, placement.DeliveryPolicy{}); !ok {
+	if _, ok := f.h.srv.persistRunGrants(ctx, httptest.NewRecorder(), localMemberRequest("bob"), remoteRun, time.Now().UTC(), bobSpec, types.PlacementRemote, localJudgement{}); !ok {
 		t.Fatal("remote placement must keep its documented behaviour")
 	}
 	if got, _ := st.ListGrantsByRun(ctx, remoteRun); len(got) != len(bobSpec.EligibleGrants) {

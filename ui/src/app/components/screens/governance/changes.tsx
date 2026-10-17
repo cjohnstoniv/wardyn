@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -42,9 +42,10 @@ export function changeLabel(c: GovernanceChange): string {
 
 // What a change is about, as the reviewer reads it. A profile's key is its id, which says nothing, so its
 // name is read from the server's own diff (the stored row on an edit or a delete, the proposed one on a
-// create). Every other kind's key is already its natural key.
+// create), as is a runner trust change's runner. Every other kind's key is already its natural key.
 export function changeTarget(c: GovernanceChange): string {
-  if (c.target_kind === "governance_profile") {
+  // A runner's key is its id; the diff carries its name on both sides.
+  if (c.target_kind === "governance_profile" || c.target_kind === "runner_trust") {
     for (const side of [c.diff.after, c.diff.before]) {
       const name = (side as { name?: unknown } | undefined)?.name;
       if (typeof name === "string" && name) return name;
@@ -250,6 +251,19 @@ export function ChangeDrawer({
                 </section>
               )}
 
+              {/* R1-0098: the notes a direct save would have shown, for the person approving, between the diff and the
+                  reason (after the profile an assignment points at). Same amber note and heading the profile screen puts them
+                  under after a save. */}
+              {change.diff.notes && change.diff.notes.length > 0 && (
+                <Note tone="amber">
+                  <b className="font-semibold">{GOVERNANCE.OMISSION_TITLE}</b>
+                  {change.diff.notes.map((n) => (
+                    <Mono key={n} className="text-inherit">
+                      {n}
+                    </Mono>
+                  ))}
+                </Note>
+              )}
               <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
                 <Input
                   id="governance-change-reason"

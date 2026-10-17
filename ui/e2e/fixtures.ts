@@ -130,6 +130,17 @@ export const test = base.extend({
 
     await use(page);
 
+    // A spec's route splice that round-trips through route.fetch() can still be running when the body
+    // ends (the shell polls, so a read lands at any moment). Closing the context then disposes that
+    // response under the handler, and "apiResponse.json: Response has been disposed" fails a test
+    // whose body passed (#1523 #1805 #1926 #1927 #2057). Every route goes, its errors ignored, before
+    // the context closes. Bounded: the call ends in a browser round trip that once hung for the whole
+    // test timeout during a reload (#1927), and nothing after this needs it.
+    await Promise.race([
+      page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+
     if (pageHealthAllowed(testInfo.file)) return;
     if (pageErrors.length > 0) {
       throw new Error(`uncaught page error(s) during "${testInfo.title}":\n${pageErrors.join("\n---\n")}`);
@@ -218,6 +229,33 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
     window.history.pushState({}, "", p);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, path);
+}
+
+// Resolves once `target` has not moved for `frames` animation frames in a row. The shell's banners are lazy
+// chunks that push the page down when they arrive, so a control can be visible and stable for Playwright's own
+// two frames and still be somewhere else by the time the pointer is released over it; a click that follows
+// this lands where the person would see the control.
+export async function layoutSettled(target: Locator, frames = 30): Promise<void> {
+  await target.evaluate(
+    (el, n) =>
+      new Promise<void>((resolve) => {
+        let top = el.getBoundingClientRect().top;
+        let still = 0;
+        const tick = () => {
+          const now = el.getBoundingClientRect().top;
+          if (now === top) {
+            still += 1;
+            if (still >= n) return resolve();
+          } else {
+            top = now;
+            still = 0;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    frames,
+  );
 }
 
 // ---------------------------------------------------------------------------

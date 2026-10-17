@@ -713,14 +713,16 @@ func TestServiceIdentity_RateLimitedLikeAPerson(t *testing.T) {
 		e.mustCreate(t, svcName, svcSponsor)
 		tok := e.mustMint(t, e.sponsor, svcName)
 		limited := 0
+		var codes []int
 		for i := 0; i < preflightBurst+4; i++ {
 			w := e.as(t, tok.Token, http.MethodPost, "/api/v1/runs/preflight", `{"agent":"claude-code","task":"t"}`)
+			codes = append(codes, w.Code)
 			if w.Code == http.StatusTooManyRequests && respReason(w) == reasonPreflightRateLimited {
 				limited++
 			}
 		}
 		if limited == 0 {
-			t.Errorf("%d preflights from one service identity were never rate limited", preflightBurst+4)
+			t.Errorf("%d preflights from one service identity were never rate limited (codes %v)", preflightBurst+4, codes)
 		}
 	})
 }

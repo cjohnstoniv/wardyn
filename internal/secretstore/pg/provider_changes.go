@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,9 +65,16 @@ func (s *Store) DeleteProviderChanges(ctx context.Context) error {
 //
 // It covers every invalidation of the call at once, a provider removal
 // included, and runs before any history row is written or deleted. The owners
-// are locked in one pass in name order. So two purges cannot deadlock, and the
-// erase, which takes an owner's counter row and then that owner's history,
-// meets the purge's locks in the same order.
+// are locked in one pass in name order, so the erase, which takes an owner's
+// counter row and then that owner's history, meets the purge's locks in the
+// same order.
+//
+// The counter rows are held shared, so they do not order two purges against
+// each other: recordProviderChanges takes db.ProviderPurgeLockClass first, and
+// two purges never overlap. Both callers of a purge (PUT /site-config and the
+// model-provider block write) also hold the site-config door lock, but that
+// lock is a session lock held on another connection, so the store does not
+// rely on it.
 //
 // The owners are chosen by one statement and the history is written by later
 // ones, so a credential that commits between them belongs to an owner who is
@@ -116,6 +124,9 @@ func recordProviderChanges(ctx context.Context, tx pgx.Tx) error {
 	invalidations := secretstore.ProviderInvalidationsFrom(ctx)
 	if len(invalidations) == 0 {
 		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.ProviderPurgeLockClass); err != nil {
+		return fmt.Errorf("pg secretstore: record provider change: %w", err)
 	}
 	locked, err := lockProviderOwners(ctx, tx, invalidations)
 	if err != nil {

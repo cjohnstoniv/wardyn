@@ -28,6 +28,8 @@ export function PoolSection({ state, runType, intent, onChoose }: {
   const value = list ? selectedPoolId(intent, list) : "";
   const chosen = pools.find((p) => p.id === value);
   const missing = flagged && !!list && !value;
+  // A draft pool the list no longer holds leaves the select blank; the cause is said here, not only at Review.
+  const gone = !!list && !value && !!intent.runner_pool_id;
   return (
     <div>
       <div className="flex flex-col gap-2">
@@ -46,7 +48,8 @@ export function PoolSection({ state, runType, intent, onChoose }: {
           {!value && <option value="" disabled hidden />}
           {list && poolChoices(pools, runType).map((c) => <option key={c.id} value={c.id} disabled={c.disabled}>{c.label}</option>)}
         </select>
-        {missing && <p role="alert" className="text-xs text-danger">{RUNNER_POOL_REFUSAL.REQUIRED()}</p>}
+        {gone && <p role="alert" className="text-xs text-danger">{RUNNER_POOL_REFUSAL.NOT_FOUND()}</p>}
+        {missing && !gone && <p role="alert" className="text-xs text-danger">{RUNNER_POOL_REFUSAL.REQUIRED()}</p>}
         {state.status === "error" && <p role="alert" className="text-xs text-danger">{state.message}</p>}
         <p id={`${POOL_ID}-help`} className="text-xs leading-snug text-muted-foreground">{NR_RUN.POOL_HELP}</p>
         {list && <PoolNotes pools={pools} chosen={chosen} runType={runType} />}

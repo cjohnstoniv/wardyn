@@ -21,6 +21,9 @@ func parseBootImages(f *bootFlags) (agent map[string]string, variants map[string
 	if agent, variants, err = parseAgentImages(*f.agentImagesJSON); err != nil {
 		return nil, nil, nil, err
 	}
+	if plain := *f.proxyImage; plain != "" && !types.SafeImageRef(plain) {
+		return nil, nil, nil, fmt.Errorf("WARDYN_PROXY_IMAGE %q is not an image reference: use only letters, digits and . _ : / @ %% + = - (at most 512 bytes), with no spaces or quotes", plain)
+	}
 	for _, p := range []struct{ env, arch, ref string }{
 		{"WARDYN_PROXY_IMAGE_AMD64", "amd64", *f.proxyImageAMD64},
 		{"WARDYN_PROXY_IMAGE_ARM64", "arm64", *f.proxyImageARM64},

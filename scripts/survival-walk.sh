@@ -14,10 +14,14 @@
 #     cannot build it in plain compose);
 #   - a Docker DAEMON restart under a live run -> lost(reboot), Revive
 #     restoring files + the current ceiling, run.revive audited;
-#   - an outage over an hour -> lost(outage);
-#   - the kind leg;
-#   - the hop CA staying stable across boots.
-# Those remain open against #700.
+#   - an outage over an hour -> lost(outage).
+# The kind leg, including the hop CA staying stable across a wardynd restart, is
+# scripts/kind-survival-walk.sh. The two Docker-daemon legs above need a daemon
+# this script may restart, which the shared host's daemon is not: lost(reboot)
+# and lost(outage), their Revive and the run.revive audit row are pinned
+# against Postgres and the fake runner by internal/api/run_lost_test.go,
+# run_revive_test.go and internal/store/store_run_cap_pg_test.go instead, and
+# the live daemon-restart walk is owner-gated (a spare Docker host).
 #
 # WHAT THIS DOES NOT PROVE, AND WHY: it does not hold a LIVE, in-flight
 # sandbox Bedrock request the way the kind SSO walk already does (that walk's

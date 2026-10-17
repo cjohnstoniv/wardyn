@@ -507,3 +507,45 @@ func TestRunInspect_KeptAgentStopped(t *testing.T) {
 		})
 	}
 }
+
+// Porcelain quotes a path that holds a space; the join with numstat's plain path needs it unquoted.
+func TestParsePorcelainLine_UnquotesAPathWithASpace(t *testing.T) {
+	for line, want := range map[string]string{
+		`?? "my notes.txt"`:          "my notes.txt",
+		`R  old.go -> "new name.go"`: "new name.go",
+		` M plain.go`:                "plain.go",
+		`?? "tab\there.txt"`:         "tab\there.txt",
+	} {
+		if got, ok := parsePorcelainLine(line); !ok || got.Path != want {
+			t.Errorf("%q = %q, %v; want %q", line, got.Path, ok, want)
+		}
+	}
+}
+
+// git C-quotes a path with a quote or a backslash in BOTH outputs, so the two
+// rows for one such file must join into one entry under the plain name.
+func TestRunFiles_QuotedPathJoinsIntoOneEntry(t *testing.T) {
+	stdout := strings.Join([]string{
+		"path=/home/agent/work",
+		runFilesSeparator,
+		"1\t0\t\"back\\\\slash.txt\"",
+		"2\t0\t\"q\\\"uote.txt\"",
+		runFilesSeparator,
+		" M \"back\\\\slash.txt\"",
+		" M \"q\\\"uote.txt\"",
+		"",
+	}, "\n")
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return fakeExecSession(stdout, "", 0), nil
+	})
+	resp := decodeRunFiles(t, doRunFiles(srv, run.ID, nil))
+	if len(resp.Files) != 2 {
+		t.Fatalf("files = %+v, want one entry per file", resp.Files)
+	}
+	for path, added := range map[string]int{`back\slash.txt`: 1, `q"uote.txt`: 2} {
+		f := fileByPath(t, resp, path)
+		if f.Status != "M" || f.Added == nil || *f.Added != added {
+			t.Errorf("%q = %+v, want status M +%d", path, f, added)
+		}
+	}
+}

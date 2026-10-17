@@ -23,12 +23,17 @@ const recordingOutputSource = "recording"
 // rather than failing: the work stays pending for a later attempt.
 var errRecordingOutputOverBudget = errors.New("recording output read outlived its budget")
 
+// recordingOutputEnabled is whether run's output is read from its recording:
+// only a recorded run whose own runner keeps no tail (execOutputCapture). A run
+// whose tail this process holds reads that tail, so a recording that yields
+// nothing never hides output that was captured.
 func (s *Server) recordingOutputEnabled(ctx context.Context, run types.AgentRun) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.ExecOutputTailOff || s.runOutputStore() == nil ||
-		run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
+		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.runOutputExpiredByRetention(run) ||
+		s.tailFor(run.ID) != nil {
 		return false
 	}
-	uncaptured, known := s.execOutputCapture(ctx)
+	uncaptured, known := s.execOutputCapture(ctx, run)
 	return known && uncaptured
 }
 
@@ -46,7 +51,7 @@ func (s *Server) uploadedRecordingOutput(ctx context.Context, runID uuid.UUID) e
 	// The runner never withholds a receipt: one that cannot be asked owes
 	// nothing here, like one that captures. The cast is kept, and the run's end
 	// or an authorized read asks the runner again.
-	if uncaptured, _ := s.execOutputCapture(ctx); !uncaptured {
+	if uncaptured, _ := s.execOutputCapture(ctx, run); !uncaptured {
 		return nil
 	}
 	st := s.runOutputStore()

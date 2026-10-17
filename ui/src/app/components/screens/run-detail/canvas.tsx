@@ -248,10 +248,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   return (
     <>
       {terminalPortal}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}
-          className="scroll-thin h-full w-full overflow-y-auto overflow-x-hidden"
+          className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden"
           style={editing ? DOT_GRID : undefined}
         >
           <GridLayout
@@ -308,83 +308,87 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
           </GridLayout>
         </div>
 
-        {editing ? (
-          <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-floating">
-            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary">
-              <LayoutGrid className="size-3.5" />
-              {RUN_COCKPIT.editing}
-            </span>
-            <span className="h-5 w-px bg-border" />
-            {(["live", "finished"] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPreset(p)}
-                className={cn(
-                  "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
-                  p === preset
-                    ? "border border-border bg-card text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
-              </button>
-            ))}
-            <span className="h-5 w-px bg-border" />
-            {/* The catalog offers exactly what a tile could appear for. Deriving
-                it from the whole table while the GRID derived from `renderable`
-                made "Attach from your terminal" a dead control on every finished
-                run and every run you did not start: the click ticked the row, ran
-                addWidget and PUT the phantom placement, and no tile ever came
-                back. Two gates, one of them uninformed. */}
-            <Catalog
-              open={catalogOpen}
-              onOpenChange={setCatalogOpen}
-              ids={WIDGET_IDS.filter(renderable)}
-              placed={layout.map((w) => w.widget)}
-              onToggle={toggleWidget}
-            />
-            <ToolbarButton onClick={reset} Icon={RotateCcw}>
-              {RUN_COCKPIT.resetLayout}
-            </ToolbarButton>
-            <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground"
-            >
-              <Check className="size-3.5" />
-              {RUN_COCKPIT.doneEditing}
-            </button>
-            {!persistable && (
-              <span className="max-w-[16rem] px-1.5 text-meta leading-tight text-muted-foreground">
-                {RUN_COCKPIT.layoutNotPersisted}
+        {/* The controls get a strip of their own under the grid. They used to float over its bottom-right
+            corner, which is where the rail's last widget (Identity) ends, and covered its last rows. */}
+        <div className={cn("flex h-12 shrink-0 items-center px-4", editing ? "justify-center" : "justify-end")}>
+          {editing ? (
+            <div className="z-30 flex items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-floating">
+              <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary">
+                <LayoutGrid className="size-3.5" />
+                {RUN_COCKPIT.editing}
               </span>
-            )}
-          </div>
-        ) : (
-          // The board puts these controls in the tabs row; that row belongs to
-          // run-detail-command-bar.tsx, which this file does not own — so the
-          // canvas carries its own entry points.
-          <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setFocus(true)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
-            >
-              <Expand className="size-3.5" />
-              {RUN_COCKPIT.enterFocus}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
-            >
-              <Pencil className="size-3.5" />
-              {RUN_COCKPIT.editLayout}
-            </button>
-          </div>
-        )}
+              <span className="h-5 w-px bg-border" />
+              {(["live", "finished"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPreset(p)}
+                  className={cn(
+                    "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
+                    p === preset
+                      ? "border border-border bg-card text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
+                </button>
+              ))}
+              <span className="h-5 w-px bg-border" />
+              {/* The catalog offers exactly what a tile could appear for. Deriving
+                  it from the whole table while the GRID derived from `renderable`
+                  made "Attach from your terminal" a dead control on every finished
+                  run and every run you did not start: the click ticked the row, ran
+                  addWidget and PUT the phantom placement, and no tile ever came
+                  back. Two gates, one of them uninformed. */}
+              <Catalog
+                open={catalogOpen}
+                onOpenChange={setCatalogOpen}
+                ids={WIDGET_IDS.filter(renderable)}
+                placed={layout.map((w) => w.widget)}
+                onToggle={toggleWidget}
+              />
+              <ToolbarButton onClick={reset} Icon={RotateCcw}>
+                {RUN_COCKPIT.resetLayout}
+              </ToolbarButton>
+              <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground"
+              >
+                <Check className="size-3.5" />
+                {RUN_COCKPIT.doneEditing}
+              </button>
+              {!persistable && (
+                <span className="max-w-[16rem] px-1.5 text-meta leading-tight text-muted-foreground">
+                  {RUN_COCKPIT.layoutNotPersisted}
+                </span>
+              )}
+            </div>
+          ) : (
+            // The board puts these controls in the tabs row; that row belongs to
+            // run-detail-command-bar.tsx, which this file does not own — so the
+            // canvas carries its own entry points.
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setFocus(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
+              >
+                <Expand className="size-3.5" />
+                {RUN_COCKPIT.enterFocus}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
+              >
+                <Pencil className="size-3.5" />
+                {RUN_COCKPIT.editLayout}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

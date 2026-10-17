@@ -1,0 +1,73 @@
+{{/*
+runnerd's own policy, default-deny both ways. Ingress: only the proxy pods of its runs namespace, on the relay
+and sink ports, so an agent pod (wardyn.component=agent) cannot reach runnerd. The substrate refuses a run's
+extra labels that would set wardyn.component. Egress: DNS, the apiserver and the organisation; the default
+organisation rule excludes the private ranges pods use, so runnerd has no route to sandbox pods.
+
+The runs namespace gets no chart default-deny: the boot canary's phase A would read it as an ambient deny.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "runnerd.fullname" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "runnerd.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runsNamespace }}
+          podSelector:
+            matchLabels:
+              wardyn.managed: "true"
+              wardyn.component: proxy
+      ports:
+        - protocol: TCP
+          port: relay
+        - protocol: TCP
+          port: sink
+  egress:
+    # DNS: the only cluster-wide peer, because CoreDNS lives in kube-system.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        {{- range .Values.apiServer.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+      {{- with .Values.apiServer.peers }}
+      to:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.relay.servicePort }}
+      to:
+        {{- range .Values.egress.orgCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+        {{- end }}
+    {{- with .Values.egress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}

@@ -101,7 +101,7 @@ func (l *maskLab) replicaBuilt(maskPool *pgxpool.Pool, bus *livebus.Bus) replica
 		bus.Start(l.t.Context())
 	}
 	st := maskstore.New(maskPool, sec.SubjectKeys(), reg)
-	srv := New(cfg)
+	srv := testServer(l.t, cfg)
 	srv.maskBeat = 25 * time.Millisecond
 	return replica{srv: srv, reg: reg, rec: rs, fr: fr, sec: sec, st: st}
 }

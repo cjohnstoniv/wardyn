@@ -5,8 +5,14 @@ package remote_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"testing"
@@ -200,5 +206,175 @@ func TestRelayConn_RunnerSessionEndUnblocksAStalledWrite(t *testing.T) {
 	srv.Peer.Close()
 	if err := waitErr(t, res, "a write after the runner session ended"); err == nil {
 		t.Fatal("stalled write returned nil after the session ended")
+	}
+}
+
+func selfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"relay"}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
+}
+
+// streamConn is the runner's end of a relay as the net.Conn tls.Client needs.
+type streamConn struct{ *runnerwire.Stream }
+
+func (streamConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (streamConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c streamConn) SetDeadline(t time.Time) error  { return c.SetReadDeadline(t) }
+func (streamConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote: the org's listener is TLS over the relay. Its server
+// writes an answer and closes the connection at once (an error answer that ends the exchange); tls.Conn.Close
+// sets a write deadline of now before it closes. The runner reads the answer to its end: neither the
+// deadline nor the close may reset the stream under bytes the runner has not read yet.
+func TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const answer = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\nfailed"
+	cert := selfSignedCert(t)
+	srv := relayRunner(t, func(_ string, c net.Conn) error {
+		go func() {
+			tc := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{cert}})
+			if err := tc.Handshake(); err != nil {
+				return
+			}
+			_, _ = tc.Write([]byte(answer))
+			_ = tc.Close()
+		}()
+		return nil
+	})
+	st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc := tls.Client(streamConn{st}, &tls.Config{InsecureSkipVerify: true, ServerName: "relay"})
+	if err := cc.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond) // the answer and the close both arrived before the first read
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(cc); err != nil || string(b) != answer {
+		t.Fatalf("runner read %q, %v; want the whole answer then EOF, not a reset", b, err)
+	}
+	_ = st.CloseWrite()
+	select {
+	case <-st.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream did not finish once the runner closed its end too")
+	}
+}
+
+// TestRelayConn_ADeadlineOfNowBeforeCloseKeepsTheResponse: the same without TLS, the two calls
+// tls.Conn.Close makes: a write deadline of now, then Close. A later Write fails but the stream is not reset.
+func TestRelayConn_ADeadlineOfNowBeforeCloseKeepsTheResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const answer = "answer"
+	late := make(chan error, 1)
+	srv := relayRunner(t, func(_ string, c net.Conn) error {
+		go func() {
+			_, _ = c.Write([]byte(answer))
+			_ = c.SetWriteDeadline(time.Now())
+			_, err := c.Write([]byte("late"))
+			late <- err
+			_ = c.Close()
+		}()
+		return nil
+	})
+	st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waitErr(t, late, "a write after the deadline passed"); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a write after the deadline = %v, want os.ErrDeadlineExceeded", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(st); err != nil || string(b) != answer {
+		t.Fatalf("runner read %q, %v; want the answer then EOF", b, err)
+	}
+}
+
+// TestRelayConn_CloseUnblocksAStalledWrite: net.Conn requires Close to release a Write waiting on a peer
+// that stopped reading, and tls.Conn.Close relies on it to break a stalled close_notify.
+func TestRelayConn_CloseUnblocksAStalledWrite(t *testing.T) {
+	c, _, _ := relayPair(t)
+	res := stalledWrite(c)
+	time.Sleep(100 * time.Millisecond) // the Write is waiting for credit
+	_ = c.Close()
+	select {
+	case <-res:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not release an in-flight Write")
+	}
+}
+
+// TestRelayConn_CloseFreesTheLinkWindowFromUnreadUploads: runners keep sending to relays the org already
+// closed (a request body the org answered early). The bytes already buffered, and the ones that arrive
+// afterwards, are discarded and returned at once; they must not hold the runner link's shared window,
+// which every other stream on that link waits on.
+func TestRelayConn_CloseFreesTheLinkWindowFromUnreadUploads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const (
+		chunk = runnerwire.StreamWindow / 2
+		fill  = runnerwire.ConnWindow / chunk // streams whose first chunk together hold the whole link window
+	)
+	got := make(chan net.Conn, 64)
+	srv := relayRunner(t, func(_ string, c net.Conn) error { got <- c; return nil })
+	open := func() (*runnerwire.Stream, net.Conn) {
+		st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st, <-got
+	}
+	write := func(st *runnerwire.Stream, n int) <-chan error {
+		res := make(chan error, 1)
+		go func() { _, err := st.Write(make([]byte, n)); res <- err }()
+		return res
+	}
+	var runners []*runnerwire.Stream
+	var orgs []net.Conn
+	for range fill {
+		st, c := open()
+		if err := waitErr(t, write(st, chunk), "an upload that fits the link window"); err != nil {
+			t.Fatal(err)
+		}
+		runners, orgs = append(runners, st), append(orgs, c)
+	}
+	blocked, _ := open()
+	res := write(blocked, chunk)
+	select {
+	case <-res:
+		t.Fatal("a write went through a full link window: the setup does not fill it")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	for _, c := range orgs {
+		_ = c.Close()
+	}
+	if err := waitErr(t, res, "a write on another stream after the relays were closed"); err != nil {
+		t.Fatalf("write on another stream: %v", err)
+	}
+	// The runners go on sending to the relays the org closed; those bytes are discarded and returned too.
+	for _, st := range runners {
+		if err := waitErr(t, write(st, chunk-1), "an upload to a closed relay"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 8 { // nearly half the window again, in streams the closed relays left room for
+		st, _ := open()
+		if err := waitErr(t, write(st, runnerwire.StreamWindow), "a write after the discarded uploads"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

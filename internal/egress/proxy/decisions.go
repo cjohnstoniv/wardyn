@@ -31,6 +31,7 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
+	remote       *remoteSink // k8s runners: runnerd's sink, the only spool writer
 	reservations map[uuid.UUID]spoolReservation
 	heldBytes    int64 // the sum of the reservations' bytes
 	activityDir  string
@@ -46,6 +47,8 @@ type decisionSink struct {
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	closed bool
+	// appending counts admitted records whose append runs without mu (emitLocal); close waits for them.
+	appending sync.WaitGroup
 
 	// outMu serialises writes to out: a single Write over PIPE_BUF is not
 	// atomic at the OS level, so concurrent mirror() calls could interleave
@@ -71,6 +74,10 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
+	if s.remote != nil {
+		s.remote.emit(log)
+		return
+	}
 	if s.local != nil {
 		s.emitLocal(log)
 		return
@@ -243,10 +250,15 @@ func (s *decisionSink) close(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
-	if s.local != nil {
-		err := errors.Join(s.local.Close(), s.writerLock.Close())
+	if s.remote != nil {
 		s.mu.Unlock()
-		return err
+		return s.remote.close(ctx)
+	}
+	if s.local != nil {
+		// An admitted record's append runs without s.mu (emitLocal); closed is set, so none starts now.
+		s.mu.Unlock()
+		s.appending.Wait()
+		return errors.Join(s.local.Close(), s.writerLock.Close())
 	}
 	close(s.ch)
 	s.mu.Unlock()

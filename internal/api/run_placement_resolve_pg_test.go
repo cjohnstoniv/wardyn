@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,10 @@ func (p *poolRunner) Executors() []string {
 }
 
 func (p *poolRunner) ExecutorFacts(_ context.Context, name string) (runner.TargetFacts, bool) {
+	if p.silent[name] {
+		// As the orchestrator answers for a configured executor whose probe failed.
+		return runner.TargetFacts{ProbeErr: errors.New("daemon down")}, false
+	}
 	f, ok := p.execFacts[name]
 	return f, ok
 }
@@ -229,7 +234,7 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	checkBody("a barrier the pool does not allow", `{`+background+`,"confinement_class":"CC3",`+pinned+`}`, http.StatusUnprocessableEntity, runnerpool.ReasonBarrierNotAllowed)
 	// D-1319 carry: a request that names no experience (an older client) is never read as Background by a
 	// pool that sets limits; it is refused at every door, and the same request in a pool with no limits is fine.
-	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeNotAllowed)
+	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeMissing)
 	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, soon.ID))
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+soon.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(soon.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
@@ -262,7 +267,7 @@ func (e *placementEnv) limitedPool(name string, barriers ...types.ConfinementCla
 		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &types.RunnerPoolAmount{Default: 1000, Cap: 2000}, MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 2048}, Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers:   barriers,
 	}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("set pool limits: %v", err)
 	}
@@ -580,7 +585,9 @@ func TestPG_HeterogeneousRemotePoolNeverWidens(t *testing.T) {
 	}, http.StatusUnprocessableEntity, string(placement.ReasonPlacementCapability))
 }
 
-// A member that is unknown or unreachable refuses; with one reachable executor the run goes there.
+// A member whose probe fails is never routed to; with one reachable executor the run goes there, and
+// with none the doors answer the logged 503, since a member that cannot report might have taken the run
+// (R2-0155): admission cannot be decided, which is not "no runner in the pool can run this".
 func TestPG_UnknownExecutorFactsRefuseNeverRouteElsewhere(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.createPool("Flaky", types.RunnerPoolOrganization)
@@ -600,10 +607,22 @@ func TestPG_UnknownExecutorFactsRefuseNeverRouteElsewhere(t *testing.T) {
 	}
 	e.runner.silent["alpha"] = true
 	delete(e.runner.execFacts, "alpha")
-	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(`"runner_pool_id":"`+pool.ID.String()+`"`))
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("no executor can report: %d %s", w.Code, w.Body)
-	}
+	sameEverywhere(t, "no executor can report", e.answers(e.person, runBody(`"runner_pool_id":"`+pool.ID.String()+`"`)),
+		http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable)
+}
+
+// R2-0155: the healthy member cannot enforce the class the run asks for and the other's probe fails. The
+// failing one might, so every door answers the 503, not the 422 that no member offers the barrier.
+func TestPG_ExecutorProbeFailureIsNotAnOfflineRefusal(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createPool("Half down", types.RunnerPoolOrganization)
+	e.addExecutors(pool.ID, "alpha", "beta")
+	e.runner.execFacts["alpha"] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2}}
+	delete(e.runner.execFacts, "beta")
+	e.runner.silent = map[string]bool{"beta": true}
+	sameEverywhere(t, "CC3 with the only member that might enforce it unreadable",
+		e.answers(e.person, runBody(`"confinement_class":"CC3","runner_pool_id":"`+pool.ID.String()+`"`)),
+		http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable)
 }
 
 // B1: a run that names no class takes its default barrier from the pool's own eligible candidates, at

@@ -10,7 +10,7 @@
 
 - The policy a run *started from* and the one it *got* differ.
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
-- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
+- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
@@ -65,7 +65,10 @@
 ### `allowed_domains`
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
-- An exact host covers only itself: to wall off GitHub, deny `api.github.com` or `*.github.com` as well as `github.com`.
+- An exact host covers only itself, so a deny names every host a vendor answers on.
+- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
+- A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
+- To wall off Azure DevOps, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; a deny on `dev.azure.com` alone leaves `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` service hosts reachable with the person's credential.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
 - A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.
@@ -442,7 +445,7 @@ done | sort -u |
 ```
 
 - The deeper outside reads catch an include of `refs/heads/*`, which binds no name with a `/` in it, and an exclude of `refs/heads/*/*`, which opens every two-component name.
-- The inside read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the first, because nothing two segments deep was ever excluded.
+- The inside read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the outside reads, because nothing two segments deep was ever excluded.
 - GitHub's App-permissions reference lists **both** reads under **Metadata: read** — `GET /repos/{owner}/{repo}/rules/branches/{branch}` and `GET /repos/{owner}/{repo}/rulesets/{ruleset_id}` are both rows in "Repository permissions for Metadata"; the "Administration" rows for that second path are the `PUT`, `DELETE` and `/history` variants, not the plain `GET`.
 - Metadata: read is the one permission every GitHub App holds mandatorily, so reading a ruleset back should cost no new permission grant.
 - **Unverified against a live installation**: that is the docs' claim, not a measurement, which is why every read failure grades *unknown* instead of *unconfined*.
@@ -462,7 +465,7 @@ What the check does and does not settle:
   - The field comes back (`"never"`) even though `bypass_actors` is withheld, which GitHub returns only to a caller with write access to the ruleset (and documents that).
   - **Two things remain unknown** and are not asserted: whether GitHub computes that field meaningfully for a GitHub App *installation* token, and what App permission the ruleset read needs.
   - An *unauthenticated* read omits the field entirely (measured) — so an absent field is treated as unknown, never as a pass.
-- **Branches only.** The verified ruleset targets branches, so `refs/tags/*` is not bounded by it and the check does not claim otherwise.
+- **Branches only.** The verified ruleset targets branches, so `refs/tags/*` is not bounded by it, this check does not read tag rulesets, and it does not claim otherwise.
 - **Any error grades unknown** — timeout, rate limit, permission refused, a bypass mode that could not be read — never "unconfined".
 - **`api.github.com` only**, so this does not cover GitHub Enterprise Server (neither does minting — the broker has no GHES base-URL setting).
 
@@ -526,6 +529,7 @@ What the check does and does not settle:
 - But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces.go`](../internal/api/workspaces.go)) directly and appends the new host.
 - That is a live write path this migration left untouched.
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
+- An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
 
 ## Approval decision scopes
 
@@ -549,7 +553,7 @@ What the check does and does not settle:
 > **Every scope in that table is HOST-wide — on every port.**
 >
 > - The approval a human is shown carries a bare host and nothing else:
->   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host` and a `mode`, no port;
+>   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host`, a `mode` and `hold_seconds` (the wait the proxy resolved), no port;
 >   - the proxy's first-use cache is keyed on that same bare host;
 >   - and the durable `always` write goes through `hostrules.ValidApprovedHost`, which refuses a port by construction.
 > - So an approval raised by a CONNECT to `example.org:443` also releases `example.org:22`, `:5432` and every other port for whatever reach the scope names.
@@ -778,7 +782,7 @@ What the check does and does not settle:
 | Inline | the run request, `components[].inline` | that run only, never stored |
 
 - A run names stored components by `components[].id`. It carries at most 8.
-- A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys).
+- A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys). It may carry a `description`: one plain line of up to 500 characters that New Run shows on the component's card.
 - Each secret names one stored secret and one delivery:
 
 | `delivery.mode` | What the secret does | The grant it becomes |
@@ -822,7 +826,7 @@ What the check does and does not settle:
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `repo` | `string` | — (required) | Repo slug or URL, validated like a run's `--repo`. |
+| `repo` | `string` | — (required) | Repo slug or URL, validated like a run's `--repo`. An http(s) URL carrying a user name or token is refused (`400` `repo_url_credentials`); use a [`git_pat`](#git_pat) grant. |
 | `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set — including the reserved `/home/agent/drive` subtree, refused with the same message as `workspace_mounts[].target` above. Unset defers to the `~/work/<name>` convention. |
 | `ref` | `string` | (unset) | Branch, tag, or commit SHA to clone. Unset clones the remote's default branch (shallow, `git clone --depth 1`). A branch/tag clones shallow directly (`--branch`); an arbitrary SHA falls back to a shallow fetch of that exact ref plus checkout. |
 
@@ -1105,7 +1109,7 @@ So an entry a pattern matches is judged one of two ways:
 | `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above; each entry is at most **256 bytes** and the list has no count cap. See [`deny_paths`](#deny_paths). |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
-| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..1024** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
+| `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
 | `deny_new_executables` | `bool` | `false` | **Not supported yet:** a policy that sets it `true` is refused (`400`) at write time, because the broker cannot yet tell a newly added executable from an edit to an existing one. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
@@ -1138,7 +1142,7 @@ So an entry a pattern matches is judged one of two ways:
 
 - Refuses a push that introduces a file larger than this many MiB.
 - `0`/absent is **off**.
-- Bounded at write time to **0..1024**.
+- Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
   - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,

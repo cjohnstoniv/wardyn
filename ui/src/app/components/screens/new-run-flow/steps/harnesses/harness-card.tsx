@@ -83,7 +83,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
             <Switch checked={started} label={NR_HARNESSES.START_IN_HARNESS} onChange={onStart} />
             <span aria-hidden="true">{NR_HARNESSES.START_IN_HARNESS}</span>
           </div>
-          {started && (
+          {started && id !== "none" && (
             <div className="flex flex-col gap-2">
               <Label htmlFor={textId} className="w-full justify-between">{NR_HARNESSES.STARTING_PROMPT} <Chip>{NR_SHARED.OPTIONAL}</Chip></Label>
               <Textarea id={textId} value={text} placeholder={NR_HARNESSES.STARTING_PROMPT_PLACEHOLDER} aria-describedby={`${textId}-hint`} onChange={(e) => onText(e.target.value)} />

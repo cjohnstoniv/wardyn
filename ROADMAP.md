@@ -43,6 +43,9 @@
 | **v0.9.0** | Hybrid local and remote runs: client-mode runners, Self-Hosted and Remote Provided pools and a run queue. Also a redesigned New Run with run documents, templates and several drives, an AWS KMS key provider and React 19 | **Shipped (pre-alpha)** — `v0.9.0`, 2026-10-13 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.1** | Self-hosted runners on people's own computers: an AWS SSO run starts on a laptop runner, wardyn-runnerd works with Docker Desktop, and setup is one command. Also a self_host_runner permission and a run page that says where a run ran | **Shipped (pre-alpha)** — `v0.9.1`, 2026-10-14 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.2** | Laptop runners on private-endpoint estates: a self-hosted runner now receives the organisation's internal_hosts | **Shipped (pre-alpha)** — `v0.9.2`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.3-rc.1** | rc.1: laptop runners in a locked-down enterprise: a corporate CA bundle, errors an SDK can read, disk on VM engines, and images for both architectures. | **Shipped (pre-alpha)** — `v0.9.3-rc.1`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.3-rc.2** | rc.2: session recordings follow the organisation, the Azure DevOps credential follows the run's own repository, and a dropped runner link no longer stops a run's egress. | **Shipped (pre-alpha)** — `v0.9.3-rc.2`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.3-rc.3** | rc.3: organisation runners in Kubernetes, AWS SSO sessions renewed mid-run, laptop audit decisions that no longer cross a VM file share, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3-rc.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
@@ -257,6 +260,16 @@
 - the disk link (`wardyn sync` into a remote sandbox; drive-as-source) ·
 - the New Run redesign: guided setup, the YAML/JSON run document, the Tools and access step, Templates, and saving a draft as a template or policy ·
 - the `member` role alias removed (0.8 warns)
+
+What 0.9.3 adds to the runners (the release candidates are in the Shipped table):
+
+| Area | What shipped |
+|---|---|
+| Organisation runners | `wardyn-runnerd` in a Kubernetes cluster, installed by the `deploy/helm/wardyn-runnerd` chart: outbound-only, ServiceAccount and NetworkPolicy isolation, a boot NetworkPolicy canary and a kubelet floor |
+| Trust classes | Each runner is `personal`, `managed_device` or `org_cluster`, set by a security operator; the credential delivery policy can differ per class |
+| Resident credentials | `runner_resident` delivers `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` to the run's runner, kept in the OS keystore and erased at run end, best effort |
+| Recordings | The organisation decides per run; a run that is not recorded says why (`org_off`, `runner_declined`), and `recording: required` refuses a non-recording runner |
+| Locked-down networks | A corporate CA on runners, provider-shaped errors, disk on VM engines, and images for both architectures |
 
 ### v0.10 scope
 

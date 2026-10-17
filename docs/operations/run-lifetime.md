@@ -135,6 +135,8 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - So a run someone is attached to is not idle-stopped, as long as those writes succeed. They are best effort and a failed one is dropped, so a database that refuses them for long enough lets an attached run look idle.
 - A run nobody is attached to is idle like any other, which is why a run can end an hour after its owner last looked at it.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
+- A pool's Interactive idle stop bounds it: its default applies when the policy sets none, and its maximum is never exceeded.
+- A member under a positive ceiling already holds that ceiling's maximum by then (next bullet), so for a member only the pool's maximum bites; an administrator gets the pool's default.
 - A member's value is clamped to the ceiling's positive maximum. The `-1` that interactive and SSH sessions use becomes that maximum too, so under the shipped default a member's session has an hour of idleness. Admins are not clamped.
 - To give members a longer window, raise `auto_stop_after_sec` in the ceiling (the default policy, `defaultPolicy` in the chart). Do not set it to `0`: a ceiling of `0` removes the cap, and it also turns idle stop off for every run that does not set its own value.
 

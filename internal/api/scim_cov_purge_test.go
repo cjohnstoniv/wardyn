@@ -48,6 +48,7 @@ func scimCovSeedPurgee(st *scimCovStore) scimCovLeaver {
 		{SubjectType: types.CapabilitySubjectAll, Subject: "sub-pat", DriveID: group},
 	}
 	st.grantsDeleted, st.assignDeleted = 3, 2
+	st.poolsNarrowed, st.poolsEmptied = 2, 1
 	return l
 }
 
@@ -109,7 +110,8 @@ func TestSCIMCovDeletePurgesAndRecordsEveryStep(t *testing.T) {
 
 	d := e.auditData(e.purgeRow())
 	if d["workspaces_reassigned"] != float64(2) || d["grants_deleted"] != float64(3) || d["assignments_deleted"] != float64(2) ||
-		d["credentials_erased"] != float64(0) || d["masks_fenced"] != float64(0) {
+		d["credentials_erased"] != float64(0) || d["masks_fenced"] != float64(0) ||
+		d["pools_narrowed"] != float64(2) || d["pools_emptied"] != float64(1) {
 		t.Errorf("purge row data = %v, want the counts of the steps", d)
 	}
 	if drives, _ := d["drives"].([]any); len(drives) != 2 || drives[0] != "alpha" || drives[1] != "zeta" {
@@ -548,16 +550,17 @@ func TestSCIMCovSweeperResumesSuspensionsAndPurges(t *testing.T) {
 }
 
 // The purge reads the identity, its forms and the purge ledger again after the suspension; a read that fails
-// there stops the purge steps and leaves the tombstone.
+// there stops the purge steps and leaves the tombstone; a forms read that fails leaves the refusal's row.
 func TestSCIMCovPurgeStopsWhenALaterReadFails(t *testing.T) {
 	for _, c := range []struct {
 		name, method string
 		skip         int
 		wantWrites   int
+		wantRows     int
 	}{
-		{"reading the identity again", "GetIdentity", 1, 0},
-		{"reading the forms again", "IdentityAliasValues", 1, 0},
-		{"reading the ledger for the audit row", "ListDeprovisionJobs:purge", 1, 2},
+		{"reading the identity again", "GetIdentity", 1, 0, 0},
+		{"reading the forms again", "IdentityAliasValues", 1, 0, 1},
+		{"reading the ledger for the audit row", "ListDeprovisionJobs:purge", 1, 2, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -569,8 +572,8 @@ func TestSCIMCovPurgeStopsWhenALaterReadFails(t *testing.T) {
 			if !errors.Is(err, errSCIMCovBoom) || !purged {
 				t.Fatalf("purged %t err %v, want the read's error", purged, err)
 			}
-			if len(st.ownerWrites) != c.wantWrites || e.purgeRows() != 0 || st.identity(l.id).PurgedAt == nil {
-				t.Errorf("owner writes %d purge rows %d, want %d writes and no audit row, with the tombstone kept", len(st.ownerWrites), e.purgeRows(), c.wantWrites)
+			if len(st.ownerWrites) != c.wantWrites || e.purgeRows() != c.wantRows || st.identity(l.id).PurgedAt == nil {
+				t.Errorf("owner writes %d purge rows %d, want %d writes and %d audit rows, with the tombstone kept", len(st.ownerWrites), e.purgeRows(), c.wantWrites, c.wantRows)
 			}
 		})
 	}

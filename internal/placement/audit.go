@@ -23,6 +23,7 @@ const (
 	ActionRunnersEnabledSet       = "runners.enabled.set"
 	ActionRunnerInventoryHold     = "runner.inventory.hold"
 	ActionRunnerUpdate            = "runner.update"
+	ActionRunnerTrustWrite        = "runner.trust.write"
 )
 
 // AuditActions lists them all.
@@ -31,4 +32,5 @@ var AuditActions = []string{
 	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply, ActionRunnerActionRefuse,
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
+	ActionRunnerTrustWrite,
 }

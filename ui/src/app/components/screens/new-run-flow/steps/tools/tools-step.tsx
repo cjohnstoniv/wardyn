@@ -10,6 +10,7 @@
 
 import * as React from "react";
 import { Button } from "../../../../ui/button";
+import { HttpError } from "../../../../../lib/api/core";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -53,12 +54,15 @@ function useAccess() {
   const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact; components: RunIntent["components"] } | undefined>(undefined);
   const answer = checks.preview.result?.access;
   const current = answer && withoutNamelessHarness(answer);
+  // A check refused for rate is not a failure of the run: the step was not checked yet, and says so.
+  const rateLimited = !current && checks.preview.error instanceof HttpError && checks.preview.error.status === 429;
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set, components: draft.intent.components };
   return {
     access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answeredFor: last.current?.components, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
     // The server refused or could not answer this body: the step has nothing true to list, and says so. It stays
     // up while the next check is out, so the button the person pressed is not replaced by an all-clear.
-    failure: !current && checks.preview.error ? checkFailureText(checks.preview.error) : null,
+    failure: !current && !rateLimited && checks.preview.error ? checkFailureText(checks.preview.error) : null,
+    notChecked: rateLimited,
     asking: checks.preview.busy,
     retry: checks.preview.retry,
     // The run's own Azure DevOps capabilities, as its policy resolves them.
@@ -66,9 +70,12 @@ function useAccess() {
   };
 }
 
+/** How long the footer's announcement stays in its live region before it empties. */
+const FOOTER_ANNOUNCE_MS = 1000;
+
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, asking, retry } = useAccess();
+  const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, notChecked, asking, retry } = useAccess();
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
@@ -100,6 +107,27 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const settled = !finished || waiting ? new Set<string>() : new Set(setup.filter((i) => i.status === "satisfied" && finished.ids.has(i.id)).map((i) => i.id));
   const items = [...missing, ...setup.filter((i) => settled.has(i.id))];
   const pending = waiting ? finished.ids : new Set<string>();
+  // The visible footer line is shown only for the answer in hand, so a stale all-clear never stands beside the Setup
+  // card's own held-back one. What a screen reader hears is kept apart: new settled words are announced once, then
+  // the region empties, so nothing stale can be browsed during a recheck. The last words announced are remembered,
+  // so a recheck that settles on the same words says nothing; a failed check forgets them.
+  const footerNow = access && answered && failure === null && !waiting ? (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length)) : undefined;
+  const [footerText, setFooterText] = React.useState("");
+  const announced = React.useRef("");
+  React.useEffect(() => {
+    if (failure !== null) {
+      announced.current = "";
+      setFooterText("");
+    } else if (footerNow !== undefined && footerNow !== announced.current) {
+      announced.current = footerNow;
+      setFooterText(footerNow);
+    }
+  }, [footerNow, failure]);
+  React.useEffect(() => {
+    if (!footerText) return;
+    const t = setTimeout(() => setFooterText(""), FOOTER_ANNOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [footerText]);
   const finish = (id: string) => {
     setFinished((old) => ({ ids: new Set(old?.ids).add(id), base: access }));
     recheck();
@@ -118,16 +146,23 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       footerExtras={{
         start: <Button type="button" variant="ghost" onClick={() => go({ screen: "step", step: "files" })}>{NR_SHARED.BACK}</Button>,
         end: (
-          <span aria-live="polite" className="self-center text-sm text-muted-foreground">
-            {access && answered && failure === null && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
-          </span>
+          <>
+            <span aria-hidden="true" className="self-center text-sm text-muted-foreground">{footerNow}</span>
+            <span aria-live="polite" className="sr-only">{footerText && NR_TOOLS.STICKY_SPOKEN(footerText)}</span>
+          </>
         ),
       }}
     >
       {failure === null ? (
         <>
+          {notChecked && (
+            <div className="flex flex-col items-start gap-2">
+              <p role="status" className="text-sm text-muted-foreground">{NR_TOOLS.NOT_CHECKED}</p>
+              <Button type="button" variant="outline" aria-busy={asking || undefined} aria-disabled={asking || undefined} onClick={() => { if (!asking) void retry(); }}>{NR_REVIEW.CHECK_AGAIN}</Button>
+            </div>
+          )}
           <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
-          <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
+          <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answeredFor={answeredFor} answered={answered} names={names} onSignedIn={recheck} />
         </>
       ) : (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle p-4 text-sm text-danger">
@@ -153,7 +188,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
             }}
           />
           {/* Before the first answer there is nothing to say yet, not "Nothing else to set up". */}
-          {access && <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />}
+          {access && <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} answered={answered} onDone={finish} />}
         </>
       )}
     </StepShell>

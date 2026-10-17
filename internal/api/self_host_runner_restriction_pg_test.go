@@ -100,7 +100,7 @@ func (e *poolEnv) seedRunner(owner, state string) {
 }
 
 // An estate that already self-hosts keeps it open across the upgrade: 0.9.0 cannot stage the grant, so
-// the migration adds the `all` allow when someone claimed a runner whose token they minted themself.
+// the migration adds the `all` allow when a claimed runner exists, whoever minted its token.
 func TestPG_Migration0178_KeepsSelfHostingForAnEstateThatHasARunner(t *testing.T) {
 	e := newPoolEnv(t, false)
 	e.enableRunners()

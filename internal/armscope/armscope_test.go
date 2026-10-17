@@ -95,10 +95,14 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		base + ";x/resourcegroups", base + "/..;/" + other, base + "?api-version=1", base + "#x",
 		// The same marks percent-encoded: a server that decodes, drops ";…" and
 		// then collapses ".." would route these into the other subscription.
-		base + "/..%3b/" + other, base + "/..%3B/" + other, base + "/.%3b/" + other, base + "/rg%3bx=1",
+		base + "/..%3b/" + other, base + "/..%3B/" + other, base + "/.%3b/" + other,
 		"/subscriptions%3bx/" + pinned, "/subscriptions/" + pinned + "%3b/resourcegroups",
 		base + "/..%253b/" + other, base + "/rg%2541", base + "/rg%25", base + "/rg%3Fx", base + "/rg%23x",
 		base + "/%2E%2E/" + other, base + "/rg%0a", base + "/rg%7f", base + "/%20rg", base + "/rg.",
+		// A dot or lookalike with no letter or digit: fullwidth dots, ".." with a zero-width character, "..+".
+		base + "/%EF%BC%8E%EF%BC%8E/" + other, base + "/..%E2%80%8B/" + other, base + "/..+/" + other, base + "/%E2%80%A4/" + other,
+		// The invisible fillers Unicode counts as letters, alone and after dots.
+		base + "/%E3%85%A4/" + other, base + "/..%E3%85%A4/" + other, base + "/%EF%BE%A0/" + other, base + "/%E1%85%9F%E1%85%A0/" + other,
 	} {
 		if err := scope(true).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
 			t.Errorf("GET %q = %v, want ErrUnreadable", path, err)
@@ -118,7 +122,7 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		}
 	}
 	// Headers the CLI really sends are not overrides.
-	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Access-Control-Request-Method": {"GET"}, "Accept": {"application/json"}}
+	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Parametersetname": {"--name"}, "Accept": {"application/json"}}
 	if err := scope(false).Admit(http.MethodGet, base, sent); err != nil {
 		t.Errorf("ordinary headers = %v, want admitted", err)
 	}
@@ -127,6 +131,70 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		if err := scope(false).Admit(http.MethodGet, path, nil); err != nil {
 			t.Errorf("GET %q = %v, want admitted", path, err)
 		}
+	}
+}
+
+// A semicolon is a path parameter some servers drop before routing. Resource Manager's own names use it
+// (an API revision, a backup item), so it is admitted after the first two segments when a real name
+// precedes it, and refused wherever it could change which subscription or which path above it is reached.
+func TestARMScope_SemicolonTable(t *testing.T) {
+	base := "/subscriptions/" + pinned
+	admitted := []string{
+		base + "/resourceGroups/rg/providers/Microsoft.ApiManagement/service/s/apis/echo-api;rev=2",
+		base + "/resourceGroups/rg/providers/Microsoft.RecoveryServices/vaults/v/backupFabrics/Azure/protectionContainers/IaasVMContainer;iaasvmcontainerv2;rg;vm/protectedItems/VM;iaasvmcontainerv2;rg;vm",
+		base + "/resourceGroups/rg%3Bx=1",
+		base + "/resourceGroups/a;b/",
+	}
+	for _, path := range admitted {
+		for _, write := range []bool{false, true} {
+			if err := scope(write).Admit(http.MethodGet, path, nil); err != nil {
+				t.Errorf("write=%v GET %s = %v, want admitted", write, path, err)
+			}
+		}
+	}
+	refused := []string{
+		// The first segment, the subscription, and either spelled with the escape.
+		"/subscriptions;x/" + pinned, "/subscriptions%3Bx/" + pinned, "/subscriptions%3bx", "/subscriptions;",
+		base + ";x/resourceGroups", base + "%3Bx/resourceGroups", base + ";", base + "%3B",
+		// A dot or a lookalike for one before the semicolon, raw, escaped, and doubly escaped.
+		base + "/..;/x", base + "/.;/x", base + "/..%3B/x", base + "/.%3b/x", base + "/..;x=1/x", base + "/...;/x",
+		base + "/%2e%2e;/x", base + "/%2E;/x", base + "/%2e%2e%3b/x", base + "/..%253b/x",
+		base + "/%E2%80%A4;/x", base + "/%EF%BC%8E%EF%BC%8E;/x", base + "/..%E2%80%8B;/x",
+		// The invisible fillers Unicode counts as letters: Hangul Filler, Halfwidth Hangul Filler, U+115F, U+1160.
+		base + "/..%E3%85%A4;/x", base + "/..%EF%BE%A0;/x", base + "/..%E1%85%9F;/x", base + "/..%E1%85%A0;/x", base + "/%E3%85%A4;x",
+		// A blank or dot-ended head, and a second layer of encoding after a real name.
+		base + "/resourceGroups/%20;x", base + "/resourceGroups/x.;y", base + "/resourceGroups/rg%253Bx",
+		// Nothing before the semicolon.
+		base + "/;x", base + "/%3Bx", base + "/%3b", base + "/resourceGroups/;rev=2", base + "/resourceGroups/rg/;",
+		// The marks that were always refused, beside a semicolon.
+		base + "/rg;x?y=1", base + "/rg;x#y", base + "/rg;x%25", base + "/rg;x\\y", base + "/rg;%2Fx", base + "/rg;x//y",
+	}
+	for _, write := range []bool{false, true} {
+		for _, path := range refused {
+			if err := scope(write).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
+				t.Errorf("write=%v GET %s = %v, want ErrUnreadable", write, path, err)
+			}
+		}
+	}
+}
+
+// A header that asks a front end to act on another path or method is refused rather than stripped, as the
+// method overrides always were; the headers the CLI really sends are still admitted.
+func TestAdmit_RefusesPathAndMethodOverrideHeaders(t *testing.T) {
+	base := "/subscriptions/" + pinned
+	for _, name := range []string{
+		"X-Original-URL", "X-Original-Uri", "X-Rewrite-URL", "X-Forwarded-Prefix", "x_original_url", "X_REWRITE_URL",
+		"X-Rewrite-URI", "X-Forwarded-Uri", "X-Forwarded-Path", "X-Original-Path", "X-Envoy-Original-Path", "X-Override-URL",
+		"x_forwarded_path", "X-Override-Uri", "X-Forwarded-URL", "X-Override-Path", "x_rewrite_path",
+		"X-Method", "X-Http-Method", "X-Custom-Method-Hint",
+	} {
+		if err := scope(false).Admit(http.MethodGet, base, http.Header{name: {"/subscriptions/" + other}}); !errors.Is(err, ErrUnreadable) {
+			t.Errorf("%s = %v, want ErrUnreadable", name, err)
+		}
+	}
+	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Parametersetname": {"--name"}, "Accept": {"application/json"}}
+	if err := scope(false).Admit(http.MethodGet, base, sent); err != nil {
+		t.Errorf("ordinary CLI headers = %v, want admitted", err)
 	}
 }
 

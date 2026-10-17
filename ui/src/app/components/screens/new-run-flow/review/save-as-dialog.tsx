@@ -59,16 +59,13 @@ export const SAVE_AS_COPY = {
   nothingChanged: NR_REVIEW.NOTHING_CHANGED,
   cancel: NR_SAVE.CANCEL_SAVE,
   save: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.CONFIRM_TEMPLATE : NR_SAVE.CONFIRM_POLICY),
-  // TODO(E1d follow-up): the canon has no sentence for these two. Empty renders nothing; the behaviour behind them
-  // (Save stays off with nothing checked, own drives are left out of a shared document) does not depend on the text.
-  nothingPicked: "",
-  ownDrivesLeftOut: "",
+  nothingPicked: NR_SAVE.NOTHING_PICKED as string,
+  ownDrivesLeftOut: NR_SAVE.OWN_DRIVES_LEFT_OUT as string,
 };
 
 export type SaveAsCopy = typeof SAVE_AS_COPY;
 
 const NAME_MAX = 128;
-const NO_DRIVES: ReadonlySet<string> = new Set();
 export const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
@@ -106,7 +103,7 @@ export function SaveAsDialog(props: SaveAsDialogProps) {
 }
 
 function SaveAsForm({
-  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds = NO_DRIVES, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
+  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
 }: SaveAsDialogProps) {
   const [name, setName] = React.useState("");
   const [audienceValue, setAudienceValue] = React.useState(ONLY_ME);

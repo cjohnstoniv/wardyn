@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import type { RemoteRunnerView } from "../../../lib/types/runner-pools";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
 
@@ -50,6 +50,7 @@ vi.mock("./pools/pools-tab", () => ({
     <div data-testid="pools-tab">
       open:{openPoolId ?? "none"}
       <button onClick={() => onOpenRunner("remote_hosted", "shared-docker")}>member shared-docker</button>
+      <button onClick={() => onOpenRunner("self_hosted", "r-cluster")}>member cluster-a</button>
     </div>
   ),
 }));
@@ -104,6 +105,8 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     name: "laptop-7",
     state: "claimed",
     owner: "alice@example.com",
+    owner_kind: "person",
+    trust_class: "personal",
     online: true,
     key_fingerprint: "SHA256:3Jd1d8XqFULLFINGERPRINTVALUEk2Q9",
     key_fingerprint_abbreviated: false,
@@ -145,7 +148,14 @@ const WAITING = runner({
 });
 const OLD = runner({ id: "r-old", name: "old-box", state: "revoked", online: false, revoked_at: aheadByHours(-48), revoked_by: "carol@example.com", usage: usageWith(0) });
 
-const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48) };
+const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48), owner_kind: "person", minted_by_kind: "human", break_glass: false };
+
+const history = { back: () => {} };
+function Back() {
+  const navigate = useNavigate();
+  history.back = () => navigate(-1);
+  return null;
+}
 
 function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
   const { operator = true, at = "/admin/runners" } = opts;
@@ -153,6 +163,7 @@ function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
     <MemoryRouter initialEntries={[at]}>
       <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
         <RunnersScreen />
+        <Back />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -575,7 +586,29 @@ describe("Admin -> Runners remote-hosted runner", () => {
     }
   });
 
-  it("a super admin makes it available to people's pools; a held change says so; a security admin reads only", async () => {
+  it("a stale refusal offers Reload, which re-reads the runner into the form and saves on its new revision (FUG-L453)", async () => {
+    remoteListMock.mockResolvedValue([SHARED]);
+    const stale = "shared-docker changed while this run was being set up. Review it and try again.";
+    remoteUpdateMock.mockRejectedValueOnce(new HttpError(409, stale, "runner_pool_stale")).mockResolvedValue(SHARED);
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: "shared-docker" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Edit limits" }));
+    const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
+    setField(dialog.querySelector("#lm-rn") as HTMLInputElement, "4");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByText(stale, { exact: false })).toBeInTheDocument();
+    remoteListMock.mockResolvedValue([{ ...SHARED, revision: 4 }]);
+    await user.click(within(dialog).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(within(dialog).queryByText(stale, { exact: false })).toBeNull());
+    expect((dialog.querySelector("#lm-rn") as HTMLInputElement).value).toBe(String(SHARED.limits!.runs_at_once));
+    setField(dialog.querySelector("#lm-rn") as HTMLInputElement, "5");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(remoteUpdateMock).toHaveBeenCalledTimes(2));
+    expect(remoteUpdateMock.mock.calls[1][1]).toMatchObject({ revision: 4 });
+  });
+
+  it("a super admin makes it available to people's pools; a held change says so; a security admin who is not a super admin switches it but reads the limits only", async () => {
     setPeopleMock.mockResolvedValueOnce(SHARED).mockRejectedValueOnce(new PendingChangeError({ id: "chg-1" } as never));
     const user = userEvent.setup();
     const { unmount } = renderScreen();
@@ -591,7 +624,7 @@ describe("Admin -> Runners remote-hosted runner", () => {
     renderScreen({ operator: false });
     await user.click(await screen.findByRole("button", { name: "shared-docker" }));
     drawer = await screen.findByRole("dialog");
-    expect(within(drawer).getByRole("checkbox")).toBeDisabled();
+    expect(within(drawer).getByRole("checkbox")).toBeEnabled();
     expect(within(drawer).queryByRole("button", { name: "Edit limits" })).toBeNull();
     expect(within(drawer).getByText("Only a super admin changes a remote-hosted runner's limits.")).toBeInTheDocument();
   });
@@ -638,6 +671,29 @@ describe("Admin -> Runners tabs", () => {
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
     await user.click(screen.getByRole("button", { name: "member shared-docker" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
+  });
+
+  it("an organization pool's organization runner opens its runner, found in the admin list beside people's", async () => {
+    const cluster = runner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com", pools: [] });
+    listMock.mockResolvedValue([LAPTOP, cluster]);
+    const user = userEvent.setup();
+    renderScreen({ at: "/admin/runners?tab=pools" });
+    await user.click(await screen.findByRole("button", { name: "member cluster-a" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("cluster-a");
+    expect(dialog).toHaveTextContent("node-1.corp.example.com");
+  });
+
+  it("Back from a runner opened out of a pool returns to that pool (FR-0122)", async () => {
+    remoteListMock.mockResolvedValue([SHARED]);
+    const user = userEvent.setup();
+    renderScreen({ at: "/admin/runners?tab=pools&pool=p-laptop" });
+    expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
+    await user.click(screen.getByRole("button", { name: "member shared-docker" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
+    expect(screen.queryByTestId("pools-tab")).toBeNull();
+    act(() => history.back());
+    expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
   });
 });
 

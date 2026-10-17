@@ -16,7 +16,6 @@ import (
 // enough to matter.
 const maxHarnessPasteTokenLen = 8 << 10
 
-// DRAFT (M2 canon pending)
 const (
 	// harnessPasteViaHelperRefusal answers a paste for a provider whose
 	// credential is captured by a helper inside a login sandbox

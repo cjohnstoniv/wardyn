@@ -290,6 +290,48 @@ func (s PG) ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, stateFi
 	return collect(ctx, s.Pool, "list", "approvals by run", q, args, scanApproval)
 }
 
+// ApprovalsKeysetByRunPager reads ONE run's approvals of the given kinds a page at a time, by keyset
+// instead of OFFSET, so a caller that must see every such row (a per-run cap, a standing grant)
+// holds one bounded page per round trip and never the run's egress rows it does not read. The
+// order and the tie-break are ListApprovalsPageByRun's with id added: requested_at DESC, id DESC.
+// A zero afterID starts at the newest row; otherwise rows are strictly after (afterRequestedAt,
+// afterID). Empty kinds means every kind. A capability interface like ApprovalsByRunPager.
+type ApprovalsKeysetByRunPager interface {
+	ListApprovalsKeysetByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, kinds []types.ApprovalKind,
+		afterRequestedAt time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error)
+}
+
+var _ ApprovalsKeysetByRunPager = PG{}
+
+// ListApprovalsKeysetByRun — see ApprovalsKeysetByRunPager. approvals_run_idx serves the run bound;
+// the kind test and the keyset are a row filter over one run's few rows, so no new index.
+func (s PG) ListApprovalsKeysetByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, kinds []types.ApprovalKind,
+	afterRequestedAt time.Time, afterID uuid.UUID, limit int,
+) ([]types.ApprovalRequest, error) {
+	q := `
+		SELECT ` + approvalCols + `
+		FROM approvals WHERE run_id = $1`
+	args := []any{runID}
+	if stateFilter != "" {
+		args = append(args, string(stateFilter))
+		q += fmt.Sprintf(` AND state = $%d`, len(args))
+	}
+	if len(kinds) > 0 {
+		ks := make([]string, len(kinds))
+		for i, k := range kinds {
+			ks[i] = string(k)
+		}
+		args = append(args, ks)
+		q += fmt.Sprintf(` AND kind = ANY($%d)`, len(args))
+	}
+	if afterID != uuid.Nil {
+		args = append(args, afterRequestedAt, afterID)
+		q += fmt.Sprintf(` AND (requested_at, id) < ($%d, $%d)`, len(args)-1, len(args))
+	}
+	q, args = Page{Limit: limit}.appendTo(q+` ORDER BY requested_at DESC, id DESC`, args)
+	return collect(ctx, s.Pool, "list", "approvals by run keyset", q, args, scanApproval)
+}
+
 // ListRunsPage returns runs in reverse creation order, bounded by p.
 // agent_runs_created_at_idx makes the ORDER BY + LIMIT an index scan.
 func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) {

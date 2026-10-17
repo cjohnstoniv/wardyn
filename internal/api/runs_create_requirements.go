@@ -7,6 +7,8 @@ import (
 	"context"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -60,7 +62,7 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 	return out
 }
 
-// applyWorkspaceRequirements folds each referenced workspace's requirements
+// applyWorkspaceRequirementsFor folds each referenced workspace's requirements
 // contract (types.Workspace.Requirements) into the run's RESOLVED policy — the
 // per-workspace analogue of unionWorkspaceEgress/applyWorkspaceCreds, kept as
 // its OWN function and never inlined into either of those: a reviewer
@@ -110,20 +112,19 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // member mount gate does not allow (requirementWriteRefusal): the caller
 // answers it and neither persists nor dispatches the spec. The workspaces
 // folded here are the run's own attached ones: the record door's one workspace.
-func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
-	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
-}
-
-// applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
-// CALLER's presence map. A request handler passes the owner-scoped map it
-// already computed (presentSecretNamesFor with secretOwnerFromRequest), so a
-// workspace's integration requirement resolves a member's own key exactly as
-// their run will; nil means the operator namespace, computed lazily — the
-// record route and every existing test keep that. attached is every workspace
-// the request names, which a door that folds one workspace at a time passes
-// whole: a write row's mount is held to the owners among them
-// (requirementWriteRefusal).
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+// A workspace that is only in the run because it stores the same directory, and
+// whose write row is not enabled, leaves the mount alone (applyWriteNarrowing).
+//
+// present is the CALLER's presence map. A request handler passes the
+// owner-scoped map it already computed (presentSecretNamesFor with
+// secretOwnerFromRequest), so a workspace's integration requirement resolves a
+// member's own key exactly as their run will; nil means the operator
+// namespace, computed lazily — the record route and every existing test keep
+// that. attached is every workspace the request names, which a door that folds
+// one workspace at a time passes whole: a write row's mount is held to the
+// owners among them (requirementWriteRefusal). bound caps the egress rows a
+// requirement may add; every production door passes one.
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection, bound *egressBound) ([]requirementAuditEntry, *sourceRefusal) {
 	var events []requirementAuditEntry
 	// The member mount gate ran on these mounts as they stand now. One a
 	// write: row below makes writable meets it again before this returns.
@@ -170,7 +171,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				// content) is skipped; only an operator's DIRECT declaration
 				// auto-adds. The predicate is shared with the confined-replay
 				// path — see egressProvenanceAllowed in workspace_egress.go.
-				if !s.egressProvenanceAllowed(req) {
+				if !s.egressProvenanceAllowed(req) || !bound.admits(req, name, ws) {
 					continue
 				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
@@ -218,7 +219,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					pinned := true
 					narrow = &pinned
 				}
-				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID })) {
+				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID }), writeGrantedElsewhere(attached, selections, name, ws.ID)) {
 					suppliers[i] = append(suppliers[i], ws)
 				}
 			}
@@ -293,6 +294,21 @@ func readOnlyPinned(attached []types.Workspace, selections map[string]client.Wor
 	return false
 }
 
+// writeGrantedElsewhere reports whether an attached workspace other than except holds a write:<path>
+// row the run grants: required, or enabled by that workspace's own selection.
+func writeGrantedElsewhere(attached []types.Workspace, selections map[string]client.WorkspaceSelection, path string, except uuid.UUID) bool {
+	key := "write:" + path
+	for _, a := range attached {
+		if a.ID == except {
+			continue
+		}
+		if req, ok := effectiveRequirements(a)[key]; ok && (req.Level == "required" || slices.Contains(selections[a.ID.String()].EnabledOptional, key)) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyWriteNarrowing resolves ONE write:<path> requirement's effective mount
 // writability onto every spec.WorkspaceMounts entry whose Source is path (a
 // no-op when path isn't actually mounted this run — e.g. a multi-source
@@ -310,10 +326,15 @@ func readOnlyPinned(attached []types.Workspace, selections map[string]client.Wor
 // required or enabled. A workspace that is only in the run because it stores
 // the same directory (referencedWorkspacesIn) and whose row is not enabled
 // neither grants a write nor removes one another workspace granted.
-func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow bool) []int {
-	granted := grantedDefault
-	if narrow != nil && *narrow {
-		granted = false
+//
+// A row that grants nothing and carries no explicit read_only also leaves the mount alone when
+// another attached workspace's row grants it (grantedElsewhere), so the answer does not depend on the
+// order workspaces fold in: only a read_only the run asked for takes a granted write away.
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow, grantedElsewhere bool) []int {
+	explicit := narrow != nil && *narrow
+	granted := grantedDefault && !explicit
+	if !granted && !explicit && grantedElsewhere {
+		return nil
 	}
 	var writable []int
 	for i := range spec.WorkspaceMounts {

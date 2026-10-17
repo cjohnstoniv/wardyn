@@ -168,3 +168,28 @@ func TestResumeCursorReleasesLostAckCapacity(t *testing.T) {
 	}
 	replay.unreserve(1)
 }
+
+// An upgrade the far side takes and never answers (a middlebox that holds the request) fails the dial
+// at dialTimeout instead of holding the reconnect loop.
+func TestDialWebSocketGivesUpOnAnUpgradeThatNeverAnswers(t *testing.T) {
+	prev := dialTimeout
+	dialTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { dialTimeout = prev })
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer server.Close()
+	defer close(release)
+	done := make(chan error, 1)
+	go func() {
+		_, err := DialWebSocket(context.Background(), server.URL, uuid.NewString(), nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("dial = %v, want the dial deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dial still waits for an upgrade that never answers")
+	}
+}

@@ -145,25 +145,32 @@ func TestOrchestrator_RemoteSubstratesAreInvisibleToCapabilitiesAndName(t *testi
 	}
 }
 
-func TestOrchestrator_SweepSkipsRemoteSubstrates(t *testing.T) {
+// TestOrchestrator_SweepReachesRunners: the crash sweep reaches a runner's substrate under the same
+// rule and age, so a run whose create died with runnerd is reclaimed; an offline runner is skipped,
+// not an error.
+func TestOrchestrator_SweepReachesRunners(t *testing.T) {
 	r := &sweepRemote{fakeSubstrate: runnerSub("r4")}
+	off := &sweepRemote{fakeSubstrate: runnerSub("r5"), err: runner.ErrRunnerOffline}
 	o := New(&fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}})
 	o.Add(r)
-	if _, err := o.SweepOrphanedSandboxes(context.Background(), time.Minute, func(uuid.UUID) bool { return true }); err != nil {
-		t.Fatal(err)
-	}
-	if r.swept {
-		t.Fatal("the orchestrator's crash sweep reached a remote substrate")
+	o.Add(off)
+	n, err := o.SweepOrphanedSandboxes(context.Background(), time.Minute, func(uuid.UUID) bool { return true })
+	if err != nil || n != 1 || !r.swept || !off.swept {
+		t.Fatalf("swept=%d err=%v online=%v offline=%v", n, err, r.swept, off.swept)
 	}
 }
 
 type sweepRemote struct {
 	*fakeSubstrate
 	swept bool
+	err   error
 }
 
 func (s *sweepRemote) SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error) {
 	s.swept = true
+	if s.err != nil {
+		return 0, s.err
+	}
 	return 1, nil
 }
 

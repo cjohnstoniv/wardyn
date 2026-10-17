@@ -240,6 +240,33 @@ func TestMCPServerKeys_OrgClaimsItsKeyFirst(t *testing.T) {
 	}
 }
 
+// TestMCPServerKeys_OrgKeysFollowComponentIDNotAttachOrder: two organisation
+// servers whose names cut to one key (a row saved before orgMCPKeyFree) take
+// it in component-id order, so the key an organisation's rules name is the
+// same server on every run whatever order it was attached in.
+func TestMCPServerKeys_OrgKeysFollowComponentIDNotAttachOrder(t *testing.T) {
+	low, high := uuid.MustParse("00000000-0000-0000-0000-000000000001"), uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	org := func(id uuid.UUID) attachedComponent {
+		return attachedComponent{snapshot: types.RunComponent{Name: "Linear", ComponentID: &id,
+			Definition: types.ComponentDefinition{MCP: &types.ComponentMCP{URL: "https://mcp.linear.test/mcp"}}}}
+	}
+	for name, attached := range map[string][]attachedComponent{
+		"low first":  {org(low), org(high)},
+		"high first": {org(high), org(low)},
+	} {
+		keys := mcpServerKeys(attached)
+		for i, a := range attached {
+			want := "linear"
+			if *a.snapshot.ComponentID == high {
+				want = "linear-2"
+			}
+			if keys[i] != want {
+				t.Errorf("%s: component %s key = %q, want %q", name, a.snapshot.ComponentID, keys[i], want)
+			}
+		}
+	}
+}
+
 // TestDispatchMCP_AutonomousRunNeverCarriesManagedMCP: Claude Code refuses
 // --strict-mcp-config while managed-mcp.json exists, so no autonomous run is
 // given it.
@@ -367,5 +394,58 @@ func TestInheritedMCPHoldRefusesACommandsHarness(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestAdmitMCPHarnesses_NoHarnessCanTakeIt: an MCP component on a run whose
+// harnesses cannot use one is refused, not admitted for zero harnesses.
+func TestAdmitMCPHarnesses_NoHarnessCanTakeIt(t *testing.T) {
+	def := *mcpInline("linear").Inline
+	got, bad := admitMCPHarnesses(def, nil, []string{"none"})
+	if bad == nil || got != nil {
+		t.Fatalf("admitMCPHarnesses = %v, %v; want a refusal", got, bad)
+	}
+	want := "mcp_harnesses: this run has no harness that can use an MCP server. Add Claude Code or Codex CLI, or remove the component."
+	if bad.status != http.StatusUnprocessableEntity || bad.reason != reasonRequestFieldUnavailable || bad.msg != want {
+		t.Errorf("refusal = %d %s %q", bad.status, bad.reason, bad.msg)
+	}
+	if got, bad := admitMCPHarnesses(def, nil, []string{"none", "claude-code"}); bad != nil || !slices.Equal(got, []string{"claude-code"}) {
+		t.Errorf("a run with a usable harness = %v, %v; want [claude-code]", got, bad)
+	}
+}
+
+// A revive under a ceiling that now denies an MCP server's host drops that server, its credential
+// with it, and the bindings that name it; a server on another host keeps its credential. Dispatch
+// gets the same answer from its order: the ceiling drops the server's injection before dispatchMCP
+// moves it, and dispatchMCP drops a credentialed server it finds no injection for.
+func TestReviveCeilingDropsADeniedMCPServer(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+	linear, other := uuid.New(), uuid.New()
+	cfg := &proxy.Config{RunID: run.ID,
+		MCPServers: []proxy.MCPServerConfig{
+			{Key: "linear", URL: "https://mcp.linear.test/mcp", GrantID: &linear},
+			{Key: "other", URL: "https://mcp.other.test/mcp", GrantID: &other},
+		},
+		MCPBindings: []proxy.MCPBinding{{Harness: "claude-code", Servers: []string{"linear", "other"}}},
+	}
+	re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"*.linear.test"}})
+	if rerr != nil {
+		t.Fatalf("refused: %+v", rerr)
+	}
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Key != "other" || *cfg.MCPServers[0].GrantID != other {
+		t.Fatalf("servers %+v: the denied host's server kept its credential", cfg.MCPServers)
+	}
+	if !slices.Equal(cfg.MCPBindings[0].Servers, []string{"other"}) {
+		t.Errorf("bindings %+v still name the dropped server", cfg.MCPBindings)
+	}
+	if !slices.Equal(re.droppedInjection, []string{"mcp.linear.test"}) {
+		t.Errorf("dropped injections %v, want [mcp.linear.test]", re.droppedInjection)
+	}
+
+	injections := []runner.InjectionGrant{{GrantID: linear, Rule: egress.InjectionRule{Host: "mcp.linear.test"}}}
+	injections = slices.DeleteFunc(injections, func(in runner.InjectionGrant) bool { return ceilingDenies([]string{"*.linear.test"}, in.Rule.Host) })
+	servers := []componentMCP{{Key: "linear", URL: "https://mcp.linear.test/mcp", Host: "mcp.linear.test", Harnesses: []string{"claude-code"}, Credentialed: true}}
+	if out := dispatchMCP(servers, &injections, "http://p:3128", false, map[string]string{}); len(out.servers) != 0 {
+		t.Errorf("dispatch brokered %+v without its withheld credential", out.servers)
 	}
 }

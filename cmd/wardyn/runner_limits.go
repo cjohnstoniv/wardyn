@@ -143,14 +143,17 @@ func (f *limitFlags) said(l sdk.RunnerLimits) string {
 func runnerSetCmd(client clientFn) *cobra.Command {
 	var limits limitFlags
 	var people string
+	var ifUnset bool
 	cmd := &cobra.Command{
 		Use: "set <runner> [--max-runs N] [--total-cpu N --total-memory GB --total-disk GB] " +
-			"[--per-run-cpu N --per-run-memory GB --per-run-disk GB] [--available-to-people on|off]",
+			"[--per-run-cpu N --per-run-memory GB --per-run-disk GB] [--if-unset] [--available-to-people on|off]",
 		Short: "Change a runner's limits, or (an admin) whether a remote-hosted runner is available to people's pools",
 		Args:  cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			lim, _ := limits.changed()
 			avail := cmd.Flags().Changed("available-to-people")
 			switch {
+			case ifUnset && !lim:
+				return errors.New("--if-unset goes with the limit flags")
 			case !lim && !avail:
 				return errors.New("name something to change: --max-runs, a --total-* or --per-run-* flag, or --available-to-people")
 			case lim && avail:
@@ -165,7 +168,7 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			c := client()
-			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) })
+			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) }, nil)
 			if err != nil {
 				return err
 			}
@@ -173,7 +176,10 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 				return setPeoplePools(cmd, c, ref, args[0], people == "on")
 			}
 			if ref.self == nil {
-				return setRemoteLimits(cmd, c, ref.remote, &limits)
+				return setRemoteLimits(cmd, c, ref.remote, &limits, ifUnset)
+			}
+			if ifUnset {
+				return fmt.Errorf("--if-unset is for a remote-hosted runner; %s is self-hosted", args[0])
 			}
 			mine, err := c.GetMyRunner(cmd.Context(), *ref.self)
 			if err != nil {
@@ -191,14 +197,21 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 			return err
 		}}
 	limits.register(cmd)
+	cmd.Flags().BoolVar(&ifUnset, "if-unset", false, "a remote-hosted runner: set the limits only if it still has none when read, else leave what an administrator declared (what setup uses)")
 	cmd.Flags().StringVar(&people, "available-to-people", "", "on: anyone may add this remote-hosted runner to their own user pools; off: nobody (admin or security admin; for listed people use `wardyn runner remote people set`)")
 	return cmd
 }
 
-// setRemoteLimits declares a remote-hosted runner's limits at the revision just read (admin).
-func setRemoteLimits(cmd *cobra.Command, c *sdk.Client, id string, limits *limitFlags) error {
+// setRemoteLimits declares a remote-hosted runner's limits at the revision just read (admin). With
+// ifUnset, limits found on that same read are left alone; a write that races after it keeps the server's
+// revision conflict.
+func setRemoteLimits(cmd *cobra.Command, c *sdk.Client, id string, limits *limitFlags, ifUnset bool) error {
 	rr, err := c.GetRemoteRunner(cmd.Context(), id)
 	if err != nil {
+		return err
+	}
+	if ifUnset && rr.Limits != nil {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s already has limits; left as they are\n", rr.Name)
 		return err
 	}
 	l, err := limits.apply(rr.Limits)

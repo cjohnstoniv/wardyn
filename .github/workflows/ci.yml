@@ -634,17 +634,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: ''
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -844,17 +838,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         if: needs.changes.outputs.backend != 'false'
         with:
@@ -1106,17 +1094,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1335,17 +1317,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|hello-world:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1445,17 +1421,11 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(hello-world:latest)@'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -1504,14 +1474,18 @@ jobs:
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   #
-  # Three shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # Four shards, each with its OWN Postgres service, so the ~12-minute suite and
   # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
   # each shard: its packages still share ONE database whose singleton state
   # (site_config) internal/api and test/apie2e both mutate. The shard package
   # lists are the old `make test-report-pg` list split in two; with
   # `make test-race-pg` they run exactly what the single job ran.
-  #   api   — internal/api and test/apie2e
-  #   store — store, db, secretstore, broker, recording, cmd/wardynd
+  #   api-1, api-2 — the Postgres-gated tests of internal/api and test/apie2e, two
+  #           slices balanced by the recorded seconds in test/pg-test-weights.tsv (make
+  #           test-report-pg-api; scripts/pg-test-select.sh picks them, the go unit run proves the pick misses none). Each slice
+  #           also runs every skip-floor probe. The ~4400 other tests run in `go`.
+  #   store — the Postgres-gated tests of store, db, secretstore, broker, recording,
+  #           cmd/wardynd, notify, livebus (make test-report-pg-store; same selector and guard)
   #   race  — `make test-race-pg` (the three -race -p 1 passes)
   # The required context `test-pg` is the aggregator below, which reports the
   # shards' combined result.
@@ -1520,19 +1494,26 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     # 45: the shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shard: api
-            suite: pg-api
-            run: make test-report-pg PG_REPORT=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
+          - shard: api-1
+            suite: pg-api-1
+            run: make test-report-pg-api PG_PART=1/2 PG_REPORT=pg-api-1
+            superuser: "1"
+          - shard: api-2
+            suite: pg-api-2
+            run: make test-report-pg-api PG_PART=2/2 PG_REPORT=pg-api-2
             superuser: "1"
           - shard: store
             suite: pg-store
-            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... ./internal/livebus/...'
+            run: make test-report-pg-store PG_REPORT=pg-store
             superuser: "1"
           # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
           # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
@@ -1547,7 +1528,10 @@ jobs:
             superuser: ''
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: wardyn
           POSTGRES_DB: wardyn
@@ -1559,16 +1543,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1600,6 +1574,9 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
           WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
           WARDYN_TEST_POOL_GUARD: '1'
+          # No gate reads a PG shard's coverage (the floor and cover-union take unit,
+          # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
+          WARDYN_TEST_REPORT_COVER: '0'
         run: ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
@@ -1707,19 +1684,14 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardynd
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       TRIVY_BUILD_ARGS: ''
     steps: &trivy_steps
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: ${{ env.TRIVY_PRIME }}
       - name: Build the image locally (scan target — never pushed)
         run: |
           # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
@@ -1803,6 +1775,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardynd-fips
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
       TRIVY_BUILD_ARGS: --build-arg GOFIPS140=v1.0.0-c2097c7c
     steps: *trivy_steps
   trivy-wardyn-proxy:
@@ -1815,6 +1788,19 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardyn-proxy
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.proxy
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine)@'
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-wardyn-runnerd:
+    name: trivy (wardyn-runnerd)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      TRIVY_IMAGE: wardyn-runnerd
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.runnerd
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-base:
@@ -1827,6 +1813,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-base
       TRIVY_DOCKERFILE: deploy/images/base/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-codex-cli:
@@ -1839,6 +1826,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-codex-cli
       TRIVY_DOCKERFILE: deploy/images/codex-cli/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-aws-sso:
@@ -1851,6 +1839,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-aws-sso
       TRIVY_DOCKERFILE: deploy/images/aws-sso/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|debian:trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-vscode:
@@ -1863,6 +1852,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-vscode
       TRIVY_DOCKERFILE: deploy/images/vscode/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-novnc:
@@ -1875,6 +1865,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: agent-novnc
       TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
+      TRIVY_PRIME: '/library/(golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
 
@@ -2174,6 +2165,7 @@ jobs:
       - trivy-wardynd
       - trivy-wardynd-fips
       - trivy-wardyn-proxy
+      - trivy-wardyn-runnerd
       - trivy-agent-base
       - trivy-agent-codex-cli
       - trivy-agent-aws-sso

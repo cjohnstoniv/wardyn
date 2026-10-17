@@ -818,9 +818,9 @@ func TestMITMVetFailureRowCarriesCauseAndVia(t *testing.T) {
 	}
 }
 
-// TestHTTPErrorAWSAwareLogsOnTheAWSBranch pins that the AWS branch warns once on the proxy, as
+// TestHTTPErrorShapedLogsOnTheAWSBranch pins that the AWS branch warns once on the proxy, as
 // httpError does, and that the body the sandbox gets is the modelled one.
-func TestHTTPErrorAWSAwareLogsOnTheAWSBranch(t *testing.T) {
+func TestHTTPErrorShapedLogsOnTheAWSBranch(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
@@ -828,7 +828,8 @@ func TestHTTPErrorAWSAwareLogsOnTheAWSBranch(t *testing.T) {
 
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
 	rec := httptest.NewRecorder()
-	p.httpErrorAWSAware(rec, awsHost, "llm upstream vet failed", errors.New("dns down"), false, http.StatusInternalServerError, "InternalServerException")
+	err := errors.New("dns down")
+	p.httpErrorShaped(rec, shapeAWS, awsHost, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(443, ruleSourceArtifactMITM, err))
 
 	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
 		t.Errorf("warnings = %d, want 1; log=%q", got, logs.String())

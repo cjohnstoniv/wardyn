@@ -32,9 +32,14 @@ const COPY_FAILED_TOAST = "Copy failed — your browser blocked clipboard access
 // arbitrary string, not a DOM selection).
 export function useCopyToClipboard(resetMs: number | null = 1500) {
   const [copied, setCopied] = React.useState(false);
+  // The pending reset, cleared on unmount so it never sets state on a gone component.
+  const resetTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  React.useEffect(() => () => clearTimeout(resetTimer.current), []);
 
   const scheduleReset = () => {
-    if (resetMs != null) setTimeout(() => setCopied(false), resetMs);
+    if (resetMs == null) return;
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), resetMs);
   };
 
   const copyAsync = async (text: string): Promise<boolean> => {

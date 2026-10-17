@@ -341,6 +341,12 @@ test.describe("governance — the security admin's authoring walk", () => {
     await editor.getByRole("button", { name: GOV.SAVE, exact: true }).click();
     await expect(editor).toHaveCount(0);
 
+    // The write's advisory names what the rubric can see on this deployment, before anyone launches.
+    await expect(page.getByText(GOV.OMISSION_TITLE)).toBeVisible();
+    await expect(
+      page.getByText(/^on this deployment a run under this profile.* grades egress .*; secrets .*; and confinement .* — so (only .* can cap it, and .* cap nothing here|every rubric row can cap it)(; a run on one of its model providers always grades secrets .*)?$/),
+    ).toBeVisible();
+
     // The profiles list chip: the strictest cap, on the chip face itself.
     const row = profilesTable(page).getByRole("row", { name: new RegExp(RUBRIC_NAME) });
     await expect(row.getByText(LIMITS_CHIP.AUTONOMY(AUTONOMY_META.L1.label))).toBeVisible();
@@ -759,5 +765,57 @@ test.describe("governance — a profile that narrows a base", () => {
     const dialog = page.getByRole("alertdialog");
     await expect(dialog.getByText(GOV.REFUSED_HAS_CHILDREN)).toBeVisible();
     await expect(dialog.getByRole("button", { name: GOV.DELETE, exact: true })).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R1-0097 — the preview's User type picker. A custom-type assignment can only
+// match when the preview is asked as that type.
+// ---------------------------------------------------------------------------
+
+test.describe("governance — the resolved preview asks as a chosen user type", () => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const TYPE_ID = "e2e-preview-type";
+  const PROFILE = "typed-wall";
+
+  test("a user type assignment matches only after that type is picked", async ({ page }) => {
+    const type = await page.request.post("/api/v1/user-types", { headers: auth, data: { id: TYPE_ID, name: "E2E preview type" } });
+    expect(type.status(), await type.text()).toBe(201);
+    const prof = await page.request.post("/api/v1/governance/profiles", {
+      headers: auth,
+      data: { name: PROFILE, ceiling: YOLO_CEILING, limits: {} },
+    });
+    expect(prof.status(), await prof.text()).toBe(201);
+    const profileID = (await prof.json()).profile.id;
+    const assigned = await page.request.post("/api/v1/governance/assignments", {
+      headers: auth,
+      data: { subject_type: "user_type", subject: TYPE_ID, profile_id: profileID, priority: 0 },
+    });
+    expect(assigned.ok(), await assigned.text()).toBeTruthy();
+
+    try {
+      await gotoConsole(page, "admin");
+      await navTo(page, "Governance");
+      await expect(page.getByText(GOV.PREVIEW_LEAD)).toBeVisible();
+      await expect(page.getByText(GOV.PREVIEW_USER_TYPE_HINT)).toBeVisible();
+
+      // As the default Standard user, nothing matches.
+      await resolve(page, "nobody@corp.example");
+      await expect(page.getByText(GOV.PREVIEW_RESULT_DEFAULT)).toBeVisible();
+
+      // Picking the type clears that answer, and Resolve now names the profile.
+      await page.getByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL }).click();
+      await page.getByRole("option", { name: "E2E preview type" }).click();
+      await expect(page.getByText(GOV.PREVIEW_RESULT_DEFAULT)).toHaveCount(0);
+      await page.getByRole("button", { name: GOV.PREVIEW_RUN_CTA, exact: true }).click();
+      await expect(page.getByText(GOV.PREVIEW_RESULT(PROFILE, GOV.MATCHED_USER_TYPE))).toBeVisible();
+    } finally {
+      const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+      for (const a of snap.assignments ?? []) {
+        if (a.subject === TYPE_ID) await page.request.delete(`/api/v1/governance/assignments/${a.id}`, { headers: auth });
+      }
+      await page.request.delete(`/api/v1/governance/profiles/${profileID}`, { headers: auth });
+      await page.request.delete(`/api/v1/user-types/${TYPE_ID}`, { headers: auth });
+    }
   });
 });

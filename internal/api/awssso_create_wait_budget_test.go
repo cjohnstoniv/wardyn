@@ -259,9 +259,13 @@ func TestCreateWait_RowGoneOrSpentRefuses(t *testing.T) {
 	}
 }
 
-// The budget follows the token exchange it waits out.
+// The budget follows the token exchange it waits out, as the operator tuned it.
 func TestCreateWait_BudgetFollowsTheTokenExchange(t *testing.T) {
-	if want := 2*awsSSORefreshTimeout + awsSSORefreshRetryDelay + time.Second; awsSSOCreateWaitBudget != want {
-		t.Errorf("budget = %v, want %v", awsSSOCreateWaitBudget, want)
+	if got, want := (&Server{}).createWaitBudget(), 2*awsSSORefreshTimeout+awsSSORefreshRetryDelay+time.Second; got != want {
+		t.Errorf("default budget = %v, want %v", got, want)
+	}
+	tuned := &Server{cfg: Config{AWSSSORefresh: AWSSSORefreshTuning{Timeout: 30 * time.Second, RetryDelay: 2 * time.Second}}}
+	if got, want := tuned.createWaitBudget(), 63*time.Second; got != want {
+		t.Errorf("tuned budget = %v, want %v", got, want)
 	}
 }

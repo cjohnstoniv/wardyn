@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -126,6 +128,39 @@ func TestEgressCanaryExitCodes(t *testing.T) {
 		}
 		if code != tc.want {
 			t.Errorf("%s: -egress-canary %s exited %d, want %d", tc.name, tc.addr, code, tc.want)
+		}
+	}
+}
+
+// TestDiskFreeFlag runs the real entry point: -disk-free prints the MiB free under a path and exits 0,
+// and exits 1 with nothing on stdout for a path it cannot read. The Docker runner trusts both.
+func TestDiskFreeFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		want       int
+	}{
+		{"readable path", t.TempDir(), 0},
+		{"missing path", "/no/such/path/for/wardyn", 1},
+	} {
+		cmd := exec.Command(os.Args[0], "-disk-free", tc.path)
+		cmd.Env = append(os.Environ(), runMainEnv+"=1")
+		out, err := cmd.Output()
+		code := 0
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			t.Fatalf("%s: run: %v", tc.name, err)
+		}
+		if code != tc.want {
+			t.Fatalf("%s: exited %d, want %d", tc.name, code, tc.want)
+		}
+		mib, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if tc.want == 0 && (perr != nil || mib <= 0) {
+			t.Errorf("%s: stdout %q is not a positive MiB count", tc.name, out)
+		}
+		if tc.want != 0 && len(out) != 0 {
+			t.Errorf("%s: stdout %q, want none", tc.name, out)
 		}
 	}
 }

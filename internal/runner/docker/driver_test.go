@@ -134,7 +134,7 @@ func testSpec() runner.SandboxSpec {
 		Image:            "busybox:latest",
 		ConfinementClass: types.CC1,
 		Env:              map[string]string{"FOO": "bar"},
-		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://cp:8080"},
+		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080"},
 		Resources:        runner.Resources{CPUMillis: 1000, MemoryMiB: 256},
 	}
 }
@@ -174,7 +174,7 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	f.failImagePull = true // absent + unpullable
 	d := newTestDriver(f)
 
-	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local", nil)
+	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local", "", nil)
 	if err == nil {
 		t.Fatal("ensureImage on an absent, unpullable image: got nil error")
 	}
@@ -203,7 +203,7 @@ func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
 		f.failImagePull = true // absent + unpullable
 		d := newTestDriver(f)
 
-		err := d.ensureImage(context.Background(), ref, nil)
+		err := d.ensureImage(context.Background(), ref, "", nil)
 		if err == nil {
 			t.Fatalf("ensureImage(%q) on an absent, unpullable image: got nil error", ref)
 		}
@@ -320,7 +320,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	if pcfg.RunToken != "tok" {
 		t.Errorf("proxy config run_token = %q, want tok", pcfg.RunToken)
 	}
-	if pcfg.ControlPlaneURL != "http://cp:8080" {
+	if pcfg.ControlPlaneURL != "http://127.0.0.1:8080" {
 		t.Errorf("proxy config control_plane_url = %q", pcfg.ControlPlaneURL)
 	}
 	if pcfg.Policy == nil {
@@ -1380,7 +1380,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 		f.images["wardyn/agent-claude:local"] = true
 		d := newTestDriver(f)
 		pulls := 0
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() { pulls++ }); err != nil {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", func() { pulls++ }); err != nil {
 			t.Fatalf("ensureImage on a present image: %v", err)
 		}
 		if pulls != 0 {
@@ -1393,7 +1393,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 		d := newTestDriver(f)
 		var order []string
 		f.onPull = func(string) { order = append(order, "pull") }
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", func() {
 			order = append(order, "report")
 		}); err != nil {
 			t.Fatalf("ensureImage on an absent, pullable image: %v", err)
@@ -1408,7 +1408,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 	t.Run("nil callback", func(t *testing.T) {
 		f := newFakeDocker()
 		d := newTestDriver(f)
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", nil); err != nil {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", nil); err != nil {
 			t.Fatalf("ensureImage with a nil callback: %v", err)
 		}
 	})

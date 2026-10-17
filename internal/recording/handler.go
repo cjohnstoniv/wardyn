@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -58,6 +59,7 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			return
 		}
 		if err != nil {
+			slog.ErrorContext(req.Context(), "recording: replay open failed", "run", prefix, "error", err)
 			http.Error(w, "recording store error", http.StatusInternalServerError)
 			return
 		}
@@ -66,8 +68,19 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		w.Header().Set("Content-Type", "application/x-asciicast")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
-		// Stream: ignore the copy error — client may disconnect mid-stream.
-		_, _ = io.Copy(w, rc)
+		// Stream: ignore the copy error — client may disconnect mid-stream. A STORE read
+		// error part-way ends the body short of its tail; the status is already sent, so log it.
+		var readErr error
+		_, _ = io.Copy(w, readerFunc(func(p []byte) (int, error) {
+			n, err := rc.Read(p)
+			if err != nil && !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			return n, err
+		}))
+		if readErr != nil {
+			slog.ErrorContext(req.Context(), "recording: replay read failed part-way", "run", prefix, "error", readErr)
+		}
 	})
 	return r
 }
@@ -86,3 +99,8 @@ func canonicalRunID(prefix string) bool {
 	id, err := uuid.Parse(prefix)
 	return err == nil && id.String() == prefix
 }
+
+// readerFunc adapts a function to io.Reader.
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }

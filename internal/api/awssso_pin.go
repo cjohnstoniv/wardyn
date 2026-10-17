@@ -112,8 +112,6 @@ func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, en
 // the docs guard only reads reasons.go and reasons_routes.go's own string
 // literals, and refuseCapture's reason now also reaches the wire.
 
-// DRAFT (M2 canon pending)
-
 const (
 	// ssoTokenAccountPinRefusal: the sign-in captured a different account/role
 	// than the one this deployment pinned at launch. It names BOTH pairs because
@@ -131,8 +129,7 @@ const (
 	// the pick did not resolve — and the value itself is already in their
 	// terminal.
 	ssoTokenAccountShapeRefusal = "This sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
-	// DRAFT (M2 canon pending)
-	ssoTokenRoleShapeRefusal = "This sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
+	ssoTokenRoleShapeRefusal    = "This sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
 	// credentialConfinementAdvisorySentence (0.8 #150): the confinement-visibility
 	// WARNING for a run whose model credential is a stored AWS SSO session
 	// delivered to the sandbox at dispatch, under a confinement class weaker than

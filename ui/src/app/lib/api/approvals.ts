@@ -47,6 +47,7 @@ export const approvals = {
   async approve(id: string, reason: string, opts?: DecisionOptions): Promise<ApprovalRequest> {
     const res = await wfetch(`/approvals/${encodeURIComponent(id)}/approve`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({
         reason,
         ...(opts?.scope ? { decision_scope: opts.scope } : {}),
@@ -60,6 +61,7 @@ export const approvals = {
   async deny(id: string, reason: string, opts?: DecisionOptions): Promise<ApprovalRequest> {
     const res = await wfetch(`/approvals/${encodeURIComponent(id)}/deny`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({
         reason,
         ...(opts?.scope ? { decision_scope: opts.scope } : {}),

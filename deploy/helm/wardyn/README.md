@@ -276,8 +276,9 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
   - the admin token always authenticates as admin (one shared credential, no per-human identity to demote), which is the recovery path if a role-map typo ever locks every human out.
 - Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes) against an EXISTING OIDC-only install to turn on RBAC for the first time;
   - it takes effect on each user's next login (a session signed before the role map existed carries no role and is never treated as authenticated).
-- By default a console session ends at the identity provider's ID token expiry.
+- By default a console session ends at the identity provider's ID token expiry, about an hour on Entra ID.
 - To make it last longer (or shorter), set `env.WARDYN_OIDC_SESSION_TTL` (a duration, at most `24h`; boot refuses more).
+- For a session that lasts while it is used, set `env.WARDYN_OIDC_SESSION_RENEW_CAP` and `env.WARDYN_OIDC_SESSION_IDLE_TIMEOUT` instead ([who-gets-in.md](../../../docs/operations/who-gets-in.md#how-long-a-console-session-lasts)).
 - Pair a longer session with `env.WARDYN_ROLE_STAMP_TTL`: nothing else re-checks the identity provider during a session, so a person disabled only there keeps the console until the session TTL runs out.
 - See [docs/ENV.md](../../../docs/ENV.md).
 - **`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**
@@ -398,6 +399,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - wardynd refuses to boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any `kubernetes.io/` or `k8s.io/` annotation or label except `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
 - `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and create can warn that no node a run may be placed on is large enough.
   - It compares a run's requests to node size, honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the scheduler stays the authority.
+  - It also shortens a start wait.
+    - A pod the scheduler reports `Unschedulable` fails at the start timeout, not the capacity wait, when a Ready node exists and none passes the `k8s.sandbox.*` selector, affinity and taints.
+    - Cordon, not-ready and autoscaler deletion taints are not counted, and zero nodes keeps the wait.
+    - A pool the autoscaler scales from zero reads as no match while other nodes are healthy, so leave the flag off for it.
   - Without it the warning is absent.
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
@@ -1033,6 +1038,7 @@ spec:
 - `extraObjects`: extra Kubernetes objects rendered with the release, each through `tpl` (the only value that is).
   - Empty by default; see [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs` with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off` (no recording, no replay) when off.
+  - **The chart default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
   - wardynd's own default directory writes to the read-only root FS and would crash-loop the pod (it did, on 0.7.0's empty-dir spelling).
   - The chart pins the store itself — not because `pg` is unsafe here (its casts are already readable from any replica), but because this chart is single-replica by policy (see `replicas` below),
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.

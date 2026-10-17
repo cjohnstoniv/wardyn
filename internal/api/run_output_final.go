@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -93,6 +94,20 @@ func (w *tailWriter) Write(p []byte) (int, error) {
 }
 
 func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
+
+// OutputGap (runner.OutputGapMarker): a recovered copy starts after skipped bytes the runner had
+// already discarded. The row says so where they would have been and is marked incomplete.
+func (w *tailWriter) OutputGap(skipped int64) {
+	w.t.mw.mu.Lock()
+	w.t.mw.capture.dropped = true
+	w.t.mw.mu.Unlock()
+	_, _ = w.Write([]byte(outputGapMarker(skipped)))
+}
+
+// outputGapMarker is the line a recovered row carries in place of the bytes a runner discarded.
+func outputGapMarker(skipped int64) string {
+	return fmt.Sprintf("[Wardyn: the first %d bytes of this run's output are missing. The runner had already discarded them when this server picked the run up.]\n", skipped)
+}
 
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
@@ -265,7 +280,7 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 	case runIsUnrecordable(run), hasTail:
 	case s.recordingOutputEnabled(ctx, run):
 		s.finalizeRecordingOutput(ctx, st, run)
-	case s.execOutputUncaptured(ctx):
+	case s.execOutputUncaptured(ctx, run):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
 	}

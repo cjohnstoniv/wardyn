@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -35,8 +36,6 @@ import (
 // credential MATERIAL; it must never re-authorize the operation against a
 // different principal, credential source, mechanism, account, role, region or
 // host. Everything below is that sentence, spelled out.
-
-// DRAFT (M2 canon pending)
 
 const (
 	// credentialReauthRaisedSentence is what the person is told when a run's
@@ -71,12 +70,9 @@ const (
 	// credentialReauthApprovalsUnreadableBody are the three fail-closed 503s.
 	// Machine-facing (the caller is a sidecar), but named rather than inlined so
 	// every sentence this lane puts on a wire has one definition and a canon row.
-	credentialReauthRunUnreadableBody = "Could not read this run"
-	// DRAFT (M2 canon pending)
-	credentialReauthStoreErrorBody = "Could not read this run's AWS SSO credential"
-	// DRAFT (M2 canon pending)
+	credentialReauthRunUnreadableBody       = "Could not read this run"
+	credentialReauthStoreErrorBody          = "Could not read this run's AWS SSO credential"
 	credentialReauthApprovalsUnreadableBody = "Could not read this run's approvals"
-	// DRAFT (M2 canon pending)
 	// Fixed: the raise error wraps the approval store's own error (driver text,
 	// possibly), and the reader is the run's own sandbox — so the cause is
 	// logged, never answered (#173, #505).
@@ -124,10 +120,36 @@ type runApprovalLister interface {
 	ListApprovalsPageByRun(ctx context.Context, runID uuid.UUID, stateFilter types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error)
 }
 
-// runApprovals reads one run's approvals in a state (empty = all), preferring
-// the paged by-run read and falling back to the fleet-wide list the dedup scan
-// in internal/approval already uses.
+// runApprovalsPage is how many rows one round trip of the keyset read returns.
+const runApprovalsPage = 200
+
+// runApprovalKinds are the kinds every caller of runApprovals reads: an Azure DevOps escalation is a
+// tool_call, and a sign-in or consent request is a credential_reauth. The run's egress rows, the
+// bulk of a long run's approvals, are never read, so the paged read does not fetch them.
+var runApprovalKinds = []types.ApprovalKind{types.ApprovalToolCall, types.ApprovalCredentialReauth}
+
+// runApprovals reads one run's tool_call and credential_reauth approvals in a state (empty = all).
+// Preferred is the keyset-paged by-run read, which holds runApprovalsPage rows per round trip;
+// then the OFFSET-less ByRun page, then the fleet-wide list the dedup scan in internal/approval
+// already uses.
 func (s *Server) runApprovals(ctx context.Context, runID uuid.UUID, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+	if pager, ok := s.cfg.Store.(store.ApprovalsKeysetByRunPager); ok {
+		var out []types.ApprovalRequest
+		var afterAt time.Time
+		var afterID uuid.UUID
+		for {
+			page, err := pager.ListApprovalsKeysetByRun(ctx, runID, state, runApprovalKinds, afterAt, afterID, runApprovalsPage)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, page...)
+			if len(page) < runApprovalsPage {
+				return out, nil
+			}
+			last := page[len(page)-1]
+			afterAt, afterID = last.RequestedAt, last.ID
+		}
+	}
 	if pager, ok := s.cfg.Store.(runApprovalLister); ok {
 		return pager.ListApprovalsPageByRun(ctx, runID, state, store.Page{})
 	}
@@ -206,18 +228,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		// NEVER resolve a scope from a read that failed.
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthScopeChangedRefusal, nil)
 	}
-	// Only a run that chose a model provider, on a grant naming it, resolves —
-	// from that provider's record and its owner's own session
-	// (providerSSOScopeAt). A grant naming no provider was authored before the
-	// model-provider conversion, and no session serves it any more.
-	drift := "model_provider"
-	var scope awsSSOScope
-	switch {
-	case snapshot.ComponentID != "":
-		scope, drift = s.cliSSOScopeAt(ctx, run, snapshot, claims.Sub)
-	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
-		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
-	}
+	scope, drift := s.awsSSOScopeAt(ctx, siteCfg, run, snapshot, claims.Sub)
 	if drift != "" {
 		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
@@ -303,6 +314,23 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresAt}),
 	})
 	return true
+}
+
+// awsSSOScopeAt re-derives, from the live roster, the scope a grant's snapshot
+// resolves its credential through for subject, the run token's own subject:
+// drift names the first thing that moved ("" = equal). Only a run that chose a
+// model provider, on a grant naming it, resolves — from that provider's record
+// and its owner's own session (providerSSOScopeAt). A grant naming no provider
+// was authored before the model-provider conversion, and no session serves it
+// any more. The resolve and the background renewer both ask it.
+func (s *Server) awsSSOScopeAt(ctx context.Context, siteCfg types.SiteConfig, run types.AgentRun, snapshot awsSSOScopeSnapshot, subject string) (awsSSOScope, string) {
+	switch {
+	case snapshot.ComponentID != "":
+		return s.cliSSOScopeAt(ctx, run, snapshot, subject)
+	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
+		return providerSSOScopeAt(siteCfg, run, snapshot, subject)
+	}
+	return awsSSOScope{}, "model_provider"
 }
 
 // The reasons a re-auth is raised for. A closed vocabulary because it rides an

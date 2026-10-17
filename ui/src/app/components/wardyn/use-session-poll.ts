@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { HttpError, isSignedOutHold, onAuthChange, setToken, wfetch } from "../../lib/api/core";
+import { HttpError, identityCheckSettled, isSignedOutHold, onAuthChange, setToken, wfetch } from "../../lib/api/core";
 import type { Me } from "../../lib/api/health";
 
 type Session = Me | "unauthed" | "unreachable";
@@ -60,7 +60,11 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     inFlight.current = controller;
     const started = generation.current;
     void readSession(controller.signal).then((session) => {
-      if (started === generation.current) receive(session);
+      if (started !== generation.current) return;
+      receive(session);
+      // A write held for this check goes (or is refused) once /me has said who is signed in, or that no one
+      // is. An error is not an answer: it leaves the write to the hold's bound, which refuses it.
+      if (session !== "unreachable") identityCheckSettled();
     }).finally(() => {
       inFlight.current = null;
       if (pending.current) tickRef.current?.();
@@ -140,6 +144,17 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     tickRef.current();
   }, [read, stopPoll]);
 
+  // Another tab's auth event reached a tab that is signed out and not waiting on a sign-in of its own:
+  // one read of who is signed in now, then the focus and visibility events can retry an outage.
+  const recheck = React.useCallback(() => {
+    if (tickRef.current) return;
+    tickRef.current = () => read((session) => {
+      if (session === "unauthed" || (typeof session === "object" && acceptRef.current(session))) stopPoll();
+    });
+    pending.current = inFlight.current !== null;
+    tickRef.current();
+  }, [read, stopPoll]);
+
   const submitToken = (token: string) => {
     stopPoll();
     setBusy(true);
@@ -157,5 +172,5 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     tickRef.current();
   };
 
-  return { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken };
+  return { status, setStatus, busy, startPoll, stopPoll, checkOnce, recheck, submitToken };
 }

@@ -197,6 +197,7 @@ type fakeRunsFilteredStore struct{ *authzStore }
 func (s *fakeRunsFilteredStore) ListRunsFiltered(_ context.Context, f store.RunFilter, _ store.Page) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sponsoredAsked = f.WithSponsored
 	var out []types.AgentRun
 	for _, run := range s.runs {
 		if f.Owner != "" && run.CreatedBy != f.Owner {
@@ -274,6 +275,20 @@ func TestMeAttentionCounts(t *testing.T) {
 	}
 	if got.PendingApprovals != 2 {
 		t.Fatalf("pending_approvals = %d, want 2 (both of the member's OWN run's pending rows, scoped like GET /approvals)", got.PendingApprovals)
+	}
+}
+
+// TestMeAttentionCountsTheRunsOfWhomTheCallerSponsors: the member's count reads the same widened scope
+// as their GET /runs list, so a held approval on a sponsored run is in the badge.
+func TestMeAttentionCountsTheRunsOfWhomTheCallerSponsors(t *testing.T) {
+	srv, ast, _ := meAttentionFixture(t)
+	memberSess := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	meAttentionOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/attention?view=user", memberSess, ""))
+	ast.mu.Lock()
+	asked := ast.sponsoredAsked
+	ast.mu.Unlock()
+	if !asked {
+		t.Fatal("the member's attention read did not ask for the runs of the identities they sponsor")
 	}
 }
 

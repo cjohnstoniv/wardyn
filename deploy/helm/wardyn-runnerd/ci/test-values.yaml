@@ -1,0 +1,6 @@
+org: https://wardyn.example.com
+runsNamespace: wardyn-runs-ci
+sandbox:
+  arch: amd64
+registration:
+  existingSecret: runnerd-registration

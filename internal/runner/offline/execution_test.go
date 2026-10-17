@@ -4,7 +4,9 @@
 package offline
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -104,5 +106,41 @@ func TestExecutionCallRequiresExactGenerationAndContainmentDoesNot(t *testing.T)
 		if err := m.BeforeRefCall(ctx, method, id.String(), uuid.Nil); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A selftest is admitted only under the lease's own generation and only before
+// that generation's Exec was attempted, and it writes nothing either way.
+func TestCheckSelftestAdmitsOnlyTheLeasesUnattemptedGeneration(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	ctx := context.Background()
+	generation := uuid.New()
+	lease := m.state.Runs[id].Lease
+	lease.ExecutionGeneration = generation
+	if err := m.Lease(ctx, lease); err != nil {
+		t.Fatal(err)
+	}
+	before, err := json.Marshal(m.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CheckSelftest(ctx, id.String(), generation); err != nil {
+		t.Fatalf("selftest before any attempt = %v, want admitted", err)
+	}
+	if after, _ := json.Marshal(m.state); !bytes.Equal(before, after) {
+		t.Fatalf("an admitted selftest wrote state:\n%s\n%s", before, after)
+	}
+	if err := m.CheckSelftest(ctx, id.String(), uuid.New()); err == nil {
+		t.Fatal("selftest admitted under a generation that is not the lease's")
+	}
+	if err := m.CheckSelftest(ctx, id.String(), uuid.Nil); err == nil {
+		t.Fatal("selftest admitted under the nil generation")
+	}
+	if err := m.BeforeRefCall(ctx, runnerwire.MethodExec, id.String(), generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CheckSelftest(ctx, id.String(), generation); err == nil {
+		t.Fatal("selftest admitted after the generation's Exec was attempted")
 	}
 }

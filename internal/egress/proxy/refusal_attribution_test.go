@@ -44,8 +44,8 @@ func TestWriteEgressDenyAttributesOnlyPolicyDecisions(t *testing.T) {
 	for _, reason := range []string{"policy:denied", "policy:default-deny", "policy:method", "approval:denied"} {
 		t.Run(reason, func(t *testing.T) {
 			rec := denyWith(attributedProxy(teamA), reason)
-			if rec.Code != http.StatusForbidden || rec.Body.String() != golden {
-				t.Errorf("code %d body %q, want 403 and %q", rec.Code, rec.Body.String(), golden)
+			if rec.Code != http.StatusForbidden || denyText(rec) != golden {
+				t.Errorf("code %d body %q, want 403 and %q", rec.Code, denyText(rec), golden)
 			}
 			if got := rec.Header().Get("X-Wardyn-Policy"); got != `profile; name="Team%20A"` {
 				t.Errorf("X-Wardyn-Policy = %q", got)
@@ -53,15 +53,15 @@ func TestWriteEgressDenyAttributesOnlyPolicyDecisions(t *testing.T) {
 			if got := rec.Header().Get("X-Wardyn-Policy-Request"); got != "https://help.example.com/access" {
 				t.Errorf("X-Wardyn-Policy-Request = %q", got)
 			}
-			if strings.Contains(rec.Body.String(), "Pat Owner") || strings.Contains(rec.Body.String(), "pat@example.com") {
-				t.Errorf("the body names the owner: %q", rec.Body.String())
+			if strings.Contains(denyText(rec), "Pat Owner") || strings.Contains(denyText(rec), "pat@example.com") {
+				t.Errorf("the body names the owner: %q", denyText(rec))
 			}
 		})
 	}
 	for _, reason := range []string{"builtin:private-ip", "builtin:resolve-failed", "builtin:dial-failed", "policy:evaluator-error", ""} {
 		t.Run("fault "+reason, func(t *testing.T) {
 			got, want := denyWith(attributedProxy(teamA), reason), denyWith(attributedProxy(nil), reason)
-			if got.Body.String() != want.Body.String() || got.Code != want.Code {
+			if denyText(got) != denyText(want) || got.Code != want.Code {
 				t.Errorf("body %q code %d, want %q code %d", got.Body.String(), got.Code, want.Body.String(), want.Code)
 			}
 			if !headersEqual(got.Header(), want.Header()) {
@@ -89,8 +89,8 @@ func TestEgressDenyThroughTheProxyIsAttributed(t *testing.T) {
 	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}, DeniedDomains: []string{"bad.test"}}, "127.0.0.1:1", nil, nil)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://denied.test/"))
-	if rec.Body.String() != "egress denied by policy\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
-		t.Errorf("an unattributed run changed: %q %v", rec.Body.String(), rec.Header())
+	if denyText(rec) != "egress denied by policy\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
+		t.Errorf("an unattributed run changed: %q %v", denyText(rec), rec.Header())
 	}
 
 	p.attribution = teamA
@@ -102,8 +102,8 @@ func TestEgressDenyThroughTheProxyIsAttributed(t *testing.T) {
 		rec := httptest.NewRecorder()
 		p.ServeHTTP(rec, req)
 		if rec.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` ||
-			!strings.Contains(rec.Body.String(), `governed by the profile "Team A"`) {
-			t.Errorf("%s: not attributed: %q %v", name, rec.Body.String(), rec.Header())
+			!strings.Contains(denyText(rec), `governed by the profile "Team A"`) {
+			t.Errorf("%s: not attributed: %q %v", name, denyText(rec), rec.Header())
 		}
 	}
 }
@@ -119,11 +119,13 @@ func TestAttributionRendering(t *testing.T) {
 		{"non-ASCII name travels percent-encoded", &policyref.Ref{Source: policyref.SourceProfile, Name: "Équipe ☂", RequestURL: "https://h.example.com/x"},
 			"profile; name=\"%C3%89quipe%20%E2%98%82\"", "https://h.example.com/x", `This run is governed by the profile "Équipe ☂". To request a change: https://h.example.com/x`},
 		{"deployment default", deploymentRef, "deployment", "https://help.example.com/access",
-			"This run is governed by this deployment's default policy. To request a change: https://help.example.com/access"},
+			"This run is governed by this deployment's policy. To request a change: https://help.example.com/access"},
 		{"mailto from the email", &policyref.Ref{Source: policyref.SourceProfile, Name: "T", Email: "pat@example.com"},
 			`profile; name="T"`, "mailto:pat@example.com", `This run is governed by the profile "T". To request a change: mailto:pat@example.com`},
 		{"request text when there is no route", &policyref.Ref{Source: policyref.SourceDeployment, RequestText: "ask the platform desk"},
-			"deployment", "", "This run is governed by this deployment's default policy. To request a change: ask the platform desk"},
+			"deployment", "", "This run is governed by this deployment's policy. To request a change: ask the platform desk"},
+		{"a changed policy no profile names is the deployment's, not its default", &policyref.Ref{Source: policyref.SourceDeployment, Overridden: true},
+			"deployment; overridden", "", "This run is governed by this deployment's policy, as changed for this run."},
 		{"a policy the person changed says so", &policyref.Ref{Source: policyref.SourceProfile, Name: "T", Overridden: true},
 			`profile; name="T"; overridden`, "", `This run is governed by the profile "T", as changed for this run.`},
 		{"nothing to say about a route", &policyref.Ref{Source: policyref.SourceProfile, Name: "T"},
@@ -161,21 +163,21 @@ func TestAttributionRendering(t *testing.T) {
 func assertAttributed(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int) {
 	t.Helper()
 	if rec.Code != wantStatus {
-		t.Fatalf("status = %d, want %d; body %q", rec.Code, wantStatus, rec.Body.String())
+		t.Fatalf("status = %d, want %d; body %q", rec.Code, wantStatus, denyText(rec))
 	}
 	if rec.Header().Get("X-Wardyn-Policy") != `profile; name="Team%20A"` || rec.Header().Get("X-Wardyn-Policy-Request") != "https://help.example.com/access" {
 		t.Errorf("headers = %v", rec.Header())
 	}
-	if !strings.Contains(rec.Body.String(), `This run is governed by the profile \"Team A\". To request a change: https://help.example.com/access`) &&
-		!strings.Contains(rec.Body.String(), `This run is governed by the profile "Team A". To request a change: https://help.example.com/access`) {
-		t.Errorf("body = %q", rec.Body.String())
+	if !strings.Contains(denyText(rec), `This run is governed by the profile \"Team A\". To request a change: https://help.example.com/access`) &&
+		!strings.Contains(denyText(rec), `This run is governed by the profile "Team A". To request a change: https://help.example.com/access`) {
+		t.Errorf("body = %q", denyText(rec))
 	}
 }
 
 func assertUntouched(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	if rec.Header().Get("X-Wardyn-Policy") != "" || strings.Contains(rec.Body.String(), "governed by") {
-		t.Errorf("a fault refusal names a policy: %v %q", rec.Header(), rec.Body.String())
+	if rec.Header().Get("X-Wardyn-Policy") != "" || strings.Contains(denyText(rec), "governed by") {
+		t.Errorf("a fault refusal names a policy: %v %q", rec.Header(), denyText(rec))
 	}
 }
 
@@ -188,8 +190,8 @@ func TestGitBrokerRefusalsAreAttributed(t *testing.T) {
 		p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, "/wardyn/gh/other/repo/info/refs?service=git-upload-pack", nil))
 		return rec
 	}
-	if rec := notGranted(); rec.Body.String() != "repository not granted to this run\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
-		t.Errorf("an unattributed refusal changed: %q %v", rec.Body.String(), rec.Header())
+	if rec := notGranted(); denyText(rec) != "repository not granted to this run\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
+		t.Errorf("an unattributed refusal changed: %q %v", denyText(rec), rec.Header())
 	}
 	p.attribution = teamA
 	assertAttributed(t, notGranted(), http.StatusForbidden)
@@ -198,8 +200,8 @@ func TestGitBrokerRefusalsAreAttributed(t *testing.T) {
 	body := recordedPush(t, "refs/heads/main", map[string]string{"a.txt": "x\n"})
 	rec := postPush(t, p, string(body))
 	assertAttributed(t, rec, http.StatusForbidden)
-	if !strings.Contains(rec.Body.String(), "outside this run's branch namespace") {
-		t.Errorf("not the branch-namespace refusal: %q", rec.Body.String())
+	if !strings.Contains(denyText(rec), "outside this run's branch namespace") {
+		t.Errorf("not the branch-namespace refusal: %q", denyText(rec))
 	}
 
 	// the 415 encoding refusal is a fault and stays byte-identical.
@@ -248,8 +250,8 @@ func TestPATBrokerRefusalIsAttributed(t *testing.T) {
 		p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, "/wardyn/git/other.example/org/repo.git/info/refs?service=git-upload-pack", nil))
 		return rec
 	}
-	if rec := notGranted(); rec.Body.String() != "host not granted to this run\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
-		t.Errorf("an unattributed refusal changed: %q %v", rec.Body.String(), rec.Header())
+	if rec := notGranted(); denyText(rec) != "host not granted to this run\n" || rec.Header().Get("X-Wardyn-Policy") != "" {
+		t.Errorf("an unattributed refusal changed: %q %v", denyText(rec), rec.Header())
 	}
 	p.attribution = teamA
 	assertAttributed(t, notGranted(), http.StatusForbidden)
@@ -269,7 +271,7 @@ func TestADORefusalsAreAttributed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
-		t.Fatalf("not Azure DevOps' shape: %v: %s", err, rec.Body.String())
+		t.Fatalf("not Azure DevOps' shape: %v: %s", err, denyText(rec))
 	}
 	if after.TypeKey != before.TypeKey || rec.Code != plain.Code {
 		t.Errorf("typeKey %q status %d, want %q %d", after.TypeKey, rec.Code, before.TypeKey, plain.Code)
