@@ -84,6 +84,7 @@ These are the sweeps, with the interval each ticks at:
 | `orphaned_build` | 30m | The image builder can sweep orphaned builds |
 | `run_output` | 1h | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
 | `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
+| `aws_sso_renewal` | 1m | Always: renews a live run's captured AWS SSO session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry. Runs on the sweeper leader |
 
 - Every replica registers every sweep whose condition holds on the install, whichever replica holds the sweeper lock, so a follower notices a leader that stopped ticking.
 - A sweep whose condition does not hold has no series and can never be stale.

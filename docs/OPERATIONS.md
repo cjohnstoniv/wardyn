@@ -3158,6 +3158,14 @@ Naming these is the point of the walk, not a caveat on it:
 - Before 0.7.6 that was terminal: the agent's next model call failed and a mid-task context was lost.
 - Now the proxy **parks** the sandbox's next credential exchange while the credential's owner signs in again.
 
+**Renewal comes first.**
+
+- The AWS SSO renewer runs every minute on the sweeper leader and renews a live run's session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry, while the token in hand still works.
+- The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
+- So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
+- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
+- It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
+
 **What the operator sees.**
 
 - The run stays RUNNING.
@@ -3191,6 +3199,7 @@ Naming these is the point of the walk, not a caveat on it:
 **What the operator can change.**
 
 - `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (proxy sidecar, default `600s`, clamped `[10s, 1800s]`) is how long ONE hold waits.
+- `WARDYN_AWS_SSO_REFRESH_SKEW`, `_SERVE_FLOOR`, `_RETRY_DELAY` and `_TIMEOUT` (wardynd) tune the renewal; see [docs/ENV.md](ENV.md#wardyn_aws_sso_refresh_skew).
 - Lower it if your agent's SDK gives up before the hold does — on expiry the call fails with the AWS `UnauthorizedException` it would have got anyway.
 - Both container runners forward it from wardynd's environment into every proxy sidecar, and the compose stack forwards it from the operator's shell into wardynd.
 - A docker-gated measurement against the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked credential exchange at eleven minutes — the test's own ceiling, not the SDK's.

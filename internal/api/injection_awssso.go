@@ -228,18 +228,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		// NEVER resolve a scope from a read that failed.
 		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthScopeChangedRefusal, nil)
 	}
-	// Only a run that chose a model provider, on a grant naming it, resolves —
-	// from that provider's record and its owner's own session
-	// (providerSSOScopeAt). A grant naming no provider was authored before the
-	// model-provider conversion, and no session serves it any more.
-	drift := "model_provider"
-	var scope awsSSOScope
-	switch {
-	case snapshot.ComponentID != "":
-		scope, drift = s.cliSSOScopeAt(ctx, run, snapshot, claims.Sub)
-	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
-		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
-	}
+	scope, drift := s.awsSSOScopeAt(ctx, siteCfg, run, snapshot, claims.Sub)
 	if drift != "" {
 		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
@@ -325,6 +314,23 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresAt}),
 	})
 	return true
+}
+
+// awsSSOScopeAt re-derives, from the live roster, the scope a grant's snapshot
+// resolves its credential through for subject, the run token's own subject:
+// drift names the first thing that moved ("" = equal). Only a run that chose a
+// model provider, on a grant naming it, resolves — from that provider's record
+// and its owner's own session (providerSSOScopeAt). A grant naming no provider
+// was authored before the model-provider conversion, and no session serves it
+// any more. The resolve and the background renewer both ask it.
+func (s *Server) awsSSOScopeAt(ctx context.Context, siteCfg types.SiteConfig, run types.AgentRun, snapshot awsSSOScopeSnapshot, subject string) (awsSSOScope, string) {
+	switch {
+	case snapshot.ComponentID != "":
+		return s.cliSSOScopeAt(ctx, run, snapshot, subject)
+	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
+		return providerSSOScopeAt(siteCfg, run, snapshot, subject)
+	}
+	return awsSSOScope{}, "model_provider"
 }
 
 // The reasons a re-auth is raised for. A closed vocabulary because it rides an

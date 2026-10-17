@@ -703,6 +703,15 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 	return actor
 }
 
+// localSeat is local mode's one principal: every request, and so every run
+// token, is attributed to it.
+func (s *Server) localSeat() string {
+	if s.cfg.LocalOperator != "" {
+		return s.cfg.LocalOperator
+	}
+	return "local:operator"
+}
+
 // operatorOwnedRequest reports whether the request on ctx is the operator
 // itself rather than a person: local mode's injected principal, or
 // actorFromRequest's system actor that is not a device — the real admin token.

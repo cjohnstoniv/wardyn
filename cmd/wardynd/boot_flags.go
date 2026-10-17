@@ -270,6 +270,8 @@ type bootFlags struct {
 	// hurry must not be able to crash-loop a daemon.
 	awsSSOProxyInject  *string
 	allowTestEndpoints *bool
+	// ssoRefresh is the AWS SSO renewal tuning, validated at boot.
+	ssoRefresh awsSSORefreshFlags
 
 	// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100) size the sign-in
 	// sandbox itself — see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
@@ -537,6 +539,7 @@ func parseBootFlags() *bootFlags {
 
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", "TEST ONLY: re-point both AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL, so an AWS SSO walk can run with no real AWS tenant. Requires -allow-test-endpoints; warns at every boot. Empty (default) uses the real AWS endpoints"),
 		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `"on" or "off": inject a captured AWS SSO session proxy-side, leaving only a placeholder in the sandbox, or write it into the sandbox directly. Applies to new dispatches only; an unrecognised value takes the default`),
+		ssoRefresh:             registerAWSSSORefreshFlags(),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "acknowledge this is a TEST deployment; unlocks -aws-sso-endpoint-override and a model provider's unencrypted http:// bedrock.base_url, both refused otherwise. Never set on a deployment holding a real credential (default false)"),
 		// harnessLoginCPUMillis/harnessLoginMemoryMiB (#1100): see api.Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB.
 		harnessLoginCPUMillis:   flagIntEnv("harness-login-cpu-millis", "WARDYN_HARNESS_LOGIN_CPU_MILLIS", 500, "milli-CPU request/limit for the sign-in (harness-login) sandbox; still capped by the acting principal's governance ceiling"),

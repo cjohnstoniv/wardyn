@@ -322,10 +322,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// loopback-only for a real guarantee (the Compose default already
 	// publishes 127.0.0.1).
 	if s.cfg.LocalMode {
-		op := s.cfg.LocalOperator
-		if op == "" {
-			op = "local:operator"
-		}
+		op := s.localSeat()
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// N1 (direct-network guard): the no-auth local surface must answer ONLY to
 			// a loopback TCP PEER. The Host header (checked next) is forgeable by a

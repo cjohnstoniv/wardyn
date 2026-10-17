@@ -133,6 +133,12 @@ what to set for the old behaviour.
   With renewal on, the expiry warning and open terminals follow a renewal instead of ending at the expiry the page
   loaded with. docs/operations/who-gets-in.md compares the three session shapes; with `WARDYN_OIDC_SESSION_TTL` unset
   a session ends with the identity provider's ID token, about an hour on Entra ID.
+- A live run's AWS SSO session is renewed in the background before it expires, so a quiet run no longer reaches the
+  sign-in hold while its refresh token still works. A session AWS will not renew still holds for a sign-in. The
+  renewal's `harness.credential.refresh` row carries `trigger: renewer`, and its passes are the `aws_sso_renewal`
+  sweep. `WARDYN_AWS_SSO_REFRESH_SKEW`, `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR`, `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY` and
+  `WARDYN_AWS_SSO_REFRESH_TIMEOUT` tune the renewal, with today's values as defaults; boot refuses a value outside its
+  bounds. See docs/ENV.md.
 - An Interactive run is idle-stopped on its pool's idle stop when its policy sets none. The New Run pool list says
   whether a run starts now or waits, and `GET /runner-pools` rows carry each pool's state, revision and limits.
 - Console: Admin → Runners shows and edits the trust class; sign-out, sign-in and a mode switch in one tab reach the

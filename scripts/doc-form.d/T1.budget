@@ -46,5 +46,7 @@
 # threatmodel/THREAT-MODEL.md 63093 adds 28 over 63065, measured: the cloud-SSO exemption bullets narrowed to what the code does (0.9.3 ASK-6 review).
 # threatmodel/THREAT-MODEL.md 63402 adds 309 over 63093, measured: the node-loss containment wording after merging the runner sweep.
 # threatmodel/THREAT-MODEL.md 63480 = 63402 + 78, measured: merge of the session-renewal rows beside the containment and recovery rows.
-threatmodel/THREAT-MODEL.md=63480
+# threatmodel/THREAT-MODEL.md 63510 = 63480 + 30, measured: merge of the AWS SSO renewal row beside the session-renewal rows.
+threatmodel/THREAT-MODEL.md=63510
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
+# threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
