@@ -158,8 +158,12 @@ func TestByteBoundOverflowFirstStableAndCounted(t *testing.T) {
 	if count < 30 || count > 40 {
 		t.Fatalf("unexpected byte limit count %d", count)
 	}
-	if err := s.Append(ctx, decision(id)); !errors.Is(err, ErrFull) {
-		t.Fatalf("overflow did not latch: %v", err)
+	if err := s.Append(ctx, log); !errors.Is(err, ErrFull) {
+		t.Fatalf("a record that does not fit was not refused: %v", err)
+	}
+	// A refusal waits in Drops for replay; it does not close a spool with room.
+	if err := s.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("a record that fits was refused after an overflow: %v", err)
 	}
 	first, err := s.Overflow(ctx)
 	if err != nil {
@@ -190,7 +194,7 @@ func TestByteBoundOverflowFirstStableAndCounted(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if sent != count+1 {
+	if sent != count+2 {
 		t.Fatal(sent, count)
 	}
 	if err := reopened.Append(ctx, decision(id)); err != nil {
@@ -480,5 +484,25 @@ func TestSpoolRefusesToHandOverAHardLinkedLock(t *testing.T) {
 	}
 	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed || len(handed) != 0 {
 		t.Fatalf("a seal over a writer lock that is not 0600 = %v, %v, handed %v; want it refused and nothing handed over", sealed, err, handed)
+	}
+}
+
+// A counted refusal waits in Drops for replay to report it. It does not close a spool with room: a
+// runner whose link is down cannot report it, and would otherwise refuse every request until reconnect.
+func TestRefusalDoesNotCloseASpoolWithRoom(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := testSpool(t)
+	if err := s.Refuse(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CanRecord(ctx); err != nil {
+		t.Fatalf("CanRecord after an unreported refusal: %v", err)
+	}
+	if err := s.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("Append after an unreported refusal: %v", err)
+	}
+	row, err := s.Overflow(ctx)
+	if err != nil || row == nil || row.Count != 1 {
+		t.Fatalf("overflow %+v %v, want the refusal still reported", row, err)
 	}
 }

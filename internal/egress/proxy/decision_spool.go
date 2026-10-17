@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,8 +72,23 @@ type spoolReservation struct {
 // summary without findings (a skip or bypass).
 const spoolRecordEnvelope = 64 << 10
 
-// spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused.
+// spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused,
+// including the wait for room in a full spool.
 const spoolAdmitTimeout = 5 * time.Second
+
+// spoolRoomPoll is how often a request held for room rechecks a full spool. Room also appears when
+// wardyn-runnerd's replay is acknowledged, which no in-process signal reports.
+const spoolRoomPoll = 100 * time.Millisecond
+
+// spoolAppendTimeout bounds how long a decision waits for the spool lock: the bound wardyn-runnerd's own
+// spool calls run under (offline/manager.go replayLoop), so a lock held by a slow replay or reclaim
+// delays a record rather than losing it.
+const spoolAppendTimeout = 30 * time.Second
+
+// spoolRetryAfter is the Retry-After, in seconds, on a refusal the audit could not record. The
+// Anthropic and OpenAI SDKs retry a 5xx and honour a Retry-After of up to 60 s; X-Should-Retry: true
+// tells them to retry whatever the status.
+const spoolRetryAfter = "1"
 
 // spoolReservationBytes is the most a request's final decision record may take.
 // A request that may be scanned while content inspection is on (a body-bearing
@@ -96,38 +112,60 @@ func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
 // Reserve the request's own record bound before forwarding. The mutex covers both
 // reservation and append accounting; a burst cannot all observe the same free
 // slot and then forward requests whose final decision has nowhere to land.
+//
+// A full spool holds the request until room appears or ctx ends; only then is
+// the refusal counted. The spool's own bounds are the backlog a dropped runner
+// link may build: admission never waits on the link itself.
 func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.localErr != nil {
-		return uuid.Nil, errors.New("runner audit spool unavailable")
-	}
-	err := s.local.CanRecord(ctx)
-	if err == nil {
-		var depth int
-		var bytes int64
-		depth, bytes, _, err = s.local.Stats(ctx)
-		if err == nil && (depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes) {
-			err = runnerspool.ErrFull
+	sawFull := false
+	for {
+		if s.closed || s.localErr != nil {
+			return uuid.Nil, errors.New("runner audit spool unavailable")
+		}
+		err := s.local.CanRecord(ctx)
+		if err == nil {
+			var depth int
+			var bytes int64
+			depth, bytes, _, err = s.local.Stats(ctx)
+			if err == nil && (depth+len(s.reservations) >= runnerspool.MaxRecords || bytes+s.heldBytes+need > runnerspool.MaxBytes) {
+				err = runnerspool.ErrFull
+			}
+		}
+		if err == nil {
+			id := uuid.New()
+			s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
+			s.heldBytes += need
+			return id, nil
+		}
+		// A deadline that runs out inside a check after the spool was seen full is still a full spool's refusal.
+		if sawFull && errors.Is(err, context.DeadlineExceeded) {
+			return uuid.Nil, errors.Join(runnerspool.ErrFull, s.refuse(ctx))
+		}
+		if !errors.Is(err, runnerspool.ErrFull) {
+			return uuid.Nil, err
+		}
+		sawFull = true
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(spoolRoomPoll):
+		}
+		s.mu.Lock()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return uuid.Nil, errors.Join(err, s.refuse(ctx))
+		}
+		if ctx.Err() != nil {
+			return uuid.Nil, errors.Join(err, ctx.Err())
 		}
 	}
-	if errors.Is(err, runnerspool.ErrFull) {
-		return uuid.Nil, errors.Join(err, s.refuse(ctx))
-	}
-	if err != nil {
-		return uuid.Nil, err
-	}
-	id := uuid.New()
-	s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
-	s.heldBytes += need
-	return id, nil
 }
 
-// refuse counts one refused admission for the builtin:spool-full record. Only a genuinely full spool is
-// counted: a count trips the overflow that refuses all egress until replay, so an admission that ran out
-// of time or whose client hung up (context.DeadlineExceeded, context.Canceled) gets an uncounted 503
-// instead. The count runs on its own deadline, since the request's own may be nearly spent. The caller
-// holds s.mu.
+// refuse counts one refused admission for the builtin:spool-full record. Only a spool that stayed full
+// for the whole admission wait is counted: an admission that ran out of time behind other requests or
+// whose client hung up gets an uncounted 503 instead. The count runs on its own deadline, since the
+// request's own is spent. The caller holds s.mu.
 func (s *decisionSink) refuse(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), spoolAdmitTimeout)
 	defer cancel()
@@ -159,8 +197,17 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
 	if err != nil {
-		p.refuseUnaudited(w, r, mitmHost, http.StatusServiceUnavailable, reasonAuditUnavailable, "egress audit spool unavailable",
-			"the run's egress audit cannot record another request now, so it was not sent")
+		plain, sentence := "egress audit spool unavailable", "the run's egress audit cannot record another request now, so it was not sent"
+		// wardyn-runnerd withdraws the activity epoch while its link to the organisation is down: a full
+		// spool then cannot drain until the link is back.
+		if errors.Is(err, runnerspool.ErrFull) && runneractivity.Capture(p.sink.activityDir) == uuid.Nil {
+			plain += ": the runner's link to the organisation is down"
+			sentence = "the runner's link to the organisation is down and the run's egress audit is full, so this request was not sent; retry"
+		}
+		slog.Warn("proxy refused a request its egress audit could not record", "reason", reasonAuditUnavailable, "cause", sentence, "err", err)
+		w.Header().Set("Retry-After", spoolRetryAfter)
+		w.Header().Set("X-Should-Retry", "true")
+		p.refuseUnaudited(w, r, mitmHost, http.StatusServiceUnavailable, reasonAuditUnavailable, plain, sentence)
 		return nil, nil
 	}
 	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
@@ -207,7 +254,7 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		b = maskDecisionBytes(b)
 		err = json.Unmarshal(b, &log)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), spoolAppendTimeout)
 	defer cancel()
 	if err == nil && admitted {
 		s.drop(id)
@@ -225,8 +272,13 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 	if err == nil && admitted && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout" {
 		_ = runneractivity.Record(s.activityDir, epoch)
 	}
-	if err != nil && !errors.Is(err, runnerspool.ErrFull) {
+	// Only a served request whose record did not land is an audit gap, which refuses all later
+	// egress. A deny or a pending hold was never served, and a full or broken spool still refuses
+	// at the next reservation.
+	if err != nil && admitted && !errors.Is(err, runnerspool.ErrFull) {
 		s.localErr = err
+	} else if err != nil && !admitted && !errors.Is(err, runnerspool.ErrFull) {
+		slog.Error("proxy could not spool a decision for a request it did not serve", "host", log.Request.Host, "rule_source", log.RuleSource, "err", err)
 	}
 }
 
