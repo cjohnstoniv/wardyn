@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -132,7 +133,14 @@ func TestPG_OrgDefaultsFirstWriteRaceAuditsARealBefore(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
 	ctx := context.Background()
-	first, err := pool.Begin(ctx)
+	// The other writer holds its own connection, so polling through the pool below takes no second one
+	// from a goroutine already holding one.
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx) //nolint:errcheck // test teardown
+	first, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
