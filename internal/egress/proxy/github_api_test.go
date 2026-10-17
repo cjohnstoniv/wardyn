@@ -352,3 +352,18 @@ func TestGitHubAPI_ShutdownRevokeKeepsItsBudgetOnAStuckLookup(t *testing.T) {
 		t.Fatalf("the revoke took %s with a stuck lookup, want at most its %s budget", took, gitHubAPIRevokeBudget)
 	}
 }
+
+// A mint that lands after shutdown hands its one token back under the same budget when the lookup
+// hangs. The lookup goroutine stays until the resolver returns.
+func TestGitHubAPI_LateMintRevokeKeepsItsBudgetOnAStuckLookup(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	stuck := stuckResolver{release: make(chan struct{})}
+	t.Cleanup(func() { close(stuck.release) })
+	p.res = stuck
+	start := time.Now()
+	p.revokeGitHubAPIToken(t.Context(), uuid.New(), "late-token")
+	if took := time.Since(start); took > gitHubAPIRevokeBudget+time.Second {
+		t.Fatalf("the late revoke took %s with a stuck lookup, want at most its %s budget", took, gitHubAPIRevokeBudget)
+	}
+}
