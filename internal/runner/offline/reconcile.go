@@ -171,14 +171,8 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")
 	}
 	m.mu.Lock()
-	if pending := (*runner.ContainmentPendingError)(nil); errors.As(err, &pending) {
-		// Held as containment pending for this run only (§8 P2): a plain error would fail Pending
-		// on every fresh session and keep the whole runner from READY. The deferred receipt keeps
-		// the obligation; CheckLapses retries until completion evidence.
-		return m.deferHeld(a, pending)
-	}
 	if err != nil {
-		return runnerwire.ActionResult{}, err
+		return m.failedAction(a, err)
 	}
 	r = m.state.Runs[a.RunID]
 	at := m.now().UTC()
@@ -197,6 +191,17 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, err
 	}
 	return result, nil
+}
+
+// failedAction answers an action whose substrate call failed. A containment held pending is held for
+// this run only (§8 P2): a plain error would fail Pending on every fresh session and keep the whole
+// runner from READY. The deferred receipt keeps the obligation; CheckLapses retries until completion
+// evidence. m.mu is held.
+func (m *Manager) failedAction(a runnerwire.PendingAction, err error) (runnerwire.ActionResult, error) {
+	if pending := (*runner.ContainmentPendingError)(nil); errors.As(err, &pending) {
+		return m.deferHeld(a, pending)
+	}
+	return runnerwire.ActionResult{}, err
 }
 
 // deferHeld answers an action whose containment is held pending with a deferred receipt and holds

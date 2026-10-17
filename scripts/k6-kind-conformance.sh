@@ -32,7 +32,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=scripts/lib/common.sh
+# shellcheck source=scripts/lib/common.sh disable=SC1091  # followed under shellcheck -x
 source "$ROOT/scripts/lib/common.sh"
 cd "$ROOT"
 
@@ -76,7 +76,7 @@ HAD_POSTGRES="$(had postgres:17)"
 RUNNER_IMAGE="docker:27.3.1-cli"
 HAD_RUNNER="$(had "$RUNNER_IMAGE")"
 
-# shellcheck disable=SC2317  # reached through the EXIT trap
+# shellcheck disable=SC2317,SC2329  # reached through the EXIT trap
 cleanup() {
   local rc=$?
   set +e
@@ -142,6 +142,7 @@ CGO_ENABLED=0 go build -o "$WORK/agent/wardyn-rec" ./cmd/wardyn-rec || die "buil
 CGO_ENABLED=0 go build -o "$WORK/agent/agentprobe" ./test/k6/agentprobe || die "building agentprobe failed"
 # The org execs a run's task as `agent-run TASK`; the harness's agent-run runs TASK as a shell line,
 # so a case chooses what its agent does (a long sleep keeps the run live).
+# shellcheck disable=SC2016  # $1 is the shim's own argument, expanded when it runs
 printf '#!/bin/sh\n[ "$1" = --idle ] && exec sleep 2147483647\nexec sh -c "$1"\n' >"$WORK/agent/agent-run"
 chmod 0755 "$WORK/agent/agent-run"
 printf 'FROM busybox:1.36\nCOPY wardyn-rec agentprobe agent-run /usr/local/bin/\n' >"$WORK/agent/Dockerfile"
@@ -281,7 +282,7 @@ spec:
   template:
     metadata: {labels: {app: postgres}}
     spec:
-$(sed 's/^/      /' <<<"$CP_PLACE")
+      ${CP_PLACE//$'\n'/$'\n'      }
       containers:
         - name: postgres
           image: $PG_IMAGE

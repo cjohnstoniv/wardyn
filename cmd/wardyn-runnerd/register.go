@@ -129,6 +129,17 @@ func registrationFailure(err error) error {
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }
 
+// registrationKey is the key a registration submits: with reuse (--if-unregistered), the one an
+// earlier, incomplete registration left in stateDir; otherwise, or when there is none, a new one.
+func registrationKey(stateDir string, reuse bool) (ed25519.PrivateKey, error) {
+	if reuse {
+		if key, err := runneridentity.PendingKey(stateDir); err != nil || key != nil {
+			return key, err
+		}
+	}
+	return runneridentity.Generate(stateDir)
+}
+
 // registerAttempts and registerBackoff bound the init container's retry of a registration that
 // could not reach the organisation: 2, 4, 8 and 16 s apart. Vars only so a test can shorten them.
 var (
@@ -230,16 +241,9 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 			return registeredRunner{}, err
 		}
 	}
-	var key ed25519.PrivateKey
-	if a.reuseKey {
-		if key, err = runneridentity.PendingKey(stateDir); err != nil {
-			return registeredRunner{}, err
-		}
-	}
-	if key == nil {
-		if key, err = runneridentity.Generate(stateDir); err != nil {
-			return registeredRunner{}, err
-		}
+	key, err := registrationKey(stateDir, a.reuseKey)
+	if err != nil {
+		return registeredRunner{}, err
 	}
 	client := sdk.New(strings.TrimSpace(org), "")
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
