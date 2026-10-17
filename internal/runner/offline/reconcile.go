@@ -171,10 +171,25 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")
 	}
 	m.mu.Lock()
+	return m.settleApplied(ctx, a, err)
+}
+
+// settleApplied records what the substrate answered for a, with m.mu held: a containment-pending
+// answer is held and refused, any other error fails, and a stop is stamped and saved as a receipt.
+func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction, err error) (runnerwire.ActionResult, error) {
+	if pending := (*runner.ContainmentPendingError)(nil); errors.As(err, &pending) {
+		// Held pending as the tick holds it, and refused rather than failed: a plain
+		// error would fail Pending on every fresh session, so the runner would never
+		// reach READY or send the state page that reports the hold.
+		if perr := m.holdPendingLocked(a.RunID, pending); perr != nil {
+			return runnerwire.ActionResult{}, perr
+		}
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	r = m.state.Runs[a.RunID]
+	r := m.state.Runs[a.RunID]
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
 	outcome := "deferred"
