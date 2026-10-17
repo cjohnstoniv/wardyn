@@ -27,6 +27,10 @@ export const NR_SHAPE = {
   EMPTY_TEMPLATES: "No saved templates yet.",
   /** pending W-23: the recommended text until the owner answers. */
   EMPTY_AGAIN: "No previous runs to start again.",
+  /** Lead wording 2026-10-17 (FUG-L771): the saved-template picker while its list loads. */
+  TEMPLATES_LOADING: "Loading saved templates…",
+  /** Lead wording 2026-10-17 (FUG-L771): the previous-run picker while its list loads. */
+  AGAIN_LOADING: "Loading previous runs…",
   AGENT_TITLE: "Agent task",
   AGENT_BODY: "A one-time coding task, driven by you or running autonomously.",
   AGENT_SUB: "Interactive · Autonomous · Repeat / schedule coming soon",

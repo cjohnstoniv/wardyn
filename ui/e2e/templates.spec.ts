@@ -387,6 +387,19 @@ test.describe("Save as template and Save as policy", () => {
     await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled();
   });
 
+  test("a subset with nothing checked keeps Save off and says why (FUG-L771)", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openReview(page);
+    await press(page, NR_REVIEW.SAVE_TEMPLATE);
+    const dialog = page.getByRole("dialog", { name: NR_SAVE.TITLE_TEMPLATE });
+    await dialog.getByLabel(NR_SAVE.NAME_LABEL).fill("None");
+    await dialog.getByLabel(NR_SAVE.INCLUDE_SUBSET).check();
+    const boxes = dialog.getByRole("checkbox");
+    for (let i = 0; i < (await boxes.count()); i++) await boxes.nth(i).uncheck();
+    await expect(dialog.getByText("Choose at least one part to include.", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: NR_SAVE.CONFIRM_TEMPLATE })).toBeDisabled();
+  });
+
   test("Save as policy keeps only network, credential and access rules, as a policy", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openReview(page);
@@ -446,6 +459,23 @@ test.describe("Start from a saved template and Run again", () => {
     await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled();
     await press(page, NR_REVIEW.LAUNCH_RUN);
     await expect(page.getByRole("dialog", { name: NR_LAUNCH.TITLE }).getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("");
+  });
+
+  test("while its list is on the way each picker says what it is loading (FUG-L771)", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route("**/api/v1/me/launch-intents*", async (route) => { await held; await route.fulfill({ json: { intents: [] } }); });
+    await page.route("**/api/v1/templates*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await held;
+      await route.fulfill({ json: { templates: [], publish: ME_ONLY } });
+    });
+    await startFrom(page, NR_SHAPE.SOURCE_TEMPLATE);
+    await expect(page.getByRole("combobox", { name: NR_SHAPE.TEMPLATE_LABEL })).toHaveText("Loading saved templates…");
+    await press(page, NR_SHAPE.SOURCE_AGAIN);
+    await expect(page.getByRole("combobox", { name: NR_SHAPE.PREVIOUS_LABEL })).toHaveText("Loading previous runs…");
+    release();
+    await expect(page.getByText(NR_SHAPE.EMPTY_AGAIN)).toBeVisible();
   });
 
   test("with no earlier run the picker says so", async ({ page }) => {

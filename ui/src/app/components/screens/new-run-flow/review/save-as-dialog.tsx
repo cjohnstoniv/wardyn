@@ -59,9 +59,9 @@ export const SAVE_AS_COPY = {
   nothingChanged: NR_REVIEW.NOTHING_CHANGED,
   cancel: NR_SAVE.CANCEL_SAVE,
   save: (kind: TemplateKind) => (kind === "template" ? NR_SAVE.CONFIRM_TEMPLATE : NR_SAVE.CONFIRM_POLICY),
-  // TODO(E1d follow-up): the canon has no sentence for these two. Empty renders nothing; the behaviour behind them
-  // (Save stays off with nothing checked, own drives are left out of a shared document) does not depend on the text.
-  nothingPicked: "",
+  nothingPicked: NR_SAVE.NOTHING_PICKED as string,
+  // TODO(E1d follow-up): the canon has no sentence for this one. Empty renders nothing; the behaviour behind it
+  // (own drives are left out of a shared document) does not depend on the text.
   ownDrivesLeftOut: "",
 };
 

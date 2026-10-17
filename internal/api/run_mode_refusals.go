@@ -110,7 +110,7 @@ func harnessSetNoImageMsg(names ...string) string {
 
 // harnessSetCustomImageMsg: several harnesses need the image an admin declared for them.
 func harnessSetCustomImageMsg() string {
-	return "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image."
+	return "A run with more than one harness starts from an image your admin declared for them, so it can't use the custom image, build or workspace base image this launch names."
 }
 
 // harnessSignInNotPrimaryMsg: an AWS sign-in serves only the run's primary

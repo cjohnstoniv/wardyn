@@ -12,6 +12,7 @@ import type { Template, TemplatePublish, TemplateSaveRequest } from "../../../..
 import type { RunIntent } from "../draft/run-intent";
 import { TemplateSaveError } from "./save-as-dialog.api";
 import { SAVE_AS_COPY, SaveAsDialog, type SaveAsDialogProps } from "./save-as-dialog";
+import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 
 afterEach(cleanup);
 
@@ -144,14 +145,14 @@ describe("SaveAsDialog", () => {
     expect(screen.getByText(SEAM_COPY.nothingPicked)).toBeVisible();
   });
 
-  it("keeps Save off with nothing checked even while the canon has no sentence for it, and invents none", async () => {
+  it("says why Save is off with nothing checked, in the canon's own words", async () => {
     const { user } = setup();
-    expect(SAVE_AS_COPY.nothingPicked).toBe("");
+    expect(SAVE_AS_COPY.nothingPicked).toBe(NR_SAVE.NOTHING_PICKED);
     await user.click(screen.getByLabelText(SAVE_AS_COPY.subset));
     for (const id of ["run", "where", "access", "limits"] as const) await user.click(screen.getByLabelText(SAVE_AS_COPY.partLabels[id]));
     setField(screen.getByLabelText("Name"), "None");
     expect(saveButton()).toBeDisabled();
-    expect(document.querySelectorAll("fieldset p")).toHaveLength(1); // the omitted-values line only
+    expect(screen.getByText("Choose at least one part to include.")).toBeVisible();
   });
 
   it("lists a left-out dependency under needs_setup, in the server's words, and retries once", async () => {

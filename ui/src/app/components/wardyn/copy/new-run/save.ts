@@ -42,5 +42,7 @@ export const NR_SAVE = {
   CANCEL_SAVE: "Cancel",
   CONFIRM_TEMPLATE: "Save template",
   CONFIRM_POLICY: "Save policy",
+  /** Lead wording 2026-10-17 (FUG-L771): under Include when a subset has nothing checked; Save stays off. */
+  NOTHING_PICKED: "Choose at least one part to include.",
   SAVED: (kind: string | number) => `${kind} saved without changing the draft.`,
 } as const;
