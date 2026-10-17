@@ -520,4 +520,9 @@ func TestPG_ProviderPurgeLocksOwnersInNameOrder(t *testing.T) {
 	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
 		t.Fatalf("waiting at the later owner, the purge does not hold the earlier owner's counter row (probe err %v)", err)
 	}
+	// Let the purge finish before the deferred rollback, which would otherwise share its connection.
+	release()
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
 }

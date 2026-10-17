@@ -78,7 +78,7 @@ func TestLoadConfigRefusesPushRulesCarriedTwoWays(t *testing.T) {
 	}{
 		"base without sets":      {func(c *Config) { c.PushRuleBase = base }, "push_rule_base is carried with push_rule_sets"},
 		"base beside policy":     {func(c *Config) { c.PushRuleSets, c.PushRuleBase, c.Policy.PushRules = set, base, rules }, "push_rule_base is carried with push_rule_sets"},
-		"sets beside policy":     {func(c *Config) { c.PushRuleSets, c.Policy.PushRules = set, rules }, "both set"},
+		"sets beside policy":     {func(c *Config) { c.PushRuleSets, c.Policy.PushRules = set, rules }, "push_rule_sets and policy.push_rules are both set"},
 		"sets and base together": {func(c *Config) { c.PushRuleSets, c.PushRuleBase = set, base }, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

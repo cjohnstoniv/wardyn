@@ -295,6 +295,9 @@ func TestServiceIdentity_StoreMintRefusesATokenBornDead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !si.SponsorSince.Equal(si.CreatedAt) {
+		t.Errorf("a new identity's sponsor_since %v and created_at %v come from one clock reading, want equal", si.SponsorSince, si.CreatedAt)
+	}
 	f := false
 	_, err = e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, apiTokenMaxPerPrincipal, types.APIToken{
 		ID: uuid.New(), Principal: svcPrin, Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{},
