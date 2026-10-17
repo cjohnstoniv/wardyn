@@ -8,6 +8,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Corrections to earlier notes
+
+- Since 0.9.0, the launch warning that a run's managed settings were not delivered is built from the runner the run is placed on and covers every harness in the run, so it appears for a secondary Claude Code harness and a runner-placed run, and no longer appears for a run that is refused over its tool rules. Earlier notes did not say so.
+
 ### Fixed
 
 - "Discard mine and reload" on the Providers and Agents screens now also re-reads who you are signed in as, so a session another tab switched to someone else no longer refuses every save.
