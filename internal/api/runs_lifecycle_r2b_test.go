@@ -47,8 +47,8 @@ func TestKillRun_TeardownFailureBodyNamesStepsOnly(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body %s: %v", w.Body.String(), err)
 	}
-	if len(body.Errors) != 1 || body.Errors[0] != "runner_error" || body.Reason != "run_kill_teardown_incomplete" {
-		t.Errorf("errors %v, reason %q; want [runner_error] and the literal run_kill_teardown_incomplete", body.Errors, body.Reason)
+	if len(body.Errors) != 1 || body.Errors[0] != "runner_error" || body.Reason != "internal_error" {
+		t.Errorf("errors %v, reason %q; want [runner_error] and the literal internal_error", body.Errors, body.Reason)
 	}
 	if strings.Contains(w.Body.String(), "10.9.8.7") {
 		t.Errorf("body %s carries the driver's text", w.Body.String())

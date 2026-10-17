@@ -682,7 +682,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 			"id":     id,
 			"state":  types.RunKilled,
 			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
-			"reason": reasonRunKillTeardownIncomplete,
+			"reason": reasonInternalError,
 			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
 		})
 		return
