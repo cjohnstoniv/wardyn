@@ -602,7 +602,7 @@ func parseBootFlags() *bootFlags {
 		recoveryManifest:        flag.Bool("recovery-manifest", false, "maintenance mode, every other wardynd must be stopped: write manifest.json into -recovery-set, tying the database snapshot to the staged spool, then exit (default false)"),
 		recoveryVerify:          flag.Bool("recovery-verify", false, "maintenance mode, every other wardynd must be stopped: check that the database at WARDYN_PG_DSN and the staged spool in -recovery-set are the pair the manifest recorded, then exit (default false)"),
 		recoveryRehearse:        flag.Bool("recovery-rehearse", false, "maintenance mode: check a restored database (WARDYN_REHEARSE_PG_DSN) against the recovery set in -recovery-set, with the deployment's keys in the environment, then exit: 0 pass, 3 refused, 4 fail, 5 incomplete (default false)"),
-		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify reads"),
+		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify and -recovery-rehearse read"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
