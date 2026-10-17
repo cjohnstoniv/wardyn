@@ -74,6 +74,10 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
 	}
+	// After chooseRelay, which made the proxy image present: the check's container uses it.
+	if err := sub.CheckStateDir(ctx); err != nil {
+		return runnerRuntime{}, errors.Join(err, rt.close())
+	}
 	relay.use(pair)
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
 	return rt, nil
