@@ -89,6 +89,28 @@ export const RUNNER_V6 = {
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 
+/**
+ * A runner's trust class on Admin -> Runners (0.9.3, owner mock item 3, Q5). The mock's strings, with the
+ * console's own spelling "Organization" (Q5), not the mock's "Organisation".
+ */
+export const RUNNER_TRUST = {
+  TITLE: "Trust class",
+  META: "Security admin",
+  PERSONAL: "Personal",
+  MANAGED: "Managed device",
+  ORG: "Organization cluster",
+  PERSONAL_DESC: "A person's own computer. Wardyn assumes nothing about how it is managed.",
+  MANAGED_DESC: "A person's computer your organization manages. This is your assertion; Wardyn can't check it.",
+  ORG_DESC: "A cluster your organization runs. An organization's runner is always this class.",
+  HINT: "Credential delivery rules in Governance can differ by class. Reviving a run started under the old class is checked again and refused if the rules differ.",
+  REASON_LABEL: "Reason",
+  REASON_HINT: "Required. Kept on the change and in the audit trail.",
+  SAVE: "Change trust class",
+  SET_BY: (who: string, when: string) => `Set by ${who} ${when}`,
+  UNCLAIMED: "Available once its owner has claimed it.",
+  DONE: (runner: string, label: string) => `${runner} is now ${label}`,
+} as const;
+
 export const LIMITS_DIALOG = {
   TITLE_SETUP: (name: string) => `Set up limits for ${name}`,
   TITLE: (name: string) => `Limits for ${name}`,

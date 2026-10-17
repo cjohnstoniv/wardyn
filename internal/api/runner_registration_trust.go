@@ -41,8 +41,11 @@ type runnerTrustChange struct {
 	Reason     string                 `json:"reason"`
 }
 
-// runnerTrustDiffView is the trust class as the reviewer reads it.
+// runnerTrustDiffView is the trust class as the reviewer reads it. Name is the runner's name, the same
+// on both sides, so the Changes list can name the runner instead of showing its id; it is never a
+// changed path.
 type runnerTrustDiffView struct {
+	Name       string                 `json:"name"`
 	TrustClass types.RunnerTrustClass `json:"trust_class"`
 }
 
@@ -112,7 +115,7 @@ func (s *Server) handlePutRunnerTrust(w http.ResponseWriter, r *http.Request) {
 	}
 	change := runnerTrustChange{RunnerID: id, TrustClass: req.TrustClass, Reason: reason}
 	if mode == govQueue {
-		before, after := &runnerTrustDiffView{TrustClass: row.TrustClass}, &runnerTrustDiffView{TrustClass: req.TrustClass}
+		before, after := &runnerTrustDiffView{Name: row.Name, TrustClass: row.TrustClass}, &runnerTrustDiffView{Name: row.Name, TrustClass: req.TrustClass}
 		s.proposeGovernanceChange(w, r, govProposal{kind: govKindRunnerTrust, op: "update", key: id.String(), payload: change,
 			before: before, after: after, changed: changedPaths(before, after), baseState: runnerTrustState(row)})
 		return
