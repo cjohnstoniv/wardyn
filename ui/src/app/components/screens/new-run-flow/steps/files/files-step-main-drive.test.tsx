@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
@@ -261,19 +261,23 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(within(screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE })).getByText(NR_FILES.MOUNT_MAIN("32 MiB"))).toBeInTheDocument();
   });
 
+  // A stored size comes back when the field is emptied, so a later size replaces the text outright.
+  const enter = (value: string) => {
+    act(() => size().focus());
+    fireEvent.change(size(), { target: { value } });
+  };
+
   it("reads the field's number in the unit beside it", async () => {
     show();
     await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.clear(size());
     await userEvent.type(size(), "0.03125");
     await userEvent.tab();
-    await userEvent.clear(size());
-    await userEvent.type(size(), "50");
+    enter("50");
     await userEvent.tab();
     expect(drawn().resources).toEqual({ disk_mib: 50 });
     // A size back over 0.1 GiB returns to GiB.
-    await userEvent.clear(size());
-    await userEvent.type(size(), "2048");
+    enter("2048");
     await userEvent.tab();
     expect(drawn().resources).toEqual({ disk_mib: 2048 });
     expect(size()).toHaveValue(2);
@@ -290,8 +294,7 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(size()).toHaveValue(0.2);
     expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(154));
     // 0.1 GiB is 102.4 MiB, stored as 102: below 0.1 GiB, so shown in MiB.
-    await userEvent.clear(size());
-    await userEvent.type(size(), "0.1");
+    enter("0.1");
     await userEvent.tab();
     expect(drawn().resources).toEqual({ disk_mib: 102 });
     expect(size()).toHaveValue(102);
