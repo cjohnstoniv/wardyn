@@ -520,7 +520,7 @@ func (o *Orchestrator) ExecOutputUncapturedFor(ctx context.Context, ref string, 
 	if ref != "" {
 		sub, err = o.subForRef(ctx, ref)
 	}
-	if _, remote := remoteNameOfRef(ref); ref == "" || (err != nil && !remote) {
+	if remote := strings.HasPrefix(ref, substrate.RemotePrefix); ref == "" || (err != nil && !remote) {
 		sub, err = o.substrateFor(ctx, class)
 	}
 	if err != nil {
