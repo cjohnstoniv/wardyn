@@ -165,10 +165,23 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 		}
 		return copyRecordingFile(ctx, root, key+ext, tmp)
 	}
+	// The 204 acknowledges a recording, so make it durable: the bytes before the rename, the
+	// directory entry after it, or a host crash can leave the acknowledged cast empty or missing.
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return root.Rename(tmpName, key+ext)
+	if err := root.Rename(tmpName, key+ext); err != nil {
+		return err
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.File) error {
@@ -193,7 +206,7 @@ func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.
 	return errors.Join(err, dst.Close())
 }
 
-// Sweep unlinks every cast (and orphaned atomic-write temp file) directly
+// Sweep unlinks every cast (and wardyn-rec's .log fallback, and orphaned atomic-write temp file) directly
 // under root whose mtime is older than olderThan, returning the count
 // removed. Deliberately not on the Store interface: retention is an
 // fs-storage concern, so callers type-assert for it.
@@ -212,7 +225,7 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	var errs []error
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || strings.HasSuffix(name, ".lock") || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
+		if e.IsDir() || strings.HasSuffix(name, ".lock") || (!strings.HasSuffix(name, ".cast") && !strings.HasSuffix(name, ".log") && !strings.HasPrefix(name, ".tmp-cast-")) {
 			continue
 		}
 		// A stat error means the entry vanished under us.

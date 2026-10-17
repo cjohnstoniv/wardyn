@@ -120,18 +120,29 @@ func (b *Bus) listen(ctx context.Context) {
 func (b *Bus) listenOnce(ctx context.Context) {
 	conn, err := pgx.ConnectConfig(ctx, b.pool.Config().ConnConfig.Copy())
 	if err != nil {
+		listenFailed(ctx, "connect", err)
 		return
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 	if _, err := conn.Exec(ctx, "LISTEN "+Channel); err != nil {
+		listenFailed(ctx, "listen", err)
 		return
 	}
 	for {
 		n, err := conn.WaitForNotification(ctx)
 		if err != nil {
+			listenFailed(ctx, "wait", err)
 			return
 		}
 		b.dispatch(ctx, n.Payload)
+	}
+}
+
+// listenFailed logs why the listener is about to reconnect: until it does, this replica hears
+// no notice, and nothing else says so. A stop on ctx is not a failure.
+func listenFailed(ctx context.Context, step string, err error) {
+	if ctx.Err() == nil {
+		slog.WarnContext(ctx, "livebus: the listener failed; reconnecting", slog.String("step", step), slog.Any("err", err))
 	}
 }
 
