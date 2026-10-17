@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -204,11 +205,13 @@ func (c credentialedHost) overlaps(o credentialedHost) bool {
 // host, over the FINAL composition: every injection rule — a policy's api_key
 // grants, a component's header deliveries, the model provider's, the Azure
 // DevOps lane's, a redirect's token, the AWS access-portal host of a Bedrock
-// sign-in — and every git_pat grant whose forge API the proxy credentials on
-// the intercepted connection. These are exactly what the proxy is handed, so
-// the answer here and the proxy's own refusal at boot cannot differ.
-func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[string]proxy.PATGrant) (grants []uuid.UUID, found bool) {
-	hosts := make([]credentialedHost, 0, len(injections)+len(patGrants))
+// sign-in — every git_pat grant whose forge API the proxy credentials on
+// the intercepted connection, and the GitHub CLI door's host. The door is one
+// lane however many owners its grants cover, so it is listed once. These are
+// exactly what the proxy is handed, so the answer here and the proxy's own
+// refusal at boot cannot differ.
+func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[string]proxy.PATGrant, githubAPI *proxy.GitHubAPIGrant) (grants []uuid.UUID, found bool) {
+	hosts := make([]credentialedHost, 0, len(injections)+len(patGrants)+1)
 	for _, in := range injections {
 		hosts = append(hosts, credentialedHost{grant: in.GrantID, host: in.Rule.Host})
 	}
@@ -216,6 +219,10 @@ func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[s
 		if g := patGrants[host]; g.API {
 			hosts = append(hosts, credentialedHost{grant: g.GrantID, host: host})
 		}
+	}
+	if githubAPI != nil && len(githubAPI.Grants) > 0 {
+		first := slices.Sorted(maps.Keys(githubAPI.Grants))[0]
+		hosts = append(hosts, credentialedHost{grant: githubAPI.Grants[first], host: ghscope.APIHost})
 	}
 	if i, j, found := firstCredentialCollision(hosts); found {
 		return []uuid.UUID{hosts[i].grant, hosts[j].grant}, true
@@ -412,7 +419,7 @@ func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, 
 	p.Components.pruneUnpaired(injections)
 	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), injections)
 	if !found {
-		grants, found = credentialHostCollision(injections, patGrants)
+		grants, found = credentialHostCollision(injections, patGrants, p.Components.GitHubAPI)
 	}
 	if !found {
 		return patGrants, true
