@@ -304,6 +304,24 @@ func (s *Server) deliverResident(ctx context.Context, run types.AgentRun, policy
 	return true
 }
 
+// leaseDeliverCreate is dispatch's last three steps, in order: the runner lease
+// (a runner refuses a create no lease authorizes), the runner_resident delivery,
+// and the create that names those values. refused means the delivery refused the
+// run, which deliverResident has already failed and recorded; no create was
+// asked for.
+func (s *Server) leaseDeliverCreate(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
+	values []residentValue) (runnerExecution, runner.Sandbox, bool, error) {
+	execution, err := s.leaseRunOnRunner(ctx, run)
+	if err != nil {
+		return execution, runner.Sandbox{}, false, err
+	}
+	if !s.deliverResident(createCtx, run, spec.ProxyConfig.Policy, values) {
+		return execution, runner.Sandbox{}, true, nil
+	}
+	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
+	return execution, sb, false, err
+}
+
 // kickResidentErase starts runnerID's resident erase now, off the caller's
 // path, when this replica holds the runner's session; the sweep retries
 // whatever it leaves.

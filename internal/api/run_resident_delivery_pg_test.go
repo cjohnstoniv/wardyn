@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -602,5 +603,37 @@ func TestResident_ReadIsAuditedAndMasked(t *testing.T) {
 		data.Delivery != placement.ClassEnvSecret || data.Owner == nil || *data.Owner != "" ||
 		data.Source != types.RunnerPostureSourceRunnerAsserted || data.Posture != posture || data.Store != "mem" || data.Ref == "" {
 		t.Fatalf("secret.read data = %s", rows[0].Data)
+	}
+}
+
+// A delivery refusal ends dispatch before the create: the sandbox is never
+// asked for; with no resident values the create follows the lease as before.
+func TestDispatch_ResidentRefusalNeverReachesCreate(t *testing.T) {
+	f := newResidentFix(t, nil, residentEnvPolicy)
+	ctx := t.Context()
+	fake := f.cfg.Runner.(*fakeRunner)
+	unbound := func(r *types.AgentRun) { r.RunnerID, r.Placement = nil, "" }
+	refusedRun := f.startingRun(t, unbound)
+	spec := runner.SandboxSpec{RunID: refusedRun.ID}
+	_, _, refused, err := f.srv.leaseDeliverCreate(ctx, ctx, refusedRun, spec, []residentValue{f.value(t, refusedRun, "v")})
+	if !refused || err != nil {
+		t.Fatalf("refused=%v err=%v, want the delivery's refusal", refused, err)
+	}
+	fake.mu.Lock()
+	calls := fake.createCalls
+	fake.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("%d creates after a refused delivery, want none", calls)
+	}
+	if st := f.runState(t, refusedRun.ID); st != types.RunFailed {
+		t.Fatalf("refused run is %s, want FAILED", st)
+	}
+	plain := f.startingRun(t, unbound)
+	_, sb, refused, err := f.srv.leaseDeliverCreate(ctx, ctx, plain, runner.SandboxSpec{RunID: plain.ID}, nil)
+	fake.mu.Lock()
+	calls = fake.createCalls
+	fake.mu.Unlock()
+	if refused || err != nil || calls != 1 || sb.Ref != "fake-"+plain.ID.String() {
+		t.Fatalf("refused=%v err=%v creates=%d sandbox=%+v, want one create for a run with no resident values", refused, err, calls, sb)
 	}
 }

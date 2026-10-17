@@ -673,21 +673,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
-	execution, err := s.leaseRunOnRunner(ctx, run)
-	var sb runner.Sandbox
-	if err == nil {
-		// Its runner_resident values go to the runner after the lease and before
-		// the create that names them; a refusal has already failed the run.
-		if !s.deliverResident(createCtx, run, spec.ProxyConfig.Policy, resident) {
-			endStartWait()
-			stopCreateLease()
-			return
-		}
-		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
-	}
+	// The lease, the runner_resident values, then the create, in that order: a runner
+	// refuses a create no lease authorizes, and the create names the values.
+	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
 	endStartWait()
 	stopCreateLease()
+	if refused {
+		return // deliverResident failed the run and recorded why; no create was asked for
+	}
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
