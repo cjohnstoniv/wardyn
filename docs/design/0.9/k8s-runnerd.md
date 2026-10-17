@@ -2,7 +2,7 @@
 
 Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 ships, with the questions the build settled. Operators read [Organisation runners in a Kubernetes cluster](../../operations/k8s-runners.md); this note is why it is shaped that way.
 
-<!-- K7-VERIFY: against lane/093-K2 c76279aa6, K3a e796964b4, K5, K8; K3-rest, K4 and K6 unmerged. Finalise after K2/K9 fixes and K6. -->
+<!-- K7-VERIFY: checked against prep/093-final 841dbea50; the one open item is the org-side containment handling below, and K6's results (see the guide). -->
 
 ## Decisions
 
@@ -34,7 +34,6 @@ Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 sh
 - The registration token links to the runner (`runners.registration_token_id`, added by K3a) so the claim can compare claimer and minter by principal or case-folded email.
 - The trust class is `org_cluster` from the insert, because the coupling CHECK forces it. The claim stamps the writer and the time.
 
-<!-- K7-VERIFY: the hub's org branch (`hub_activity.go`, `runner_stream.go`) and organisation-runner pending actions are K3 follow-ups on lane/093-K3a; until they land an org runner cannot hold a session. -->
 
 ## Trust class
 
@@ -44,7 +43,6 @@ Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 sh
 - Delivery policy (K4): `by_trust.<class>.classes.<credential class>` falls back to the global row for every class, then to `refuse`. A plan is judged per trust class among the eligible candidates, highest first. Resident delivery and revive re-judge against the bound runner's current trust and refuse `runner_trust_changed` on any difference.
 - The CC3 floor and cluster-only trusted-output runs are unchanged.
 
-<!-- K7-VERIFY: `by_trust`, the per-door `ForTrust` judgement, `agent_runs.runner_trust_class` and organisation-pool membership for org runners are K4, not merged. -->
 
 ## Placement in the cluster
 
@@ -116,7 +114,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 - The unbound-pod arm (a pod deleted before it was bound) ships enabled, gated on K6's bind and delete race at the floor and at the latest release.
 - Operational threat model: this guards against honest failure, not against a holder of a node's kubelet credentials. Two kubelets under one Node name are unsupported.
 
-<!-- K7-VERIFY: the org-side `ContainmentPending` handling, the "node powered off" form and its approvers, and the `relay_ip_fenced` run-lost reason are K3 (`PendingAction.node_record` on `stop_proxy`). runnerd's side is on lane/093-K2. -->
+<!-- K7-VERIFY: in prep/093-final 841dbea50 the org side of this table is absent: no `ContainmentPending` handling, no "node powered off" form or route, no `relay_ip_fenced` run-lost reason. runnerd's side is shipped. -->
 
 ## Failure behaviour
 

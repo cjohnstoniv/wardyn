@@ -6,8 +6,6 @@
 - It dials the organisation outbound only: the control plane never reaches into the cluster.
 - This page is for the platform engineer who installs it and the security operators who claim and run it. Design and residuals: [the design note](../design/0.9/k8s-runnerd.md).
 
-<!-- K7-VERIFY: written against K1 rev 15 and lane/093-K2 c76279aa6; K3-rest, K4 and K6 unmerged, marked below. -->
-
 ## When to use it
 
 | Situation | Use |
@@ -39,9 +37,7 @@
 
 ## Install
 
-<!-- K7-VERIFY: the org-tokens, claim-org and trust routes are confirmed on lane/093-K3a e796964b4; the CLI (`org-token mint`, `claim-org`) and the "Add organisation runner" button are K3-rest. -->
-
-1. A security operator mints a single-use `wdr_` token in *Admin → Runners → Add organisation runner*, or with `wardyn runner org-token mint --name <name>`. It lasts 72 hours and is shown once.
+1. A security operator mints a single-use `wdr_` token with `wardyn runner org-token mint --name <name>` (`POST /api/v1/runners/org-tokens`). It lasts 72 hours and prints once. The console has no form for this.
 2. Create the two namespaces. The runner's own namespace holds only runnerd; the runs namespace holds every sandbox.
 
    ```sh
@@ -76,11 +72,11 @@
      hardDenyCIDRs: ["10.244.0.0/16", "10.96.0.0/12"]
    ```
 
-5. Install the chart. Set `image.tag` to the release you run.
+5. Install the chart from a checkout of the release you run.
 
    ```sh
    helm install wardyn-runner deploy/helm/wardyn-runnerd \
-     --namespace wardyn-runner -f values.yaml --set image.tag=<release>
+     --namespace wardyn-runner -f values.yaml
    ```
 
 6. Read the fingerprint the init container printed.
@@ -89,14 +85,13 @@
    kubectl -n wardyn-runner logs deploy/wardyn-runner --all-containers
    ```
 
-7. A second security operator opens *Admin → Runners*, compares the fingerprint and claims the runner (`POST /api/v1/runners/{id}/claim-org`, or `wardyn runner claim-org`). An unclaimed runner expires after 24 hours.
-8. Add the runner to an organisation pool: `wardyn runner pool add <pool> <runner>`.
-9. Confirm the runner card shows Online, the architecture, trust class `org_cluster` and the canary verdict `enforced`.
+7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
+8. An admin adds the runner to an organisation pool with `PUT /api/v1/runner-pools/{pool}/runners/{runner}`. `wardyn runner pool add` does not take organisation runners, and a runner serves one pool only.
+9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
-<!-- K7-VERIFY: step 8 needs K4 (org pools take org runners); step 9's card fields are K3. The chart is unpublished (K5 follow-up 2) and release-commit.sh does not bump its tag (follow-up 3), hence the checkout path and `image.tag`. -->
-
-- The claim sets the trust class `org_cluster`; the registration token already fixes `owner_kind` as organisation.
+- The chart is not published to a registry in 0.9.3. Install it from a checkout of the release tag, where the default `image.tag` is that release.
+- The registration token already fixes `owner_kind` as organisation, so the runner is `org_cluster` from registration. The claim records who bound it and when.
 - A break-glass mint (an admin API token under four-eyes) is audited `governance.change.bypass` and never counts as the second human. Claiming it is audited `runner.claim` with `break_glass` true.
 - The init container runs `wardyn-runnerd register --substrate k8s --if-unregistered`. The Ed25519 key is generated on the volume and never leaves it.
 - Register measures nothing on Kubernetes. The three totals are required in practice: `limits.totalCPU` in CPUs, `limits.totalMemory` and `limits.totalDisk` in GB. Register refuses until they are set.
@@ -132,12 +127,13 @@
 | `managed_device` | An administrator's assertion that the device is managed |
 | `org_cluster` | An organisation runner. This class holds if and only if the runner is organisation-owned |
 
-- Only a security operator changes a class, through `PUT /api/v1/runners/{id}/trust` (`wardyn runner trust`), under the governance-change path and audited `runner.trust.write`. A runner cannot raise its own: the registration payload, capabilities and posture never feed the column.
+- Only a security operator changes a class: `wardyn runner trust <runner-id> <class> --reason <text>` (`PUT /api/v1/runners/{id}/trust`), or the trust section of *Admin → Runners*. It goes through the governance-change path and is audited `runner.trust.write`.
+- An organisation runner is always `org_cluster` and cannot be changed. The write moves a person's runner between `personal` and `managed_device` only.
+- A runner cannot raise its own class: the registration payload, capabilities and posture never feed the column.
 - Trusting `org_cluster` means trusting that cluster's administrators with the per-run and keystore Secrets, etcd backups and the per-run MITM key.
-- Delivery policy can differ per class (`by_trust`). A downgrade does not pull values already delivered; the next door refuses.
+- The delivery policy can differ per class (`by_trust`, falling back to the global row). A run is judged at the highest class among its eligible runners and bound to a runner of that class.
+- A downgrade does not pull values already delivered. A resident delivery or revive that finds the class changed is refused `runner_trust_changed`.
 - The CC3 floor is unchanged: no runner takes a resident credential for a CC3 run.
-
-<!-- K7-VERIFY: `wardyn runner trust` is K3-rest; `by_trust` and `runner_trust_changed` are K4. The route and audit action are on lane/093-K3a. -->
 
 ## What the chart applies
 
@@ -225,32 +221,32 @@
 | No decision sink | The decision sink did not start, so the runner refuses to create a sandbox | Read the sink error in the log |
 | Arch conflict | `k8s.sandbox.nodeSelector` names another `kubernetes.io/arch` | Remove the key or match `sandbox.arch` |
 
-- The kubelet floor is conservative. Since 1.27 a deleted pod reaches a terminal phase before the kubelet deletes it, and the `DeletionByPodGC` pod disruption condition is GA in 1.31.
+- The kubelet floor is conservative. Since [Kubernetes 1.27](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) the kubelet moves a deleted pod to a terminal phase before it is deleted, except static pods and force-deleted pods without a finalizer. [Pod disruption conditions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-conditions), including `DeletionByPodGC`, are stable since 1.31.
 - Below the floor a stop has no terminal status, so the run waits in termination unknown instead of ending.
 - A node that joins below the floor after boot is shown on the runner card.
 
-<!-- K7-VERIFY: the 1.27 and 1.31 release-note citations are unchecked (the 1.27 and 1.31 announcement pages did not show them); the below-floor card field is K3. -->
 
 ## Sandbox node lost or partitioned
 
-A run on a lost node is fenced at the relay before its first delete. Both pods stay Terminating; runnerd keeps the NetworkPolicies, the per-run Secrets and the liability. The run shows "containment pending; egress bounded until T", then "egress bound passed; termination unknown". Other runs on the runner stay READY.
+A run on a lost node is fenced at the relay before its first delete. Both pods stay Terminating; runnerd keeps the NetworkPolicies, the per-run Secrets and the liability, and reports the run to the organisation as `ContainmentPending`. Other runs on the runner stay READY.
+
+> [!WARNING]
+> The organisation side of this runbook is not in 0.9.3. Nothing in the console or the API shows "containment pending" or "termination unknown", and there is no form or route for the "node powered off" and "no prior holder" records. Runnerd accepts them on a `stop_proxy` action's `node_record`, but nothing sends one yet.
 
 | Node state | Do |
 |---|---|
-| Powered off, confirmed out of band (provider console or management controller) | Taint it `node.kubernetes.io/out-of-service`, or, if the Node object is already gone, record "node powered off" in *Admin → Runners* |
+| Powered off, confirmed out of band (provider console or management controller) | Taint it `node.kubernetes.io/out-of-service`. This releases a run whose Node object still shows the machine recorded when the run bound |
 | Partitioned, or state unknown | Nothing destructive: no taint, no force delete. The run waits until the node returns or is confirmed off |
-| Healthy node, no causal association, no status bound | Two humans record "no prior holder" while the holder still reports the pod's terminal status; or the record is "node powered off" if another machine held the name |
-| Node name reused | Only the two-person "node powered off" record, covering every machine that used the name since binding |
+| The Node object is gone, no causal association, or the node name was reused | The run waits for the record, which 0.9.3 cannot send. Runnerd keeps the fence and the policies; the pods end at their deadline |
 
-- The run detail's label decides the path: "causal node" means the taint or the record; "no causal association" means the record only.
-- The record follows the org's four-eyes rule. On the no-association path, and for every record that needs one, two distinct humans are required, and API tokens do not count.
-- A deleted Node object is not confirmation. The record captures the confirmation source and binds to the run, its pods, the node name and the machine.
+- The taint is read only for a run whose Node has a causal association, still shows the machine recorded at binding, and has no recorded name reuse. It is never a release for a reused name.
+- A deleted Node object is not confirmation. The record binds to the run, its pods, the node name and the machine.
 - A force delete is never evidence. Runnerd's finalizer keeps the object, and runnerd keeps the fence. Never strip `wardyn.dev/stop-proof` by hand.
-- Where another machine held the name, drain and power off the replacement, and delete its Node object, before recording the original machine's release.
+- Where another machine held the name, drain and power off the replacement, and delete its Node object, before the original machine's run can be released.
 - An anchored container whose closing list differs only in InternalIP is refused tier 1 and takes the record path. That is the safe side of a rebooted node that returns on a new address.
 - The pending run keeps its concurrency slot, and a reinstall refuses until the namespace is clean.
 
-<!-- K7-VERIFY: the "node powered off" form, its approvals and the run-detail labels are K3 (`PendingAction.node_record` on `stop_proxy`). Runnerd's side is on lane/093-K2. -->
+<!-- K7-VERIFY: the org-side ContainmentPending handling, the record form and route, and the run-detail labels were not in prep/093-final 841dbea50 (grep of internal/api, internal/store, pkg, ui/src). Restore the two-person record rows once they land. -->
 
 ### Revoked and gone
 
@@ -269,8 +265,15 @@ A revoked runner whose runnerd never returns leaves objects behind. Admin → Ru
 - Runnerd writes a hard deny into every proxy: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver and `apiServer.peers`, and `egress.hardDenyCIDRs`.
 - The deny is checked on the name and every resolved address before the `internal_hosts` lift, so declaring a host does not help.
 - A run therefore cannot reach any in-cluster service, such as an artifact registry or a model gateway. Reach such a service by an external name or address outside the deny set, or host it outside the cluster.
-- A model gateway or trusted URL the operator configured is dialled by the runner, not by agent egress, and is exempt.
 - Set `egress.hardDenyCIDRs` to the cluster's pod and service CIDRs.
+
+| What you see or need | Fact |
+|---|---|
+| A denied request in the audit | The row's rule source is `builtin:private-ip`, with the class "an in-cluster name or address this runner denies to every run". There is no `hard_deny` rule source |
+| An operator-authored gateway or trusted URL | Dialled by the runner path, not by agent egress, so the deny does not apply to it. An in-cluster model gateway you configure still works |
+| An upstream proxy inside the cluster | It voids this protection. A name the proxy cannot resolve locally gets only the name and suffix check, and the upstream proxy can resolve it to an in-cluster address |
+
+- Do not point `upstream_proxy` at an address inside the cluster. Runnerd does not refuse it at boot.
 
 ## What K6 proves
 
