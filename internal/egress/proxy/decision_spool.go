@@ -94,6 +94,9 @@ func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
 // reservation and append accounting; a burst cannot all observe the same free
 // slot and then forward requests whose final decision has nowhere to land.
 func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
+	if s.remote != nil {
+		return s.remote.reserve(need)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.localErr != nil {
@@ -124,12 +127,26 @@ func (s *decisionSink) drop(id uuid.UUID) {
 	delete(s.reservations, id)
 }
 
-func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); s.drop(id); s.mu.Unlock() }
+func (s *decisionSink) release(id uuid.UUID) {
+	if s.remote != nil {
+		s.remote.release(id)
+		return
+	}
+	s.mu.Lock()
+	s.drop(id)
+	s.mu.Unlock()
+}
 
 // admitSpoolHTTP reserves r's audit record before r is served. mitmHost is the
 // terminated tunnel's host for an inner request, "" for one ServeHTTP admits.
 func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost string) (*http.Request, func()) {
-	if p.sink == nil || p.sink.local == nil {
+	// Also the gate for a terminated tunnel's inner requests: no credential is
+	// injected once a self-lapsing proxy has closed.
+	if !p.lapse.serving() {
+		refuseClosed(w)
+		return nil, nil
+	}
+	if p.sink == nil || (p.sink.local == nil && p.sink.remote == nil) {
 		return r, func() {}
 	}
 	// JSON can expand one control byte into six. Refuse an oversized target
@@ -215,6 +232,13 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 }
 
 func configuredDecisionSink(cfg *Config, token *tokenSource, client *http.Client, out io.Writer) (*decisionSink, error) {
+	if cfg.DecisionSink != nil {
+		remote, err := newRemoteSink(cfg.RunID, *cfg.DecisionSink)
+		if err != nil {
+			return nil, err
+		}
+		return &decisionSink{remote: remote, out: out}, nil
+	}
 	if cfg.DecisionSpoolDir != "" {
 		return newLocalDecisionSink(cfg.DecisionSpoolDir, cfg.RunID, out)
 	}

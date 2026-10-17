@@ -56,6 +56,10 @@ type serverHooks struct {
 	res     resolver
 	engine  bool
 	maskKey uuid.UUID // where this server's secrets are filed (procMaskFor)
+	// lapseClock and lapseTune replace the self-lapse clock and renew cadence
+	// in tests; zero values are CLOCK_BOOTTIME and the design's cadence.
+	lapseClock bootClock
+	lapseTune  *lapseRenewTuning
 }
 
 // start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
@@ -73,7 +77,11 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 		p.localClient = client
 		return
 	}
-	startRunTokenRenewer(out, p, ts, cfg, client)
+	tune := defaultLapseRenewTuning()
+	if h.lapseTune != nil {
+		tune = *h.lapseTune
+	}
+	startRunTokenRenewer(out, p, ts, cfg, client, tune)
 }
 
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
@@ -279,6 +287,22 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
+	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
+		_ = sink.close(context.Background())
+		return nil, fmt.Errorf("hard deny: %w", err)
+	}
+	// k8s runners only: the proxy is closed until its first renew and lapses
+	// for good at the last renew's send time + RunTokenTTL (§6.2).
+	if cfg.SelfLapse {
+		clock := hooks.lapseClock
+		if clock == nil {
+			clock = sysBootClock{}
+		}
+		p.lapse = newLapseGate(clock, selfLapseTTL)
+		if sink.remote != nil {
+			p.lapse.onLapse = sink.remote.lapse
+		}
+	}
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
@@ -314,7 +338,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 // torn down by Shutdown; NewServer's ctx is a STARTUP context, so the
 // renewer gets its own lifetime instead. Alongside it, the activity reporter
 // streams the pause's presence clock for as long as the renewer runs.
-func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
+func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client, tune lapseRenewTuning) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -323,6 +347,11 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 	out.renewStopped = make(chan struct{})
 	go func() {
 		defer close(out.renewStopped)
+		if p.lapse != nil {
+			go p.lapse.watch(rctx, tune.watchEvery)
+			runSelfLapseRenewer(rctx, ts, cfg.ControlPlaneURL, client, p.lapse, tune)
+			return
+		}
 		runTokenRenewer(rctx, ts, cfg.ControlPlaneURL, client)
 	}()
 	go runActivityReporter(rctx, &p.streamMoved, ts, cfg.ControlPlaneURL, client, activityReportEvery)
@@ -391,6 +420,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	return errors.Join(httpErr, sinkErr)
 }
+
+// Lapsed closes when a self-lapsing proxy lapses; the process must then shut
+// down and exit non-zero, never serve again. Nil (never fires) otherwise.
+func (s *Server) Lapsed() <-chan struct{} { return s.proxy.lapse.Done() }
 
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }

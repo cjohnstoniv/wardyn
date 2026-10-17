@@ -172,6 +172,14 @@ func main() {
 			slog.Error("wardyn-proxy: serve error", slog.Any("err", err))
 			os.Exit(1)
 		}
+	case <-srv.Lapsed():
+		// Terminal (k8s runners): the pod is never restarted, so a lapsed
+		// proxy never serves again. Drain the sink for at most 5 s, then fail.
+		slog.Error("wardyn-proxy: run egress lapsed; exiting")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), lapseDrain)
+		_ = srv.Shutdown(shutdownCtx)
+		cancel()
+		os.Exit(exitLapsed)
 	case <-ctx.Done():
 		slog.Info("wardyn-proxy: shutdown signal received")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -183,6 +191,12 @@ func main() {
 		slog.Info("wardyn-proxy: stopped cleanly")
 	}
 }
+
+// exitLapsed is a self-lapsed proxy's exit status; lapseDrain bounds its sink drain.
+const (
+	exitLapsed = 3
+	lapseDrain = 5 * time.Second
+)
 
 // applyLLMScanSwitch is the per-proxy kill-switch: WARDYN_LLM_SCAN=off forces
 // THIS proxy process's outbound content inspection OFF regardless of policy.
