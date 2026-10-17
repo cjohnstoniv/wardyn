@@ -464,6 +464,7 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
 		spec := ceiling.Spec.Clone()
+		clampStoredFileSize(&spec, "the governance profile ceiling")
 		// A ceiling's azure_devops_capabilities and github_capabilities are
 		// bounds, not grants: handed to a member as their spec either would
 		// replace the row's default_profile with the widest list they may
@@ -482,7 +483,9 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		return types.RunPolicySpec{}, nil, policyOrigin{}, err
 	}
 	pid := p.ID
-	return p.Spec.Clone(), &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
+	spec := p.Spec.Clone()
+	clampStoredFileSize(&spec, "stored policy "+p.ID.String())
+	return spec, &pid, policyOrigin{kind: policyKindStored, name: p.Name, updatedAt: &p.UpdatedAt}, nil
 }
 
 // bestClass returns the strongest class a runner declares (slice is

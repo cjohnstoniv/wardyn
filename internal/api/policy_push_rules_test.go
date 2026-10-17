@@ -4,9 +4,15 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -84,9 +90,9 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		{"hold_seconds negative", spec(&types.PushRulesSpec{HoldSeconds: -1}),
 			"push_rules.hold_seconds must be between 0 and 600"},
 		{"max_file_size_mib negative", spec(&types.PushRulesSpec{MaxFileSizeMiB: -1}),
-			"push_rules.max_file_size_mib must be between 0 and 1024"},
+			"push_rules.max_file_size_mib must be between 0 and 32"},
 		{"max_file_size_mib above the cap", spec(&types.PushRulesSpec{MaxFileSizeMiB: maxPushRulesFileSizeMiB + 1}),
-			"push_rules.max_file_size_mib must be between 0 and 1024"},
+			"the most a pack can carry is 32 MiB"},
 		{"deny_new_executables is not enforced yet", spec(&types.PushRulesSpec{DenyNewExecutables: true}),
 			"push_rules.deny_new_executables is not supported yet"},
 		{"hold_seconds above the proxy's hold ceiling", spec(&types.PushRulesSpec{HoldSeconds: maxPushRulesHoldSeconds + 1}),
@@ -131,4 +137,52 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 	if err := validatePolicySpec(spec(&types.PushRulesSpec{DenyPaths: manyPaths})); err != nil {
 		t.Errorf("rejected a 100-entry deny_paths (no count cap by design): %v", err)
 	}
+}
+
+// gitpack refuses every object over 32 MiB, so a larger max_file_size_mib never took effect. A save
+// above it is refused at the route with a sentence an operator can act on.
+func TestCreatePolicyRefusesMaxFileSizeAboveWhatAPackCarries(t *testing.T) {
+	h := newHarness(t)
+	w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken,
+		`{"name":"p","spec":{"min_confinement_class":"CC2","push_rules":{"max_file_size_mib":33}}}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "the most a pack can carry is 32 MiB") {
+		t.Fatalf("POST = %d %s, want 400 naming the 32 MiB limit", w.Code, w.Body.String())
+	}
+}
+
+// A value saved when the bound was 1024 is lowered to 32 where it is read (the default policy file at
+// boot, a stored policy at launch, a profile ceiling), with the same effect, instead of failing to load.
+func TestStoredMaxFileSizeAboveTheBoundIsLoweredOnRead(t *testing.T) {
+	t.Run("the default policy file at boot", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "policy.json")
+		if err := os.WriteFile(path, []byte(`{"min_confinement_class":"CC2","push_rules":{"max_file_size_mib":500}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		spec, err := LoadPolicySpec(path)
+		if err != nil {
+			t.Fatalf("LoadPolicySpec refused a pre-bound value: %v", err)
+		}
+		if got := spec.PushRules.MaxFileSizeMiB; got != maxPushRulesFileSizeMiB {
+			t.Errorf("max_file_size_mib = %d, want %d", got, maxPushRulesFileSizeMiB)
+		}
+	})
+	t.Run("a stored policy at launch", func(t *testing.T) {
+		stored := types.RunPolicy{ID: uuid.New(), Name: "old", Spec: types.RunPolicySpec{
+			MinConfinementClass: types.CC2, PushRules: &types.PushRulesSpec{MaxFileSizeMiB: 500, HoldSeconds: 5}}}
+		h := newHarness(t)
+		h.srv.cfg.Store = &policyListStore{capStore: &capStore{}, pols: []types.RunPolicy{stored}}
+		spec, _, _, err := h.srv.resolvePolicy(context.Background(), &stored.ID, governanceCeiling{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := spec.PushRules.MaxFileSizeMiB; got != maxPushRulesFileSizeMiB || spec.PushRules.HoldSeconds != 5 {
+			t.Errorf("push_rules = %+v, want max_file_size_mib %d and the rest kept", *spec.PushRules, maxPushRulesFileSizeMiB)
+		}
+		if stored.Spec.PushRules.MaxFileSizeMiB != 500 {
+			t.Errorf("the stored row was edited in place: %d", stored.Spec.PushRules.MaxFileSizeMiB)
+		}
+		if err := validatePolicySpec(spec); err != nil {
+			t.Errorf("the lowered spec does not validate: %v", err)
+		}
+	})
 }
