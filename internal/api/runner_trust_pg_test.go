@@ -310,3 +310,19 @@ func TestPG_RunTrust_PromotedRunStartsOnTheFreePersonalLaptopBesideAFullManagedO
 		}
 	}
 }
+
+// Fable K4 round 2: with room on both laptops (max 2 runs each, the managed_device one holding one), the
+// promotion picks the roomier personal laptop and the start keeps it: the promotion's runner's class is
+// judged first, ahead of the higher class that also has room.
+func TestPG_RunTrust_PromotedRunKeepsTheRoomierPersonalLaptopBesideAManagedOneWithRoom(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, b := cappedLaptops(e, 2)
+	e.setTrust(a, types.RunnerTrustManagedDevice)
+	occupyRunner(e, p, a)
+	for i := 0; i < 4; i++ {
+		_, got := launchThroughQueue(e, p, a, b)
+		if got.State == types.RunFailed || got.RunnerID == nil || *got.RunnerID != b {
+			t.Fatalf("launch %d = %s on %v detail %q; want the promotion's roomier personal laptop %s kept", i, got.State, got.RunnerID, got.StatusDetail, b)
+		}
+	}
+}
