@@ -591,7 +591,7 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 		f.spec.AutoStopAfterSec = poolIdleStop(f.spec.AutoStopAfterSec, *idle)
 	}
 	// The clamp already folded a PIDs cut into the shared warning; this is the signal that says which one.
-	f.place.applied.PidsLimit = appliedPids(f.source, f.ceiling, rl.PidsLimit, s.inheritDeploymentResources(nil).PidsLimit)
+	f.place.applied.PidsLimit = appliedPids(f.source, f.ceiling, rl.PidsLimit)
 	if (a.CPUMillis.Capped || a.MemoryMiB.Capped) && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
 		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
 	}

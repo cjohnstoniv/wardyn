@@ -41,6 +41,9 @@ func authoredAfter(base types.ResourceLimits, row types.GovernanceProfile, res c
 	if v := row.Overlay.Resources.MemoryMiB; v != nil && *v > 0 {
 		base.MemoryMiB = res.Ceiling.Resources.MemoryMiB
 	}
+	if v := row.Overlay.Resources.PidsLimit; v != nil && *v > 0 {
+		base.PidsLimit = res.Ceiling.Resources.PidsLimit
+	}
 	return base
 }
 
