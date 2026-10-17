@@ -106,3 +106,60 @@ func TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey(t *testing.T) {
 		t.Errorf("generated %d keys, want 1: the second boot must read the first one's key", n)
 	}
 }
+
+// TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA is the same race as above on
+// the internal CA the control-plane to proxy hop pins (#692): two replicas
+// booting at once against an empty store must serve one CA, or a proxy pinned
+// to one replica's CA fails closed against the other.
+func TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA(t *testing.T) {
+	poolA := pgPool(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	poolB, err := db.Connect(ctx, os.Getenv("WARDYN_TEST_PG"))
+	if err != nil {
+		t.Fatalf("connect poolB: %v", err)
+	}
+	defer poolB.Close()
+
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("age identity: %v", err)
+	}
+	storeA, err := buildSecretStore(ctx, poolA, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("store A: %v", err)
+	}
+	storeB, err := buildSecretStore(ctx, poolB, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("store B: %v", err)
+	}
+	// The CA name is fixed, so start from an empty store and leave it empty.
+	_ = storeA.Delete(ctx, secretInternalCA)
+	t.Cleanup(func() { _ = storeA.Delete(context.Background(), secretInternalCA) })
+
+	hops := make([]*hopTLS, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i, s := range []bootKeyStore{
+		newBootKeyStore(storeA, poolA, true),
+		newBootKeyStore(storeB, poolB, true),
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			hops[i], errs[i] = loadHopTLS(ctx, s, "https://wardynd:8443")
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("boot %d: %v", i, err)
+		}
+	}
+	if hops[0].caPEM == "" || hops[0].caPEM != hops[1].caPEM {
+		t.Fatal("the two first boots serve different internal CAs: a proxy pinned to one replica fails closed against the other")
+	}
+}
