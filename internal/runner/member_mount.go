@@ -184,6 +184,26 @@ func validateUserSource(src string, roots []string) (string, error) {
 	return real, nil
 }
 
+// resolveEntry is a configured path made comparable with an already-resolved one: cleaned, with
+// symlinks resolved through its longest existing prefix. An entry that does not exist yet keeps
+// its remaining names, so one behind a symlinked parent still lands where a resolved spelling of
+// that parent does, and not at its lexical text.
+func resolveEntry(entry string) string {
+	p := filepath.Clean(entry)
+	var rest []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Clean(entry)
+		}
+		rest = append([]string{filepath.Base(p)}, rest...)
+		p = parent
+	}
+}
+
 // withinAnyRoot reports whether the ALREADY-RESOLVED real path is one of roots
 // or nested under one. Each root is canonicalized the same way before the
 // comparison (falling back to its cleaned lexical form when it does not
@@ -191,10 +211,7 @@ func validateUserSource(src string, roots []string) (string, error) {
 // matches a resolved source under it.
 func withinAnyRoot(real string, roots []string) bool {
 	for _, root := range roots {
-		r := filepath.Clean(root)
-		if resolved, err := filepath.EvalSymlinks(r); err == nil {
-			r = resolved
-		}
+		r := resolveEntry(root)
 		if real == r || strings.HasPrefix(real, r+string(filepath.Separator)) {
 			return true
 		}
@@ -209,10 +226,7 @@ func withinAnyRoot(real string, roots []string) bool {
 func denyPathUnder(real string, deny []string) string {
 	prefix := strings.TrimSuffix(real, string(filepath.Separator)) + string(filepath.Separator)
 	for _, entry := range deny {
-		d := filepath.Clean(entry)
-		if resolved, err := filepath.EvalSymlinks(d); err == nil {
-			d = resolved
-		}
+		d := resolveEntry(entry)
 		if strings.HasPrefix(d, prefix) {
 			return entry
 		}
