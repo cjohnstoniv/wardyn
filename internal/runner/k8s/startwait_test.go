@@ -81,6 +81,45 @@ func TestWaitPodIP_UnplaceableProxyWaitsForRoomThenStarts(t *testing.T) {
 	}
 }
 
+// A pod no node can take by placement (a mistyped nodeSelector) is not waiting for room: with the
+// node read on it spends the ordinary start budget and fails with the scheduler's own words, where
+// the same pod on a cluster that has an allowed node keeps its capacity wait and starts.
+func TestWaitPodIP_PlacementThatExcludesEveryNodeFailsAtTheStartBudget(t *testing.T) {
+	fastPoll(t)
+	const msg = "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector."
+	for _, tc := range []struct {
+		name      string
+		nodeLabel string
+		wantErr   bool
+	}{
+		{"no node matches the selector", "general", true},
+		{"an allowed node exists", "sandbox", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond, CapacityWait: 5 * time.Second,
+				ReadNodes: true, SandboxPlacement: `{"nodeSelector":{"pool":"sandbox"}}`})
+			seed(t, cs, node("n1", 4000, 8192, map[string]string{"pool": tc.nodeLabel}))
+			const podName = "wardyn-proxy-selector"
+			podByAge(cs, podName, func(age time.Duration) corev1.PodStatus {
+				if age < 1500*time.Millisecond {
+					return unschedulableStatus(msg)
+				}
+				return proxyReadyStatus()
+			})
+			_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("waitPodIP: %v; want the wait to run past StartTimeout and start", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "did not start within") || !strings.Contains(err.Error(), msg) {
+				t.Fatalf("waitPodIP err = %v; want the start-budget failure carrying the scheduler's message", err)
+			}
+		})
+	}
+}
+
 // Only the agent contends: the proxy starts at once, the agent waits for room, and the shared clock
 // still lets it start.
 func TestWaitContainerRunning_AgentOnlyContention(t *testing.T) {
