@@ -959,6 +959,7 @@ const (
 	reasonRunnerRegistrationUnavailable = "runner_registration_unavailable"
 	reasonRemoteRunnerNotFound          = "remote_runner_not_found" // no remote-hosted runner has that id (the operators' /remote-runners routes)
 	reasonRunnerRegistrationRateLimited = "runner_registration_rate_limited"
+	reasonRunnerTokenRateLimited        = "runner_token_rate_limited" // a person minted too many runner registration tokens in an hour
 	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
 	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
 	reasonRunnerKeyAlreadyRegistered    = "runner_key_already_registered"

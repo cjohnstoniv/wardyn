@@ -593,6 +593,7 @@ start.
 | `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or admission limits exceeded. |
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
+| `runner_token_rate_limited` | `POST /me/runners/tokens` (`runner_registration.go`): a person minted more than 10 runner registration tokens in an hour; retry later (`429` with `Retry-After`). |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner, and an unclaimed runner past its wait, answer as an absent id. |
