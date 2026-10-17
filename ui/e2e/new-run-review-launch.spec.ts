@@ -182,6 +182,34 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
     expect(seen.created).toHaveLength(0);
   });
 
+  test("Cancel while the create is out cannot be followed by a second run (DR-0269)", async ({ page }) => {
+    const seen = await stub(page, { preflight: CLEAR });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      posts.push(route.request().postData() ?? "");
+      await held;
+      return route.fulfill({ status: 201, json: { id: RUN_ID, state: "PENDING" } });
+    });
+    await openReview(page);
+    await openNameDialog(page);
+    await nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL).fill("held create");
+    await nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    await press(page, NR_LAUNCH.CANCEL);
+    await expect(nameDialog(page)).toHaveCount(0);
+
+    await launch(page).click();
+    await expect(nameDialog(page)).toBeVisible();
+    await expect(nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
+    release();
+    await expect(page).toHaveURL(new RegExp(`\\?launched=${RUN_ID}$`));
+    expect(posts).toHaveLength(1);
+    expect(seen.created).toHaveLength(0);
+  });
+
   test("a create the check missed is shown inside the dialog, and the typed text stays", async ({ page }) => {
     await stub(page, { preflight: CLEAR });
     await page.route("**/api/v1/runs", (route) =>
@@ -259,6 +287,22 @@ test.describe("New Run, Review: what the summaries say the server will do", () =
     const tools = page.locator("[data-policy-row=tools]");
     await expect(tools).toContainText(TOOLS_COPY.EFFECT_DENY);
     await expect(tools).not.toContainText(NR_REVIEW.POLICY_AUTOMATIC);
+  });
+
+  test("a CPU cut and a main-drive cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
+    const line = "resources capped to operator maximum";
+    const cut = { source: "governance", source_name: "Platform team", capped: true };
+    await stub(page, {
+      preflight: {
+        ...CLEAR,
+        warnings: [line],
+        resources_applied: { cpu_millis: { requested: 16000, applied: 8000, ...cut }, memory_mib: { requested: 4096, applied: 4096 } },
+        main_drive: { requested_mib: 40960, applied_mib: 20480, basis: "request", clamped_by: "governance", soft: false },
+      } as never,
+    });
+    await openReviewWith(page, ENV);
+    await expect(page.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeVisible();
+    await expect(page.getByText(line, { exact: true })).toBeVisible();
   });
 
   test("the lifetime is the one the server resolves: held to its cap, or No end when asked for and allowed (DR-0245)", async ({ page }) => {

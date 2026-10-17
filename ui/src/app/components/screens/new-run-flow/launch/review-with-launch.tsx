@@ -15,10 +15,12 @@ import { useNewRunDraft, type LaunchedState, type NewRunScreenProps } from "../n
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { ReviewScreen } from "../review/review-screen";
 import { NameRunDialog } from "./name-run-dialog";
+import { usePendingLaunch } from "./use-launch-run";
 
 export function ReviewWithLaunch(props: NewRunScreenProps) {
   const [naming, setNaming] = React.useState(false);
   const navigate = useNavigate();
+  const pending = usePendingLaunch();
   const { principal } = useRequestIdentity();
   const { catalogue } = useDriveCatalogue(useNewRunDraft().intent.runner_pool_id);
   // A catalogue still loading, or that failed, is unknown, not "no drives": pass nothing then.
@@ -30,7 +32,7 @@ export function ReviewWithLaunch(props: NewRunScreenProps) {
   return (
     <>
       <ReviewScreen {...props} ownDriveIds={ownDriveIds} onLaunch={() => setNaming(true)} />
-      {naming && <NameRunDialog open onOpenChange={setNaming} onCreated={created} />}
+      {naming && <NameRunDialog open onOpenChange={setNaming} onCreated={created} pending={pending} />}
     </>
   );
 }

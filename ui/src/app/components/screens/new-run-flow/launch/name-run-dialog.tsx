@@ -36,7 +36,7 @@ import { BarrierChip } from "../review/barrier-chip";
 import { cpuNumber, resolvedLifetime, resolvedLifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
-import { useLaunchRun } from "./use-launch-run";
+import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
 
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
@@ -62,9 +62,11 @@ export interface NameRunDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The create answered 2xx: the caller moves to the Launched screen. */
   onCreated: (created: CreateRunResult) => void;
+  /** The create in flight, held by the dialog's owner so that closing and reopening cannot start a second. */
+  pending?: PendingLaunch;
 }
 
-export function NameRunDialog({ open, onOpenChange, onCreated }: NameRunDialogProps) {
+export function NameRunDialog({ open, onOpenChange, onCreated, pending }: NameRunDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -74,13 +76,13 @@ export function NameRunDialog({ open, onOpenChange, onCreated }: NameRunDialogPr
           (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("#name-run-title")?.focus();
         }}
       >
-        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} />
+        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} pending={pending} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated">) {
+function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated" | "pending">) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const identity = useDraftIdentity();
@@ -124,7 +126,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
     }
     void modelDoor.refresh();
   };
-  const create = useLaunchRun(identity, onCreated, refused);
+  const create = useLaunchRun(identity, onCreated, refused, pending);
 
   const pre = checks.preflightIsCurrent ? (checks.preflightResult as ReviewPreflight | null) : null;
   const answered = pre !== null;

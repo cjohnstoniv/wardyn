@@ -65,4 +65,70 @@ describe("Review launches through the Name dialog to Launched", () => {
     expect(screen.getByTestId("where")).toHaveTextContent(`/runs/new?launched=${RUN_ID}`);
     expect(runs.createRunWire).toHaveBeenCalledTimes(1);
   });
+
+  describe("Cancel while the create is out (DR-0269)", () => {
+    function mount() {
+      render(
+        <MemoryRouter initialEntries={[`/runs/new?again=${RUN_ID}`]}>
+          <OperatorProvider operator={false} principal="alice">
+            <Routes>
+              <Route
+                path="/runs/new"
+                element={<><NewRunRoute loaders={loaders} screens={{ ...NEW_RUN_SCREENS, review: ReviewWithLaunch, launched: LaunchedScreen }} /><Where /></>}
+              />
+            </Routes>
+          </OperatorProvider>
+        </MemoryRouter>,
+      );
+    }
+    const openDialog = async () => {
+      const launch = await screen.findByRole("button", { name: NR_REVIEW.LAUNCH_RUN });
+      await waitFor(() => expect(launch).toBeEnabled());
+      await userEvent.click(launch);
+      const box = await screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+      await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+      return box;
+    };
+    const press = (box: HTMLElement) => userEvent.click(within(box).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) }));
+
+    it("a reopened dialog cannot make a second run while the first create is still out", async () => {
+      let finish!: (r: unknown) => void;
+      vi.mocked(runs.createRunWire).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+      mount();
+      let box = await openDialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "once");
+      await press(box);
+      expect(runs.createRunWire).toHaveBeenCalledTimes(1);
+      await userEvent.click(within(box).getByRole("button", { name: NR_LAUNCH.CANCEL }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: NR_LAUNCH.TITLE })).toBeNull());
+
+      box = await openDialog();
+      expect(within(box).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) })).toBeDisabled();
+      await press(box);
+      expect(runs.createRunWire).toHaveBeenCalledTimes(1);
+
+      // The one run still lands where it always did.
+      finish({ id: RUN_ID, state: "PENDING", title: "once" });
+      expect(await screen.findByText(NR_LAUNCH.BADGE_STARTING)).toBeInTheDocument();
+      expect(runs.createRunWire).toHaveBeenCalledTimes(1);
+    });
+
+    it("a later deliberate launch works once the first create has answered", async () => {
+      let fail!: (e: unknown) => void;
+      vi.mocked(runs.createRunWire).mockImplementationOnce(() => new Promise((_ok, no) => { fail = no; }) as never);
+      mount();
+      let box = await openDialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "twice");
+      await press(box);
+      await userEvent.click(within(box).getByRole("button", { name: NR_LAUNCH.CANCEL }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: NR_LAUNCH.TITLE })).toBeNull());
+      fail(new Error("refused"));
+
+      box = await openDialog();
+      await waitFor(() => expect(within(box).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) })).toBeEnabled());
+      await press(box);
+      expect(await screen.findByText(NR_LAUNCH.BADGE_STARTING)).toBeInTheDocument();
+      expect(runs.createRunWire).toHaveBeenCalledTimes(2);
+    });
+  });
 });
