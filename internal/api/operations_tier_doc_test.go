@@ -188,6 +188,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},
+	{"GET /api/v1/governance/credential-delivery", "`GET /governance/credential-delivery`"},
+	{"PUT /api/v1/governance/credential-delivery", "`PUT /governance/credential-delivery`"},
 	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
 	{"PUT /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
@@ -276,9 +278,6 @@ var docTierRows = []struct{ route, token string }{
 var docTierUndocumented = map[string]string{
 	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
-	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
-	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
-	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still

@@ -43,6 +43,8 @@ type reviveStore struct {
 	// outage run whose agent stopped can); CountNonTerminalRuns counts it
 	// unless except names it.
 	selfCounted bool
+	// countErr makes CountNonTerminalRuns fail, as an unreadable store would.
+	countErr error
 }
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
@@ -127,6 +129,9 @@ func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.Governanc
 // CountNonTerminalRuns: the deployment's one other run fills the cap when capFull;
 // the run itself counts when selfCounted, unless except names it.
 func (s *reviveStore) CountNonTerminalRuns(_ context.Context, except uuid.UUID) (int, error) {
+	if s.countErr != nil {
+		return 0, s.countErr
+	}
 	n := 0
 	if s.capFull {
 		n++
@@ -382,18 +387,29 @@ func TestReviveRun_Refusals(t *testing.T) {
 			f.rs.cfg, _ = runner.BuildProxyConfig(uuid.New(), runner.ProxyConfig{RunToken: "x", ControlPlaneURL: "http://x"}, 3128)
 		}, http.StatusConflict},
 	}
+	denied := map[string]string{"the git broker would lose GitHub": "revive_ceiling_denies_git_broker"}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newReviveFixture(t)
 			tc.arrange(f)
-			if code := f.revive(t); code != tc.code {
-				t.Fatalf("revive: code %d, want %d", code, tc.code)
+			w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive: code %d, want %d", w.Code, tc.code)
 			}
 			if len(f.rr.replaced) != 0 {
 				t.Error("a refused revive replaced the proxy")
 			}
 			if lostAt, _ := f.st.lost(); lostAt == nil {
 				t.Error("a refused revive cleared the lost mark")
+			}
+			// Only the ceiling refusals write a `denied` run.revive row, naming the reason.
+			if want := denied[name]; want != "" {
+				if got := errorReason(w); got != want {
+					t.Errorf("reason = %q, want %q", got, want)
+				}
+				if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "denied" || leaseAuditData(t, ev[0])["reason"] != want {
+					t.Errorf("run.revive rows = %+v, want one denied row naming %q", ev, want)
+				}
 			}
 		})
 	}
@@ -809,11 +825,15 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 	cases := map[string]struct {
 		door, deny, live bool
 		code             int
+		ceil             []string // the ceiling's denied entries when it is not the bare Resource Manager host
 	}{
-		"the profile is unchanged":                  {door: true, code: http.StatusOK},
-		"the profile now denies Resource Manager":   {door: true, deny: true, code: http.StatusConflict},
-		"it does on a live run too":                 {door: true, deny: true, live: true, code: http.StatusConflict},
-		"the profile already denied it at dispatch": {deny: true, code: http.StatusOK},
+		"the profile is unchanged":                    {door: true, code: http.StatusOK},
+		"the profile now denies Resource Manager":     {door: true, deny: true, code: http.StatusConflict},
+		"it does on a live run too":                   {door: true, deny: true, live: true, code: http.StatusConflict},
+		"the profile already denied it at dispatch":   {deny: true, code: http.StatusOK},
+		"a wildcard entry covers it":                  {door: true, deny: true, code: http.StatusConflict, ceil: []string{"*.azure.com"}},
+		"a port-qualified entry covers it":            {door: true, deny: true, code: http.StatusConflict, ceil: []string{armscope.Host + ":443"}},
+		"a ceiling that denies only the sign-in host": {door: true, code: http.StatusOK, ceil: []string{proxy.AzureLoginHost}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -834,8 +854,12 @@ func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.rs.cfg = stored
-			if tc.deny {
-				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, armscope.Host)
+			if tc.deny || len(tc.ceil) > 0 {
+				deny := []string{armscope.Host}
+				if len(tc.ceil) > 0 {
+					deny = tc.ceil
+				}
+				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, deny...)
 			}
 			if tc.live {
 				f.st.run.LostAt, f.st.run.LostReason = nil, ""

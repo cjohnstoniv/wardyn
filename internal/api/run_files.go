@@ -454,7 +454,7 @@ func parseNumstatLine(line string) (runFileStat, bool) {
 	if len(parts) != 3 {
 		return runFileStat{}, false
 	}
-	path := strings.TrimSpace(parts[2])
+	path := unquoteGitPath(strings.TrimSpace(parts[2]))
 	if path == "" {
 		return runFileStat{}, false
 	}
@@ -475,6 +475,18 @@ func parseRunFileCount(s string) *int {
 	return &n
 }
 
+// unquoteGitPath undoes git's C-quoting of a path that holds a quote, a
+// backslash or a control character (porcelain also quotes a space). Both
+// outputs quote the same way, and the join between them is on the plain path.
+func unquoteGitPath(path string) string {
+	if strings.HasPrefix(path, `"`) {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			return unquoted
+		}
+	}
+	return path
+}
+
 // parsePorcelainLine parses one `git status --porcelain` row: two status
 // columns (staged, worktree), a space, then the path — "?? scratch.txt",
 // " M main.go", "R  old.go -> new.go".
@@ -493,12 +505,7 @@ func parsePorcelainLine(line string) (runFileStat, bool) {
 			path = strings.TrimSpace(path[i+len(" -> "):])
 		}
 	}
-	// Porcelain quotes a path that holds a space; numstat does not, and the join is on the plain path.
-	if strings.HasPrefix(path, `"`) {
-		if unquoted, err := strconv.Unquote(path); err == nil {
-			path = unquoted
-		}
-	}
+	path = unquoteGitPath(path)
 	if code == "" || path == "" {
 		return runFileStat{}, false
 	}

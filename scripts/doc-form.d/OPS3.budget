@@ -41,7 +41,7 @@ docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3416 adds 57 over 3359 (0.9 member drives): the admin list and delete of people's drives; measured at merge.
 # docs/operations/admin-only-writes.md 3418 adds 2 over 3416 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/operations/admin-only-writes.md 3444 adds 26 over 3418 (0.9 release text for the fix sets merged at release); measured.
-docs/operations/admin-only-writes.md=3444 share=35
+docs/operations/admin-only-writes.md=3495 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 docs/operations/three-roles.md=4173 share=35
@@ -104,3 +104,4 @@ docs/operations/denials.md=4963 share=35
 # docs/operations/governance-writes.md 3047 adds 35 over 3012, measured: a rename that can move an equal-priority group tie is held.
 # docs/operations/governance-writes.md 3076 adds 29 over 3047, measured: a held role mapping carries the effect its proposer acknowledged.
 # three-roles.md 4173 (+49) and governance-writes.md 3086 (+10), measured: a maximum where no size is set can raise the member cap.
+# docs/operations/admin-only-writes.md 3495 adds 51 over 3444, measured: the two security-tier rows for GET and PUT /governance/credential-delivery (the tier table covered neither).

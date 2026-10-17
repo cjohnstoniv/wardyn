@@ -565,6 +565,14 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
+// addRemoteInstead appends how to run a refused run on a remote-hosted runner, to a sent 4xx only: a
+// denial decision (status 0) is written from the decision, not from this body, and a server error says nothing.
+func (f *runRefusal) addRemoteInstead(pool string) {
+	if f != nil && f.status >= http.StatusBadRequest && f.status < http.StatusInternalServerError {
+		f.body.Error += " " + remoteInsteadMsg(pool)
+	}
+}
+
 // stepLocalEligibility is before confinement/provider liveness: create may
 // renew a one-use AWS credential there. No local refusal may reach that phase.
 // The admitted plan supplies specific refusals; an unpooled local request has
@@ -579,8 +587,8 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	}
 	var refusal *runRefusal
 	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
-	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
-		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
+	if f.place.remoteOffered {
+		refusal.addRemoteInstead(f.place.pool.Name)
 	}
 	if refusal.write(s, f.w, f.r) {
 		return false

@@ -384,7 +384,7 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 	}
 	n, err := c.CountNonTerminalRuns(ctx, run.ID)
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "count active runs", err))
 	}
 	if n >= s.cfg.MaxConcurrentRuns {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)

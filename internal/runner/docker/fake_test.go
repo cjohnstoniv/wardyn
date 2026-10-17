@@ -42,7 +42,7 @@ func (e fakeNotFound) Error() string { return e.msg }
 func (e fakeNotFound) NotFound()     {}
 
 // fakePullResponse adapts an io.ReadCloser to client.ImagePullResponse (the v29
-// ImagePull return type). PullImage only drains the reader, so the extra
+// ImagePull return type). PullImage decodes the reader itself, so the extra
 // progress helpers are inert no-ops.
 type fakePullResponse struct{ io.ReadCloser }
 
