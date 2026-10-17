@@ -333,11 +333,13 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     await userEvent.type(size(), "0.03125");
     await userEvent.tab();
     expect(size()).toHaveValue(32);
-    enter("500");
-    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("500 MiB"))).toBeInTheDocument();
+    // 512 MiB is half a GiB: once stored it reads "0.5 GiB", but while typed in MiB it reads as typed.
+    enter("512");
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("512 MiB"))).toBeInTheDocument();
     expect(screen.queryByText(NR_FILES.MOUNT_MAIN("0.5 GiB"))).toBeNull();
     await userEvent.tab();
-    expect(drawn().resources).toEqual({ disk_mib: 500 });
+    expect(drawn().resources).toEqual({ disk_mib: 512 });
+    expect(await screen.findByText(NR_FILES.MOUNT_MAIN("0.5 GiB"))).toBeInTheDocument();
   });
 
   it("emptying the field and leaving it keeps the stored size and the clamp note", async () => {
