@@ -224,12 +224,32 @@ type h2MismatchError struct {
 func (e *h2MismatchError) Error() string {
 	msg := "upstream protocol mismatch: " + e.err.Error()
 	if e.h2Err != nil {
-		msg += "; HTTP/2 resend: " + e.h2Err.Error()
+		msg += "; HTTP/2 resend: " + h2ResendClass(e.h2Err)
 	}
 	return msg
 }
 
 func (e *h2MismatchError) Unwrap() error { return e.err }
+
+// h2ResendClass is a fixed word for why the HTTP/2 resend failed. The error's own text can carry the peer's
+// GOAWAY debug data, which the peer chose and the sandbox's run reads (CWE-117), so it is never printed.
+func h2ResendClass(err error) string {
+	var goAway http2.GoAwayError
+	var stream http2.StreamError
+	var conn http2.ConnectionError
+	var nerr net.Error
+	switch {
+	case errors.As(err, &goAway):
+		return "GOAWAY " + goAway.ErrCode.String()
+	case errors.As(err, &stream):
+		return stream.Code.String()
+	case errors.As(err, &conn):
+		return http2.ErrCode(conn).String()
+	case errors.As(err, &nerr) && nerr.Timeout():
+		return "timeout"
+	}
+	return "failed"
+}
 
 // roundTripUpstream is the MITM/LLM and plain lanes' round trip. A host
 // already known to speak HTTP/2 unasked goes straight to the fallback
@@ -364,7 +384,7 @@ func h2MismatchSentence(e *h2MismatchError) string {
 	s := "peer answered HTTP/2 to an HTTP/1.1 request (ALPN: " + alpnOrNone(e.alpn) + ")"
 	switch {
 	case e.h2Err != nil:
-		s += "; the HTTP/2 resend also failed: " + e.h2Err.Error()
+		s += "; the HTTP/2 resend also failed: " + h2ResendClass(e.h2Err)
 	case e.notResent:
 		s += "; not resent over HTTP/2 because the request had already been written and its body cannot be replayed; later requests to this host use HTTP/2"
 	}

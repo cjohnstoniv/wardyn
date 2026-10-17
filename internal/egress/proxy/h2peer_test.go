@@ -1024,3 +1024,23 @@ func TestResendableRebuildsBeforeReusingTheShield(t *testing.T) {
 		t.Error("a body already read must not be resent")
 	}
 }
+
+// The resend's failure is named by a fixed class: a peer's GOAWAY debug text never reaches the sentence the
+// sandbox's run reads.
+func TestH2ResendClassNeverEchoesPeerText(t *testing.T) {
+	const peerText = "injected\nline from the peer"
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"goaway":  {fmt.Errorf("resend: %w", http2.GoAwayError{ErrCode: http2.ErrCodeEnhanceYourCalm, DebugData: peerText}), "GOAWAY ENHANCE_YOUR_CALM"},
+		"stream":  {http2.StreamError{StreamID: 1, Code: http2.ErrCodeRefusedStream, Cause: errors.New(peerText)}, "REFUSED_STREAM"},
+		"timeout": {fmt.Errorf("resend: %w", context.DeadlineExceeded), "timeout"},
+		"other":   {errors.New(peerText), "failed"},
+	} {
+		got := h2ResendClass(tc.err)
+		if got != tc.want || strings.Contains(got, "peer") {
+			t.Errorf("%s: class = %q, want %q", name, got, tc.want)
+		}
+	}
+}
