@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -301,7 +302,7 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap)}
+	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap), limit: recording.MaxCastBytes}
 	r.masker = secretmask.NewMaskingWriter(&r.output, r.mask)
 	return r
 }
@@ -316,6 +317,45 @@ type recordingMaskReader struct {
 	held  []byte
 	err   error
 	guard func() bool // nil, or false once the run is no longer covered
+	// limit is the most masked bytes a plain log may leave this reader. Masking can lengthen a body, so a log
+	// within the upload cap can come out past the store's. Past limit the output is cut and ends with
+	// maskCutMarker(limit) in place of the rest. The cut is of masked bytes after the masker has flushed, so it
+	// cannot split a secret. A cast is never cut here, its lines would break: the store refuses it.
+	limit int
+	sent  int    // masked bytes handed to the caller
+	head  []byte // the first bytes read, to tell a cast from a plain log
+	cut   bool
+}
+
+// maskCutMarker is the line a log cut at limit masked bytes ends with. It is not wardyn-rec's cut marker, which
+// says the sender cut the log; this one says the server did.
+func maskCutMarker(limit int) string {
+	return fmt.Sprintf("\n[wardyn: log truncated: the masked log passed the %d byte limit; the rest was dropped]\n", limit)
+}
+
+const castHeadPrefix = `{"version"`
+
+// held back from the caller until the end or the cap is known: the room the cut marker needs.
+func (r *recordingMaskReader) holdBack() int {
+	if r.err != nil || r.cut || r.limit == 0 || strings.HasPrefix(string(r.head), castHeadPrefix) {
+		return 0
+	}
+	return len(maskCutMarker(r.limit))
+}
+
+// capOutput cuts a plain log's masked output at the limit: whatever was not yet handed on, up to the room the
+// marker needs, then the marker. The source is not read again.
+func (r *recordingMaskReader) capOutput() {
+	if r.limit == 0 || r.cut || r.sent+r.output.Len() <= r.limit || strings.HasPrefix(string(r.head), castHeadPrefix) {
+		return
+	}
+	marker := maskCutMarker(r.limit)
+	r.output.Truncate(r.limit - len(marker) - r.sent)
+	r.output.WriteString(marker)
+	r.cut, r.held = true, nil
+	if r.err == nil {
+		r.err = io.EOF
+	}
 }
 
 // finish masks the held bytes and flushes the masker. A body that ends with wardyn-rec's log cut marker
@@ -337,32 +377,38 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	for r.output.Len() == 0 && r.err == nil {
+	for r.output.Len() <= r.holdBack() && r.err == nil {
 		if r.guard != nil && !r.guard() {
 			r.err = errMaskUncovered
 			return 0, r.err
 		}
 		n, readErr := r.src.Read(r.chunk[:])
 		r.held = append(r.held, r.chunk[:n]...)
+		if room := len(castHeadPrefix) - len(r.head); room > 0 {
+			r.head = append(r.head, r.chunk[:min(n, room)]...)
+		}
 		var maskErr error
 		if over := len(r.held) - recording.LogCutMarkerMax; over > 0 {
 			_, maskErr = r.masker.Write(r.held[:over])
 			r.held = append(r.held[:0], r.held[over:]...)
 		}
 		r.err = cmp.Or(maskErr, readErr)
-		if r.err != nil {
+		r.capOutput()
+		if r.err != nil && !r.cut {
 			// Flush the retained masked tail before exposing EOF or the source
 			// error, including MaxBytesError. Neither may discard buffered bytes.
 			closeErr := r.finish(r.err == io.EOF)
 			if r.err == io.EOF && closeErr != nil {
 				r.err = closeErr
 			}
+			r.capOutput()
 		}
 		if n == 0 && r.err == nil {
 			return 0, nil
 		}
 	}
-	n, _ := r.output.Read(p)
+	n, _ := r.output.Read(p[:min(len(p), r.output.Len()-r.holdBack())])
+	r.sent += n
 	if r.output.Len() > 0 {
 		return n, nil
 	}

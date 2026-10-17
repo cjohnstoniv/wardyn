@@ -192,3 +192,128 @@ func TestBuildMaskingBody_MasksANestedSecretALogCutSplits(t *testing.T) {
 		}
 	}
 }
+
+// maskedWithLimit is body through the masking reader with its masked-output limit lowered to limit.
+func maskedWithLimit(t *testing.T, src io.Reader, secret string, limit int) *recordingMaskReader {
+	t.Helper()
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(runID, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	r := buildMaskingBody(src, reg, runID).(*recordingMaskReader)
+	r.limit = limit
+	return r
+}
+
+// Masking lengthens a body (a value of MinLen bytes becomes the longer placeholder), so a log within the upload
+// cap can come out past the store's. The masked output is cut at the limit and ends with the server's marker, once,
+// at every read size, and what comes before it is the masked log, unchanged.
+func TestBuildMaskingBody_CutsAnExpandedLogAtTheStoreCap(t *testing.T) {
+	const secret, limit = "expand-me", 4096
+	placeholder := string(secretmask.Placeholder())
+	marker := maskCutMarker(limit)
+	line := "x " + secret + "\n"
+	input := strings.Repeat(line, 2000) // 2000 lines, each 2+15+1 bytes masked: ~36000, far past the limit
+	wantAll := strings.Repeat("x "+placeholder+"\n", 2000)
+	for _, chunk := range []int{1, 7, 4096, 1 << 20} {
+		r := maskedWithLimit(t, chunkedReader{strings.NewReader(input), chunk}, secret, limit)
+		got, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("%d-byte reads: %v", chunk, err)
+		}
+		if len(got) != limit || strings.Count(string(got), marker) != 1 || !strings.HasSuffix(string(got), marker) {
+			t.Fatalf("%d-byte reads: %d bytes, marker count %d, ends %q", chunk, len(got), strings.Count(string(got), marker), got[len(got)-100:])
+		}
+		if keep := limit - len(marker); string(got[:keep]) != wantAll[:keep] {
+			t.Fatalf("%d-byte reads: the kept bytes are not the masked log's start", chunk)
+		}
+		if strings.Contains(string(got), secret) {
+			t.Fatalf("%d-byte reads: the secret survived", chunk)
+		}
+	}
+}
+
+// A masked log that fills the limit exactly is left whole; one byte more is cut.
+func TestBuildMaskingBody_OnlyCutsAMaskedLogPastTheLimit(t *testing.T) {
+	const secret, limit = "expand-me", 2048
+	placeholder := string(secretmask.Placeholder())
+	pad := func(n int) string { return strings.Repeat("p", n) }
+	for _, tc := range []struct {
+		name string
+		size int
+		cut  bool
+	}{{"under", limit - 1, false}, {"exactly", limit, false}, {"one over", limit + 1, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			masked := pad(tc.size-len(placeholder)) + placeholder
+			got, err := io.ReadAll(maskedWithLimit(t, strings.NewReader(pad(tc.size-len(placeholder))+secret), secret, limit))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.cut {
+				if len(got) != limit || !strings.HasSuffix(string(got), maskCutMarker(limit)) {
+					t.Fatalf("%d bytes, ends %q", len(got), got[len(got)-80:])
+				}
+			} else if string(got) != masked {
+				t.Fatalf("a masked log within the limit changed: %d bytes", len(got))
+			}
+		})
+	}
+}
+
+// The server's marker is not wardyn-rec's, so neither detector takes the other's line for its own, and a log wardyn-rec
+// already cut that then expands past the limit ends with the server's marker alone and no secret.
+func TestBuildMaskingBody_ServerCutMarkerIsDistinct(t *testing.T) {
+	marker := maskCutMarker(4096)
+	if recording.LogCutAt([]byte("log"+marker)) != -1 || recording.LogCutAt([]byte("log"+recording.LogCutMarker(3, 9))) != 3 {
+		t.Fatal("the two cut markers are not told apart")
+	}
+	const secret, limit = "expand-me", 4096
+	head := strings.Repeat("y "+secret+"\n", 1000) + secret[:4]
+	body := head + recording.LogCutMarker(int64(len(head)), int64(len(head))+100)
+	got, err := io.ReadAll(maskedWithLimit(t, strings.NewReader(body), secret, limit))
+	if err != nil || len(got) != limit || strings.Count(string(got), marker) != 1 || strings.Contains(string(got), secret[:4]+"\n") {
+		t.Fatalf("(%d bytes, %v), marker count %d", len(got), err, strings.Count(string(got), marker))
+	}
+}
+
+// A cast is not cut mid-line: past the limit it comes through whole for the store to refuse, as it always was.
+func TestBuildMaskingBody_DoesNotCutACast(t *testing.T) {
+	const secret, limit = "expand-me", 2048
+	cast := `{"version":2,"width":80,"height":24}` + "\n" + strings.Repeat(`[0.1,"o","`+secret+`"]`+"\n", 400)
+	got, err := io.ReadAll(maskedWithLimit(t, strings.NewReader(cast), secret, limit))
+	want := strings.ReplaceAll(cast, secret, string(secretmask.Placeholder()))
+	if err != nil || string(got) != want || len(got) <= limit {
+		t.Fatalf("cast changed or cut: %d bytes (want %d), %v", len(got), len(want), err)
+	}
+}
+
+// At the real limit: a log that is within the upload cap before masking and past the store's after it.
+func TestBuildMaskingBody_CutsAtTheRealStoreCap(t *testing.T) {
+	const secret = "expand-me"
+	line := strings.Repeat("a", 54) + secret + "\n" // 64 bytes in, 70 out
+	src := io.LimitReader(&repeatReader{s: line}, maxRecordingUploadBytes)
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(runID, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(buildMaskingBody(src, reg, runID))
+	if err != nil || len(got) != recording.MaxCastBytes || !strings.HasSuffix(string(got), maskCutMarker(recording.MaxCastBytes)) {
+		t.Fatalf("(%d bytes, %v), want %d ending in the marker", len(got), err, recording.MaxCastBytes)
+	}
+}
+
+// repeatReader yields s over and over.
+type repeatReader struct {
+	s   string
+	off int
+}
+
+func (r *repeatReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.s[r.off]
+		r.off = (r.off + 1) % len(r.s)
+	}
+	return len(p), nil
+}

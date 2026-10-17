@@ -47,10 +47,10 @@ func TestLiveMaskWriter_GuardDropsChunksOnceTheRunIsUncovered(t *testing.T) {
 
 // The upload reader ends with errMaskUncovered the moment its guard turns
 // false, and never reads another chunk from the source. The first chunk is
-// longer than the end the reader keeps back for a log cut marker.
+// longer than the ends the reader keeps back for a log cut marker and for its own.
 func TestRecordingMaskReader_GuardEndsTheUpload(t *testing.T) {
 	covered := true
-	src := io.MultiReader(strings.NewReader("first chunk\n"+strings.Repeat("x", recording.LogCutMarkerMax)), strings.NewReader("second chunk\n"))
+	src := io.MultiReader(strings.NewReader("first chunk\n"+strings.Repeat("x", recording.LogCutMarkerMax+len(maskCutMarker(recording.MaxCastBytes)))), strings.NewReader("second chunk\n"))
 	r := buildGuardedMaskingBody(src, secretmask.NewRegistry(), uuid.New(), func() bool { return covered })
 
 	buf := make([]byte, 64)

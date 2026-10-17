@@ -26,6 +26,9 @@ var _ Store = (*PGStore)(nil)
 // its own cap rather than trusting callers upstream.
 const maxCastBytes = 64 << 20 // 64 MiB
 
+// MaxCastBytes is maxCastBytes for the upload path, which bounds what it hands the store by it.
+const MaxCastBytes = maxCastBytes
+
 // readCapped reads everything r yields, stopping at limit+1 bytes so the
 // caller can tell "exactly at the cap" from "over it".
 //
