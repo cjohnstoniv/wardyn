@@ -140,7 +140,7 @@ spec:
               agent must never reach the control plane by the node address behind the kubernetes Service.
               Read at install and upgrade from that Service's EndpointSlice; deny-only, so an address that
               later moves is over-denied, never opened. helm template (no cluster) reads nothing. */}}
-            {{- $hardDeny := .Values.egress.hardDenyCIDRs }}
+            {{- $hardDeny := .Values.egress.hardDenyCIDRs | default list }}
             {{- with lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes" }}
             {{- range .endpoints }}
             {{- range .addresses }}

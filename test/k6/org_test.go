@@ -49,9 +49,8 @@ type orgEnv struct {
 	http                         *http.Client
 	poolID                       string
 	// state the later cases continue from
-	residentRun string // walk-trust-placement's run holding a runner_resident value
-	fenced      *fencedProxy
-	lapse       *lapseRun
+	fenced *fencedProxy
+	lapse  *lapseRun
 }
 
 // lapseRun is self-lapse-end-to-end's run: renewed once, then ended at the org behind runnerd's back.
@@ -470,7 +469,6 @@ func caseOrgWalk(t *testing.T, o *orgEnv) {
 	if !strings.Contains(keys, "secret/wardyn-resident-") {
 		t.Fatalf("no resident keystore Secret in %s: %s", o.ownNS, keys)
 	}
-	o.residentRun = id
 	note(t, "org runner (org_cluster): run %s RUNNING, agent holds the %d-byte value, keystore Secret in %s", id, len(value), o.ownNS)
 
 	body := map[string]any{"agent": "claude-code", "task": "sleep 3000", "placement": "local", "runner_pool_id": o.personalPool, "inline_policy": orgPolicy(residentGrant)}
@@ -482,8 +480,8 @@ func caseOrgWalk(t *testing.T, o *orgEnv) {
 }
 
 // caseOrgHardDeny: an agent's requests for in-cluster names and addresses are refused by the proxy's
-// hard deny even when the run's policy allows them exactly (design §5.3: before every admission,
-// the exact-literal trust included). example.com is the control that the proxy is serving.
+// hard deny even when the run's policy allows them exactly (the hard deny comes before every
+// admission, the exact-literal trust included). example.com is the control that the proxy is serving.
 func caseOrgHardDeny(t *testing.T, o *orgEnv) {
 	rd := o.runnerdIP(t)
 	apiHost, _, err := net.SplitHostPort(o.apiserver)
@@ -639,12 +637,14 @@ func (o *orgEnv) waitOnline(within time.Duration) error {
 // caseOrgKeystoreRevoke is the §8 checklist item: revoking the runner deletes its keystore Secrets.
 // It runs last: the org runner is revoked.
 func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
-	if o.residentRun == "" {
-		t.Fatal("walk-trust-placement left no resident run")
-	}
+	// Its own live resident run (walk-trust-placement set the delivery policy and the secret): the walk's
+	// run is killed when that case ends, and a run's end erases its keystore Secret by itself.
+	ws := o.workers(t)
+	o.sched(t, ws[len(ws)-1])
+	o.live(t, map[string]any{"inline_policy": orgPolicy(residentGrant)})
 	before := o.residentSecrets(t)
 	if len(before) == 0 {
-		t.Fatal("no resident keystore Secret before the revoke")
+		t.Fatal("no resident keystore Secret for a live resident run before the revoke")
 	}
 	if code, raw := o.api(t, o.secToken, http.MethodDelete, "/api/v1/runners/"+o.runnerID, nil, nil); code >= 300 {
 		t.Fatalf("revoke = %d %s", code, raw)

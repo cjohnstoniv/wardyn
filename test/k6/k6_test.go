@@ -3,8 +3,8 @@
 
 //go:build k8s
 
-// Package k6_test is lane K6's kind conformance suite for the Kubernetes runner (design K1 §8, and
-// the K6 list in lanes/K2/review-fable.md). scripts/k6-kind-conformance.sh is its only caller: it
+// Package k6_test is the kind conformance suite for the Kubernetes runner.
+// scripts/k6-kind-conformance.sh is its only caller: it
 // creates the kind cluster, installs the runnerd chart, and runs this suite once per kubelet version.
 //
 // The suite drives the real k8s runner-mode Driver in process, as runnerd would, under runnerd's own
@@ -160,7 +160,7 @@ func TestK6(t *testing.T) {
 		results = append(results, fmt.Sprintf("K6-CASE\t%s\t%s\t%s", name, status, detail))
 	}
 
-	// (Fable r8 L1) The IDs the guard compares must be distinct across kind nodes before any guard case.
+	// The IDs the guard compares must be distinct across kind nodes before any guard case.
 	kase("node-identity-distinct", caseNodeIdentity)
 	if t.Failed() {
 		t.Fatal("kind node IDs are not distinct: every node guard below would be meaningless")
@@ -402,7 +402,7 @@ func (f *fences) fenced(ip string) bool {
 	return false
 }
 
-// unfence is the driver's release of a run's IP refusal at witness save (K2 round 3, Fable H2).
+// unfence is the driver's release of a run's IP refusal at witness save.
 func (f *fences) unfence(run uuid.UUID, ip string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

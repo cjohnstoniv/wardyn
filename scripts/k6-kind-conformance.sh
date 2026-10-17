@@ -334,16 +334,6 @@ install_runnerd() {
     "$WORK/values.yaml" >"$WORK/values-$release-$VERSION.yaml"
   helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
-  # Two chart gaps the harness works around (reported as K5 follow-ups):
-  # - the register init container does not mount trustedCA.configMap, so registration against an org
-  #   behind a private CA cannot verify it; the harness hands it the bundle through SSL_CERT_FILE;
-  # - --state-dir is the PVC's root, which fsGroup makes group-accessible, and runnerd refuses a state
-  #   directory that is not 0700; the harness points both containers at a subdirectory runnerd creates.
-  kubectl -n "$own" get deployment "$INSTALLED" -o json | jq '
-    .spec.template.spec.initContainers[0].env = [{"name":"SSL_CERT_FILE","value":"/etc/wardyn/trusted-ca/ca.pem"}]
-    | .spec.template.spec.initContainers[0].volumeMounts += [{"name":"trusted-ca","mountPath":"/etc/wardyn/trusted-ca","readOnly":true}]
-    | (.spec.template.spec.initContainers[0].args, .spec.template.spec.containers[0].args) |=
-        map(if startswith("--state-dir=") then . + "/state" else . end)' | kubectl replace -f - >/dev/null
   if kubectl -n "$own" rollout status "deployment/$INSTALLED" --timeout=300s >/dev/null &&
      timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep -q 'k8s runner ready to connect'; do sleep 3; done"; then
     return 0
@@ -509,7 +499,8 @@ EOF
     grep '^K6-CASE' "$WORK/test-$1-$VERSION.log" | sed "s/^K6-CASE/$VERSION/" >>"$SUMMARY" || true
     if [ "$trc" != 0 ]; then
       rc=1
-      grep -B2 -A12 -E '^\s*--- FAIL|panic:' "$WORK/test-$1-$VERSION.log" | head -150 || true
+      # go test -v prints a failed case's messages above its --- FAIL line, as file:line.
+      grep -E '_test\.go:[0-9]+:|panic:' "$WORK/test-$1-$VERSION.log" | tail -120 || true
     fi
     if [ -n "${K6_KEEP_LOGS:-}" ]; then cp "$WORK/test-$1-$VERSION.log" "$K6_KEEP_LOGS/" || true; fi
   }

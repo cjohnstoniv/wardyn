@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command agentprobe is the K6 kind harness's agent-side probe (scripts/k6-kind-conformance.sh bakes
+// Command agentprobe is the kind conformance harness's agent-side probe (scripts/k6-kind-conformance.sh bakes
 // it into the harness's agent image). The suite runs it inside a run's agent container, so every
 // request it makes is an agent request through the run's proxy, which it finds in HTTPS_PROXY.
 //

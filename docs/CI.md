@@ -275,8 +275,8 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - every Dex identity — admin, allowlist-only operator, security admin, two members and one that matches no role — signed in through the real console on each shape.
   - It brings up its own uniquely-named compose project per shape and tears it down on every exit path, so it runs in `nightly.yml`'s `compose-sso-roles` job rather than `ci.yml`, and remains runnable by hand.
   - Needs Docker; self-skips unless `WARDYN_TEST_SSO_ROLES=1`.
-- **[`scripts/k6-kind-conformance.sh`](../scripts/k6-kind-conformance.sh)** — the Kubernetes runner's kind conformance (design K1 §8):
-  - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico and installs the `wardyn-runnerd` chart against a fake organisation.
+- **[`scripts/k6-kind-conformance.sh`](../scripts/k6-kind-conformance.sh)** — the Kubernetes runner's kind conformance:
+  - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
   - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job; self-skips unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/run-e2e-ssh-k8s.sh`](../scripts/run-e2e-ssh-k8s.sh)** (`make test-e2e-ssh-k8s`) — the SSH gateway proven against a **Pod** rather than a container: the run's sandbox confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec lane,

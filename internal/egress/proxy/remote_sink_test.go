@@ -321,7 +321,7 @@ func TestRemoteSink_DrainClosesOpenTunnels(t *testing.T) {
 	}
 }
 
-// TestRemoteSink_DrainEndsInFlightMITMRequest is K9's open item for the terminated lane: a drain with a
+// TestRemoteSink_DrainEndsInFlightMITMRequest: a drain with a
 // MITM inner request still waiting on its upstream closes the agent's connection, the inner request
 // ends at once (the upstream sees its context cancelled), and its final decision is emitted before the
 // drained reply, so the drain is exact and the record is in it.

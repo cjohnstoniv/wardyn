@@ -44,7 +44,8 @@ func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.I
 	}
 	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil {
 		// A k8s runner's hard deny beats the exact-literal trust below, as it beats every admission in
-		// egressTarget (design K1 §5.3): a trusted literal skips egressTarget, so it is checked here.
+		// egressTarget: no allow, approval or redirect reopens it. A trusted literal skips egressTarget,
+		// so it is checked here.
 		if p.hardDeny.ip(ip) {
 			return deny()
 		}

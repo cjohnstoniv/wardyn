@@ -250,7 +250,7 @@ func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
 }
 
 // upstreamProxyOutsideHardDeny refuses an --upstream-proxy whose literal address is one the run's hard
-// deny covers (design DQ9): an upstream proxy inside the cluster would reach the in-cluster addresses
+// deny covers: an upstream proxy inside the cluster would reach the in-cluster addresses
 // the deny set keeps every run away from, so the misconfiguration is refused at boot.
 func upstreamProxyOutsideHardDeny(raw string, h *k8s.HardDeny) error {
 	if raw == "" {

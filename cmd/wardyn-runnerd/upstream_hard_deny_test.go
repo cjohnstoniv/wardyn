@@ -13,7 +13,7 @@ import (
 )
 
 // TestUpstreamProxyInsideHardDenyRefused: an upstream proxy literal inside the hard deny's CIDRs or
-// hosts refuses boot (design DQ9); one outside it, or a name, boots.
+// hosts refuses boot; one outside it, or a name, boots.
 func TestUpstreamProxyInsideHardDenyRefused(t *testing.T) {
 	h, err := k8s.NewHardDeny("cluster.local", []string{"10.96.10.20", "10.244.1.7"}, []string{"10.96.0.0/12", "172.20.0.1/32"})
 	if err != nil {
