@@ -71,7 +71,8 @@ docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4823 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
-docs/operations/capabilities.md=4205 share=35
+# docs/operations/capabilities.md 4381 = 4205 + 176, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
+docs/operations/capabilities.md=4381 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
