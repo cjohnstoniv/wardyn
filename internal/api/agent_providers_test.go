@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -175,6 +177,31 @@ func TestAgentProvidersPut(t *testing.T) {
 		}
 		if !strings.Contains(w.Body.String(), agent412Stale) {
 			t.Errorf("412 body = %s, want the DRAFT sentence", w.Body.String())
+		}
+	})
+
+	t.Run("a Save composed under another person is refused before the write", func(t *testing.T) {
+		before := fake.putSeen
+		put := func(who string) *httptest.ResponseRecorder {
+			return doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+				`{"agents":[{"id":"claude-code"}]}`,
+				map[string]string{expectedPrincipalHeader: who})
+		}
+		w := put(url.PathEscape("someone-else@example.com"))
+		if w.Code != http.StatusPreconditionFailed {
+			t.Fatalf("expected-principal mismatch = %d, want 412; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), agent412Stale) || !strings.Contains(w.Body.String(), `"reason":"site_config_stale"`) {
+			t.Errorf("412 body = %s, want the existing stale sentence and reason", w.Body.String())
+		}
+		if fake.putSeen != before {
+			t.Error("a refused Save reached the store")
+		}
+		if w = put("%zz"); w.Code != http.StatusPreconditionFailed {
+			t.Errorf("an undecodable value = %d, want 412", w.Code)
+		}
+		if w = put(url.PathEscape(adminTokenPrincipal)); w.Code != http.StatusOK {
+			t.Errorf("the caller's own principal = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
 

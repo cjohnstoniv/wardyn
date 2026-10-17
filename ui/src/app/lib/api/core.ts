@@ -47,6 +47,14 @@ export function getAuthGeneration(): number {
   return authGeneration;
 }
 
+// DR-0034: the person this tab last confirmed (/me), named on a screen's Save
+// so a cookie another tab switched to someone else is refused by the server
+// (412, nothing written) rather than saving this draft under the new person.
+let _expectedPrincipal = "";
+export function setExpectedPrincipal(principal: string): void {
+  _expectedPrincipal = principal;
+}
+
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
 // (another tab can have signed in as someone else) must never receive one
@@ -294,6 +302,9 @@ export async function wfetch(
     headers.set("Content-Type", "application/json");
   }
   headers.set("Accept", headers.get("Accept") ?? "application/json");
+  if (save && _expectedPrincipal) {
+    headers.set("X-Wardyn-Expected-Principal", encodeURIComponent(_expectedPrincipal));
+  }
 
   let res: Response;
   const generation = authGeneration;

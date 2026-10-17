@@ -78,7 +78,7 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   - It then launches on exactly that provider (`--model-provider`).
 
 * The CI principal is a **service identity**, `service:<name>`: automation that runs under its own name, with a named person as its sponsor.
-  * An admin creates it (`wardyn service-identity create --name ci --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
+  * An admin creates it (`wardyn service-identity create --name ci-bot --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
   * It stores its own model-provider credential once (`PUT /model-providers/{id}/credential`, with its own token) — see "[Provisioning the CI principal](#driving-an-existing-control-plane-instead)" below.
 * Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
@@ -602,7 +602,7 @@ wardyn audit <id> --json       # likewise
 
 ```sh
 # 1. An admin creates the service identity, naming its sponsor:
-#      wardyn service-identity create --name ci --sponsor <principal>
+#      wardyn service-identity create --name ci-bot --sponsor <principal>
 #    The sponsor signs in to the console and mints its token from Account,
 #    "Service identities I sponsor" — shown exactly once. Store it as the
 #    pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN for the calls

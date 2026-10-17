@@ -625,6 +625,9 @@ func (s *Server) handleGetWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 //
 //	PUT /api/v1/workspace-providers
 func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Request) {
+	if refuseExpectedPrincipalMismatch(w, r, providers412Stale) {
+		return
+	}
 	var body types.WorkspaceProviders
 	if !decodeStrict(w, r, &body) {
 		return
