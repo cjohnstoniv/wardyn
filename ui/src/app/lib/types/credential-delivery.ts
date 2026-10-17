@@ -59,7 +59,8 @@ export type PostureOS = (typeof POSTURE_OSES)[number];
 export interface PostureRequirement {
   mdm_managed?: boolean;
   disk_encrypted?: boolean;
-  os_min?: Partial<Record<PostureOS, string>>;
+  // Keyed by the OS a runner reports; the Go side takes any key, so one the editor has no field for can be stored.
+  os_min?: Record<string, string>;
 }
 
 /** Go: placement.ClassPolicy. */

@@ -270,6 +270,17 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, CODEX.display))).toBeVisible();
   });
 
+  test("a second harness a larger declared set carries is offered (DR-0225)", async ({ page }) => {
+    const [claude, codex, own] = SCENARIO_HARNESSES.full;
+    await stubFlow(page, { sets: [[claude.id, codex.id, own.id]] });
+    await openGuided(page);
+    await toHarnesses(page, "agent", "interactive");
+    await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeEnabled();
+    await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, CODEX.display))).toHaveCount(0);
+    await press(page, NR_HARNESSES.ADD_ANOTHER);
+    await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(2) })).toBeVisible();
+  });
+
   test("not-installed, no-provider and not-enabled harnesses stay listed with their reasons", async ({ page }) => {
     const roster: SetupHarnessTool[] = [
       CLAUDE,

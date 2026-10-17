@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { ADO } from "../../../../lib/ado-entra-copy";
 import { getAuthGeneration, HttpError, onAuthChange } from "../../../../lib/api/core";
 import { isGitCredentialRefusal } from "../../../../lib/api/runs";
-import { useAdoConnect } from "../../../../lib/hooks/use-ado-connect";
+import { useAdoConnect, type AdoRowMatch } from "../../../../lib/hooks/use-ado-connect";
 import { adoPatRefusalReason } from "../../../../lib/api/ado-pat";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { patRefusalNote, type PatRefusalNote } from "../../../../lib/ado-pat-display";
@@ -93,9 +93,10 @@ export function useAdoLaunchDoor(): {
     }
   };
 
-  const connectOwned = (connectNow: () => Promise<boolean | null>) => {
+  const connectOwned = (connectNow: (match?: AdoRowMatch) => Promise<boolean | null>) => {
     const auth = getAuthGeneration();
-    void connectNow().then((connected) => {
+    // The refusal named the organisation: only its own sign-in row finishes this connect.
+    void connectNow(org ? { org } : undefined).then((connected) => {
       if (owner.current === principal && auth === getAuthGeneration()) void settle(connected);
     });
   };

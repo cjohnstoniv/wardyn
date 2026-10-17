@@ -281,7 +281,7 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
-  // The ordinary human type id both previews send. An empty value means "no type tier" to the
+  // The user type id both previews send: the picker's choice, Standard when there is no picker. An empty value means "no type tier" to the
   // server, which is not what a signed-in person's run is given.
   user_type: string;
 }
@@ -298,7 +298,7 @@ export interface GovernancePreviewInput {
 // positionally to pick which claim an `email_local` home is named from. Array
 // .prototype.sort is stable, so every other line keeps the order it was typed
 // in. The ranking itself stays in SQL.
-export function previewClaims(claims: string): GovernancePreviewInput {
+export function previewClaims(claims: string, userType: string = USER_TYPE_STANDARD): GovernancePreviewInput {
   const lines = claims
     .split("\n")
     .map((c) => c.trim())
@@ -306,7 +306,7 @@ export function previewClaims(claims: string): GovernancePreviewInput {
   return {
     user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
     groups: lines,
-    user_type: USER_TYPE_STANDARD,
+    user_type: userType || USER_TYPE_STANDARD,
   };
 }
 

@@ -119,7 +119,7 @@ export function glyphKindFor(hue: RowHue, word: string, state: string): RowGlyph
   // any other over row — checked on the word, ahead of the state switch.
   if (word === "Ended at its end time") return "square-outline";
   if (state === "RUNNING") return "dot";
-  if (state === "STARTING" || state === "PENDING") return "ring";
+  if (state === "STARTING" || state === "PENDING" || state === "QUEUED") return "ring";
   if (word === "Completed") return "check";
   if (word === "Killed") return "square-fill";
   return "square-outline";

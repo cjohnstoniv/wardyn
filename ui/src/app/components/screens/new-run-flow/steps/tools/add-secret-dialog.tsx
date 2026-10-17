@@ -16,7 +16,7 @@ import { CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { envNameError, hostError } from "../../checks/custom-component-form-model";
 import { residentSecretRef } from "./catalogue-edits";
-import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
+import { NamesFailed, SELECT_CLASS, ToolDialog, ToolField, type NamesFailure } from "./tool-dialog";
 
 type Mode = "header" | "env" | "file";
 
@@ -25,6 +25,8 @@ export type SecretAddition = { kind: "header"; secret: SecretOverride } | { kind
 export interface AddSecretDialogProps {
   /** The person's saved secret names. */
   names: readonly string[];
+  /** Why the names could not be read, with a retry; absent when they were. */
+  namesFailure?: NamesFailure;
   /** Hosts already on the run, offered for the header's host. */
   hosts: readonly string[];
   /** False when the organisation has turned off environment-variable and file delivery. */
@@ -39,9 +41,11 @@ export interface AddSecretDialogProps {
 
 const FILE_NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 
-export function AddSecretDialog({ names, hosts, residentAllowed, mayDefine, residentOffReason, onAdd, onClose }: AddSecretDialogProps) {
+export function AddSecretDialog({ names, namesFailure, hosts, residentAllowed, mayDefine, residentOffReason, onAdd, onClose }: AddSecretDialogProps) {
   const base = React.useId();
-  const [secret, setSecret] = React.useState(names[0] ?? "");
+  const [picked, setPicked] = React.useState("");
+  // Names that arrive after a retry preselect the first, as they would have on open.
+  const secret = picked || names[0] || "";
   const [mode, setMode] = React.useState<Mode>("header");
   const [host, setHost] = React.useState("");
   const [header, setHeader] = React.useState("");
@@ -60,8 +64,10 @@ export function AddSecretDialog({ names, hosts, residentAllowed, mayDefine, resi
   const error = submitted ? errors[mode] : "";
 
   const confirm = () => {
+    // With no secret to add (none saved, or the names could not be read) the field errors would blame the host.
+    if (!secret) return;
     setSubmitted(true);
-    if (!secret || errors[mode]) return;
+    if (errors[mode]) return;
     if (mode === "header") {
       onAdd({ kind: "header", secret: { secret_name: secret, host: hostValue, ...(header.trim() && { header: header.trim() }), ...(format.trim() && { format: format.trim() }) } });
     } else if (mode === "env") {
@@ -89,11 +95,12 @@ export function AddSecretDialog({ names, hosts, residentAllowed, mayDefine, resi
       onClose={onClose}
     >
       <ToolField id={fieldId("secret")} label={NR_TOOLS.SECRET_LABEL}>
-        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} disabled={names.length === 0} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setSecret(e.target.value)}>
+        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} disabled={names.length === 0} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setPicked(e.target.value)}>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        {names.length === 0 && <p className="text-sm text-foreground">{NR_TOOLS.SECRET_NONE}</p>}
+        {names.length === 0 && !namesFailure && <p className="text-sm text-foreground">{NR_TOOLS.SECRET_NONE}</p>}
         <p id={`${fieldId("secret")}-help`} className="text-sm text-muted-foreground">{NR_TOOLS.SECRET_HELP}</p>
+        <NamesFailed failure={namesFailure} />
       </ToolField>
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">{NR_TOOLS.DELIVERY_LABEL}</legend>

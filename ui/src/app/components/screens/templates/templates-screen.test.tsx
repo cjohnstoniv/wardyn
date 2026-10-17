@@ -77,6 +77,16 @@ describe("Templates screen: rows", () => {
     expect(screen.getByRole("region", { name: T.LIST_ARIA })).toBeInTheDocument();
   });
 
+  // DR-0057: teal is for the one primary action, so a row's Use is an outline
+  // button and the "Only me" chip is as neutral as the other scopes.
+  it("keeps a single teal action: Use is outline and the Only me chip is neutral", async () => {
+    mount({ templates: [MINE], publish: MEMBER });
+    const row = within(await screen.findByText("Nightly tests").then((n) => n.closest("li") as HTMLElement));
+    expect(row.getByRole("link", { name: new RegExp(`^${T.USE}`) })).not.toHaveClass("bg-primary");
+    expect(row.getByText(T.SCOPE_ME)).not.toHaveClass("text-primary");
+    expect(screen.getByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveClass("bg-primary");
+  });
+
   it("a row shows name, description, who it is for, what it includes, when and which revision", async () => {
     mount({ templates: [MINE], publish: MEMBER });
     const row = within(await screen.findByText("Nightly tests").then((n) => n.closest("li") as HTMLElement));

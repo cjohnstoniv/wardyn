@@ -5,7 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, consoleAPI, gotoConsole } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, navTo } from "./fixtures";
 import { POOLS, POOL_DRAWER, POOL_FORM, RUNNER_V6 } from "../src/app/components/wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNERS } from "../src/app/components/wardyn/copy/runners";
 import { entry, member, pool, remoteRunner } from "../src/app/components/screens/runners/pools/pool-test-fixtures";
@@ -247,4 +247,15 @@ test("a default that fails after the runner joined the pool does not say the run
   await expect(page.getByText(MY_RUNNER.CLAIM_DEFAULT_FAILED("mbp-ben", poolName, "Defaults could not be saved."))).toBeVisible();
   await expect(page.getByText(MY_RUNNER.CLAIM_POOL_FAILED("mbp-ben", poolName, "Defaults could not be saved."))).toHaveCount(0);
   expect(await poolNamed(page, poolName)).toBeTruthy();
+});
+
+// DR-0147: My pools says who can see the pools and how many a person may keep. The e2e server keeps runners off,
+// which hides the My runner card, so the person's runner list is answered here (empty: no computer registered yet).
+test("Your account: My pools says administrators can see the pools and the cap is 10", async ({ page }) => {
+  await page.route("**/api/v1/me/runners*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.fallback()));
+  await gotoConsole(page, "user");
+  await navTo(page, "Your account");
+  await page.getByRole("button", { name: /^My runner/ }).click();
+  await expect(page.getByText("Only you can change these. Administrators can see them.", { exact: true })).toBeVisible();
+  await expect(page.getByText("You can have up to 10 pools, for example Laptop and Home server.")).toBeVisible();
 });

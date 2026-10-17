@@ -141,6 +141,7 @@ beforeEach(() => {
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
   listUserTypesMock.mockReset().mockResolvedValue([
+    { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true, created_at: "", updated_at: "" },
     { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false, created_at: "", updated_at: "" },
   ]);
 });
@@ -228,7 +229,7 @@ describe("DrivesScreen — allocations", () => {
     await screen.findByText(DRIVES.ALLOC_TITLE);
 
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "wardyn.platform");
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
     await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
 
@@ -364,7 +365,7 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
   const fill = async (who = "wardyn.platform") => {
     await screen.findByText(DRIVES.ALLOC_TITLE);
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), who);
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
     await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
   };
   const allocate = () => userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
@@ -660,5 +661,29 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
       groups: ["alice@corp.example", "8f2c-sub-id", "eng"],
       user_type: "standard",
     });
+  });
+  // R1-0097: the same picker as Governance's preview.
+  it("sends the picked user type, and clears the last answer when it changes", async () => {
+    previewDriveMock.mockResolvedValue({ drive_name: SCRATCH.name, matched_tier: "user_type", size_mib: 16384, writable: true, enforcement: "request" });
+    renderScreen();
+    await ask();
+    await screen.findByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_USER_TYPE));
+    const picker = await screen.findByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
+    await waitFor(() => expect(picker).toHaveTextContent("Standard user"));
+    await userEvent.click(picker);
+    await userEvent.click(await screen.findByRole("option", { name: "Portfolio manager" }));
+    expect(screen.queryByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_USER_TYPE))).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.PREVIEW_CTA }));
+    expect(previewDriveMock).toHaveBeenLastCalledWith(expect.objectContaining({ user_type: "portfolio-manager" }));
+  });
+
+  it("hides the picker when only the built-in user type exists", async () => {
+    listUserTypesMock.mockResolvedValue([
+      { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true, created_at: "", updated_at: "" },
+    ]);
+    renderScreen();
+    await ask();
+    expect(screen.queryByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL })).not.toBeInTheDocument();
+    expect(previewDriveMock).toHaveBeenLastCalledWith(expect.objectContaining({ user_type: "standard" }));
   });
 });

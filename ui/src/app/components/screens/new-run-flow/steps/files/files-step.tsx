@@ -20,7 +20,7 @@ import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
-import { attachDrive, chooseNothing, mibToGibText, parseGiB, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
+import { attachDrive, chooseNothing, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { issue, type StepIssue } from "../../lenses/step-issues";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -169,9 +169,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
     ...(sub.bad ? [{ ...issue("files", "starts_here_required"), focus: SUBFOLDER_ID }] : []),
   ];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
-  const sizeMib = parseGiB(size.text);
   // No size is no number: the summary asks for one, and the map names the drive alone.
-  const sizeText = sizeMib === undefined ? undefined : mibToGibText(sizeMib);
+  const sizeText = size.words;
   const settled = noExtra || (items.length > 0 && !!start);
   const empty = !noExtra && items.length === 0;
 

@@ -21,6 +21,12 @@ import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
+import { limitsFor } from "../src/app/lib/new-run-fixtures/scenarios/files";
+import { CLAUDE_UNGATED } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
+import { SCENARIO_ACCESS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
+import { NR_SAVE } from "../src/app/components/wardyn/copy/new-run/save";
+import { NR_TOOLS as TOOLS_COPY } from "../src/app/components/wardyn/copy/new-run/tools";
+import { ENDS_NONE } from "../src/app/components/wardyn/copy/run-lifetime";
 
 const RUN_ID = "b2222222-2222-4222-8222-222222222222";
 const CLEAR = SCENARIO_PREFLIGHT.member;
@@ -191,6 +197,65 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
     expect(seen.created).toHaveLength(0);
   });
 
+  test("Cancel while the create is out cannot be followed by a second run (DR-0269)", async ({ page }) => {
+    const seen = await stub(page, { preflight: CLEAR });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      posts.push(route.request().postData() ?? "");
+      await held;
+      return route.fulfill({ status: 201, json: { id: RUN_ID, state: "PENDING" } });
+    });
+    await openReview(page);
+    await openNameDialog(page);
+    await nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL).fill("held create");
+    await nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    await press(page, NR_LAUNCH.CANCEL);
+    await expect(nameDialog(page)).toHaveCount(0);
+
+    await launch(page).click();
+    await expect(nameDialog(page)).toBeVisible();
+    await expect(nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
+    release();
+    await expect(page).toHaveURL(new RegExp(`\\?launched=${RUN_ID}$`));
+    expect(posts).toHaveLength(1);
+    expect(seen.created).toHaveLength(0);
+  });
+
+  test("leaving Review and coming back does not forget the create that is still out (DR-0269)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      posts.push(route.request().postData() ?? "");
+      await held;
+      return route.fulfill({ status: 201, json: { id: RUN_ID, state: "PENDING" } });
+    });
+    await openReview(page);
+    await openNameDialog(page);
+    await nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL).fill("held create");
+    await nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    await press(page, NR_LAUNCH.CANCEL);
+    await expect(nameDialog(page)).toHaveCount(0);
+
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toHaveCount(0);
+    await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await launch(page).click();
+    await expect(nameDialog(page)).toBeVisible();
+    await expect(nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
+    release();
+    await expect(page).toHaveURL(new RegExp(`\\?launched=${RUN_ID}$`));
+    expect(posts).toHaveLength(1);
+  });
+
   test("a create the check missed is shown inside the dialog, and the typed text stays", async ({ page }) => {
     await stub(page, { preflight: CLEAR });
     await page.route("**/api/v1/runs", (route) =>
@@ -244,5 +309,114 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
     await expect(nameDialog(page).getByRole("alert")).toContainText(refusal);
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+  });
+});
+
+/** Review with a document of its own: the intent lines go under `intent:`. */
+async function openReviewWith(page: Page, intentLines: string[]) {
+  await gotoConsole(page);
+  await navToRoute(page, "/runs/new");
+  await press(page, NR_START.DOC_YAML);
+  await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(["api_version: wardyn/v1", "kind: Run", "intent:", ...intentLines.map((l) => `  ${l}`), ""].join("\n"));
+  await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+  await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+}
+
+const ENV = ["shape: environment", "experience: interactive", "no_repositories_or_drives: true"];
+const SAVED_LIMITS = { ...limitsFor("interactive"), lifetime_sec: { default: { value: 3600 }, cap: { value: 7200 } }, no_end_allowed: true };
+
+test.describe("New Run, Review: what the summaries say the server will do", () => {
+  test("a tool default the server resolved to deny reads Block it, not Run automatically (DR-0244)", async ({ page }) => {
+    const denied = { ...CLAUDE_UNGATED, default: { ...CLAUDE_UNGATED.default, effective: "deny" } };
+    await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [denied] } } as never });
+    await openReviewWith(page, ENV);
+    const tools = page.locator("[data-policy-row=tools]");
+    await expect(tools).toContainText(TOOLS_COPY.EFFECT_DENY);
+    await expect(tools).not.toContainText(NR_REVIEW.POLICY_AUTOMATIC);
+  });
+
+  test("harnesses with different tool defaults are each named in the Tools and pushes row (DR-0244)", async ({ page }) => {
+    const held = { ...CLAUDE_UNGATED, harness: "claude-code", default: { ...CLAUDE_UNGATED.default, effective: "hold" } };
+    const denied = { ...CLAUDE_UNGATED, harness: "codex-cli", default: { ...CLAUDE_UNGATED.default, effective: "deny" } };
+    await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [held, denied] } } as never });
+    await openReviewWith(page, ENV);
+    await expect(page.locator("[data-policy-row=tools]")).toContainText(
+      new RegExp(`(Claude Code|claude-code): ${NR_REVIEW.POLICY_HOLD} · (Codex[^:·]*|codex-cli): ${TOOLS_COPY.EFFECT_DENY}`),
+    );
+  });
+
+  test("a CPU cut and a main-drive cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
+    const line = "resources capped to operator maximum";
+    const cut = { source: "governance", source_name: "Platform team", capped: true };
+    await stub(page, {
+      preflight: {
+        ...CLEAR,
+        warnings: [line],
+        resources_applied: { cpu_millis: { requested: 16000, applied: 8000, ...cut }, memory_mib: { requested: 4096, applied: 4096 } },
+        main_drive: { requested_mib: 40960, applied_mib: 20480, basis: "request", clamped_by: "governance", soft: false },
+      } as never,
+    });
+    await openReviewWith(page, ENV);
+    await expect(page.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeVisible();
+    await expect(page.getByText(line, { exact: true })).toBeVisible();
+  });
+
+  test("a CPU cut and a PIDs cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
+    const line = "resources capped to operator maximum";
+    const cut = { source: "governance", source_name: "Platform team", capped: true };
+    await stub(page, {
+      preflight: {
+        ...CLEAR,
+        warnings: [line],
+        resources_applied: {
+          cpu_millis: { requested: 16000, applied: 8000, ...cut },
+          memory_mib: { requested: 4096, applied: 4096 },
+          pids_limit: { requested: 4096, applied: 256, ...cut },
+        },
+      } as never,
+    });
+    await openReviewWith(page, ENV);
+    await expect(page.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeVisible();
+    await expect(page.getByText(line, { exact: true })).toBeVisible();
+  });
+
+  test("the lifetime is the one the server resolves: held to its cap, or No end when asked for and allowed (DR-0245)", async ({ page }) => {
+    await stub(page, { preflight: { ...CLEAR, limits: SAVED_LIMITS } as never });
+    await openReviewWith(page, [...ENV, "ends_after_sec: 36000"]);
+    const limits = page.locator("[data-review-group=limits]");
+    await expect(limits).toContainText("2 hours");
+    await expect(limits).not.toContainText("10 hours");
+    await page.goto("about:blank");
+    await openReviewWith(page, [...ENV, "no_end: true"]);
+    await expect(page.locator("[data-review-group=limits]")).toContainText(ENDS_NONE);
+  });
+});
+
+test.describe("New Run, Review: Save as and the saver's own drives (DR-0221)", () => {
+  const MINE = "c1111111-1111-4111-8111-111111111111";
+  const TEAM = "c2222222-2222-4222-8222-222222222222";
+  const drive = (id: string, name: string, owned: boolean) => ({ id, name, section: owned ? "user" : "shared", source: owned ? "personal" : "team", backend: "docker_volume", target: `/home/agent/${name}`, writable: true, enforcement: "filesystem", legacy: false, owned });
+
+  test("a template shared with a group leaves out the member drive and the start folder on it", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    await page.route("**/api/v1/me/drives*", (route) => route.fulfill({ json: { drives: [drive(MINE, "scratch", true), drive(TEAM, "share", false)], pool_checked: true } }));
+    const posted: string[] = [];
+    await page.route("**/api/v1/templates", (route) => {
+      if (route.request().method() === "POST") {
+        posted.push(route.request().postData() ?? "");
+        return route.fulfill({ status: 201, json: { id: "t1", kind: "template" } });
+      }
+      return route.fulfill({ json: { templates: [], publish: { org: false, groups: ["g-1"], group_labels: { "g-1": "Platform" }, groups_unverified: false } } });
+    });
+    await openReviewWith(page, ["shape: environment", "experience: interactive", `drives:\n    - drive_id: ${MINE}\n    - drive_id: ${TEAM}`, `start_folder:\n    kind: attachment\n    drive_id: ${MINE}`]);
+    await press(page, NR_REVIEW.SAVE_TEMPLATE);
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Available to").selectOption({ label: "Platform group" });
+    await dialog.getByLabel(NR_SAVE.NAME_LABEL).fill("Team");
+    await dialog.getByRole("button", { name: NR_SAVE.CONFIRM_TEMPLATE, exact: true }).click();
+    await expect.poll(() => posted.length).toBe(1);
+    const intent = JSON.parse(posted[0]).document.intent;
+    expect(intent.drives).toEqual([{ drive_id: TEAM }]);
+    expect(intent).not.toHaveProperty("start_folder");
   });
 });

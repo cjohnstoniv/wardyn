@@ -129,6 +129,18 @@ test.describe("Templates: filters and rows", () => {
     await expect(names(page)).toHaveText([PLATFORM_BASELINE.name, ORG_BASELINE.name]);
   });
 
+  test("one teal action: Use is an outline button and the Only me chip is neutral (DR-0057)", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openTemplates(page);
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    const teal = page.locator("main").locator('.bg-primary:not([role="switch"])');
+    await expect(teal).toHaveCount(1);
+    await expect(teal).toHaveText(T.NEW_FROM_SCRATCH);
+    const row = rowOf(page, NIGHTLY.name);
+    await expect(row.getByRole("link", { name: T.USE })).not.toHaveClass(/bg-primary/);
+    await expect(row.getByText(T.SCOPE_ME, { exact: true })).not.toHaveClass(/text-primary/);
+  });
+
   test("each row shows its kind, what it needs, who it is for, what it includes and its revision", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);

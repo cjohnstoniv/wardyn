@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -91,4 +92,30 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 	}
 	out.SourceName = names[out.Source]
 	return out
+}
+
+// appliedPids is the process limit the run's source policy asked for held against the one it got after
+// the ceiling clamp. The pools fold no PIDs limit, so the cut is the ceiling's alone: the caller's
+// governance profile when it set a limit of its own, else the deployment (deploymentPids is the limit a
+// profile with none inherits). A profile used as the policy asks nothing of its own; a policy_overlay
+// that names resources asks through the overlaid spec, which is where the console's ask arrives.
+func appliedPids(source policySourceRecord, ceiling governanceCeiling, applied, deploymentPids int) *client.AppliedAmount {
+	asked := 0
+	switch {
+	case source.overlaid != nil && slices.Contains(source.Overlay, "resources"):
+		if r := source.overlaid.Resources; r != nil {
+			asked = r.PidsLimit
+		}
+	case source.Kind != policyKindProfile && source.Spec.Resources != nil:
+		asked = source.Spec.Resources.PidsLimit
+	}
+	out := client.AppliedAmount{Requested: asked, Applied: applied}
+	if asked > 0 && applied > 0 && applied < asked {
+		out.Capped, out.Source = true, types.LimitSourceDeployment
+		if p := ceiling.Profile; p != nil && p.Ceiling.Resources != nil && p.Ceiling.Resources.PidsLimit > 0 &&
+			p.Ceiling.Resources.PidsLimit != deploymentPids {
+			out.Source, out.SourceName = types.LimitSourceGovernance, p.Name
+		}
+	}
+	return &out
 }

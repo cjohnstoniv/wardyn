@@ -81,7 +81,9 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
   return fromFact(fact.rule_effects).map((o) => {
     const effect = o.effect as ToolEffect;
     // What the harness cannot honour comes first; the policy's strictness is the reason only for what it could.
-    const code = builtinOnly ? "harness_no_block_builtin" : !o.available ? o.reason : RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined;
+    // The server grades policy_stricter_tool against the policy's "*"; a named tool is graded against its own rule here.
+    const harnessRefusal = !o.available && o.reason !== "policy_stricter_tool" ? o.reason : undefined;
+    const code = builtinOnly ? "harness_no_block_builtin" : harnessRefusal ?? (RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined);
     return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy }) };
   });
 }
