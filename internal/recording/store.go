@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,8 +182,17 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 		return err
 	}
 	defer dir.Close()
-	return dir.Sync()
+	// The cast is stored once the rename returns. Some filesystems (FUSE, 9p, older CIFS) cannot fsync
+	// a directory and answer EINVAL or ENOTSUP; that must not turn a stored cast into an error.
+	if err := syncDir(dir); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return err
+	}
+	return nil
 }
+
+// syncDir is the directory fsync saveFile makes after its rename; a variable so a test can answer
+// the way a filesystem that cannot sync a directory does.
+var syncDir = func(dir *os.File) error { return dir.Sync() }
 
 func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.File) error {
 	// Replacing the inode would bypass write access and change owner/mode/ACL.
