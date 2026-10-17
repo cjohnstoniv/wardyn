@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -147,5 +148,27 @@ func TestPosture_UnusableFileIsLoggedOncePerReason(t *testing.T) {
 	read(path, uid)
 	if got := strings.Count(buf.String(), "the MDM posture file is ignored"); got != 3 {
 		t.Fatalf("a break after a repair logged %d times in all:\n%s", got, buf.String())
+	}
+}
+
+// A FIFO at the MDM path is refused as not a regular file at once, never waited on for a writer: the
+// read runs at every connect and every report, so a blocking open would hang them.
+func TestPosture_AFIFOIsRefusedWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "posture.json")
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := fromMDMFile(path, uint32(os.Getuid()))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("a FIFO read = %v, want not a regular file", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("reading a FIFO at the MDM path blocked waiting for a writer")
 	}
 }

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,7 +62,38 @@ func TestPG_ComposedEmptyUIAppsOverlayDeniesUIApps(t *testing.T) {
 		}
 	}
 
+	// The ceiling reads: the member's default policy lists no apps, since a run under it gets
+	// none; the admin view shows the base's list beside deny_ui_apps.
 	w := httptest.NewRecorder()
+	srv.handleGetDefaultPolicy(w, httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil).WithContext(mctx))
+	var def defaultPolicyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &def); w.Code != http.StatusOK || err != nil || len(def.UIApps) != 0 || def.GovernanceProfileName != "team" {
+		t.Errorf("GET /policies/default as the member = %d %s, want 200 with no ui_apps under \"team\"", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	actx := operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin)
+	srv.handleGetGovernance(w, httptest.NewRequest(http.MethodGet, "/api/v1/governance", nil).WithContext(actx))
+	var view struct {
+		Profiles []governanceProfileView `json:"profiles"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); w.Code != http.StatusOK || err != nil {
+		t.Fatalf("GET /governance = %d %s (%v)", w.Code, w.Body, err)
+	}
+	seen := false
+	for _, p := range view.Profiles {
+		if p.Name != "team" {
+			continue
+		}
+		seen = true
+		if eff := p.Effective; len(eff.Ceiling.UIApps) != 1 || eff.Ceiling.UIApps[0].Name != "docs" || !eff.Limits.DenyUIApps {
+			t.Errorf("the admin view of team = ui_apps %+v, deny_ui_apps %v; want the base's list and true", eff.Ceiling.UIApps, eff.Limits.DenyUIApps)
+		}
+	}
+	if !seen {
+		t.Errorf("GET /governance lists no profile named team: %s", w.Body)
+	}
+
+	w = httptest.NewRecorder()
 	run := types.AgentRun{ID: uuid.New(), GovernanceProfileID: &team.ID}
 	if !srv.refuseUIAppsDenied(w, r, run) || w.Code != http.StatusForbidden {
 		t.Errorf("the UI-session door into a run under the profile = %d %s, want 403", w.Code, w.Body)

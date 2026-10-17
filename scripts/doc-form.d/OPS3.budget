@@ -55,7 +55,8 @@ docs/operations/admin-only-writes.md=3645 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
-docs/operations/three-roles.md=4194 share=35
+# docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
+docs/operations/three-roles.md=4218 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.

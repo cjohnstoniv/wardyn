@@ -74,7 +74,8 @@ type mdmPosture struct {
 func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 	var out mdmPosture
 	// One open file for the checks and the read, so the file judged is the file read; a link is not followed.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// O_NONBLOCK: a FIFO opens at once (and is then refused as not a regular file) instead of waiting for a writer.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return out, err
 	}

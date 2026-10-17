@@ -78,8 +78,9 @@ func (s *Server) recordingReader(r *http.Request, run types.AgentRun) bool {
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 
 // recordingUploadReadWindow bounds how long an upload's body may take to
-// arrive once the store has admitted its save, so a slow or stalled client
-// holds a save slot for at most this long. It stays below the proxy's 130 s
+// arrive once the store starts reading it (the Postgres store first admits the
+// save; the file store reads at once), so a slow or stalled client holds a save
+// slot for at most this long. It stays below the proxy's 130 s
 // control-plane call timeout: an upload admitted within the store's 65 s
 // admission wait still answers in 65 + 60 = 125 s, before its proxy gives up.
 // 60 s carries a 32 MiB part (where wardyn-rec cuts one) at about 4.5 Mbit/s
@@ -87,8 +88,9 @@ const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 // any read error does: nothing is stored. A var so tests can shorten it.
 var recordingUploadReadWindow = 60 * time.Second
 
-// readWindow arms the connection's read deadline at the body's first Read. The
-// store reads only once it has admitted the save, so queue time is not charged.
+// readWindow arms the connection's read deadline at the body's first Read. A
+// store that queues saves reads only once it has admitted one, so queue time is
+// not charged.
 type readWindow struct {
 	io.ReadCloser
 	rc    *http.ResponseController
