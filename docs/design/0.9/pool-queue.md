@@ -205,7 +205,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | `AgentRun` | `admitted_at`; `queue` while `QUEUED`: `pool_id`, `queued_at`, `deadline_at`, `position`, `reason` (derived, never stored on the run) |
 | Preflight and preview | Per pool: `slots_used`, `slots_max`, `waiting`, "starts now" or "waits" |
 | Go SDK | `CreateRunRequest.MaxWaitSec`, `AgentRun.Queue`, `AgentRun.AdmittedAt`, `types.RunQueued` |
-| CLI `wardyn run` | `--max-wait <duration>`. With `--wait` and no `--max-wait` it sends `--timeout` minus 60 s (at least 60 s), so `queue_timeout` lands before the CLI's own 124. `--wait` prints position changes to stderr |
+| CLI `wardyn run` | `--max-wait <duration>`. With `--wait` and no `--max-wait` it sends `--timeout` minus 60 s for a `--timeout` of 2 min or more (never under 60 s) and half of `--timeout` for a shorter one, so a run that waits too long should end `queue_timeout` before the CLI's own 124. That is the limit asked of the server, not a guarantee. `--wait` prints position changes to stderr |
 | CLI exit | `queue_timeout` is `FAILED`: exit 1 with the sentence |
 | TS | `RunState` gains `"QUEUED"`; `AgentRun.queue`, `admitted_at`; `wire-parity.test.ts` pins them |
 
@@ -289,7 +289,7 @@ One migration; its number comes from the lead.
 | Queue rows (PG) | Cancel and timeout leave no `run_queue` row; deleting a pool with waiting runs succeeds and leaves them `KILLED runner_pool_removed` |
 | Reapers | A queued run past 60 min survives `finalizeUndispatchedRuns`; a promoted run with a stale lease is failed; a plain `PENDING` run 5 min into its build with a 2-min-old heartbeat survives |
 | Timeout, kill | Past the deadline: `FAILED queue_timeout`. Cancel: `202`, `KILLED`, no `identity.revoke` row |
-| Counts, CLI | Deployment and pool counts exclude `QUEUED`; person count per Q2b. `--wait` sends `--timeout` minus 60 s; exit 1 on `queue_timeout` |
+| Counts, CLI | Deployment and pool counts exclude `QUEUED`; person count per Q2b. `--wait` sends `--timeout` minus 60 s (half of `--timeout` under 2 min); exit 1 on `queue_timeout` |
 | Browser | Full pool: "Waiting", cancel; a waiting run starts when one ends |
 
 Mutations, each failing a named test: mint before the queue decision; renew in `foldQueue`; refuse `Need > Left` at enqueue; apply host capacity at enqueue; count `QUEUED` as a slot; drop the pool row lock; drop the `QUEUED` CAS predicate; drop `admitted_at IS NOT NULL` from the stale-lease pass; pin the captured profile id instead of re-resolving; read the delegated token's expiry at the start; keep the `run_queue` row on kill (fails the flood-limit test: 100 cancelled runs still block a new launch); skip one §7 re-check; age the reaper from `created_at`; answer `runner_pool_at_capacity` as an HTTP refusal.

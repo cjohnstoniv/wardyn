@@ -109,3 +109,23 @@ func TestRunnerListNoLimits(t *testing.T) {
 		}
 	}
 }
+
+// A --free-disk of zero or less is refused before any request, not ignored.
+func TestRunnerRemotePropose_FreeDiskMustBePositive(t *testing.T) {
+	for _, v := range []string{"0", "-5"} {
+		srv := newCmdServer(t, http.StatusOK, sdk.RemoteRunnerView{})
+		out, err := execCmdCapture(t, "runner", "remote", "propose", "docker", "--free-disk", v, "--url", srv.URL, "--token", "t")
+		if err == nil || !strings.Contains(err.Error(), "--free-disk must be a positive") || out != "" || len(srv.reqs) != 0 {
+			t.Errorf("--free-disk %s = %q, %v, %d requests; want it refused before any request", v, out, err, len(srv.reqs))
+		}
+	}
+}
+
+// `runner remote people clear` says what it did, like its sibling verbs.
+func TestRunnerRemotePeopleClear_SaysWhatItDid(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+	out, err := execCmdCapture(t, "runner", "remote", "people", "clear", "docker", "--url", srv.URL, "--token", "t")
+	if err != nil || !strings.Contains(out, "docker") || !strings.Contains(out, "no longer available to people's pools") {
+		t.Errorf("people clear = %q, %v; want a line naming the runner and the change", out, err)
+	}
+}
