@@ -273,6 +273,6 @@ func (a *Authenticator) retryLoginUnwidened(w http.ResponseWriter, r *http.Reque
 	}
 	slog.Warn("oidc: the identity provider refused the widened sign-in; retrying with the login's own scopes only, so this person is not kept out of the console",
 		"issuer", a.cfg.IssuerURL, "error", code)
-	a.startLogin(w, r, false)
+	a.startLogin(w, r, false, false)
 	return true
 }

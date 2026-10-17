@@ -289,6 +289,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
 | `WARDYN_OIDC_SESSION_TTL` | duration | (unset = the ID token's expiry) | how long a console SSO session lasts from sign-in (flag `-oidc-session-ttl`); unset or `0` ends it at the ID token's expiry. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_ttl) |
+| `WARDYN_OIDC_SESSION_RENEW_CAP` | duration | (unset = off) | renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`). Unset or `0` changes nothing. Boot refuses a negative value or one above `24h`. [Details](#wardyn_oidc_session_renew_cap) |
+| `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` | duration | (unset = off) | ends a console session after this long with no console activity (flag `-oidc-session-idle-timeout`). Unset or `0` changes nothing. [Details](#wardyn_oidc_session_idle_timeout) |
+| `WARDYN_OIDC_SILENT_REAUTH` | bool | `false` | a browser that signed in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`). `false` changes nothing. [Details](#wardyn_oidc_silent_reauth) |
+| `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
+| `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -1554,6 +1559,46 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The ID token's expiry is today the only identity-provider-driven bound on a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default.
 - Pair a longer session with a role-stamp TTL, or a person disabled only at the identity provider keeps the console until this TTL runs out.
 - Attach tickets, the per-identity gate and sign-out are unaffected.
+
+### `WARDYN_OIDC_SESSION_RENEW_CAP`
+
+- Renews a console session on console activity, never past this long after sign-in (flag `-oidc-session-renew-cap`).
+- Off by default; the owner chooses a default after measuring real Entra sessions.
+- Console activity is a write (any method but `GET`, `HEAD` and `OPTIONS`) the browser marks `Sec-Fetch-Site: same-origin`; background reads never count.
+- A session past half its length is extended by that length, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
+- Renewal moves only the expiry: revocation, suspension and sign-out end a renewed cookie exactly as before.
+- Boot refuses a negative value or one above `24h`.
+
+### `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`
+
+- Ends a console session after this long with no console activity, as defined under `WARDYN_OIDC_SESSION_RENEW_CAP` (flag `-oidc-session-idle-timeout`).
+- Off by default; the owner chooses a default after measuring real Entra sessions.
+- The server refuses the idle session as expired (`auth.fail` reason `expired_session`), so the person signs in again.
+- It bounds a browser left unattended, not a copied cookie, which its holder can keep active up to the session's end.
+- A person who only reads, or only types in a terminal, meets it; a session can end up to a tenth of it early.
+- Turning it on ends, at their next request, sessions signed in more than the timeout ago with no write since: their cookies carry no activity stamp.
+- During a mixed-version rollout an older replica neither renews nor enforces it, and a cookie it re-signs (a view switch) loses its activity stamp.
+
+### `WARDYN_OIDC_SILENT_REAUTH`
+
+- A browser that completed a sign-in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`).
+- Off by default; turn it on only after measuring the provider's `prompt=none` behaviour, including under third-party-cookie blocking.
+- When the provider refuses, the same window continues once with the ordinary interactive sign-in, so a refusal never strands the person.
+- A completed sign-in sets an `HttpOnly` marker cookie for 30 days; signing out clears it, so the next sign-in on that browser is interactive.
+- Nothing is replayed: a draft from before the lapse is not resubmitted.
+
+### `WARDYN_OIDC_LOGIN_HINT`
+
+- A browser that completed a sign-in sends that account (`preferred_username`, else `email`) as `login_hint` on its next sign-in (flag `-oidc-login-hint`).
+- Off by default; it spares an Entra browser holding several accounts the account picker.
+- The account rides in an `HttpOnly` cookie for 30 days; signing out clears it.
+- The hint only preselects an account: the identity provider still authenticates.
+
+### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
+
+- Sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`).
+- Off by default; a browser that restores its last session may keep the cookie anyway.
+- The server still ends the session at its expiry.
 
 ### `WARDYN_UI_SANDBOX_LISTEN`
 
