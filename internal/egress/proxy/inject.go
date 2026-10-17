@@ -153,7 +153,7 @@ func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token
 		approvals: httpApprovalReader{base: base, token: token, client: client},
 	}
 	for _, r := range rules {
-		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.Host), "."))
+		host := hostKey(r.Host)
 		if host == "" {
 			return nil, fmt.Errorf("injection rule with empty host")
 		}
@@ -203,7 +203,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 	if i == nil {
 		return injectedHeader{}, false, nil
 	}
-	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	key := hostKey(host)
 	i.mu.Lock()
 	e, ok := i.byHost[key]
 	i.mu.Unlock()
@@ -314,7 +314,7 @@ func (i *injector) dropStale(host, jti string) {
 	if i == nil {
 		return
 	}
-	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	key := hostKey(host)
 	i.mu.Lock()
 	e, ok := i.byHost[key]
 	i.mu.Unlock()
@@ -374,7 +374,7 @@ func (i *injector) requiresTLS(host string) bool {
 	if i == nil {
 		return false
 	}
-	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	key := hostKey(host)
 	i.mu.Lock()
 	e, ok := i.byHost[key]
 	i.mu.Unlock()
@@ -575,7 +575,7 @@ func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 	if i == nil {
 		return true
 	}
-	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	key := hostKey(host)
 	i.mu.Lock()
 	e, ok := i.byHost[key]
 	i.mu.Unlock()

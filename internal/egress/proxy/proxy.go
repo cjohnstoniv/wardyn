@@ -22,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -436,7 +437,7 @@ func newProxy(opts Options) *Proxy {
 		// channelForHost) — an untrimmed key here is unmatchable.
 		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
-		gatewayVendor[host] = vendor
+		gatewayVendor[hostKey(host)] = vendor
 	}
 	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
 	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
@@ -641,13 +642,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // a dot-free deny key "evil.com" while VetHost still resolved+dialed it (an
 // explicit-deny bypass under allow_all_egress). This is the single funnel every
 // request host flows through, so normalizing it here reduces every FQDN-root
-// spelling to the canonical dot-free host for all downstream matching.
+// spelling to the canonical dot-free host for all downstream matching, and an
+// IP literal to its one canonical spelling (domainmatch.CanonHost): the same one
+// the policy and every host-keyed table compile to (hostKey).
 func splitHostPort(hostport string, defaultPort int) (host string, port int) {
 	if h, ps, err := net.SplitHostPort(hostport); err == nil {
 		port, _ = strconv.Atoi(ps)
-		return strings.ToLower(strings.TrimRight(h, ".")), port
+		return domainmatch.CanonHost(strings.TrimRight(h, ".")), port
 	}
-	return strings.ToLower(strings.TrimRight(hostport, ".")), defaultPort
+	return domainmatch.CanonHost(strings.TrimRight(hostport, ".")), defaultPort
 }
 
 // evaluate runs the full decision pipeline for a request, emitting the
