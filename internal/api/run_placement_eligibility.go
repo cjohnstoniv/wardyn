@@ -352,8 +352,9 @@ type localGrantDelivery struct {
 // grant persistence never depends on a caller remembering to stamp OwnerOnly.
 // An org-held grant is admitted only when the delivery policy the run's plan was
 // judged on, at the trust class it was admitted at, delivers its class via_org
-// and its kind has the via_org shape; it stays as authored (never OwnerOnly) and
-// is recorded via_org.
+// and its kind has the via_org shape, or delivers it runner_resident and the
+// table admits it (residentGrantRefusal adds the grant's own bounds); it stays
+// as authored (never OwnerOnly) and is recorded with that mode.
 func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j localJudgement) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
 	spec = spec.Clone()
 	out := make([]localGrantDelivery, len(spec.EligibleGrants))
@@ -364,6 +365,17 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j
 		}
 		if placement.ViaOrgGrant(origin, j.policy, j.trust) {
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
+			continue
+		}
+		resident, rref := placement.ResidentGrant(origin, j.policy, j.trust)
+		if rref != nil {
+			return types.RunPolicySpec{}, nil, runError(rref.Reason.Status(), string(rref.Reason), fmt.Sprintf("eligible_grants[%d]: %s", i, rref.Error()))
+		}
+		if resident {
+			if detail := s.residentGrantRefusal(r.Context(), g); detail != "" {
+				return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: %s", i, detail))
+			}
+			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeRunnerResident}
 			continue
 		}
 		if origin.Class != placement.ClassOwn || !origin.Stored || !origin.OwnNamespace {

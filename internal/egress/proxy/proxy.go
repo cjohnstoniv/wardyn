@@ -115,9 +115,7 @@ type Proxy struct {
 	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
 	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
 	brokeredPATGrantIDs []uuid.UUID
-	// residentMints are the runner_resident grants the mint route answers
-	// locally, by grant id (resident_mint.go).
-	residentMints map[uuid.UUID]ResidentMint
+	residentMints       map[uuid.UUID]ResidentMint // runner_resident mints answered locally (resident_mint.go)
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
@@ -303,8 +301,6 @@ type Options struct {
 	PATGrants map[string]PATGrant
 	// BrokeredPATGrantIDs backs isBrokeredPATGrant. See Config.BrokeredPATGrantIDs.
 	BrokeredPATGrantIDs []uuid.UUID
-	// ResidentMints backs the local answer to a runner_resident mint. See Config.ResidentMints.
-	ResidentMints []ResidentMint
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
 	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
@@ -463,7 +459,6 @@ func newProxy(opts Options) *Proxy {
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
-		residentMints:        residentMintsByGrant(opts.ResidentMints),
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
 		patAPI:               patAPI,

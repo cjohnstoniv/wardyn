@@ -47,8 +47,8 @@ func TestResidentLift_PerClass(t *testing.T) {
 		t.Run(tc.class, func(t *testing.T) {
 			policy := DeliveryPolicy{Classes: map[string]ClassPolicy{tc.class: {Mode: ModeRunnerResident}}}
 			origin := CredentialOrigin{Class: ClassOperator, Delivery: tc.class, GrantKind: kinds[tc.class], Stored: true}
-			record := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy}, reflect.Value{})
-			resident, ref := ResidentGrant(origin, policy)
+			record := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy, Trust: types.RunnerTrustPersonal}, reflect.Value{})
+			resident, ref := ResidentGrant(origin, policy, types.RunnerTrustPersonal)
 			if !tc.built {
 				if record == nil || record.Detail != "runner_resident delivery of this credential is not built yet" || resident || ref == nil {
 					t.Fatalf("an unbuilt class: record %+v, resident %v %+v, want the exact refusal", record, resident, ref)
@@ -58,14 +58,14 @@ func TestResidentLift_PerClass(t *testing.T) {
 			if record != nil || !resident || ref != nil {
 				t.Fatalf("a built class: record %+v, resident %v %+v, want admitted", record, resident, ref)
 			}
-			if ViaOrgGrant(origin, policy) {
+			if ViaOrgGrant(origin, policy, types.RunnerTrustPersonal) {
 				t.Fatal("a resident-mode class was answered via_org")
 			}
-			if ok, ref := ResidentGrant(origin, DeliveryPolicy{Classes: map[string]ClassPolicy{tc.class: {Mode: ModeRefuse}}}); ok || ref != nil {
+			if ok, ref := ResidentGrant(origin, DeliveryPolicy{Classes: map[string]ClassPolicy{tc.class: {Mode: ModeRefuse}}}, types.RunnerTrustPersonal); ok || ref != nil {
 				t.Fatalf("a refused class: resident %v %+v, want not resident", ok, ref)
 			}
 			plan := func(spec runner.SandboxSpec) LocalPlan {
-				return LocalPlan{Spec: spec, Origins: map[string]CredentialOrigin{tc.path: origin}, Delivery: policy}
+				return LocalPlan{Spec: spec, Origins: map[string]CredentialOrigin{tc.path: origin}, Delivery: policy, Trust: types.RunnerTrustPersonal}
 			}
 			if _, r := LocalEligibility(plan(tc.leaf)); r != nil {
 				t.Fatalf("the placeholder leaf: %+v", r)

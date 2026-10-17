@@ -39,9 +39,9 @@ func residentMintProxy(t *testing.T, now *atomic.Int64, mints []ResidentMint, br
 		ControlPlaneURL:     "http://wardynd.test:8080",
 		RunToken:            newTokenSource("RUNTOK"),
 		BrokeredPATGrantIDs: brokered,
-		ResidentMints:       mints,
 		Now:                 func() time.Time { return time.Unix(0, now.Load()).UTC() },
 	})
+	p.residentMints = residentMintsByGrant(mints)
 	return p, buf, &cpCalls
 }
 

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ var residentClassCases = []residentClassCase{
 	{placement.ClassEnvSecret, types.GrantEnvSecret, true, func(s string) string { return `{"name":"RES_TOKEN","secret_name":"` + s + `"}` }, ""},
 	{placement.ClassFileSecret, types.GrantFileSecret, true, func(s string) string { return `{"file":"res.key","secret_name":"` + s + `"}` }, ""},
 	{placement.ClassSSHKey, types.GrantSSHKey, false, func(s string) string { return `{"host":"github.com","key_secret_ref":"` + s + `"}` }, "github.com"},
-	{placement.ClassGitPATHelper, types.GrantGitPAT, false, func(s string) string { return `{"host":"dev.azure.com","secret_name":"` + s + `"}` }, "dev.azure.com"},
+	{placement.ClassGitPATHelper, types.GrantGitPAT, false, func(s string) string { return `{"host":"git.example.com","secret_name":"` + s + `"}` }, "git.example.com"},
 }
 
 // classGrant stores a runner_resident grant of c for run, reading secret.
@@ -410,7 +411,7 @@ func TestResidentGitPAT_FlagMatrix(t *testing.T) {
 	if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-pat", []byte("pat value")); err != nil {
 		t.Fatal(err)
 	}
-	policy := storedPolicy(t, f.srv)
+	policy := localJudgement{policy: storedPolicy(t, f.srv), trust: types.RunnerTrustPersonal}
 	grant := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(c.scope("op-pat"))}
 	create := func(broker bool) ([]localGrantDelivery, *runRefusal) {
 		f.srv.cfg.DisableGitPATBroker = !broker
@@ -428,6 +429,10 @@ func TestResidentGitPAT_FlagMatrix(t *testing.T) {
 	f.srv.cfg.DisableGitPATBroker = true
 	if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{approval}}, policy); ref == nil {
 		t.Fatal("a grant that requires approval was admitted runner_resident")
+	}
+	ado := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"dev.azure.com","secret_name":"op-pat"}`)}
+	if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{ado}}, policy); ref == nil || !strings.Contains(ref.body.Error, residentADOGitPATRefused) {
+		t.Fatalf("an Azure DevOps git token was admitted runner_resident: %+v", ref)
 	}
 
 	// Off at create, on at dispatch.
@@ -461,6 +466,34 @@ func TestResidentGitPAT_FlagMatrix(t *testing.T) {
 	if err := f.srv.refreshLocalDeploymentConfig(ctx, run, sc, cfg); errors.As(err, &ref) && ref.Detail == residentPATBrokered {
 		t.Fatalf("revive with the broker off was refused as brokered: %v", err)
 	}
+
+	// One run through every door with the broker off: create admits, persist
+	// records the grant runner_resident, dispatch authors and delivers its mint,
+	// and the revive of that stored config is admitted.
+	run = f.startingRun(t, nil)
+	rec := httptest.NewRecorder()
+	gw, ok := f.srv.persistRunGrants(ctx, rec, localMemberRequest("bob"), run.ID, time.Now(), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant}}, types.PlacementLocal, policy)
+	if !ok || len(gw.delivery) != 1 || gw.delivery[0].Mode != placement.ModeRunnerResident {
+		t.Fatalf("persist: ok=%v %+v (%s), want one runner_resident grant", ok, gw.delivery, rec.Body.String())
+	}
+	rows, err := f.st.ListGrantsByRun(ctx, run.ID)
+	if err != nil || len(rows) != 1 || rows[0].Delivery != types.GrantDeliveryResident || rows[0].ID != gw.delivery[0].GrantID {
+		t.Fatalf("stored grants %+v (%v), want the one runner_resident grant persist recorded", rows, err)
+	}
+	spec, values, ok := f.authorClass(t, run, c, false)
+	if !ok || placeholderOf(spec, c, rows[0].ID) != placement.ResidentPlaceholder(rows[0].ID) || len(values) != 1 {
+		t.Fatalf("dispatch authored %+v with %d values", spec.ProxyConfig.ResidentMints, len(values))
+	}
+	if r := f.classify(t, run, spec); r != nil {
+		t.Fatalf("dispatch classify of the persisted run: %v", r)
+	}
+	if !f.srv.deliverResident(ctx, run, spec.ProxyConfig.Policy, values) {
+		t.Fatal("delivery of the persisted run's git token refused")
+	}
+	cfg = &proxy.Config{RunID: run.ID, Policy: spec.ProxyConfig.Policy, ResidentMints: spec.ProxyConfig.ResidentMints}
+	if err := f.srv.refreshLocalDeploymentConfig(ctx, run, sc, cfg); err != nil {
+		t.Fatalf("revive of the persisted run: %v", err)
+	}
 }
 
 // A resident ssh_key or git_pat is authored only when dispatch's post-drop
@@ -489,5 +522,33 @@ func TestResidentMints_OnlyPostDropGrants(t *testing.T) {
 				t.Fatalf("a withheld grant was authored: %+v, %d values", spec.ProxyConfig.ResidentMints, len(values))
 			}
 		})
+	}
+}
+
+// A resident grant of another run is never read for this run's runner, and a
+// git token for an Azure DevOps host is refused at delivery even when it is
+// recorded runner_resident (the site config of that moment decides).
+func TestResident_ForeignRunAndAzureDevOpsGitTokenRefused(t *testing.T) {
+	f := newResidentFix(t, nil, residentAllClassesPolicy)
+	f.srv.cfg.DisableGitPATBroker = true
+	ctx := t.Context()
+	if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte("foreign value")); err != nil {
+		t.Fatal(err)
+	}
+	runA, runB := f.startingRun(t, nil), f.startingRun(t, nil)
+	gB := f.classGrant(t, runB, residentClassCases[0], "op-secret")
+	if v, err := f.srv.readResidentValue(ctx, runA, gB, "op-secret"); err == nil {
+		t.Fatalf("a grant of run B was read for run A: %+v", v.grant.ID)
+	}
+	run := f.startingRun(t, nil)
+	ado := f.classGrant(t, run, residentClassCase{kind: types.GrantGitPAT, scope: func(s string) string { return `{"host":"dev.azure.com","secret_name":"` + s + `"}` }}, "op-secret")
+	if f.srv.deliverResident(ctx, run, policyOf(ado), []residentValue{{grant: ado, class: placement.ClassGitPATHelper, value: []byte("ado value")}}) {
+		t.Fatal("an Azure DevOps git token was delivered runner_resident")
+	}
+	if got := f.dispatchRefusal(t, run.ID); got["reason"] != string(placement.ReasonPlacementCredential) || got["grant_id"] != ado.ID.String() {
+		t.Fatalf("refusal = %v, want placement_credential naming the grant", got)
+	}
+	if delivered, _ := f.side.calls(); len(delivered) != 0 {
+		t.Fatalf("delivered %+v, want nothing", delivered)
 	}
 }
