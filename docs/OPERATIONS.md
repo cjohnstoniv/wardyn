@@ -1246,6 +1246,8 @@ erases one person's retained records by explicit scope, in one audited act
   - A request decoded before the erase whose insert begins after it commits keeps its intent, as its run row keeps its task.
   - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
+- An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
+
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
   - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
