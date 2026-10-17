@@ -58,7 +58,7 @@ ok "NetworkPolicy: proxy-only ingress, one cluster-wide peer, private ranges exc
 # Helm sorts kinds into its install order, the same order install and upgrade apply them in.
 first_deploy="$(grep -n '^kind: Deployment$' <<<"$out" | head -1 | cut -d: -f1)"
 last_rbac="$(grep -nE '^kind: (ClusterRole|ClusterRoleBinding|Role|RoleBinding)$' <<<"$out" | tail -1 | cut -d: -f1)"
-[ -n "$first_deploy" ] && [ -n "$last_rbac" ] && [ "$last_rbac" -lt "$first_deploy" ] \
+[[ -n "$first_deploy" && -n "$last_rbac" && "$last_rbac" -lt "$first_deploy" ]] \
   || die "an RBAC object renders after the Deployment: the image could start before its verbs exist"
 ok "RBAC renders before the Deployment"
 
@@ -97,7 +97,7 @@ server_role="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-w
 server_cluster="$(docs "$server" 'select(.kind == "ClusterRole") | .rules')"
 runs_role="$(docs "$out" 'select(.kind == "Role" and .metadata.namespace == "wardyn-runs-ci") | .rules')"
 cluster="$(docs "$out" 'select(.kind == "ClusterRole") | .rules')"
-[ -n "$server_role" ] && [ -n "$server_cluster" ] || die "the control-plane chart rendered no k8s-runner Role or ClusterRole to compare with"
+[[ -n "$server_role" && -n "$server_cluster" ]] || die "the control-plane chart rendered no k8s-runner Role or ClusterRole to compare with"
 [ "$(yq -o=json -I=0 '.[:-1]' <<<"$runs_role")" = "$server_role" ] \
   || die "the runs-namespace Role is not the control-plane Role rule for rule: runnerd $runs_role vs server $server_role"
 [ "$(yq -o=json -I=0 '.[-1]' <<<"$runs_role")" = '{"apiGroups":[""],"resources":["pods"],"verbs":["patch"]}' ] \
