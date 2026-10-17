@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.3-rc.3] — 2026-10-17
+
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
 cluster that the control plane never dials into. A laptop runner can now hold four credential classes in its OS
 keystore for a run. A security operator sets each runner's trust class, and macOS fleets install runners from a
