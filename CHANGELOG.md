@@ -58,17 +58,11 @@ below.
   `recording_store_off` when the organisation keeps no session recordings and recording is required.
 - A kill whose teardown is incomplete still answers `500`, now with reason `internal_error`, and its `errors` field is
   an array of the failed step names instead of an object of step and error text. The text is in the `run.revoke`
-  audit row; retry the kill. <!-- lead: verify — LEAD-QUEUE names the reason run_kill_teardown_incomplete, but
-  045a9fa52 replaced it with internal_error (internal/api/runs_lifecycle.go:681-687). -->
-- A console save composed while signed in as a different person than the one now signed in is refused `412`
-  (`site_config_stale`) before anything is written, on the providers Saves and the console's other draft saves.
-  Reload and retry. Writes without the console's header (the CLI, scripts) are unaffected.
-  <!-- lead: verify — FIN-B-ROWS marks DR-0034 PRIVATE; keep or reword. -->
+  audit row; retry the kill.
+- The console's draft saves, the providers Saves among them, can now be refused `412` (`site_config_stale`) before
+  anything is written. Reload and retry. Writes without the console's header (the CLI, scripts) are unaffected.
 - A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`) and is not
-  asked to retire a finished run's output. Upgrade runners after the organisation. <!-- lead: verify COMPAT L6 — the
-  runner/org interop property is not pinned by a test or a doc line, and its item (a) is not built:
-  internal/runner/offline/state.go:92 still sets DisallowUnknownFields. An old runner also fails closed on the
-  custom-image self-test (private lane; left out). -->
+  asked to retire a finished run's output. Upgrade runners after the organisation.
 - A runner's state file can now hold compacted retired runs, so a runner moved back to an earlier version refuses it
   after any retirement; downgrading a runner below this release is not supported. <!-- pending merge: FIN-C2 -->
 - A run queued before the upgrade whose MCP server takes an organisation credential can still start on your own
@@ -82,10 +76,9 @@ below.
 
 - **Organisation runners in Kubernetes.** `wardyn-runnerd serve --substrate k8s` places each run as an agent pod and a
   proxy pod in a dedicated runs namespace and dials the organisation outbound only. The `wardyn-runnerd` image is
-  published with each release, and its chart is `deploy/helm/wardyn-runnerd`. Boot refuses a kubelet below 1.31
+  published with each release; install its chart from `deploy/helm/wardyn-runnerd` in the release's source tree. Boot refuses a kubelet below 1.31
   (`kubelet_below_floor`) and starts only when an egress canary proves NetworkPolicy is enforced. One release serves
-  one architecture (`WARDYN_RUNNERD_ARCH`). <!-- lead: verify the chart is published, or installed from a checkout
-  as the K7 guide's marker says -->
+  one architecture (`WARDYN_RUNNERD_ARCH`).
 - A security operator mints an organisation runner's token (`wardyn runner org-token mint`) and claims the runner by
   its fingerprint (`wardyn runner claim-org`); under four-eyes the claimer must differ from the minter. An organisation
   runner has no owner and takes runs only through an organisation runner pool.
@@ -200,12 +193,15 @@ below.
 - Hardened member drive deletion, console session expiry, runner stream ownership and proxy host matching.
 - Hardened certificate errors for configured gateways.
 
-<!-- lead: decide — FIN-E-REPORT.md "CHANGELOG lines for the lead" also lists corrections to earlier releases' notes
-(not 0.9.3 changes): a webhook sink with flush_interval or retry_base_delay <= 0 refuses boot in best-effort mode
-too; `wardyn runner remote propose` suggests Runs at once up to 1024 while registration stops at 64; owner-claimed
-runner registration (POST /runners/register, /runners/tokens, /me/runners/tokens, /me/runners/{id}/claim,
-WARDYN_RUNNER_ORG_URL, 0142_runner_registration) was never in the notes; a disk maximum with no default becomes the
-soft default; host capacity and the run cap count only this deployment's own substrates. Not placed here. -->
+### Corrections to earlier notes
+
+- A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative refuses to boot in
+  best-effort mode too, not only when the sink is required.
+- `wardyn runner remote propose` can suggest up to 1024 runs at once, but registration accepts at most 64.
+- Owner-claimed runner registration shipped in 0.9.0 without a note: `POST /runners/register`, `/runners/tokens`,
+  `/me/runners/tokens`, `/me/runners/{id}/claim`, `WARDYN_RUNNER_ORG_URL` and migration `0142_runner_registration`.
+- A disk maximum set with no default becomes the soft default.
+- Host capacity and the run cap count only this deployment's own substrates.
 
 ## [0.9.3-rc.2] — 2026-10-17
 
