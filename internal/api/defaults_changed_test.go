@@ -40,16 +40,16 @@ func TestDefaultChanges_PredicatesReadTheEstate(t *testing.T) {
 			off: upgradeEstate{AWSSSOProxyInject: true, Site: ssoOff},
 		},
 		"internal_hosts_on_runners": {
-			on:  upgradeEstate{Site: hosts, ClaimedSelfHosted: 1},
+			on:  upgradeEstate{Site: hosts, ClaimedPersonal: 1},
 			off: upgradeEstate{Site: hosts},
 		},
 		"recording_preferred": {
-			on:  upgradeEstate{ClaimedSelfHosted: 2, RecordingStoreOn: true},
-			off: upgradeEstate{ClaimedSelfHosted: 2, RecordingStoreOn: true, OrgRecording: types.RecordingRequired},
+			on:  upgradeEstate{ClaimedPersonal: 2, RecordingStoreOn: true},
+			off: upgradeEstate{ClaimedPersonal: 2, RecordingStoreOn: true, OrgRecording: types.RecordingRequired},
 		},
 		"runner_recording_follows_org": {
-			on:  upgradeEstate{ClaimedSelfHosted: 1},
-			off: upgradeEstate{ClaimedSelfHosted: 1, RecordingStoreOn: true},
+			on:  upgradeEstate{ClaimedPersonal: 1},
+			off: upgradeEstate{ClaimedPersonal: 1, RecordingStoreOn: true},
 		},
 	}
 	for _, d := range defaultChanges {
@@ -110,7 +110,7 @@ func TestDefaultChanges_ReleaseWindow(t *testing.T) {
 		}
 	}
 	all := upgradeEstate{
-		CustomComponentOpen: true, RunMaxAge: time.Hour, SelfHostRestricted: true, AWSSSOProxyInject: true, ClaimedSelfHosted: 1, RecordingStoreOn: true,
+		CustomComponentOpen: true, RunMaxAge: time.Hour, SelfHostRestricted: true, AWSSSOProxyInject: true, ClaimedPersonal: 1, RecordingStoreOn: true,
 		Site: types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}, ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{ID: "aws", Kind: types.ModelProviderBedrockSSO}}}},
 	}
 	names := func(ds []defaultChange) (out []string) {
@@ -121,7 +121,7 @@ func TestDefaultChanges_ReleaseWindow(t *testing.T) {
 	}
 	for prev, want := range map[string][]string{
 		"0.9.3":      nil,
-		"0.9.3-rc.2": {"recording_preferred"},
+		"0.9.3-rc.2": nil,
 		"0.9.2":      {"recording_preferred"},
 		"0.9.1":      {"internal_hosts_on_runners", "recording_preferred"},
 		"0.9.0":      {"self_host_runner_restricted", "aws_sso_config_env", "internal_hosts_on_runners", "recording_preferred"},
@@ -231,8 +231,8 @@ func TestSelfHostRunnerGrantRow(t *testing.T) {
 		grants:     []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectAll, Capability: capFeature, Value: capWildcard, Effect: types.CapabilityAllow}},
 	}
 	chk, ok := upgradeRows(t, f)["self_host_runner_grant"]
-	if !ok || chk.Status != "warn" || chk.Blocking || !strings.Contains(chk.Detail, "cannot mint runner tokens") || !strings.Contains(chk.Detail, "2 claimed runners keep working") {
-		t.Fatalf("row = %+v, %v; want a warn: restricted, two claimed runners, only a wildcard allow", chk, ok)
+	if !ok || chk.Status != "warn" || chk.Blocking || !strings.Contains(chk.Detail, "cannot mint runner tokens") || !strings.Contains(chk.Detail, "2 claimed person-owned runners keep working") {
+		t.Fatalf("row = %+v, %v; want a warn: restricted, two claimed person-owned runners, only a wildcard allow", chk, ok)
 	}
 	if !strings.Contains(chk.Fix, selfHostGrantBody) || !strings.Contains(chk.Fix, "/api/v1/permissions/explain") {
 		t.Errorf("fix = %q, want the exact grant body and the explain door", chk.Fix)
@@ -248,6 +248,10 @@ func TestSelfHostRunnerGrantRow(t *testing.T) {
 	f.runners = []types.Runner{{State: types.RunnerUnclaimed}}
 	if _, ok := upgradeRows(t, f)["self_host_runner_grant"]; ok {
 		t.Error("the row showed with no claimed runner")
+	}
+	f.runners = []types.Runner{{State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerOrg}, {State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerOrg}}
+	if chk, ok := upgradeRows(t, f)["self_host_runner_grant"]; ok {
+		t.Errorf("an estate whose only claimed runners are the organisation's got the grant row: %+v", chk)
 	}
 	f.runners = []types.Runner{{State: types.RunnerClaimed}}
 	f.restricted = map[string]map[string]bool{}
@@ -281,5 +285,70 @@ func TestSetupStatus_ShowsTheUpgradeRows(t *testing.T) {
 	f.runners = nil
 	if got := ids(); slices.Contains(got, "self_host_runner_grant") || slices.Contains(got, "defaults_changed") {
 		t.Fatalf("with no claimed runner, setup status ids = %v, want neither upgrade row", got)
+	}
+}
+
+// A registry entry carries the first release that shipped it, a candidate included: the recording
+// defaults shipped in 0.9.3-rc.2, so an estate on rc.2 is not told again at rc.3 or at 0.9.3, and one
+// coming from 0.9.2 is told both.
+func TestDefaultChanges_CandidateLabels(t *testing.T) {
+	storeOn := upgradeEstate{ClaimedPersonal: 1, RecordingStoreOn: true}
+	storeOff := upgradeEstate{ClaimedPersonal: 1}
+	shown := func(prev, current string) (out []string) {
+		p, ok := previousRelease(store.UpgradeOrigin{Recorded: true, Previous: prev}, current)
+		if !ok {
+			t.Fatalf("previousRelease(%s, %s) found no previous release", prev, current)
+		}
+		for _, e := range []upgradeEstate{storeOn, storeOff} {
+			for _, d := range changedDefaults(defaultChanges, p, e) {
+				out = append(out, d.Name)
+			}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		prev, current string
+		want          []string
+	}{
+		{"0.9.3-rc.2", "0.9.3-rc.3", nil},
+		{"0.9.3-rc.2", "0.9.3", nil},
+		{"0.9.2", "0.9.3", []string{"recording_preferred", "runner_recording_follows_org"}},
+	} {
+		if got := shown(c.prev, c.current); !slices.Equal(got, c.want) {
+			t.Errorf("%s -> %s: %v, want %v", c.prev, c.current, got, c.want)
+		}
+	}
+}
+
+// Organisation runners (0.9.3) count toward no entry: no earlier default reached them.
+func TestDefaultChanges_OrganisationRunnersCountForNothing(t *testing.T) {
+	f := &upgradeFake{
+		runners:    []types.Runner{{State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerOrg}},
+		restricted: map[string]map[string]bool{capFeature: {featureSelfHostRunner: true}},
+		origin:     store.UpgradeOrigin{Recorded: true, Previous: "0.9.1"},
+		siteCfg:    types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}},
+	}
+	if rows := upgradeRows(t, f); rows["self_host_runner_grant"].ID != "" || strings.Contains(rows["defaults_changed"].Detail, "internal_hosts_on_runners") ||
+		strings.Contains(rows["defaults_changed"].Detail, "recording") {
+		t.Fatalf("organisation runners reached an entry or the grant row: %+v", rows)
+	}
+	f.runners = append(f.runners, types.Runner{State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerPerson})
+	if rows := upgradeRows(t, f); rows["self_host_runner_grant"].ID == "" || !strings.Contains(rows["defaults_changed"].Detail, "internal_hosts_on_runners") {
+		t.Fatalf("a person's runner beside them did not: %+v", rows)
+	}
+}
+
+// 0.9.1 -> 0.9.3 by -migrate-only: the record keeps the 0.9.1 tip (0179), which places as 0.9.1, so
+// 0.9.2's internal_hosts entry is kept; cmd/wardynd's TestMigrateOnly_RecordsTheReleaseBeforeTheBoot
+// pins that the record holds 0179.
+func TestDefaultChanges_FromTheOneNineOneTipKeepsTheOneNineTwoEntry(t *testing.T) {
+	prev, ok := previousRelease(store.UpgradeOrigin{Recorded: true, PriorMigration: "0179_runner_arch.sql", LastRunRelease: "0.9.1"}, "0.9.3")
+	e := upgradeEstate{ClaimedPersonal: 1, Site: types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}}
+	var names []string
+	for _, d := range changedDefaults(defaultChanges, prev, e) {
+		names = append(names, d.Name)
+	}
+	if !ok || prev != "0.9.1" || !slices.Contains(names, "internal_hosts_on_runners") {
+		t.Fatalf("previous = %q, %v; entries %v; want 0.9.1 and the internal_hosts entry", prev, ok, names)
 	}
 }

@@ -24,8 +24,10 @@ import (
 // upgradeEstate is the configuration the entries are asked about, read once per setup status call.
 type upgradeEstate struct {
 	Site types.SiteConfig
-	// ClaimedSelfHosted counts claimed self-hosted (laptop) runners.
-	ClaimedSelfHosted int
+	// ClaimedPersonal counts claimed self-hosted runners a person owns. An organisation's runners
+	// (0.9.3, owner_kind org) are left out of every entry and of the grant row: they did not exist
+	// before 0.9.3, so no earlier default reached them, and nobody but an admin registers one.
+	ClaimedPersonal int
 	// OrgRecording is the organisation's runner-pool default recording setting; "" is preferred.
 	OrgRecording types.RecordingRequirement
 	// RecordingStoreOn: the server keeps recordings (WARDYN_RECORDING_STORE is not off).
@@ -43,7 +45,7 @@ type upgradeEstate struct {
 
 // defaultChange is one registry entry.
 type defaultChange struct {
-	Release string // the release the default changed in
+	Release string // the first release, a candidate included, that shipped the change
 	Name    string
 	Changed string // what changed, one sentence
 	Old     string // what to set to get the old behaviour
@@ -98,26 +100,26 @@ var defaultChanges = []defaultChange{
 			"before, they were dropped for every local run.",
 		Old: "No setting sends them to the cluster only; a suffix laptops must not reach has to come out of internal_hosts, which removes it everywhere.",
 		Applies: func(e upgradeEstate) bool {
-			return len(e.Site.InternalHosts) > 0 && e.ClaimedSelfHosted > 0
+			return len(e.Site.InternalHosts) > 0 && e.ClaimedPersonal > 0
 		},
 	},
 	{
-		Release: "0.9.3", Name: "recording_preferred",
+		Release: "0.9.3-rc.2", Name: "recording_preferred",
 		Changed: "Recording defaults to preferred: a run a non-recording laptop runner takes goes ahead unrecorded and says why (runner_declined), " +
 			"where a runner older than 0.9.3 recorded it regardless.",
 		Old: `Set "recording": "required" in PUT /api/v1/runner-pool-defaults, beside the stored pool_id and barrier (read them first with GET; ` +
 			"a write that leaves barrier out clears it). A run only a non-recording runner could take is then refused instead of running unrecorded.",
 		Applies: func(e upgradeEstate) bool {
-			return e.ClaimedSelfHosted > 0 && e.RecordingStoreOn && e.OrgRecording != types.RecordingRequired
+			return e.ClaimedPersonal > 0 && e.RecordingStoreOn && e.OrgRecording != types.RecordingRequired
 		},
 	},
 	{
-		Release: "0.9.3", Name: "runner_recording_follows_org",
+		Release: "0.9.3-rc.2", Name: "runner_recording_follows_org",
 		Changed: "A laptop runner records a run only when its organisation keeps recordings: with the recording store off, runs are marked org_off " +
 			"and nothing is uploaded, where before the runner recorded and its upload failed.",
 		Old: "Turn the organisation's recording store on (WARDYN_RECORDING_STORE pg or fs); the runner's own --recording-store stays its ceiling.",
 		Applies: func(e upgradeEstate) bool {
-			return e.ClaimedSelfHosted > 0 && !e.RecordingStoreOn
+			return e.ClaimedPersonal > 0 && !e.RecordingStoreOn
 		},
 	},
 }
@@ -167,7 +169,7 @@ func defaultsChangedCheck(previous string, changed []defaultChange) (SetupCheck,
 }
 
 // releaseTips is the newest migration each release before deployment_versions shipped (migration
-// 0192), oldest first, read from the release tags. It places a deployment's first record: the
+// 0190), oldest first, read from the release tags. It places a deployment's first record: the
 // newest migration the database held before is the newest one its previous release shipped. It
 // never grows: every later upgrade finds the release it ran before in deployment_versions.
 var releaseTips = []struct{ release, tip string }{
@@ -270,13 +272,14 @@ func (s *Server) upgradeEstate(ctx context.Context, site types.SiteConfig) (upgr
 			return fail("list runners", err)
 		}
 		for _, r := range runners {
-			if r.State == types.RunnerClaimed {
-				e.ClaimedSelfHosted++
+			if r.State == types.RunnerClaimed && r.OwnerKind != types.RunnerOwnerOrg {
+				e.ClaimedPersonal++
 			}
 		}
 	}
-	// Neither row can show without a boot record or a claimed runner; stop before the grant reads.
-	if _, versioned := s.cfg.Store.(store.DeploymentVersionStore); !versioned && e.ClaimedSelfHosted == 0 {
+	// A store that keeps no boot record (store.PG always does; some test doubles do not) can show only
+	// the grant row, which needs a claimed runner: stop before the grant reads.
+	if _, versioned := s.cfg.Store.(store.DeploymentVersionStore); !versioned && e.ClaimedPersonal == 0 {
 		return upgradeEstate{}, false
 	}
 	if ps, ok := s.cfg.Store.(store.RunnerPoolStore); ok {

@@ -284,6 +284,8 @@ crash or a usage limit resumes with the same command:
        `None.` when there are none.
      - Every entry also lands in the registry `defaultChanges` ([internal/api/defaults_changed.go](internal/api/defaults_changed.go)),
        with a predicate over a deployment's own configuration, so setup status names it where it applies.
+     - A registry entry names the first release that shipped the change, a release candidate included (`0.9.3-rc.2`), so
+       an estate on that candidate is not told again at the final release.
    - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
      (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
      cutting — this has drifted from the shipped version before, twice.

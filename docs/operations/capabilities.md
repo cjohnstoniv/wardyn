@@ -259,7 +259,7 @@ the ADMIN pre-authorized.
   - An estate upgrading from before 0.9.1 with a claimed runner keeps self-hosting open, whoever minted the runner's token: the migration adds that `all` allow. A deny still wins, a `*` feature deny included.
   - An estate with no claimed runner starts closed; add the grant after upgrading. So does a database that took 0.9.1's migration while it counted only runners their owners minted: the migration does not run again.
   - The grant for everyone is `POST /api/v1/permissions/grants` with `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}`. Name a `user`, `group` or `user_type` subject instead to open it to fewer people.
-  - While the value is restricted, runners are claimed and no grant row names the value, setup status shows a "Self-hosted runner tokens" warning for admins with that body. A deny row naming the value also clears it: that is a choice to keep it closed.
+  - While the value is restricted, runners people own are claimed and no grant row names the value, setup status shows a "Self-hosted runner tokens" warning for admins with that body. A deny row naming the value also clears it: that is a choice to keep it closed.
 - Asked at `POST /me/runners/tokens` only (reason `capability_feature`, target `me.runners.tokens`). Existing runners, claims and the admin mint are never asked.
 - Admins are never asked, even with `WARDYN_GOVERN_ADMIN_RUNS` on: the admin mint lets them name themself.
 

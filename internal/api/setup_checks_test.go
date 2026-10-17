@@ -799,7 +799,7 @@ func TestSetupCheckBlocking(t *testing.T) {
 	// arms — ssoRBACCheck has two distinct warn causes (#484's original and
 	// #491's default-role cause), both exercised below.
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
-	if chk, ok := selfHostGrantCheck(upgradeEstate{SelfHostRestricted: true, ClaimedSelfHosted: 1}); ok {
+	if chk, ok := selfHostGrantCheck(upgradeEstate{SelfHostRestricted: true, ClaimedPersonal: 1}); ok {
 		assertSetupCheckBlocking(t, chk)
 	}
 	if chk, ok := defaultsChangedCheck("0.9.2", defaultChanges); ok {
