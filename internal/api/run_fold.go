@@ -76,6 +76,7 @@ type runFold struct {
 	adoGrade           adoEntraGrade
 	bedrockGrade       bedrockCredGrade
 	adoNarrowed        string
+	adoDecline         adoLaneDecline // stepADOStanding: why the run is not on the per-person Azure DevOps lane
 	fitWarnings        []string
 	end                createEnd
 	prov               []provenanceRow

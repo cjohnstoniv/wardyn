@@ -13,6 +13,7 @@
 import { KeyRound } from "lucide-react";
 import type { AuditEvent, CredentialGrant } from "../../../../lib/types";
 import { relativeTime } from "../../../../lib/format";
+import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { Chip, WidgetCard } from "../../../wardyn/primitives";
 import { AdoRunTokens } from "../ado-run-tokens";
@@ -28,6 +29,13 @@ export function CredentialsWidget({
   ado?: { runId: string; paused: boolean; live: boolean };
 }) {
   const minted = audit.filter((e) => e.action === "credential.mint" && e.outcome === "success");
+  // The per-person Azure DevOps lane's decline (run.ado_lane.skip): the
+  // approved sentence for the row's reason code, or the row's own detail for a
+  // code this console does not know.
+  const adoDeclineRow = audit.find((e) => e.action === "run.ado_lane.skip")?.data;
+  const adoDeclinePhrase =
+    typeof adoDeclineRow?.reason === "string" ? ADO_PAT.LANE_DECLINE_REASON[adoDeclineRow.reason] : undefined;
+  const adoDecline = adoDeclinePhrase ? ADO_PAT.LANE_DECLINED(adoDeclinePhrase) : adoDeclineRow?.detail;
 
   return (
     <WidgetCard
@@ -78,6 +86,14 @@ export function CredentialsWidget({
         </div>
       )}
 
+      {typeof adoDecline === "string" && adoDecline !== "" && (
+        <div className="mt-2.5 border-t border-border pt-2" data-testid="ado-lane-declined">
+          <h5 className="text-meta font-medium text-muted-foreground">{ADO_PAT.RUN_TOKEN_TITLE}</h5>
+          <p role="alert" className="mt-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
+            {adoDecline}
+          </p>
+        </div>
+      )}
       {ado && <AdoRunTokens runId={ado.runId} paused={ado.paused} live={ado.live} />}
     </WidgetCard>
   );

@@ -76,7 +76,7 @@ func TestLLMRouteReportsAFailedCredentialRefresh(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader("{}")))
 	body := rec.Body.String()
-	if rec.Code != http.StatusBadGateway || !strings.Contains(body, "llm credential refresh failed") ||
+	if rec.Code != http.StatusBadGateway || !strings.Contains(body, "credential_unavailable") ||
 		strings.Contains(body, llmBelowPolicyClause) || gw.reached {
 		t.Fatalf("status = %d body=%q reached=%v, want a 502 naming the failed refresh", rec.Code, body, gw.reached)
 	}

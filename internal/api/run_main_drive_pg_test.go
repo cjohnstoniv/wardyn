@@ -36,7 +36,7 @@ func (e *placementEnv) diskPool(name string, defMiB, capMiB int, executors ...st
 		bg.DiskMiB = &types.RunnerPoolAmount{Default: defMiB, Cap: capMiB}
 	}
 	limits := types.RunnerPoolLimits{Background: &bg, Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("set pool limits: %v", err)
 	}

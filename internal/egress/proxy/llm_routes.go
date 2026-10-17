@@ -53,6 +53,7 @@ const (
 func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmAnthropicPrefix)
 	host, port, prefix := p.llmUpstream(anthropicHost)
+	r = withRouteShape(r, shapeAnthropic)
 	if p.llmRequestRefused(w, r, host, port, rest) {
 		return
 	}
@@ -65,6 +66,7 @@ func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleLLMOpenAI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmOpenAIPrefix)
 	host, port, prefix := p.llmUpstream(openaiHost)
+	r = withRouteShape(r, shapeOpenAI)
 	if p.llmRequestRefused(w, r, host, port, rest) {
 		return
 	}
@@ -83,12 +85,16 @@ func (p *Proxy) llmRequestRefused(w http.ResponseWriter, r *http.Request, host s
 		if p.sink != nil {
 			p.sink.emit(log)
 		}
-		p.writeEgressDeny(w, host, port, &log, false)
+		p.writeEgressDenyLLM(w, p.shapeOf(r, host), host, port, &log)
 		return true
 	}
 	if strings.ContainsFunc(rest, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
 		slices.ContainsFunc(strings.Split(rest, "/"), isDotSegment) {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		if shape := p.shapeOf(r, host); shape != shapePlain {
+			writeProviderError(w, shape, http.StatusBadRequest, reasonUnsupportedPath, "wardyn: unsupported llm request path", nil)
+			return true
+		}
 		http.Error(w, "unsupported llm request path", http.StatusBadRequest)
 		return true
 	}
@@ -140,31 +146,27 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
+		if shape := p.shapeOf(r, host); shape != shapePlain {
+			dest := p.hostPortLabel(shape, host, port)
+			writeProviderError(w, shape, http.StatusNotFound, reasonCredentialUnavailable,
+				brokeredMessage(reasonCredentialUnavailable, dest, ruleSourceLLM, extra["detail"].(string), ""), extra)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		body, _ := json.Marshal(map[string]string{
-			"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail),
-		})
+		body, _ := json.Marshal(extra)
 		_, _ = w.Write(body)
 		return
 	}
-	// A rule exists but its credential could not be refreshed: the control plane's answer, not the
-	// below-policy 404 above, so the row carries the reason and the sandbox gets the MITM lane's error.
-	if ierr != nil {
-		if r.Context().Err() != nil {
-			return // the caller hung up mid re-resolve and was never refused
-		}
-		if p.sink != nil {
-			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceLLM)
-			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
-			p.sink.emit(log)
-		}
-		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
-		return
+	if ierr != nil && r.Context().Err() != nil {
+		return // the caller hung up mid re-resolve and was never refused
 	}
 
 	// A CONTROL-PLANE-authored gateway gets gatewayTarget's relaxed vet; every
-	// other host gets egressTarget's SSRF-guarded vet.
+	// other host gets egressTarget's SSRF-guarded vet. Vetted before a failed
+	// refresh is reported: an egress refusal of the host is the fault to fix
+	// first, and a refreshed credential would not get past it.
 	target, err := p.llmRouteTarget(host, port)
 	if err != nil {
 		// A refused/unreachable configured gateway is vetTrustedHost's own
@@ -175,8 +177,21 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			source = ruleSourceGatewayVetFailed
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
-		// AWS lane: an AWS SDK hands plain text straight to a JSON parser and crashes on it.
-		p.httpErrorAWSAware(w, host, "llm upstream vet failed", err, false, http.StatusInternalServerError, "InternalServerException")
+		// An SDK hands plain text straight to a JSON parser and crashes on it.
+		p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(port, source, err))
+		return
+	}
+
+	// A rule exists but its credential could not be refreshed: the control plane's answer, not the
+	// below-policy 404 above, so the row carries the reason and the sandbox gets the MITM lane's error.
+	if ierr != nil {
+		if p.sink != nil {
+			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceLLM)
+			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
+			p.sink.emit(log)
+		}
+		p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm credential refresh failed", ierr, http.StatusBadGateway,
+			brokeredFault{port: port, ruleSource: ruleSourceLLM, reason: reasonCredentialUnavailable})
 		return
 	}
 
@@ -252,7 +267,8 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
 		if err != nil {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
-			p.httpError(w, "build llm request", err, http.StatusBadGateway)
+			p.httpErrorShaped(w, p.shapeOf(r, host), host, "build llm request", err, http.StatusBadGateway,
+				brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 			return nil, false
 		}
 		copyHeader(outReq.Header, r.Header)
@@ -266,14 +282,15 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		resp, err := p.roundTripUpstream(outReq)
 		if err != nil {
 			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
-			if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
+			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
 				return nil, false
 			}
 			if p.sink != nil {
 				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 			}
-			// withStage=true: shares its Cause with the decision log above verbatim.
-			p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
+			// No reason: classified from err, and the message ends with the decision log's Cause above.
+			p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream error", err, http.StatusBadGateway,
+				brokeredFault{port: port, ruleSource: "builtin:dial-failed"})
 			return nil, false
 		}
 		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
@@ -407,7 +424,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
-		return p.scanBufferedBody(w, r, channel, "read llm body",
+		return p.scanBufferedBody(w, r, host, channel, "read llm body",
 			func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 				p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 			})
@@ -416,7 +433,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		// uninspected-channel skip, refused under fail-closed blocking.
 		if p.scanner.BlocksOnError() {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
-			writeScanBlocked(w, 0, nil, "uninspected_channel")
+			writeScanBlockedShaped(w, p.shapeOf(r, host), 0, nil, "uninspected_channel")
 			return nil, nil, noRelease, true
 		}
 		return r.Body, p.skipSummary("skip", "uninspected_channel", channel), noRelease, false
@@ -451,7 +468,7 @@ func hasScannableBody(r *http.Request) bool {
 // buffered body + a content-free summary. blocked=true means a 403/error was
 // already written.
 func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host string, port int) (io.Reader, *egress.ScanSummary, func(), bool) {
-	return p.scanBufferedBody(w, r, contentscan.ChannelGeneric, "read body",
+	return p.scanBufferedBody(w, r, host, contentscan.ChannelGeneric, "read body",
 		func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 			p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 		})
@@ -467,7 +484,8 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 //
 // The returned release MUST be deferred by the caller: gives the buffer back
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
-func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
+func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host string, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
+	shape := p.shapeOf(r, host)
 	// Scan slot (maxConcurrentScans) bounds live heap against the sidecar's
 	// cgroup cap. Waited through the request ctx AND a wall-clock bound
 	// (scanQueueWait); fails CLOSED on either, since an uninspectable request
@@ -480,14 +498,14 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 		defer func() { <-scanSlots }()
 	case <-ctx.Done():
 		emit(egress.Deny, ruleSourceLLM, nil)
-		p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
+		p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
 		return nil, nil, noRelease, true
 	}
 
 	buffered, rerr := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
-		http.Error(w, readErrMsg, http.StatusBadRequest)
+		p.scanFault(w, shape, readErrMsg, rerr, http.StatusBadRequest)
 		return nil, nil, noRelease, true
 	}
 	// Charge the buffer to the LIFETIME budget after the read/scan peak, still
@@ -496,7 +514,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 		release, ok := retainScanBuffer(ctx, len(buffered))
 		if !ok {
 			emit(egress.Deny, ruleSourceLLM, nil)
-			p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
+			p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
 			return noRelease, false
 		}
 		return release, true
@@ -504,7 +522,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
-			writeScanBlocked(w, 0, nil, "body_oversize")
+			writeScanBlockedShaped(w, shape, 0, nil, "body_oversize")
 			return nil, nil, noRelease, true
 		}
 		release, ok := charge()
@@ -517,7 +535,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
 	if p.scanner.ShouldBlock(res) {
 		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
-		writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
+		writeScanBlockedShaped(w, shape, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
 		return nil, nil, noRelease, true
 	}
 	var sum *egress.ScanSummary
@@ -554,18 +572,56 @@ func categoriesOf(findings []contentscan.Finding) []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
+// scanFault answers a request scanBufferedBody could not take in, so did not
+// forward: the scan queue or the retain budget expired (502, a load condition
+// worth a retry), or the body could not be read (400). shape is shapeOf(r,
+// host): a provider or AWS error body, or the plain lane's text.
+func (p *Proxy) scanFault(w http.ResponseWriter, shape errShape, readErrMsg string, err error, status int) {
+	switch {
+	case shape != shapePlain:
+		writeProviderError(w, shape, status, reasonNotInspected, "wardyn: "+reasonNotInspected+": "+readErrMsg+": "+p.dialFailureCause(err), nil)
+	case status == http.StatusBadRequest:
+		http.Error(w, readErrMsg, status)
+	default:
+		p.httpError(w, readErrMsg, err, status)
+	}
+}
+
 // writeScanBlocked returns the 403 the sandbox client sees when a request is
 // refused by content inspection. TRUST BOUNDARY: the body carries counts +
 // category enums + a reason only, never the matched content.
 func writeScanBlocked(w http.ResponseWriter, findings int, categories []string, reason string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(struct {
+	writeScanBlockedShaped(w, shapePlain, findings, categories, reason)
+}
+
+// writeScanBlockedShaped is writeScanBlocked in the LLM lane's provider error
+// shape, the {"wardyn":...} fields riding along as extras.
+func writeScanBlockedShaped(w http.ResponseWriter, shape errShape, findings int, categories []string, reason string) {
+	type scanBlock struct {
 		Wardyn     string   `json:"wardyn"`
 		Findings   int      `json:"findings"`
 		Categories []string `json:"categories,omitempty"`
 		Reason     string   `json:"reason,omitempty"`
-	}{Wardyn: "llm_content_blocked", Findings: findings, Categories: categories, Reason: reason})
+	}
+	b := scanBlock{Wardyn: "llm_content_blocked", Findings: findings, Categories: categories, Reason: reason}
+	if shape != shapePlain {
+		msg := "wardyn: " + reasonContentBlocked + ": the request was refused by content inspection"
+		if reason != "" {
+			msg += " (" + reason + ")"
+		}
+		extra := map[string]any{"wardyn": b.Wardyn, "findings": b.Findings}
+		if len(categories) > 0 {
+			extra["categories"] = categories
+		}
+		if reason != "" {
+			extra["reason"] = reason
+		}
+		writeProviderError(w, shape, http.StatusForbidden, reasonContentBlocked, msg, extra)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(b)
 }
 
 // emitLLMDecision emits a decision log for an LLM or MITM route carrying a

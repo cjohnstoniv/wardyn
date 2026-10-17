@@ -159,16 +159,19 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	}
 	cmd := argv
 	if d.cfg.Record {
-		// Recover the run id from the container label so wardyn-rec names the
-		// recording deterministically. If we cannot, record under a nil id
-		// rather than failing the exec.
-		runID := uuid.Nil
+		// Recover the run id and the run's own recording choice from the
+		// container labels so wardyn-rec names the recording deterministically.
+		// If we cannot, record under a nil id rather than failing the exec.
+		runID, record := uuid.Nil, true
 		if insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{}); err == nil && insp.Container.Config != nil {
+			record = d.recordsLabels(insp.Container.Config.Labels)
 			if id, perr := parseRunID(insp.Container.Config.Labels[labelRun]); perr == nil {
 				runID = id
 			}
 		}
-		cmd = d.recordCmd(runID, defaultCastDir, argv)
+		if record {
+			cmd = d.recordCmd(runID, defaultCastDir, argv)
+		}
 	}
 	execCfg := client.ExecCreateOptions{
 		TTY:          true,
@@ -253,12 +256,10 @@ func (d *Driver) followMainProcessOutput(ref string) {
 // blocks on the CONTAINER's exit. Returns once the container is started.
 func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAgent, argv []string) error {
 	cmd := argv
-	if d.cfg.Record {
+	if d.recordsLabels(p.cfg.Labels) {
 		runID := uuid.Nil
-		if p.cfg != nil {
-			if id, perr := parseRunID(p.cfg.Labels[labelRun]); perr == nil {
-				runID = id
-			}
+		if id, perr := parseRunID(p.cfg.Labels[labelRun]); perr == nil {
+			runID = id
 		}
 		// Exec-less agents run as a non-root user and have no root exec to create
 		// the root-owned default cast dir; record into an agent-writable tmpfs dir

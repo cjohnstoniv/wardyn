@@ -1,0 +1,134 @@
+name: Mirror self-test
+
+# Proves .github/actions/base-image-mirror on real hosted runners, with Docker
+# Hub made unreachable, on both runner images CI meets: ubuntu-24.04 (Docker
+# 28, classic image store) and ubuntu-26.04 (Docker 29, containerd image store
+# by default). Dispatch it after mirror-base-images.yml has copied the list,
+# and again whenever the runner image or the action changes. It publishes
+# nothing. See docs/CI.md, "Docker Hub base-image mirror".
+#
+# What it shows, in order:
+#   1. after the action, dockerd lists the mirror, the mirror process outlives
+#      the action's step, the Postgres service container (pulled from the GHCR
+#      copy with the job's token) is still healthy, and the tag pins exist;
+#   2. with Docker Hub blackholed in /etc/hosts: a digest pull, a multi-stage
+#      build (one FROM --platform=$BUILDPLATFORM), a `docker build --pull`, and
+#      `docker run` of the primed tag pins all succeed;
+#   3. kind creates a cluster (node image via the mirror) with Hub blackholed;
+#   4. with Hub back: a tag the mirror cannot serve falls through to Hub, and
+#      with the mirror process killed a digest pull falls through as well.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  selftest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    services:
+      postgres:
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_PASSWORD: selftest
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Record the Docker version and image store
+        id: store
+        run: |
+          docker version --format 'server {{.Server.Version}}'
+          status="$(docker info --format '{{json .DriverStatus}}')"
+          echo "driver status: $status"
+          if grep -q 'io.containerd.snapshotter' <<<"$status"; then
+            echo "containerd=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=mirror-selftest::${{ matrix.os }} uses the containerd image store"
+          else
+            echo "containerd=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=mirror-selftest::${{ matrix.os }} uses the classic image store"
+          fi
+      - uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(alpine|busybox|hello-world):'
+      - name: The mirror is set, outlives the action, and left the service running
+        run: |
+          set -euo pipefail
+          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -F '127.0.0.1:15999'
+          curl -fsS -o /dev/null http://127.0.0.1:15999/v2/
+          test "$(docker inspect --format '{{.State.Health.Status}}' '${{ job.services.postgres.id }}')" = healthy
+          docker image inspect hello-world:latest busybox:latest >/dev/null
+      - name: Blackhole Docker Hub
+        run: |
+          set -euo pipefail
+          for h in registry-1.docker.io auth.docker.io index.docker.io production.cloudflare.docker.com; do
+            printf '0.0.0.0 %s # mirror-selftest\n:: %s # mirror-selftest\n' "$h" "$h"
+          done | sudo tee -a /etc/hosts
+          if curl -sS --max-time 5 -o /dev/null https://registry-1.docker.io/v2/; then
+            echo "::error::Docker Hub is still reachable; the blackhole did not take"; exit 1
+          fi
+      - name: Digest pull, multi-stage build, --pull build and primed tags, Hub unreachable
+        run: |
+          set -euo pipefail
+          pin() { grep -E "$1" deploy/base-images.txt | head -n1 | sed -E 's/^tag //'; }
+          bydigest() { sed -E 's/:[^:/@]+@/@/' <<<"$1"; }
+          golang="$(pin '^docker\.io/library/golang:[^@]*-alpine@')"
+          alpine="$(pin '^docker\.io/library/alpine:3\.24@')"
+          busybox="$(pin '^docker\.io/library/busybox:1\.38@')"
+          docker pull "$(bydigest "$golang")"
+          dir="$(mktemp -d)"
+          printf 'FROM --platform=$BUILDPLATFORM %s AS b\nRUN echo ok > /ok\nFROM %s\nCOPY --from=b /ok /ok\n' "$golang" "$alpine" > "$dir/Dockerfile"
+          docker build -t mirror-selftest:multi "$dir"
+          test "$(docker run --rm mirror-selftest:multi cat /ok)" = ok
+          printf 'FROM %s\nRUN true\n' "$busybox" > "$dir/Dockerfile.pull"
+          docker build --pull -t mirror-selftest:pull -f "$dir/Dockerfile.pull" "$dir"
+          docker run --rm hello-world >/dev/null
+          docker run --rm busybox:latest true
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: mirror-selftest
+          wait: 120s
+      - name: kind came up with Hub unreachable
+        run: kubectl get nodes -o wide
+      - name: Restore Docker Hub
+        if: always()
+        run: sudo sed -i '/# mirror-selftest$/d' /etc/hosts
+      - name: A tag falls through to Docker Hub
+        run: |
+          set -euo pipefail
+          docker pull busybox:1.37
+          grep -E '"(GET|HEAD) /v2/library/busybox/manifests/1\.37 ' "$RUNNER_TEMP/base-image-mirror.log" | grep -F '" 404 '
+      - name: With the mirror process killed, a digest pull falls through to Docker Hub
+        run: |
+          set -euo pipefail
+          since="$(date '+%Y-%m-%d %H:%M:%S')"
+          sudo ss -ltnpH 'sport = :15999' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u | xargs -r sudo kill
+          if curl -sS --max-time 3 -o /dev/null http://127.0.0.1:15999/v2/; then
+            echo "::error::the mirror process is still answering"; exit 1
+          fi
+          debian="$(grep -E '^docker\.io/library/debian:' deploy/base-images.txt | head -n1 | sed -E 's/:[^:/@]+@/@/')"
+          docker pull "$debian"
+          if sudo journalctl -u docker --since "$since" --no-pager | grep -F 'Attempting next endpoint'; then
+            echo "dockerd logged the fallback"
+          elif [ '${{ steps.store.outputs.containerd }}' = true ]; then
+            echo "::warning title=mirror-selftest::pull fell through, but the containerd store logs no 'Attempting next endpoint' line"
+          else
+            echo "::error::dockerd logged no 'Attempting next endpoint' for the fallback pull"; exit 1
+          fi
+      - name: Mirror log
+        if: always()
+        run: cat "$RUNNER_TEMP/base-image-mirror.log" || true

@@ -1,0 +1,170 @@
+name: Docker Hub base-image mirror
+description: >-
+  Serves the docker.io digest pins in deploy/base-images.txt from their GHCR
+  copies (ghcr.io/<owner>/base-images, made by mirror-base-images.yml), so a
+  job's base-image pulls and builds stop spending Docker Hub's pull quota.
+  Starts a loopback mirror, points dockerd's registry-mirrors at it by a SIGHUP
+  config reload (no restart, so service containers keep running), then pulls
+  the pins under their docker.io names. A miss anywhere falls back to Docker
+  Hub exactly as before. See docs/CI.md, "Docker Hub base-image mirror".
+inputs:
+  prime:
+    description: >-
+      grep -E pattern selecting which deploy/base-images.txt entries to pull
+      up front ("." = all). Builds need their FROM pins pulled here: dockerd's
+      builder resolves a digest pin locally first, and only a pin already in
+      the local store is guaranteed not to reach Docker Hub. Empty = start the
+      mirror only (docker pull, compose and kind node pulls still go through it).
+      Tag pins ("tag " lines) match the same pattern and are tagged locally.
+    default: "."
+  list:
+    description: The mirror list, relative to the workspace.
+    default: deploy/base-images.txt
+runs:
+  using: composite
+  steps:
+    - name: Start the loopback mirror and point dockerd at it
+      shell: bash
+      env:
+        MIRROR_REPO: ${{ github.repository_owner }}/base-images
+        MIRROR_PORT: "15999"
+      run: |
+        set -euo pipefail
+        log="$RUNNER_TEMP/base-image-mirror.log"
+        # One GHCR repository holds every pin, so the mirror rewrites
+        # /v2/<any docker.io repo>/{manifests,blobs}/sha256:<d> to
+        # /v2/<owner>/base-images/... and answers anything else (a tag) with
+        # 404, which sends dockerd on to Docker Hub. It authenticates with
+        # GHCR's anonymous pull token (the package is public) and never
+        # forwards the client's Authorization header. Blob responses are
+        # GHCR's redirects to its CDN, passed back untouched for dockerd to
+        # follow, so only manifests flow through this process.
+        python3 -u - "$MIRROR_REPO" "$MIRROR_PORT" >"$log" 2>&1 <<'PY' &
+        import http.client, json, sys, threading, urllib.request
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        REPO, PORT = sys.argv[1].lower(), int(sys.argv[2])
+        HOP = {"connection", "keep-alive", "transfer-encoding", "www-authenticate"}
+        lock, cached = threading.Lock(), {}
+
+        def token(refresh):
+            with lock:
+                if refresh or "t" not in cached:
+                    url = f"https://ghcr.io/token?service=ghcr.io&scope=repository:{REPO}:pull"
+                    with urllib.request.urlopen(url, timeout=30) as r:
+                        cached["t"] = json.load(r)["token"]
+                return cached["t"]
+
+        class Mirror(BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.forward()
+
+            def do_GET(self):
+                self.forward()
+
+            def reply(self, status, body=b""):
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Docker-Distribution-API-Version", "registry/2.0")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+
+            def forward(self):
+                path = self.path.split("?", 1)[0].rstrip("/")
+                if path == "/v2":
+                    return self.reply(200, b"{}")
+                parts = path.split("/")
+                if len(parts) < 6 or parts[1] != "v2" or parts[-2] not in ("manifests", "blobs") or not parts[-1].startswith("sha256:"):
+                    return self.reply(404, b'{"errors":[{"code":"MANIFEST_UNKNOWN","message":"only digest pins are mirrored"}]}')
+                try:
+                    for attempt in (0, 1):
+                        headers = {"Authorization": "Bearer " + token(attempt == 1)}
+                        accept = self.headers.get_all("Accept")
+                        if accept:
+                            headers["Accept"] = ", ".join(accept)
+                        conn = http.client.HTTPSConnection("ghcr.io", timeout=120)
+                        conn.request(self.command, f"/v2/{REPO}/{parts[-2]}/{parts[-1]}", headers=headers)
+                        resp = conn.getresponse()
+                        if resp.status != 401 or attempt:
+                            break
+                        resp.read()
+                        conn.close()
+                except Exception as e:  # GHCR unreachable: let dockerd fall back to Docker Hub
+                    self.log_message("upstream error: %s", e)
+                    return self.reply(502, b'{"errors":[{"code":"UNAVAILABLE","message":"mirror upstream error"}]}')
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in HOP:
+                        self.send_header(k, v)
+                self.end_headers()
+                while self.command != "HEAD":
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                conn.close()
+
+        ThreadingHTTPServer(("127.0.0.1", PORT), Mirror).serve_forever()
+        PY
+        curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "http://127.0.0.1:$MIRROR_PORT/v2/"
+
+        # Put this mirror ahead of any mirror already configured (the job's
+        # mirror.gcr.io step). Mirrors apply to docker.io only; loopback
+        # registries are insecure (plain http) by default. A SIGHUP reload
+        # resets the host-gateway address, so restart dockerd and bring back
+        # the job's service containers.
+        conf=/etc/docker/daemon.json
+        sudo test -s "$conf" || echo '{}' | sudo tee "$conf" >/dev/null
+        sudo jq --arg m "http://127.0.0.1:$MIRROR_PORT" '.["registry-mirrors"] = [$m] + ((.["registry-mirrors"] // []) - [$m])' "$conf" > "$RUNNER_TEMP/daemon.json"
+        sudo install -m 0644 "$RUNNER_TEMP/daemon.json" "$conf"
+        running="$(docker ps -q)"; sudo systemctl restart docker
+        [ -z "$running" ] || docker start $running >/dev/null
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "127.0.0.1:$MIRROR_PORT" && break
+          sleep 1
+        done
+        docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "127.0.0.1:$MIRROR_PORT" \
+          || echo "::warning title=base-image-mirror::dockerd did not pick up the registry mirror; pulls go to Docker Hub as before"
+
+    - name: Pull the base-image pins under their docker.io names
+      if: inputs.prime != ''
+      shell: bash
+      env:
+        MIRROR_PORT: "15999"
+        MIRROR_REPO: ${{ github.repository_owner }}/base-images
+        PRIME: ${{ inputs.prime }}
+        LIST: ${{ inputs.list }}
+      run: |
+        set -euo pipefail
+        # A digest pin is pulled by its docker.io name, through the mirror, so
+        # the local reference store records docker.io/<repo>@sha256:<d>: the
+        # Dockerfile frontend in dockerd's builder looks a digest-pinned FROM
+        # up there before any registry. A tag pin ("tag " lines) is pulled from
+        # the GHCR copy directly and tagged <name>:<tag>, since the mirror only
+        # serves digests. A pin that fails here (not copied yet, GHCR down)
+        # only warns: the job then pulls it from Docker Hub, as before.
+        lines="$(grep -vE '^[[:space:]]*(#|$)' "$LIST" | grep -E -- "$PRIME" || true)"
+        [ -n "$lines" ] || { echo "::warning title=base-image-mirror::no entry in $LIST matches '$PRIME'"; exit 0; }
+        accept="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+        copy="ghcr.io/${MIRROR_REPO,,}"
+        while read -r kind ref; do
+          [ -n "$ref" ] || { ref="$kind"; kind=digest; }
+          named="${ref%@*}"; digest="${ref#*@}"
+          # Only a pin the GHCR copy already has is pulled: pulling a missing
+          # one would fetch it from Docker Hub, which this step exists to avoid.
+          if ! curl -fsS -I -o /dev/null </dev/null -H "Accept: $accept" "http://127.0.0.1:$MIRROR_PORT/v2/${named#docker.io/}/manifests/$digest"; then
+            echo "::warning title=base-image-mirror::$ref is not in the GHCR copy yet (run mirror-base-images.yml); left to Docker Hub"
+          elif [ "$kind" = tag ]; then
+            if docker pull -q "$copy@$digest" </dev/null >/dev/null && docker tag "$copy@$digest" "$named"; then
+              echo "primed $named (tag pin)"
+            else
+              echo "::warning title=base-image-mirror::could not pull $copy@$digest for $named"
+            fi
+          elif docker pull -q "${named%:*}@$digest" </dev/null >/dev/null; then
+            echo "primed ${named%:*}@$digest"
+          else
+            echo "::warning title=base-image-mirror::could not pull $ref through the mirror"
+          fi
+        done <<<"$lines"

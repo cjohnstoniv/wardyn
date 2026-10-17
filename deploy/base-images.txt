@@ -1,0 +1,50 @@
+# Docker Hub images CI pulls by digest, copied byte-for-byte to
+# ghcr.io/cjohnstoniv/base-images by .github/workflows/mirror-base-images.yml and
+# served back to CI under their docker.io names by
+# .github/actions/base-image-mirror (docs/CI.md, "Docker Hub base-image mirror").
+#
+# scripts/test-repo-guards.sh (guard 17) fails when a Dockerfile FROM pin on
+# docker.io is missing here, so a Dependabot base-image bump goes red until this
+# file carries the new digest. Merging that change to main re-runs the mirror.
+# One normalized ref per line: docker.io/<namespace>/<name>:<tag>@sha256:<digest>.
+# A line starting "tag " is a tag pin (below); every other line is a digest pin.
+
+# Dockerfile FROM pins
+docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+docker.io/library/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+docker.io/library/busybox:1.38@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+docker.io/library/golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c
+docker.io/library/golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673
+docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+docker.io/library/node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
+docker.io/library/rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7
+
+# deploy/compose/docker-compose.yaml pins; postgres is also the CI service
+# container image (ghcr.io/cjohnstoniv/base-images@sha256:<this digest>).
+docker.io/library/postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+docker.io/library/registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
+
+# kind v0.33.0's default node image (helm/kind-action v1.15.0 installs kind
+# v0.33.0); bump with the action.
+docker.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+
+# Tag pins: images CI pulls by a floating TAG. The mirror cannot serve a tag,
+# so the action pulls the GHCR copy of the digest below and tags it locally as
+# <name>:<tag>; a later `docker run <name>:<tag>` then finds it without a pull.
+# HAND-MAINTAINED (guard 17 does not find these sites); each digest is what the
+# tag resolved to on 2026-10-15. Sites:
+#   ubuntu:24.04       ci.yml helm-install-test (wardyn run --image)
+#   hello-world        ci.yml conformance, envbuild-integration (docker run)
+#   busybox:latest     nightly.yml gvisor-cc2-live (docker run),
+#                      provider-subscription-docker-pg (an explicit docker pull,
+#                      which still asks a registry: drop it once primed)
+#   registry:2         scripts/kind-sso-walk.sh (docker run)
+#   postgres:16        Makefile helm-install-test, pulled INSIDE kind: copied,
+#                      but only useful once a step `kind load`s it (docs/CI.md)
+tag docker.io/library/busybox:latest@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+tag docker.io/library/hello-world:latest@sha256:11a3eb1597e864c51b3f56733cb2e8a90bf0c284bfc05f9444d81c558bc848aa
+tag docker.io/library/postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+tag docker.io/library/registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+tag docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55

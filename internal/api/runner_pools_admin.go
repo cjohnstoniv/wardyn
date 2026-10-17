@@ -62,12 +62,19 @@ func (s *Server) handleCreateRunnerPool(w http.ResponseWriter, r *http.Request) 
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolOrganization, Limits: req.Limits},
+	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolOrganization, Limits: req.Limits, Recording: req.Recording},
 		http.StatusBadRequest, "the catalogue holds at most 200 pools")
 }
 
 // createPool validates p's limits, stores it and audits it; fullStatus and full answer a pool cap.
 func (s *Server) createPool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, p types.RunnerPool, fullStatus int, full string) {
+	if !p.Recording.Valid() {
+		writePoolInvalid(w, "recording is preferred or required")
+		return
+	}
+	if s.refuseRecordingWithoutStore(w, p.Recording) {
+		return
+	}
 	if p.Limits != nil {
 		if err := p.Limits.Validate(); err != nil {
 			writePoolInvalid(w, err.Error())
@@ -89,6 +96,9 @@ func (s *Server) createPool(w http.ResponseWriter, r *http.Request, ps store.Run
 	data := map[string]any{"name": p.Name, "scope": p.Scope, "revision": p.Revision}
 	if p.Limits != nil {
 		data["limits"] = p.Limits
+	}
+	if p.Recording != "" {
+		data["recording"] = p.Recording
 	}
 	s.auditPool(r, auditPoolCreate, p.ID.String(), withPoolOwner(data, p))
 	writeJSON(w, http.StatusCreated, p)
@@ -122,6 +132,9 @@ func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.Run
 		writePoolInvalid(w, err.Error())
 		return
 	}
+	if req.Recording != nil && s.refuseRecordingWithoutStore(w, *req.Recording) {
+		return
+	}
 	// The audit row below is built from cur, so a request naming any other revision is refused before the
 	// store call: one that names a revision another admin's write just made would otherwise be a store
 	// no-op audited against the older pool. The store checks the revision again under the pool lock.
@@ -134,7 +147,7 @@ func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.Run
 		st := types.RunnerPoolState(*req.State)
 		state = &st
 	}
-	p, err := ps.UpdateRunnerPool(r.Context(), cur.ID, req.Revision, req.Name, state, req.Limits)
+	p, err := ps.UpdateRunnerPool(r.Context(), cur.ID, req.Revision, req.Name, state, req.Limits, req.Recording)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writePoolNotFound(w)
@@ -156,6 +169,9 @@ func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.Run
 		}
 		if !reflect.DeepEqual(cur.Limits, p.Limits) {
 			data["limits_before"], data["limits"] = cur.Limits, p.Limits
+		}
+		if cur.Recording != p.Recording {
+			data["recording_before"], data["recording"] = cur.Recording, p.Recording
 		}
 		s.auditPool(r, auditPoolUpdate, p.ID.String(), withPoolOwner(data, p))
 		// A raised cap, or a pool switched back on, may have room for a waiting run.
@@ -388,20 +404,34 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 		return
 	}
 	var d types.RunnerPoolDefaults
-	if !decodeStrict(w, r, &d) {
+	present, msg := decodeStrictKeys(w, r, &d)
+	if present == nil && msg == "" {
+		return
+	}
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	if err := d.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
 		return
 	}
+	if s.refuseRecordingWithoutStore(w, d.Recording) {
+		return
+	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)
 	if !ok || !checkDefaultPool(w, d, rows, true) {
 		return
 	}
+	// A body that leaves recording out keeps the stored setting (the store writes an empty one as a
+	// keep): a writer that edits only the pool or the barrier (the console's Pools tab, a CLI older
+	// than recording) never lowers required. One that names it empty lowers it, as preferred.
+	if present["recording"] && d.Recording == "" {
+		d.Recording = types.RecordingPreferred
+	}
 	before, err := ps.GetRunnerPoolOrgDefaults(r.Context())
 	if err == nil {
-		err = ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+		d, err = ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
 	}
 	if err != nil {
 		writeServerError(w, r, "write organisation runner pool defaults", err)

@@ -303,8 +303,9 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 	if d.Via != viaUpstreamProxy {
 		t.Errorf("via = %q, want %q", d.Via, viaUpstreamProxy)
 	}
-	if d.Cause != body["message"] {
-		t.Errorf("sandbox message %q != decision log Cause %q — the sandbox and the audit row must agree", body["message"], d.Cause)
+	if !strings.HasSuffix(body["message"], ": "+d.Cause) || body["__type"] != "UpstreamProtocolMismatchException" ||
+		!strings.HasPrefix(body["message"], "wardyn: upstream_protocol_mismatch: "+awsHost+":443 ("+ruleSourceUpstreamProtocolMismatch+")") {
+		t.Errorf("sandbox message %q does not name the host and rule and end with decision log Cause %q", body["message"], d.Cause)
 	}
 }
 
@@ -621,8 +622,8 @@ func TestUpstreamProtocolMismatch_BodyAlreadyWritten(t *testing.T) {
 	if !strings.Contains(body["message"], "ALPN: none") || !strings.Contains(body["message"], "cannot be replayed") {
 		t.Fatalf("message = %q, want the ALPN clause and the reason the resend was skipped", body["message"])
 	}
-	if d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch); d.Cause != body["message"] {
-		t.Fatalf("deny row cause = %q, want %q", d.Cause, body["message"])
+	if d := findDecision(t, buf, ruleSourceUpstreamProtocolMismatch); !strings.HasSuffix(body["message"], ": "+d.Cause) {
+		t.Fatalf("message %q does not end with the deny row cause %q", body["message"], d.Cause)
 	}
 }
 

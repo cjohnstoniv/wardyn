@@ -137,7 +137,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 ) (runComponents, *runRefusal) {
 	// One credential per host, for every run, before any component is looked
 	// at: the policy's own credentials and the deployment's (credentialHostRefusal).
-	if refusal := s.credentialHostRefusal(r, *spec); refusal != nil {
+	if refusal := s.credentialHostRefusal(r, *spec, req.Repo); refusal != nil {
 		return runComponents{}, refusal
 	}
 	if len(req.Components) == 0 {
@@ -146,7 +146,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 	// One capability snapshot and one listing of the caller's own secrets for
 	// the whole list, however many hosts and secrets it names.
 	r = r.WithContext(withOwnedSecretMemo(withCapBatch(r.Context())))
-	comps, refused := s.admitRunComponents(r, req.Components, *spec, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
+	comps, refused := s.admitRunComponents(r, req.Components, *spec, req.Repo, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
 	if refused != nil {
 		s.auditComponentRefusal(r, *refused)
 		return runComponents{}, refused.refusal
@@ -157,7 +157,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 
 // admitRunComponents decides every component before any is expanded, so a
 // refusal leaves the spec untouched.
-func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, spec types.RunPolicySpec,
+func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, spec types.RunPolicySpec, repo string,
 	ceiling governanceCeiling, wsRefs []types.Workspace, credentials bool, harnesses []string,
 ) (runComponents, *componentRefusal) {
 	ctx := r.Context()
@@ -196,7 +196,7 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 		return runComponents{}, &componentRefusal{refusal: runServerError("get site config", err)}
 	}
 	adm.settings, adm.site, adm.ceiling, adm.grants = componentSettings(sc), sc, ceiling, spec.EligibleGrants
-	adm.bounds = s.newComponentHostBounds(r, sc, spec, ceiling, wsRefs)
+	adm.bounds = s.newComponentHostBounds(r, sc, spec, repo, ceiling, wsRefs)
 
 	comps := runComponents{settings: adm.settings}
 	for i, ref := range refs {

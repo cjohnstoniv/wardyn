@@ -28,6 +28,13 @@ type TargetFacts struct {
 	KeepsEnded bool
 	// UserDrives: the target can bind a member's drive (Capabilities.UserDrives).
 	UserDrives bool
+	// Records: the target records a run its organisation asks it to (Capabilities.SessionRecording,
+	// and for a self-hosted runner one that takes the per-run SandboxSpec.Record).
+	Records bool
+	// RecordsUnasked: a self-hosted runner older than per-run recording that records by its own
+	// setting whatever its organisation asks (session recording without the per-run flag). Its
+	// runner_declined mark is a guess, so a cast it uploads may clear it.
+	RecordsUnasked bool
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are

@@ -129,7 +129,7 @@ func TestADONames_AdmissionAndEntraLane(t *testing.T) {
 		if _, ok := parseCloneTarget(fx.canonical, nil); !ok {
 			t.Errorf("parseCloneTarget(%q, nil) refused it", fx.canonical)
 		}
-		if run, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), []string{fx.canonical}, adoTestOwner); !ok || run.org != "contoso" {
+		if run, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), nil, fx.canonical, adoTestOwner); !ok || run.org != "contoso" {
 			t.Errorf("%q: lane = %+v ok=%v, want organisation contoso", fx.canonical, run, ok)
 		}
 	}

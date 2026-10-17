@@ -108,6 +108,15 @@ type SandboxSpec struct {
 	// implements OutputDrainer, or io.Closer, is told when each copy into it
 	// ends (BeginOutputDrain), so its owner can wait for the last bytes.
 	ExecOutput io.Writer `json:"-"`
+	// Record is the organisation's per-run recording choice. Nil means the organisation predates it,
+	// and the substrate records by its own setting, as before; a substrate never records past its own
+	// setting either way (RecordWithin).
+	Record *bool `json:"record,omitempty"`
+}
+
+// RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
+func (s SandboxSpec) RecordWithin(ceiling bool) bool {
+	return ceiling && (s.Record == nil || *s.Record)
 }
 
 // NotifyWaiting delivers one OnWaiting report, or does nothing when this spec

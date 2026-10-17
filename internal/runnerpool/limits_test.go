@@ -682,9 +682,17 @@ func TestMemberCapIsNeverUnbounded(t *testing.T) {
 func TestPoolSourceTakesTheStoredRunType(t *testing.T) {
 	l := appServerPool()
 	for _, rt := range []types.RunnerPoolRunType{"", "batch", "Background"} {
-		if _, ref := PoolSource(testPool(&l), rt); ref == nil || ref.Reason != ReasonRunTypeNotAllowed {
-			t.Errorf("run type %q was taken by a pool with a run-type list", rt)
+		want := ReasonRunTypeNotAllowed
+		if rt == "" {
+			want = ReasonRunTypeMissing
 		}
+		if _, ref := PoolSource(testPool(&l), rt); ref == nil || ref.Reason != want {
+			t.Errorf("run type %q: refusal = %+v, want %s", rt, ref, want)
+		}
+	}
+	_, ref := PoolSource(testPool(&l), "")
+	if ref.Message() != "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client." || ref.Reason.Status() != 422 {
+		t.Errorf("the missing run type reads %q (%d)", ref.Message(), ref.Reason.Status())
 	}
 	if got := RunTypeNotAllowedMsg("P", ""); strings.Contains(got, "take .") {
 		t.Errorf("an empty run type reads %q", got)

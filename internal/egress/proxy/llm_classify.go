@@ -18,6 +18,9 @@ const (
 	scanOpaque          // prompt-bearing but no extractor yet (…/batches): honest skip
 )
 
+// channelSharedGateway is channelForHost's channel for a gateway host both vendors share.
+const channelSharedGateway contentscan.Channel = "shared-gateway"
+
 // classifyLLM dispatches to the per-provider endpoint classifier.
 func classifyLLM(channel contentscan.Channel, method, rest string) int {
 	switch channel {
@@ -25,6 +28,11 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 		return classifyAnthropicLLM(method, rest)
 	case contentscan.ChannelOpenAIChat:
 		return classifyOpenAILLM(method, rest)
+	case channelSharedGateway:
+		if bodyBearingMethod(method) {
+			return scanOpaque
+		}
+		return scanNone
 	default:
 		return scanNone
 	}

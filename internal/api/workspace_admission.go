@@ -358,7 +358,9 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 	if req.Repo != "" && s.denyUserWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
 		return true
 	}
-	return gate && s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
+	// A service identity holds no connection: its run launches and the lane
+	// declines as no_person (adoServiceCaller).
+	return gate && !adoServiceCaller(r.Context()) && s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
 }
 
 // recordLaunchRefusals are the ORG-POLICY refusals a record session must clear

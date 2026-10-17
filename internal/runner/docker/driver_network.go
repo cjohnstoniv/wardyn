@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -53,7 +55,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// Best-effort image presence: pull the agent image if absent.
-	if err := d.ensureImage(ctx, spec.Image, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
+	if err := d.ensureImage(ctx, spec.Image, runtimeName, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 	// ...and the proxy sidecar image, which nothing else fetches: only a repo checkout or CI (which
@@ -62,7 +64,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// it — without this pull, the one-line install and desktop tier reach a healthy console and then
 	// fail the FIRST RUN with an unresolvable ref. No-ops where the image is already resident; k8s is
 	// untouched, since kubelet pulls the sidecar there.
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
+	if err := d.ensureImage(ctx, d.cfg.ProxyImage, "", func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 
@@ -140,6 +142,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}
+	spec.Env = d.withRunnerTrustedCA(spec.Env)
 	env := envSlice(spec.Env)
 	// SandboxSpec.SecretEnv rides plain container env HERE — the honest posture on this substrate: a
 	// docker container's config is reachable only through the daemon socket, the same
@@ -147,7 +150,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// it through a Secret instead, since a Pod spec is readable by anyone holding pods/get).
 	// Concatenation needs no dedup: dispatch's splitSecretEnv keeps the two maps disjoint.
 	env = append(env, envSlice(spec.SecretEnv)...)
-	if d.cfg.Record {
+	record := spec.RecordWithin(d.cfg.Record)
+	if record {
 		// The one in-sandbox signal that session recording is configured; boot_seed_rec_wrap keys its
 		// wrap on this rather than on the /var/log/wardyn dir a one-shot root exec creates, since that
 		// exec can race the interactive boot-seed pane and silently ship an unrecorded seed session.
@@ -158,7 +162,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   wardynLabels(spec.RunID, componentAgent, spec.Labels),
+		Labels:   withRecordLabel(wardynLabels(spec.RunID, componentAgent, spec.Labels), record),
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}
@@ -176,6 +180,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 	agentHost.Mounts = append(agentHost.Mounts, agentMounts...)
+	if d.cfg.TrustedCAFile != "" {
+		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
+	}
 
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
@@ -240,7 +247,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// agent user: CastDir (root-owned 0755 under /var/log) and the RecordingMount target (a fresh
 	// named volume the daemon creates root-owned 0755). Both are prepared via a single one-shot ROOT
 	// exec right after start. Best-effort: a failure here only impairs recording, surfaced separately.
-	if d.cfg.Record {
+	if record {
 		d.prepareRecordingDirs(ctx, agentResp.ID)
 	}
 	d.keepExecOutput(agentContainerName(spec.RunID), spec.ExecOutput)
@@ -614,4 +621,28 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		swept++
 	}
 	return swept, errors.Join(errs...)
+}
+
+// withRunnerTrustedCA adds this runner's own roots to a sandbox's CA trust after whatever the
+// organisation staged (Config.TrustedCAPEM); it returns a copy, never the caller's map.
+func (d *Driver) withRunnerTrustedCA(env map[string]string) map[string]string {
+	if d.cfg.TrustedCAPEM == "" {
+		return env
+	}
+	env = maps.Clone(env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	if len(env["WARDYN_MITM_CA_PEM"])+len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
+		runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, env)
+	} else {
+		// Too big for one environment string with the PEM the organisation
+		// staged (runnerd refuses a bundle that is too big alone): the mounted
+		// file carries it, and an agent image older than 0.9.3 trusts only the
+		// staged roots. Even an older image's install_mitm_ca builds the file
+		// the trust variables name from the staged PEM.
+		runner.SetSandboxCATrustVars(env, true)
+	}
+
+	return env
 }

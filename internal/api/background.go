@@ -10,12 +10,13 @@ import (
 
 // goBackground runs fn on a goroutine tracked by s.bg (server.go), so an
 // orderly shutdown (WaitBackground) can wait for it instead of abandoning it
-// the instant http.Server.Shutdown returns. Every caller that detaches work
-// from a request with `go s.something(...)` should route through this instead
-// of a bare `go`. The callers today are handleCreateRun's launch
-// (finishCreateRunLaunch, runs_create_launch.go), finishHarnessLoginLaunch's
-// launch (harnesscred_launch.go), supersedeOneLoginRun's kill-teardown tail
-// (harnesscred_supersede.go) and killSignInRunAfterCapture (ssotoken.go).
+// the instant http.Server.Shutdown returns; `grep -n goBackground` lists the
+// callers. They are of two kinds: work detached from a request (a launch, a
+// kill teardown, output persistence, attach-lease and queue follow-ups), which
+// ends on its own bound, and the loops ReconcileOnBoot starts (the
+// orphaned-build and run-watcher sweepers and each run's watcher), which
+// return once BaseCtx is cancelled. New work of either kind routes through
+// this instead of a bare `go`.
 func (s *Server) goBackground(fn func()) {
 	s.bg.Add(1)
 	go func() {
@@ -73,8 +74,8 @@ func (s *Server) WaitBackground() {
 	select {
 	case <-done:
 	case <-time.After(budget):
-		slog.Warn("wardynd: shutdown budget hit with detached work (a launch or a kill-supersede teardown) "+
-			"still running; abandoning it", slog.Duration("budget", budget))
+		slog.Warn("wardynd: shutdown budget hit with background work (a launch, a teardown, output persistence, "+
+			"or a sweeper or run watcher that did not stop on cancel) still running; abandoning it", slog.Duration("budget", budget))
 	}
 }
 

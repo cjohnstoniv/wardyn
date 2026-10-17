@@ -10,7 +10,7 @@ package proxy
 // straight to a JSON parser and crashes on it (the field report this lane
 // answers). This is a SIBLING to denial_body_golden_test.go, not an
 // extension of it: that file pins the 403 writeEgressDeny family; this pins
-// the four httpErrorAWSAware sites' 401/500 bodies.
+// the four httpErrorShaped sites' 401/500 bodies on the AWS lane.
 //
 // Every AWS-lane case below has a NON-AWS-lane twin proving the body is
 // BYTE-IDENTICAL to what it always was — Anthropic, OpenAI and an operator's
@@ -137,14 +137,11 @@ func TestAWSLaneErrorGolden_UpstreamError(t *testing.T) {
 					t.Errorf("x-amzn-errortype = %q, want InternalServerException", got)
 				}
 				body := decodeAWSSDKError(t, rec.Body.Bytes())
-				// withStage=true at this one site: the SDK message matches the
-				// decision log's Cause field verbatim (same causeSentence call).
-				if !strings.HasPrefix(body["message"], "tcp dial: ") {
-					t.Errorf("message = %q, want the stage-prefixed cause (parity with the decision log)", body["message"])
-				}
+				// A dial-shaped fault: the SDK message ends with the decision
+				// log's Cause field verbatim (same causeSentence call).
 				d := findDecision(t, buf, "builtin:dial-failed")
-				if d.Cause != body["message"] {
-					t.Errorf("sandbox message %q != decision log Cause %q — C1/C3 must agree", body["message"], d.Cause)
+				if !strings.HasPrefix(d.Cause, "tcp dial: ") || !strings.HasSuffix(body["message"], ": "+d.Cause) {
+					t.Errorf("sandbox message %q does not end with decision log Cause %q — C1/C3 must agree", body["message"], d.Cause)
 				}
 			} else {
 				if rec.Code != http.StatusBadGateway {

@@ -143,6 +143,49 @@ the box on the compose stack. Four things ship pre-wired:
 - `GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` — `info` once it resolves, `warn` with the fix above when it doesn't.
 - It's never `blocking`: the kind is optional, so an install offering only API-key or Bedrock providers is never funneled back into setup over it.
 
+## Images for both laptop architectures
+
+Wardyn's published images are `linux/amd64` + `linux/arm64` indexes. A fleet with Apple-silicon (arm64) and x86 laptops needs every ref in `WARDYN_AGENT_IMAGES` to be one too. A single-architecture image on the other architecture runs under emulation, which is slow, or is refused when the engine cannot emulate it.
+
+### Building the claude-code harness image for both architectures
+
+- Wardyn publishes no claude-code image (it bundles a vendor CLI), so this is the image an arm64 laptop most often gets wrong: `make agent-images-core` builds only the architecture of the engine that ran it.
+- One command builds and pushes both platforms. A multi-platform build needs the containerd image store or a `docker buildx create --use` builder, and with the classic store it must be pushed, so name a registry repository:
+
+  ```sh
+  make agent-image-claude-code-multiarch CLAUDE_CODE_IMAGE=<your-registry>/agent-claude-code:<tag>
+  docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>   # must list linux/amd64 and linux/arm64
+  ```
+
+- The target runs `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile --push`. The Go helper binaries cross-compile, and the vendor CLI is fetched for each target architecture, so only the `apt`/`npm` steps need emulation (QEMU: `docker run --privileged --rm tonistiigi/binfmt --install all`). The corporate-build variables (`NPM_REGISTRY`, `HTTPS_PROXY`, `CLAUDE_INSTALL`, ...) pass through as for `agent-images-core`.
+- Name the result in `WARDYN_AGENT_IMAGES='{"claude-code":"<your-registry>/agent-claude-code:<tag>"}'` and restart wardynd.
+
+### Mirroring published images
+
+- Copy every platform, not the platform of the machine doing the copy. A plain `docker pull` and `docker push` copies one:
+
+  ```sh
+  crane copy ghcr.io/cjohnstoniv/agent-base:<version> <mirror>/agent-base:<version>
+  skopeo copy --all docker://ghcr.io/cjohnstoniv/agent-base:<version> docker://<mirror>/agent-base:<version>
+  regctl image copy ghcr.io/cjohnstoniv/agent-base:<version> <mirror>/agent-base:<version>
+  ```
+
+- `crane copy` and `regctl image copy` copy the whole index; `skopeo copy` needs `--all`.
+- Check the copy lists both platforms: `docker buildx imagetools inspect <mirror>/agent-base:<version>`.
+- Pin the **index digest** (`<mirror>/agent-base@sha256:...`, from that command's `Digest:` line), never a child-manifest digest.
+- Mirror `wardyn-proxy` the same way. A plain `WARDYN_PROXY_IMAGE` serves every runner architecture that has no `WARDYN_PROXY_IMAGE_AMD64` / `WARDYN_PROXY_IMAGE_ARM64`.
+
+### One image per architecture
+
+If your mirror cannot hold an index, name each architecture. A run on an arm64 runner uses the `@arm64` entry, and every other run uses the plain one:
+
+```json
+{"claude-code": "<mirror>/agent-claude-code:<tag>",
+ "claude-code@arm64": "<mirror>/agent-claude-code:<tag>-arm64"}
+```
+
+The emulation warning in the runner log, and the `runner_arch_images` row of `GET /api/v1/setup/status`, name the image and the fix. See also [Multi-arch images](../adoption/corp-image-authoring.md#multi-arch-images) for authoring images from our bases.
+
 ## The image a run's harnesses start from
 
 - A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.

@@ -87,6 +87,8 @@ func registrationFailure(err error) error {
 type registerArgs struct {
 	org, tokenFile, stateDir, name string
 	limits                         *registerLimits
+	// proxyImage is the image that measures a VM-backed engine's disk; "" is the release image.
+	proxyImage string
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -106,7 +108,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		return registeredRunner{}, err
 	}
 	// The limits are measured and checked before anything is spent: a refused limit keeps the token.
-	measured, err := measureHost(cmd.Context())
+	measured, err := measureWithVMDisk(cmd.Context(), a.proxyImage)
 	if err != nil {
 		measured = types.RunnerAmounts{}
 	}

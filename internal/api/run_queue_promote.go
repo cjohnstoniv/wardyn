@@ -134,8 +134,9 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	}
 	// The candidates are the start's own: the same targets, the same kinds (kindTargets: the kind asked
 	// for, none the profile denies, no runner of the person's for a run with drives) and the same demand
-	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared). A
-	// ceiling that cannot be read denies nothing here: the start judges the run against it again.
+	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared, recording
+	// under a required setting). A ceiling that cannot be read denies nothing here: the start judges the
+	// run against it again.
 	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
 	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
 		in.ceiling = ceiling
@@ -153,7 +154,17 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: s.runnerFits(ctx)}
+	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	if err != nil {
+		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
+	}
+	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: s.runnerFits(ctx),
+		requireRecording: org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired}
+	// A required setting with no store has no room anywhere: the start would refuse recording_store_off.
+	if demand.requireRecording && s.cfg.RecordingStore == nil {
+		out.wait = runnerpool.WaitNoRunnerFree
+		return out, nil
+	}
 	out.needs = map[string]types.RunnerAmounts{}
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {

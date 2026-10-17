@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -109,6 +109,21 @@ agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/aws-sso/Dockerfile     -t wardyn/agent-aws-sso:local     .
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 	@echo "AWS SSO login image built: wardyn/agent-aws-sso:local"
+
+# The claude-code image for BOTH laptop architectures in one command. The vendor CLI is not
+# redistributable, so Wardyn publishes no claude-code image and `agent-images-core` builds only the
+# engine's own architecture; a fleet with arm64 and amd64 laptops needs one multi-arch index. A
+# multi-platform build needs the containerd image store or a `docker buildx create --use` builder (the
+# classic store cannot hold the result, so it must be pushed); this pushes it: name a registry
+# repo you can push to (and QEMU for the foreign platform: docker run --privileged --rm tonistiigi/binfmt --install all).
+#   make agent-image-claude-code-multiarch CLAUDE_CODE_IMAGE=registry.example/team/agent-claude-code:1
+#   WARDYN_AGENT_IMAGES='{"claude-code":"registry.example/team/agent-claude-code:1"}'
+# docs/operations/build-images.md has the verify and mirroring steps.
+CLAUDE_CODE_IMAGE ?=
+agent-image-claude-code-multiarch: ## Build + push the claude-code agent image for linux/amd64 and linux/arm64
+	@test -n "$(CLAUDE_CODE_IMAGE)" || { echo "set CLAUDE_CODE_IMAGE=<registry>/<repo>:<tag> (a multi-platform image is pushed, not loaded)" >&2; exit 2; }
+	docker buildx build $(DOCKER_BUILD_ARGS) --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile -t $(CLAUDE_CODE_IMAGE) --push .
+	@echo "Pushed $(CLAUDE_CODE_IMAGE); check it: docker buildx imagetools inspect $(CLAUDE_CODE_IMAGE)"
 
 # The full toolchain image: the core claude-code agent PLUS real language toolchains
 # (Go, Python, Rust, JDK/Maven, pnpm). Workspace import's Record/Verify runs the
@@ -253,7 +268,17 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(PG_PKGS)
+	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(if $(PG_RUN),-run '$(PG_RUN)') $(PG_PKGS)
+
+# The api shards: only the tests that skip without the DSN (scripts/pg-test-select.sh),
+# not the ~4400 others the `go` unit job already runs under -race. PG_PART=i/n runs the
+# i-th of n slices (ci.yml runs 1/2 and 2/2); every testfloor.Mark(t, "pg") probe is in
+# every slice, so each slice's skip floor still has to see them pass. The unit run guards
+# the selection (test-report.sh).
+PG_PART ?= 1/1
+test-report-pg-api: PG_REPORT ?= pg-api
+test-report-pg-api: ## An api slice of test-report-pg: just the Postgres-gated tests of internal/api and test/apie2e
+	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part $(PG_PART))'
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
@@ -382,6 +407,9 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
 	@echo "Run through test-report.sh (l0-docker): a rename or a skip of the three fails the job."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
+	@echo "Running the remote-runner internal_hosts pin (internal/api TestInternalHostsOnRunnerDocker: local dispatch -> runner wire -> the real proxy image)."
+	@echo "Through test-report.sh (internal-hosts-docker): the test's testfloor.Mark makes a skip or a rename fail the job."
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh internal-hosts-docker -tags docker -timeout 10m -run '^TestInternalHostsOnRunnerDocker$$' ./internal/api/
 
 # The key-service suite against real servers (T-33): the Vault Transit KEK and the
 # Vault KV store on the official hashicorp/vault and openbao/openbao dev images, and
@@ -663,6 +691,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
+	./scripts/test-test-report.sh
 	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
@@ -1618,6 +1647,9 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
 	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
 	@echo "  confirm CI is green before merging."
+
+candidate-preflight: ## Release-candidate preflight: lint, whole-tree guards, changed-package + Postgres tests, vitest, changed e2e specs x3 (BASE=<ref>)
+	./scripts/lane-preflight.sh --candidate
 
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."

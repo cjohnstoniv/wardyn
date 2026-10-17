@@ -1056,7 +1056,7 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 // the miss would be invisible.
 func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 	site := adoSite(adoEntraTestRow())
-	adoRun, ok := resolveADOEntraRun(site, []string{adoTestRepo}, adoTestOwner)
+	adoRun, ok := resolveADOEntraRun(site, nil, adoTestRepo, adoTestOwner)
 	if !ok {
 		t.Fatalf("fixture: %q does not resolve to the per-person Azure DevOps lane", adoTestRepo)
 	}

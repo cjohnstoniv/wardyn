@@ -175,6 +175,8 @@ var testHost = types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 5
 func init() {
 	measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil }
 	engineArch = func(context.Context) string { return "arm64" }
+	engineVMDisk = func(context.Context, string) (int64, bool) { return 0, false }
+	engineDiskCapped = func(context.Context) (bool, bool) { return false, false }
 }
 
 // Registration sends the engine's architecture, and none when the engine could not be asked.

@@ -26,6 +26,8 @@
 ## Requirements
 
 - `setup` and `serve` find the relay address and prove it with a probe container on Docker Desktop, Rancher Desktop (dockerd) and other VM-backed engines; Rancher Desktop's containerd mode is unsupported. See [Requirements](../runner-registration.md#requirements). There is no native Windows binary.
+- The default laptop storage driver (overlayfs on Docker Desktop, Colima and Rancher Desktop) cannot cap a run's disk, so `disk_mib` is not enforced there; `setup` says so.
+- On a VM-backed engine `setup` measures the VM's free disk with the proxy image (`wardyn-proxy -disk-free /`). `--total-disk` overrides it, and is needed when the probe cannot run.
 - The full list, and why `serve` refuses to start: [Requirements](../runner-registration.md#requirements).
 
 ## Resident credentials and posture
@@ -59,10 +61,52 @@
 
 ### Private endpoints and `internal_hosts`
 
-- The organisation's [`internal_hosts`](../OPERATIONS.md#network-upstream-proxy-and-egress-redirects) declarations reach a laptop runner's proxy as they do a cluster one. A host that resolves to a private address (PrivateLink, Private Service Connect, a zero-trust client's `100.64.0.0/10` range) is reached when it is declared there, and the decision row reads `rule_source: site-config:internal-host`.
+- The organisation's [`internal_hosts`](../OPERATIONS.md#network-upstream-proxy-and-egress-redirects) declarations reach a laptop runner's proxy as a cluster's. A host that resolves to a private address (PrivateLink, a zero-trust client's `100.64.0.0/10` range) is reached when declared there. Its decision row reads `rule_source: site-config:internal-host`; one an egress approval released reads `approval:<id>`.
 - A declaration lifts only the private-IP guard for that suffix. The egress allowlist still decides, and loopback, link-local and metadata addresses stay closed.
 - On a laptop the sandbox resolves through the person's network, so declare `cidrs` on each entry a laptop estate uses. An entry without them lifts the whole private range for that suffix.
-- The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop.
+- The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop's proxy. The runner's own CA bundle takes the trusted CA's place: see below.
+
+### A corporate CA on a laptop runner
+
+- Behind a TLS-inspecting proxy, give the runner your organisation's roots. Every run's proxy and sandbox then trust them beside the system roots and the run's own interception CA.
+- Certificates only, your organisation's roots, 64 KiB at most: a merged system bundle is refused.
+- Only `--trusted-ca-file` or `WARDYN_TRUSTED_CA_FILE` (what setup writes) is read, never `SSL_CERT_FILE` or `SSL_CERT_DIR`.
+- When an organisation's own CA is also staged and the two pass 64 KiB, agent images older than 0.9.3 trust only the organisation's roots.
+
+The bundle is read when `serve` starts; a bad file stops it and is named.
+
+1. Export the roots. On macOS (one `-c` per root):
+
+   ```sh
+   security find-certificate -a -p -c "Example Corp Root CA" /Library/Keychains/System.keychain \
+     > "$HOME/Library/Application Support/wardyn/corp-ca.pem"
+   ```
+
+   On Linux:
+
+   ```sh
+   mkdir -p ~/.config/wardyn
+   cat /usr/local/share/ca-certificates/*.crt > ~/.config/wardyn/corp-ca.pem      # Debian, Ubuntu
+   cat /etc/pki/ca-trust/source/anchors/*.pem > ~/.config/wardyn/corp-ca.pem      # Fedora, RHEL
+   ```
+
+2. Run setup with the file. It checks the file before the token is spent; a rerun keeps it. If the kept file has moved, rerun with `--trusted-ca-file <new file>`.
+
+   ```sh
+   wardyn-runnerd setup --org https://wardyn.example --trusted-ca-file ~/.config/wardyn/corp-ca.pem
+   ```
+
+3. If your shell's `SSL_CERT_FILE` already names the roots, setup says so; pass it with `--trusted-ca-file "$SSL_CERT_FILE"`.
+
+### Session recordings
+
+- `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
+- The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
+- `wardyn-runnerd serve --recording-store off` is the runner's ceiling: it never records a run's terminal session. Otherwise the runner records the runs its organisation asks it to; a runner older than 0.9.3 records by its own setting, and counts as not recording.
+- The organisation, not the runner, records console and SSH sessions opened through it, even on a run marked not recorded, while it has a recording store.
+- An organisation or pool can set `recording: required` (default `preferred`). A run only a non-recording runner could take is then refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. A defaults write that leaves `recording` out keeps it.
+- Under `preferred` the page says `runner_declined`. A cast from a recording runner older than 0.9.3 clears it; any other runner's upload is refused `409` `recording_off`.
+- An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).
 
 ## Claiming a runner
 
@@ -83,7 +127,7 @@
 | Situation | Behaviour |
 | --- | --- |
 | Link down at run creation | Refused `runner_offline`; no run row exists |
-| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions |
+| Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 10 s, then answers a retryable `503` naming the runner's link |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |

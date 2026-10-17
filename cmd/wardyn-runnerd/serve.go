@@ -24,7 +24,12 @@ type runnerRuntime struct {
 
 type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error)
 
-type serveOptions struct{ proxyImage, relayListen, relayHostTarget, network, recording string }
+type serveOptions struct {
+	proxyImage, relayListen, relayHostTarget, network, recording string
+	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
+	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
+	trustedCAFile, trustedCA, trustedCAPath string
+}
 
 func (o serveOptions) recordingEnabled() (bool, error) {
 	switch o.recording {
@@ -63,6 +68,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		// The flag (whose default is the environment) outranks the image the organisation named at
 		// registration, which outranks this binary's release image.
 		opts.proxyImage = cmp.Or(opts.proxyImage, identity.ProxyImage, releaseProxyImage())
+		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
+			return err
+		}
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
@@ -88,6 +96,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", os.Getenv("WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
 	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
+	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd

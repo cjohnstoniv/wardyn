@@ -111,6 +111,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		if f.req.RunnerPoolID != "" {
 			return runPlacement{}, runError(runnerpool.ReasonPoolsUnavailable.Status(), string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg())
 		}
+		if refusal := s.unpooledRecordingRefusal(ctx, *f.req); refusal != nil {
+			return runPlacement{}, refusal
+		}
 		// Unpooled: the deployment and governance still size the run.
 		limits, applied, refusal := s.runSize(ctx, f, nil, nil)
 		return runPlacement{limits: limits, applied: applied}, refusal
@@ -164,6 +167,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
 	demand := s.placementDemand(ctx, f)
 	demand.holdRunnerCapacity = !capped && !f.promoted
+	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
+		return runPlacement{}, refusal
+	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal
@@ -196,6 +202,17 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// poolRecordingDemand reports whether the organisation or the pool requires recording, refusing the
+// run outright when it does and this deployment has no recording store.
+func (s *Server) poolRecordingDemand(org types.RunnerPoolDefaults, pool types.RunnerPool) (bool, *runRefusal) {
+	required := org.Recording == types.RecordingRequired || pool.Recording == types.RecordingRequired
+	if required && s.cfg.RecordingStore == nil {
+		reason, msg := recordingRefusal(true, pool.Name)
+		return true, runError(reason.Status(), string(reason), msg)
+	}
+	return required, nil
 }
 
 // anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.
@@ -654,6 +671,8 @@ func targetRefusal(reason placement.Reason, pool string, scope types.RunnerPoolS
 		return runError(reason.Status(), string(reason), runnerpool.RunnerAtCapacityMsg(pool))
 	case placement.ReasonRunnerLimitsUnset:
 		return runError(reason.Status(), string(reason), runnerpool.RunnerLimitsUnsetMsg(pool))
+	case placement.ReasonRunnerRecordingOff:
+		return runError(reason.Status(), string(reason), runnerpool.RunnerRecordingOffMsg(pool))
 	}
 	return runError(reason.Status(), string(reason), "This run cannot be placed in "+pool+".")
 }
@@ -668,6 +687,9 @@ type placementDemand struct {
 	cpu, mem, disk int64
 	// holdRunnerCapacity refuses a runner with no room for the run now (fitRefusal).
 	holdRunnerCapacity bool
+	// requireRecording refuses a target that does not record a run on its organisation's word: the
+	// organisation or the pool requires recording.
+	requireRecording bool
 	// fits is each runner's declared limits and In use, by target id (runnerFits).
 	fits map[string]runnerFit
 }
@@ -706,6 +728,9 @@ func (d placementDemand) refusal(t poolTarget) placement.Reason {
 		if err != nil || (enforced != "" && !slices.Contains(t.facts.Classes, enforced)) {
 			return placement.ReasonPlacementCapability
 		}
+	}
+	if d.requireRecording && !t.facts.Records {
+		return placement.ReasonRunnerRecordingOff
 	}
 	return d.fitRefusal(t)
 }

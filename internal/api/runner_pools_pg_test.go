@@ -618,7 +618,7 @@ func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testin
 	pool := e.createPool("Provided", types.RunnerPoolOrganization)
 	renamed := "Renamed"
 	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
-		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &renamed, nil, nil); err != nil {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &renamed, nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	}}

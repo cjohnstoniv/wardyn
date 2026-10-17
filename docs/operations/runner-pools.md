@@ -48,7 +48,7 @@
 
 - A pool takes background tasks, interactive environments or both: its limits carry a `background` block, an `interactive` block or both (`--run-type`).
 - The pool list answers `run_types` and `run_types_source`: `pool` when the pool's own limits name them, `none` for a pool with no limits, which takes both.
-- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. So is a request with no run type, by any pool that has limits (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
+- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. A request with no run type (an older client) is refused `runner_pool_run_type_missing` (`422`) by any pool that has limits: pass `--experience background|interactive` or upgrade the client (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
 
 ## Limits: the strictest wins
 
@@ -98,7 +98,7 @@ The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `
 
 - A pool with an empty `barriers` list allows every barrier its runners offer.
 - A launch that names no barrier gets the organization's default barrier when it is available (`default_source: organisation`), otherwise the strongest available one (`default_source: server`).
-- An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the whole document, so one that leaves `barrier` out clears it.
+- An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the document, so one that leaves `barrier` out clears it; one that leaves `recording` out keeps it.
 - A person's own default names a pool only; it cannot set a barrier.
 
 ## The queue

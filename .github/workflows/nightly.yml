@@ -9,16 +9,44 @@ name: Nightly (full-stack e2e)
 on:
   schedule:
     - cron: '0 7 * * *' # 07:00 UTC daily
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "full = every lane (the nightly); candidate = only the lanes a release is gated on (release.yml's watched= list, plus the multi-arch staging builds)"
+        type: choice
+        options: [full, candidate]
+        default: full
 
 permissions:
   contents: read
+
+# GitHub gives this repository 20 concurrent job slots, and a candidate's PR CI,
+# its nightly and the 07:00 schedule all draw on them (docs/CI.md, "This
+# repository's own CI"). scope=candidate (see SCOPE below) cuts what a release
+# candidate's dispatch takes; this group stops a re-dispatch on the same ref from
+# running beside the run it replaces. Only a dispatched run is ever cancelled:
+# the event name is in the key, so a scheduled run shares a group with no
+# dispatch, is never cancelled by one, and never cancels one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+# SCOPE. scope=candidate skips every job that release.yml's preflight-green does
+# not judge, by a JOB-LEVEL `if: inputs.scope != 'candidate'` (a skipped job takes
+# no runner). Schedule runs and scope=full have no such input and run everything.
+# The jobs kept are exactly release.yml's watched= list (== notify-new-lanes.needs
+# minus the multi-arch builds) and the two multi-arch staging builds, which
+# green-by-tree.sh requires and `promote` copies. A skipped job reports `skipped`,
+# never `failure`, so notify-new-lanes (`if: failure()`) stays quiet.
+# test-repo-guards.sh guard 18 pins this: a job is skipped under candidate iff it
+# is neither watched nor a multi-arch build, and a new job must pick a side.
 
 # Every job sets timeout-minutes, at least twice its measured maximum (docs/CI.md).
 # e2e-live and docker-tagged-live failed in every nightly measured, so no green
 # duration exists for them and theirs are wider still.
 jobs:
   e2e-live:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -355,6 +383,7 @@ jobs:
   # kept out of notify-new-lanes' needs and release.yml's watched= until it has
   # gone green on a real scheduled run, the same posture kind-survival-walk has.
   ci-mode-dogfood-model-fake:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -576,6 +605,7 @@ jobs:
   # #697's ask that was already sitting finished and unwired: the compose
   # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
   test-e2e-concurrent:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -1295,6 +1325,7 @@ jobs:
   # notify-new-lanes' needs and release.yml's watched= until it has gone green
   # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
   kind-survival-walk:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1370,6 +1401,7 @@ jobs:
   # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
   # kind-survival-walk above.
   hybrid-walk:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -1452,6 +1484,7 @@ jobs:
   # ghcr.io packages (the chart + wardynd images), hence packages: read below.
   # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
   kind-upgrade-walk:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -1662,6 +1695,7 @@ jobs:
   # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
   # each); re-measure and tighten once nightly runs exist (docs/CI.md).
   migration-merge-check:
+    if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -1761,6 +1795,7 @@ jobs:
   # are in scripts/test-repo-guards.sh's NOTIFY_EXEMPT for that reason.
   # Nothing here retags, rebuilds or otherwise touches a published image.
   published-image-scan:
+    if: inputs.scope != 'candidate'
     name: published-image-scan (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20

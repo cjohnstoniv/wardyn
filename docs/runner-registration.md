@@ -31,12 +31,12 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 
 ### The startup reachability check
 
-`serve` and `setup` prove the relay address before they use it: on this engine, a throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address (up to three tries per address pair, 0, 2 and 4 s apart). `setup` runs the check before it spends the token or installs the service; `serve` runs it before it shows Online.
+`serve` and `setup` prove the relay address before they use it: on this engine, a throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address (up to three tries per address pair, 0, 2 and 4 s apart). `setup` runs it before it spends the token when it already knows an image the engine has; otherwise (a development build without `--proxy-image`, or a release image this engine cannot pull) it runs after registering, with the image the organisation names. `serve` runs it before it shows Online.
 
 | If the check | Then |
 |---|---|
 | Passes | `setup` prints the listen address and the target a proxy reaches it at, and pins both in the service settings (`WARDYN_RELAY_LISTEN` and `WARDYN_RELAY_HOST_TARGET`, even when the target is `host-gateway`) on a VM-backed engine. `serve` checks that one pair. |
-| Fails | It exits with the engine's name, each address pair it tried and why it failed. `setup` adds that no token was spent. Nothing is installed. |
+| Fails | It exits with the engine's name, each address pair it tried and why it failed. Before registering, `setup` adds that no token was spent; after, that no new token is needed. The service is not installed. |
 
 - `--relay-listen` / `WARDYN_RELAY_LISTEN` fixes where the relay listens, and `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` fixes the address a proxy dials: `host-gateway` or an IP address. A value you give is checked as given and never replaced by a guess.
 - On a native engine with a firewall that drops container-to-host traffic (`firewalld`, `ufw`), the check fails; allow the bridge to reach the relay port.
@@ -140,6 +140,7 @@ The console prints the same command from the token mint answer, with its `proxy_
 | `--proxy-image` / `WARDYN_PROXY_IMAGE` | The flag, then the variable, then the image the register answer named for this runner's architecture (kept in `runner.json`), then, on a release binary, `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`. A development build with none of these must pass it. |
 | `--relay-listen` / `WARDYN_RELAY_LISTEN` | Where the run relay listens, instead of the engine's default; any engine, loopback included. See [the startup check](#the-startup-reachability-check). |
 | `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` | The address a run's proxy dials to reach the relay: `host-gateway` or an IP address. `setup` pins the one it proved on a VM-backed engine. |
+| `--trusted-ca-file` / `WARDYN_TRUSTED_CA_FILE` | Extra roots for every run's proxy and sandbox, 64 KiB at most; `SSL_CERT_FILE` and `SSL_CERT_DIR` are not read. See [A corporate CA on a laptop runner](operations/hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner). |
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
@@ -162,9 +163,9 @@ The service is per user, not a root service: the runner identity sits in the per
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
-- Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)), always and before spending the single-use token; a refusal leaves it usable.
-- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
-- A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`; a development build refuses unless `--proxy-image` is given.
+- Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)). With no image the engine has yet, that proof waits for the organisation's answer, after the token is spent; a refusal then needs no new token.
+- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
+- A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` without pinning it, so replacing the binary moves the proxy too. A named image is pinned and kept by a rerun. Installs from before 0.9.3 pinned the release image: run setup once after replacing the binary. A development build without `--proxy-image` uses the organisation's answer and refuses when there is none.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.
 - `deploy/runner/install.sh` is a thin wrapper: it finds a binary (`--binary`, beside the script, or on `PATH`), runs a private executable copy and passes every other argument to `setup`. It ships in `wardyn-runner-units.tar.gz`.
 

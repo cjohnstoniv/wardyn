@@ -413,7 +413,7 @@ What the wrap does NOT add — your base must still provide:
 
 - **TLS-MITM trust per runtime.**
   - The per-run proxy CA is delivered at `/tmp/wardyn/mitm-ca.pem` (bare CA) and `/tmp/wardyn/ca-bundle.pem` (system roots + CA).
-  - "Install the CA" is one action PER TOOLCHAIN; dispatch sets all five (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../../internal/api/runs_dispatch_llm.go)).
+  - "Install the CA" is one action PER TOOLCHAIN; dispatch sets all five (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../../internal/runner/trusted_ca.go)).
   - A **replaces** row must always name the COMBINED bundle — the bare CA there costs that runtime every public root.
 
 | Runtime | Variable | Dispatch sets | Adds to / replaces the trust store |

@@ -265,7 +265,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// (modelServingHosts).
 		if s.modelServingHosts(sc)(host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": "refused: To names a model-provider or configured gateway host, which would collide with the LLM injection route",
 				})))
@@ -273,7 +273,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}
 		if laneCarriesHost(laneHosts, host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": "the per-person Azure DevOps lane carries this host's credential; redirect applied without token injection",
 				})))
@@ -287,7 +287,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		tok, why := s.resolveRedirectToken(ctx, r, present)
 		if why != "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": why + "; redirect applied without token injection",
 				})))

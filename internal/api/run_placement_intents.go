@@ -14,12 +14,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// localAWSCLIRefusal refuses the AWS CLI on a local placement at every door:
+// dispatch authors its sign-in as a credential local placement does not carry,
+// so the run would otherwise be accepted and then fail as it starts.
+const localAWSCLIRefusal = "This run uses the AWS CLI, which a run on your own runner cannot carry yet. " +
+	"Remove the AWS CLI from the run, or run it on the organisation's runners."
+
 // localCredentialIntents reads admitted configuration through the same provider,
 // ADO and redirect predicates dispatch reads. It never renews/mints or reads a
 // secret value: owner namespace proof is the own List, not fallback Get.
 func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, spec types.RunPolicySpec,
-	workspaces []types.Workspace, sc types.SiteConfig,
+	comps runComponents, workspaces []types.Workspace, sc types.SiteConfig,
 ) ([]placement.CredentialIntent, *runRefusal) {
+	if comps.awsCLI() != nil {
+		return nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localAWSCLIRefusal)
+	}
 	_, actor := actorFromRequest(r)
 	owner := runIdentitySubject(r.Context(), actor)
 	var out []placement.CredentialIntent
@@ -34,16 +43,13 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 		}
 		out = append(out, intents...)
 	}
-	var laneHosts []string
-	for _, repo := range append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo) {
-		a, on := adoEntraRunForRepo(sc, repo, owner)
-		if !on {
-			continue
-		}
-		laneHosts = append(laneHosts, adoEntraEgressEntries(a.org)...)
-		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: s.localADOOrigin(r.Context(), owner, a)})
+	// The one lane dispatch would author, from the same inputs: one intent, and
+	// the exact hosts dispatch hands planArtifactRedirect. None when it is off.
+	lane, on := resolveADOEntraRun(sc, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r))
+	if on {
+		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + lane.rowID + "]", Origin: s.localADOOrigin(r.Context(), lane.owner, lane)})
 	}
-	out = append(out, s.localRedirectIntents(r, spec, sc, laneHosts)...)
+	out = append(out, s.localRedirectIntents(r, spec, sc, resolvedLaneHosts(lane, on))...)
 	return out, nil
 }
 

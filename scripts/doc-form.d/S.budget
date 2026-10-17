@@ -109,7 +109,14 @@
 # docs/sdk.md 17629 adds 69 over 17560 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/sdk.md 17560 measured after merging the Files-step seam lane (RP-3 runner limits reasons) into E6b-pdc over the member drives chain's 17473.
 # docs/sdk.md 17645 adds 16 over 17629 (0.9 release text for the fix sets merged at release); measured.
-docs/sdk.md=17645 share=21
+# docs/sdk.md 17669 adds 24 over 17645 (0.9.3 D), measured: the runner_pool_run_type_missing reason.
+# docs/sdk.md 17736 adds 91 (0.9.3 C): runner_recording_off, recording_store_off and recording_off, measured.
+# docs/sdk.md 17760 = 17669 (rc.1 batch) + 91 (C), measured at the rc.2 merge.
+# docs/sdk.md 17760 adds 91 (0.9.3 lane C): recording required/preferred and not_recorded.
+# docs/sdk.md 17898 adds 138 over 17760, measured (0.9.3 ADO): ado_lane_declined on policy preview and the governance 405 line.
+# docs/sdk.md 17898 = 17760 + 138 (ADO), measured at the rc.2 merge.
+# docs/sdk.md 17936 adds 38 (0.9.3 C2), measured: recording_off for a declining runner's run; the org-defaults PUT keeps an omitted recording.
+docs/sdk.md=17936 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

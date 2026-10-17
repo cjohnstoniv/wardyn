@@ -30,7 +30,7 @@ func (d *Driver) PrewarmImages() {
 			if ref == "" {
 				continue
 			}
-			if err := d.ensureImage(ctx, ref, nil); err != nil {
+			if err := d.ensureImage(ctx, ref, "", nil); err != nil {
 				slog.Warn("wardynd: docker: background image prewarm failed; the first request needing it will pull it inline instead",
 					slog.String("image", ref), slog.Any("err", err))
 			}

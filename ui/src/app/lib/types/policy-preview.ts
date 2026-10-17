@@ -64,6 +64,9 @@ export interface PolicyPreviewResult {
   warnings: string[];
   pending: PolicyPreviewPending[];
   repository_access: PolicyPreviewRepository[];
+  // The run-level reason the per-person Azure DevOps credential would not be
+  // given to this run's sandbox; absent when no structural decline was reported.
+  ado_lane_declined?: string;
   // Absent for a draft with no component and no GitHub or Azure DevOps repository.
   components?: ComponentFact[];
   // Why each entry is in `spec`, from the same fold as the launch. The server always
