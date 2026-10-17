@@ -253,7 +253,11 @@ func (s *Server) recoverAttachLease(runID uuid.UUID, h *attachHolder, gen uint64
 		slog.InfoContext(ctx, "wardynd: took back a run's attach lease after it lapsed unclaimed",
 			slog.String("run_id", runID.String()), slog.String("holder", h.id.String()))
 	case !l.held.Load():
-		_, _ = l.st.ReleaseAttachLease(ctx, runID, h.id)
+		// Given back as handoffAttachLease gives one back: the other replicas' waiting observers are
+		// told now, not at their keepers' next tick.
+		if released, err := l.st.ReleaseAttachLease(ctx, runID, h.id); err == nil && released {
+			s.publishNotice(livebus.KindAttachFree, runID, nil)
+		}
 	}
 }
 

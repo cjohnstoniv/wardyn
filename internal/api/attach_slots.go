@@ -51,6 +51,17 @@ func (s *Server) reserveAttachSlot(runID uuid.UUID) (release func(), ok bool) {
 	}, true
 }
 
+// attachSlotsFull reports whether runID is at maxAttachSessionsPerRun on this replica. It reserves
+// nothing: the ticket mint asks it so the person is told the cap in a response they can read (a
+// failed WebSocket handshake shows a browser no status or body), and the upgrade still takes the
+// slot itself.
+func (s *Server) attachSlotsFull(runID uuid.UUID) bool {
+	reg := s.attachRegistry()
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.slots[runID] >= maxAttachSessionsPerRun
+}
+
 // webAttachSlot is reserveAttachSlot for the web lane, before the upgrade: a refusal is answered
 // here, with nil returned.
 func (s *Server) webAttachSlot(ctx context.Context, w http.ResponseWriter, run types.AgentRun, actorType types.ActorType, principal string) (release func()) {

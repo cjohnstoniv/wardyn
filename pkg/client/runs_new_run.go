@@ -406,6 +406,9 @@ type AgentSecretFact struct {
 type ManagedSettingsFact struct {
 	Path     string `json:"path"`
 	Document string `json:"document"`
+	// Harness names whose document this is: the started agent's, else the first harness of the set that
+	// brings one, so a run that starts one harness can carry another's document.
+	Harness string `json:"harness,omitempty"`
 	// Locked is the B-P2 variant that adds the managed-only locks; LockedBy is
 	// profile or organisation, and Profile names the profile.
 	Locked   bool   `json:"locked,omitempty"`

@@ -1694,3 +1694,56 @@ func TestSSHAuditAuthFailure_KeyMapIsCapped(t *testing.T) {
 		t.Errorf("rows = %d, want alice's 1 plus bob's %d from the shared bucket", got, int(authFailedBurst))
 	}
 }
+
+// FUG-L750 N4: the gateway probes an established connection, and closes one whose client stops
+// answering, so a dead SSH shell frees the attach slot it holds; a client that answers is left alone.
+func TestSSHGateway_ClosesAConnectionThatStopsAnswering(t *testing.T) {
+	st, run, principal := sshOwnedRunningRun(t)
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	prev := setSSHKeepaliveEvery(100 * time.Millisecond)
+	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &ssh.ClientConfig{User: run.ID.String(), Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.FixedHostKey(h.hostPub), Timeout: 3 * time.Second}
+
+	// A client that answers every probe stays up well past several intervals.
+	live, err := sshDial(t, h, run.ID.String(), priv)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer live.Close()
+
+	// A client that reads its requests and never replies is a dead peer.
+	nc, err := net.DialTimeout("tcp", h.addr, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	deadConn, chans, _, err := ssh.NewClientConn(nc, h.addr, cfg)
+	if err != nil {
+		t.Fatalf("dial the silent client: %v", err)
+	}
+	go func() {
+		for ch := range chans {
+			_ = ch.Reject(ssh.Prohibited, "test")
+		}
+	}()
+	gone := make(chan error, 1)
+	go func() { gone <- deadConn.Wait() }()
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateway kept a connection whose client never answered its keepalive")
+	}
+
+	time.Sleep(350 * time.Millisecond) // three more intervals
+	if _, _, err := live.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Errorf("the gateway closed a client that answers its probes: %v", err)
+	}
+}

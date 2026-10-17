@@ -184,6 +184,11 @@ const RunnerPoolDefaultPrefKey = "runner_pool_default.v2"
 type RunnerPoolDefaults struct {
 	PoolID  *uuid.UUID       `json:"pool_id,omitempty"`
 	Barrier ConfinementClass `json:"barrier,omitempty"`
+	// Revision is the organisation's document alone: it starts at 1 and rises by one on every write
+	// to it. A read answers it, and a write that names it is refused (409 runner_pool_stale) when the
+	// document has moved on; a write that omits it is unconditional. A person's own document never
+	// carries one.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 // Validate checks the document's shape. Whether the pool exists, is permitted
@@ -195,6 +200,9 @@ func (d RunnerPoolDefaults) Validate() error {
 	}
 	if d.Barrier != "" && d.Barrier.Rank() == 0 {
 		return fmt.Errorf("barrier %q is not CC1, CC2 or CC3", d.Barrier)
+	}
+	if d.Revision < 0 {
+		return errors.New("revision is the number you read")
 	}
 	return nil
 }

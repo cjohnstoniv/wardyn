@@ -172,6 +172,8 @@ export interface RunnerPoolDefaults {
   pool_id?: string;
   /** The organisation's default barrier; a person's own document never carries one (the server refuses it). */
   barrier?: ConfinementClass;
+  /** The organisation's document alone. A write that names the revision it read is refused (409 `runner_pool_stale`) once it has moved on. */
+  revision?: number;
 }
 
 /** Go: types.ResolvedRunnerPool. A label for the choice, never admission. */
@@ -213,6 +215,8 @@ export interface RunnerPoolChoice {
   barriers?: ConfinementClass[];
   /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
   main_drive?: MainDriveFacts;
+  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. On the list and both dry doors. */
+  my_runners?: PoolRunner[];
 }
 
 /** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
@@ -277,12 +281,14 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   run_types: RunnerPoolRunType[];
   run_types_source?: "pool" | "none";
   barrier_options: BarrierOption[];
-  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
-  my_runners?: PoolRunner[];
   slots?: PoolSlots;
   capacity?: PoolCapacity;
   /** A user pool's owner: the caller, or the person on an administrator's oversight row. */
   owner?: string;
+  /** The pool's own record, as GET /runner-pools/{id} reads it, on every row (including an oversight row). `pool_limits` is its raw limits, not the effective `limits`. */
+  state?: RunnerPoolState;
+  revision?: number;
+  pool_limits?: RunnerPoolLimits;
 }
 
 /**

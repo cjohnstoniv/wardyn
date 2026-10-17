@@ -103,9 +103,16 @@ func castBufferStart(r io.Reader) int {
 // A save waits at most castSaveAdmitWait to be admitted, and the upload route
 // bounds how long an admitted upload's body may take to arrive.
 //
-// ponytail: one upload at a time; writing the payload as a stream instead of
-// three whole copies would allow concurrent uploads again.
+// The payload is read whole (bounded) but written in castWriteChunk pieces, so the peak above is one
+// payload and a chunk's copies, not three payloads. The slot count was measured before that and is
+// still one.
+//
+// ponytail: one upload at a time; re-measure the resident peak, then allow concurrent uploads again.
 const castStreamSlots = 1
+
+// castWriteChunk is how much of a payload one statement sends. A larger one holds more of pgx's copies at
+// once; a smaller one makes the database rewrite the growing value more often (each append copies it).
+var castWriteChunk = 16 << 20
 
 var (
 	streamSaveSlots  = &slotQueue{size: castStreamSlots}
@@ -287,16 +294,26 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	if len(data) > maxCastBytes {
 		return fmt.Errorf("recording: cast %q exceeds %d byte limit", runID, maxCastBytes)
 	}
+	// Written in castWriteChunk pieces in one transaction: pgx copies a bytea parameter twice more
+	// while sending it, so a whole 64 MiB payload in one statement peaked at three copies of it,
+	// and a chunk's copies are a fraction. A reader still sees the old row or the whole new one.
 	return s.runTx(ctx, runID, false, func(tx pgx.Tx) error {
+		first := data[:min(len(data), castWriteChunk)]
 		_, err := tx.Exec(ctx, `
 		INSERT INTO recordings (cast_key, payload)
 		VALUES ($1, $2)
 		ON CONFLICT (cast_key) DO UPDATE
 			SET payload = EXCLUDED.payload, updated_at = now()`,
-			runID, data,
+			runID, first,
 		)
 		if err != nil {
 			return fmt.Errorf("recording: save cast %q: %w", runID, err)
+		}
+		for rest := data[len(first):]; len(rest) > 0; rest = rest[min(len(rest), castWriteChunk):] {
+			if _, err := tx.Exec(ctx, `UPDATE recordings SET payload = payload || $2 WHERE cast_key = $1`,
+				runID, rest[:min(len(rest), castWriteChunk)]); err != nil {
+				return fmt.Errorf("recording: save cast %q: %w", runID, err)
+			}
 		}
 		return nil
 	})
