@@ -17,7 +17,7 @@ import (
 type ResetError struct{ Code uint32 }
 
 func (e *ResetError) Error() string {
-	return fmt.Sprintf("runnerwire: the runner ended the stream: %s (code %d)", resetReason(e.Code), e.Code)
+	return fmt.Sprintf("runnerwire: stream ended: %s (code %d)", resetReason(e.Code), e.Code)
 }
 
 // resetReason says in a sentence why a stream was reset, so the line a person reads is not a bare code.
@@ -28,13 +28,13 @@ func resetReason(code uint32) string {
 	case ResetReconnect:
 		return "the connection was replaced"
 	case ResetRefused:
-		return "the runner refused it"
+		return "it was refused"
 	case ResetInternal:
-		return "the runner failed while serving it"
+		return "serving it failed"
 	case ResetNoSuchPeer:
 		return "the other side of the relay is not connected"
 	case ResetCapacity:
-		return "the runner has no room for another stream"
+		return "there is no room for another stream"
 	}
 	return "reason unknown"
 }
