@@ -517,22 +517,27 @@ func (s *Server) interactiveNothingKept(run types.AgentRun, reader bool) string 
 // for a Kubernetes runner under the session recorder, whose runs keep no tail,
 // so a read says the output was not captured instead of serving an empty,
 // complete one. The runner is the run's own: the self-hosted runner it was
-// bound to (a person's laptop or an organisation's runner), else this
-// deployment's executor. A run that is not recorded is captured whatever its
-// runner says, since the recorder wraps only a recorded run's exec, unless its
-// runner records whatever it is asked (runnerRecordsUnasked). A self-hosted
-// runner that cannot be asked now (offline, or not connected to this replica)
-// is taken to capture: the run's tail is read rather than a recording it may
-// never have made. known is false only when this deployment's executor cannot
-// be asked: the answer is then neither "captured" nor "uncaptured". A run that
+// bound to (a person's laptop or an organisation's runner), else the executor
+// of this deployment its pool named, else this deployment's executor. A run
+// that is not recorded is captured whatever its runner says, since the
+// recorder wraps only a recorded run's exec, unless its runner records whatever
+// it is asked (runnerRecordsUnasked). A self-hosted runner or named executor
+// that cannot be asked now (offline, or not connected to this replica) leaves
+// the answer to this deployment's executor, so a recorded run keeps the
+// recording path the deployment would use and a run that is not recorded keeps
+// its tail. known is false only when this deployment's executor cannot be
+// asked: the answer is then neither "captured" nor "uncaptured". A run that
 // printed nothing on a runner that captures still reads as complete.
 func (s *Server) execOutputCapture(ctx context.Context, run types.AgentRun) (uncaptured, known bool) {
-	if run.RunnerID != nil {
-		pc, err := s.runnerStreamCapabilities(ctx, *run.RunnerID)
-		if err != nil {
-			return false, true
+	switch {
+	case run.RunnerID != nil:
+		if pc, err := s.runnerStreamCapabilities(ctx, *run.RunnerID); err == nil {
+			return pc.ExecOutputUncaptured && (run.NotRecorded == "" || runnerRecordsUnasked(pc)), true
 		}
-		return pc.ExecOutputUncaptured && (run.NotRecorded == "" || runnerRecordsUnasked(pc)), true
+	case run.RunnerPoolExecutor != "":
+		if f, ok := s.executorFacts(ctx, run.RunnerPoolExecutor); ok {
+			return f.ExecOutputUncaptured && run.NotRecorded == "", true
+		}
 	}
 	if s.cfg.Runner == nil {
 		return false, true

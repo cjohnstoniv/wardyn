@@ -107,9 +107,11 @@ copy is permanent.
   - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
   - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
     `source: "recording"`.
-  - A run that is not recorded (`not_recorded` set) reads its tail, whatever its runner.
-  - A self-hosted runner that cannot be asked when the run is read (offline, or connected to another replica) is
-    taken to keep a tail.
+  - A run that is not recorded (`not_recorded` set) reads its tail, unless its runner predates per-run recording and
+    records it anyway.
+  - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
+    answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
+  - A pooled run asks the executor its pool named.
   - So turning on a recording store (`WARDYN_RECORDING_STORE`) moves the output of runs on this deployment's
     Kubernetes runner from `stdout` to `recording`; a laptop run on Docker keeps `stdout`.
 - **Recording-on Kubernetes output.**

@@ -31,6 +31,8 @@ type TargetFacts struct {
 	// Records: the target records a run its organisation asks it to (Capabilities.SessionRecording,
 	// and for a self-hosted runner one that takes the per-run SandboxSpec.Record).
 	Records bool
+	// ExecOutputUncaptured: the target cannot capture an exec's output (Capabilities.ExecOutputUncaptured).
+	ExecOutputUncaptured bool
 	// ProbeErr comes only with a false answer: a configured executor whose probe failed. It might
 	// enforce the run, so a caller with no other candidate cannot decide admission and answers that
 	// it is unavailable, not that the target is offline.

@@ -139,6 +139,10 @@ func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) 
 		reason = "unrecoverable"
 	case errors.Is(err, runner.ErrSandboxGone):
 		reason = "sandbox_gone"
+	case errors.Is(err, runner.ErrRunnerOffline):
+		// A runner that cannot be reached read nothing: a gap, which a later
+		// recovery (a recording's, on the replica that holds the runner) replaces.
+		reason = "runner_offline"
 	case err != nil:
 		slog.Warn("wardynd: could not recover a run's output from the substrate; the row will be incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))

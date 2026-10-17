@@ -451,7 +451,7 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 	}
 	_, keeps := sub.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement,
-		KeepsEnded: keeps, UserDrives: cs.UserDrives, Records: cs.SessionRecording}, true
+		KeepsEnded: keeps, UserDrives: cs.UserDrives, Records: cs.SessionRecording, ExecOutputUncaptured: cs.ExecOutputUncaptured}, true
 }
 
 // MeasureExecutor implements runner.ExecutorMeasurer: what one configured executor has, when its

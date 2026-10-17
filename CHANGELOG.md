@@ -190,7 +190,8 @@ below.
 - Run output: a laptop run's output is no longer read from a recording it never made when the server's own runner is
   Kubernetes with recording on. It used to come back empty, marked `incomplete` and `capture_gap`. The source now
   follows the runner that served the run, so the laptop's tail is kept and read as `stdout`. A run that is not
-  recorded reads its tail, and a recording that yields nothing no longer hides a tail the server holds.
+  recorded reads its tail, and a recording that yields nothing no longer hides a tail the server holds. A pooled
+  run asks the executor its pool named.
 - Runner links: the organisation's relay listener speaks HTTP/1.1 only and holds at most 128 relay streams per runner,
   so one runner cannot fill its own session. A link no longer stalls when a peer opens many streams the runner
   refuses, and a handler panic ends that one link instead of the runner process. A runner that cannot open one run's
