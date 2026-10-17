@@ -66,6 +66,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	if exit.Code != 0 {
 		terminal, outcome = types.RunFailed, "failure"
 	}
+	// arrival stamps both the run.complete audit row and the run's ended_at, so they agree exactly.
 	var arrival time.Time
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&arrival); err != nil {
 		return false, err
@@ -78,7 +79,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$2,updated_at=clock_timestamp(),ended_at=clock_timestamp() WHERE id=$1`, runID, terminal); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$2,updated_at=clock_timestamp(),ended_at=$3 WHERE id=$1`, runID, terminal, arrival); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash,accepted_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()) ON CONFLICT(run_id,generation) DO UPDATE SET accepted_at=EXCLUDED.accepted_at`, runID, exit.Generation, runnerID, payload, hash); err != nil {
