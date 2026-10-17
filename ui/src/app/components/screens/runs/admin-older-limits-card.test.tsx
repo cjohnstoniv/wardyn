@@ -105,6 +105,28 @@ describe("AdminOlderLimitsCard", () => {
     expect(button.querySelector("svg.animate-spin")).toBeNull();
   });
 
+  it("FR-0163: shows each batch's results as it lands, while the next is still running", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const ids = ["a1", "a2", "a3", "a4", "a5", "b1"];
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: ids.map((run_id) => ({ run_id, created_by: "u1", state: "RUNNING", proxy_release: "0.6" })),
+    });
+    let settleSecond: (v: unknown) => void = () => {};
+    restartAdminRunsMock
+      .mockResolvedValueOnce({ results: ids.slice(0, 5).map((run_id) => ({ run_id, ok: true })) })
+      .mockReturnValueOnce(new Promise((resolve) => { settleSecond = resolve; }));
+    renderCard();
+    await screen.findByText("Older limits · 6");
+    const button = screen.getByRole("button", { name: "Restart with current limits" });
+    await user.click(button);
+    expect(await screen.findAllByText(/Restarted/)).toHaveLength(5);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    settleSecond({ results: [{ run_id: "b1", ok: true }] });
+    await waitFor(() => expect(screen.getAllByText(/Restarted/)).toHaveLength(6));
+  });
+
   // R2-4 (PR #1317 round-2 review): a real restart rewrites the run's own
   // proxy_release (store_run_revive.go), so the very NEXT listing this same
   // reload asks for comes back with nothing outside the window — the result

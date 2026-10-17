@@ -79,11 +79,12 @@ export function AdminOlderLimitsCard() {
         const batch = outsideIds.slice(i, i + RESTART_BATCH_SIZE);
         const res = await runsApi.restartAdminRuns(batch, restartBatchDeadlineMs(batch.length));
         collected.push(...res.results);
+        // FR-0163: a restart is minutes long, so each batch's answer shows as it lands.
+        setResults([...collected]);
       }
     } catch (err) {
       toast.error("Couldn't restart these runs", { description: getErrorMessage(err) });
     } finally {
-      if (collected.length > 0) setResults(collected);
       load();
       setBusy(false);
     }
