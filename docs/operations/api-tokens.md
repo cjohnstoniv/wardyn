@@ -247,6 +247,7 @@ Both replace a token an admin created for someone else, and nothing that works t
   - Only the target, signed in as themselves, can claim it, so a forwarded link reaches nothing.
   - Anyone else who is signed in, an admin included, gets `404` `invitation_not_found`, the answer for a missing id.
   - The target's own claim of a dead invitation is `409` `invitation_not_pending`, with its `state`.
+  - The target's own `wdn_` token may list their pending invitations (`GET /me/invitations`); only a signed-in claim mints.
 - **A claim is a self-mint.**
   - The token carries the claimer's own role, user type and groups, exactly as `POST /me/tokens` does, and has no `minted_by`.
   - Claiming never grants the `api_token` feature: a person without it is refused `403` `capability_feature`.
@@ -265,10 +266,10 @@ Admin > Credentials shows it as a State column and an "Also show revoked tokens"
 
 | `disposition` | Condition |
 |---|---|
-| `needs_decision` | Live; no pending invitation replaces it; not moved. |
+| `needs_decision` | Live, an expired token not yet revoked included (only `DELETE` acts on one); no pending invitation replaces it; not moved, or moved to an identity since retired. |
 | `awaiting_owner` | Live; a pending invitation names it in `replaces_token_id`. |
 | `replaced_by_owner` | Revoked by that invitation's claim. |
-| `linked_to_service_identity` | Live; moved to a service identity. |
+| `linked_to_service_identity` | Live; moved to a service identity that is not retired. |
 | `moved_to_service_identity` | Revoked after a move. |
 | `revoked` | Revoked, neither of the above. |
 

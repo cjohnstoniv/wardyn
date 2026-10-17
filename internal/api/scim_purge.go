@@ -108,7 +108,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return s.refuseUnproved(ctx, st, ident, forms.unproved)
 	}
 	forms = forms.destructive()
-	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
+	isEmail := func(t string) bool {
+		return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) && !slices.Contains(forms.named, t)
+	}
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
 	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}, {Step: jobStepInvites}, {Step: jobStepSponsor}}
