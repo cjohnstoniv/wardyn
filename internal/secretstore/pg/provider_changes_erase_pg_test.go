@@ -317,3 +317,76 @@ func TestPG_ProviderPurgesAndErasesNeverDeadlock(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A provider removal writes no history, but it deletes an owner's old history for the provider, so it
+// locks that owner's counter row like an edit: an owner known only by their history is waited for.
+func TestPG_RemovalOnlyPurgeLocksAnOwnerKnownByTheirHistory(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	x := "gen-removal-" + uuid.NewString()
+	removedUID := uuid.NewString()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, x, "prov-"+removedUID); err != nil {
+		t.Fatal(err)
+	}
+	erase, release := holdCounter(t, s, x)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(removalOf(removedUID)), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("a removal-only purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := erase.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The purge deletes a provider's old history only for the owners it locked. History that lands for an
+// owner the purge did not lock, between its choosing owners and its delete, is left to that owner's own
+// erase: deleting it unlocked is what the erase's ordering cannot see.
+func TestPG_ProviderPurgeLeavesTheHistoryOfAnOwnerItDidNotLock(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	a, b := "gen-keep-a-"+uuid.NewString(), "gen-keep-b-"+uuid.NewString()
+	oldUID := uuid.NewString()
+	putProviderKey(t, s, a, oldUID)
+	third, release := holdCounter(t, s, a)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(editOf(oldUID, "uid-2")), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("the purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// History for the same provider lands for an owner nothing has locked, while the purge waits.
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, b, "prov-"+oldUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := third.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := historyRows(t, s, b); n != 1 {
+		t.Fatalf("the unlocked owner has %d history rows after the purge, want the 1 that landed", n)
+	}
+}

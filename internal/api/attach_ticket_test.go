@@ -285,6 +285,27 @@ func TestAttachWS_AttributedRefusalsDropCounted(t *testing.T) {
 	}
 }
 
+// TestUITicket_AttributedRefusalsDropCounted is the UI gateway's twin: its attributed refusals past the
+// burst are dropped from the trail and counted too.
+func TestUITicket_AttributedRefusalsDropCounted(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, newAuthzStore())
+	frozen := time.Now()
+	cfg.Now = func() time.Time { return frozen }
+	srv := New(cfg)
+	run := uuid.New()
+	const probes = 20
+	for range probes {
+		srv.refuseUITicket(httptest.NewRecorder(), run, "app", ticketActor{principal: "mallory"}, verdictRevoked)
+	}
+	srv.metrics.mu.Lock()
+	suppressed := srv.metrics.authFailedSuppressed
+	srv.metrics.mu.Unlock()
+	if want := int64(probes - int(authFailedBurst)); suppressed != want {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+	}
+}
+
 // TestAttach_RefusesAKeptRun: a run the lease ended is RUNNING with its agent
 // stopped, so both attach gates refuse it with a plain 409, rather than minting
 // a ticket or upgrading a WebSocket that dies on its first exec.
