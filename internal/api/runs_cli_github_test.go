@@ -201,3 +201,85 @@ func TestGitHubCLI_ConfineKeepsTheRunsOwnDeny(t *testing.T) {
 		}
 	}
 }
+
+// A profile that denies any host of GitHub's family withholds the GitHub CLI door, as it withholds the git
+// broker: the sandbox keeps no inert token for it, the proxy gets no grant, and api.github.com is closed
+// again. A profile that denies something else leaves the door.
+func TestGitHubCLI_FamilyDenyWithholdsTheDoor(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deny     []string
+		wantDoor bool
+	}{
+		{"github.com alone", []string{"github.com"}, false},
+		{"the API host alone", []string{"api.github.com"}, false},
+		{"the content wildcard", []string{"*.githubusercontent.com"}, false},
+		{"an unrelated host", []string{"example.org"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, ref := githubCLIFixture(t)
+			f.cs.govProfile = &types.GovernanceProfile{ID: uuid.New(), Name: "no-github", Ceiling: types.RunPolicySpec{EligibleGrants: f.srv.cfg.DefaultPolicy.EligibleGrants, DeniedDomains: tc.deny}}
+			fr := f.srv.cfg.Runner.(*fakeRunner)
+			body := componentBody(ref)
+			body["repo"] = "acme/app"
+			if w := f.ask(t, componentDoors[0], body); w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s, want 201", w.Code, w.Body)
+			}
+			fr.waitForSandbox(t)
+			fr.mu.Lock()
+			spec := fr.lastSpec
+			fr.mu.Unlock()
+			pc := spec.ProxyConfig
+			if (pc.GitHubAPI != nil) != tc.wantDoor {
+				t.Fatalf("door = %+v, want present %v", pc.GitHubAPI, tc.wantDoor)
+			}
+			if tc.wantDoor {
+				return
+			}
+			if _, ok := spec.Env["GH_TOKEN"]; ok {
+				t.Error("the sandbox still holds the door's inert token")
+			}
+			if slices.Contains(pc.Policy.AllowedDomains, "api.github.com:443") {
+				t.Errorf("allowed %v still opens the door's host", pc.Policy.AllowedDomains)
+			}
+			if !ceilingDenies(pc.Policy.DeniedDomains, "api.github.com") {
+				t.Errorf("denied %v lacks api.github.com", pc.Policy.DeniedDomains)
+			}
+		})
+	}
+}
+
+// On a revive the same family rule takes the door out of the stored config and closes its host.
+func TestGitHubCLI_ReviveWithholdsTheDoorUnderAFamilyDeny(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deny     []string
+		wantDoor bool
+	}{
+		{"github.com alone", []string{"github.com"}, false},
+		{"an unrelated host", []string{"example.org"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := types.AgentRun{ID: uuid.New()}
+			cfg := &proxy.Config{RunID: run.ID,
+				GitHubAPI: &proxy.GitHubAPIGrant{Repos: []string{"acme/app"}, Grants: map[string]uuid.UUID{"acme": uuid.New()}},
+				Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}}}
+			re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: tc.deny})
+			if rerr != nil {
+				t.Fatalf("refused: %+v", rerr)
+			}
+			if (cfg.GitHubAPI != nil) != tc.wantDoor {
+				t.Fatalf("door = %+v, want present %v", cfg.GitHubAPI, tc.wantDoor)
+			}
+			if tc.wantDoor {
+				return
+			}
+			if slices.Contains(cfg.Policy.AllowedDomains, "api.github.com:443") || !ceilingDenies(cfg.Policy.DeniedDomains, "api.github.com") {
+				t.Errorf("the door's host is still open: allowed %v denied %v", cfg.Policy.AllowedDomains, cfg.Policy.DeniedDomains)
+			}
+			if !slices.Equal(re.droppedLane, []string{githubDoorLane}) {
+				t.Errorf("dropped lanes %v, want [%s]", re.droppedLane, githubDoorLane)
+			}
+		})
+	}
+}
