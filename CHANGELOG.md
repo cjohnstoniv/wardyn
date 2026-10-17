@@ -153,7 +153,8 @@ what to set for the old behaviour.
   powered off" or "no prior holder") from run detail or `wardyn runner node-record`; a run whose node name was
   reused, or that the runner could not tie to one machine, needs two people. Migration `0189_run_containment_pending`
   adds `run_containment_pending` and `run_node_records` and lets a `stop_proxy` action carry a node record instead
-  of an outage loss.
+  of an outage loss. The runner's machine list and each node record's source id are shown to security operators
+  only.
 - A Kubernetes run whose proxy was given an address still fenced for an earlier run fails at start with
   `relay_ip_fenced`.
 - Governance has a Baseline hosts tab, the console for `PUT /governance/egress-baseline`: the hosts the autonomy
