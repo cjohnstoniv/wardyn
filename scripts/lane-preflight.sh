@@ -197,11 +197,18 @@ if [ "${candidate}" = 1 ]; then
   done < <(grep -E '^ui/e2e/[^/]+\.spec\.ts$' <<<"${changed}" || true)
   if [ "${#e2e_specs[@]}" -gt 0 ]; then
     ss -ltn 2>/dev/null | grep -q ':8088 ' && log "[candidate] note: :8088 is held by another process; run-ui-e2e.sh picks free ports itself, so this does not collide"
+    # As in ci.yml: governance-changes needs the second-human switch on in the daemon, which changes every
+    # other spec's writes, so it skips by name beside them and runs on its own with the switch on.
+    four_eyes=0
+    for s in "${e2e_specs[@]}"; do [ "${s}" = governance-changes ] && four_eyes=1; done
     for pass in 1 2 3; do
       if [ "${pass}" = 1 ]; then
-        step "6 playwright pass 1/3 (${e2e_specs[*]})" "${G[@]}" scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+        step "6 playwright pass 1/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes scripts/run-ui-e2e.sh "${e2e_specs[@]}"
       else
-        step "6 playwright pass ${pass}/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+        step "6 playwright pass ${pass}/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+      fi
+      if [ "${four_eyes}" = 1 ]; then
+        step "6 playwright pass ${pass}/3 (governance-changes, second-human switch on)" "${G[@]}" env WARDYN_GOVERNANCE_SECOND_HUMAN=true WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh governance-changes
       fi
     done
   else
