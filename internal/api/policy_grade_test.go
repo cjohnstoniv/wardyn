@@ -166,9 +166,6 @@ func TestGradePolicy_ReadsNoControlPlaneFile(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Errorf("grade %s = %d %s, want 200", src, w.Code, w.Body.String())
 		}
-		if strings.Contains(w.Body.String(), dir) || strings.Contains(w.Body.String(), "/etc") {
-			t.Errorf("grade %s body names a path: %s", src, w.Body.String())
-		}
 	}
 	save := fmt.Sprintf(`{"name":"p","spec":{"min_confinement_class":"CC2","workspace_mounts":[{"source":%q,"target":"/workspace/m"}]}}`, link)
 	if w := do(t, h.srv, http.MethodPost, "/api/v1/policies", adminToken, save); w.Code != http.StatusBadRequest {

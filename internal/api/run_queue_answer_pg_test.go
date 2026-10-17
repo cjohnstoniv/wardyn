@@ -23,7 +23,7 @@ func TestPG_QueuedLaunchAnswersWhatAnImmediateLaunchAnswers(t *testing.T) {
 	e.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	e.srv.cfg.MaskRegistry = secretmask.NewRegistry()
 	e.srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
-	storeSSOBlobFor(t, e.srv, adminTokenPrincipal, putAWSSSOBlob(t, e.srv, awsSSOTestFixedNow.Add(time.Hour)))
+	storeSSOBlobFor(t, e.srv, e.personP, putAWSSSOBlob(t, e.srv, awsSSOTestFixedNow.Add(time.Hour)))
 	if _, err := e.srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{
 		Runners: &types.RunnerSettings{Enabled: true}, ModelProviders: providerBlock(awsSSOTestProvider()),
 	}); err != nil {
@@ -33,7 +33,7 @@ func TestPG_QueuedLaunchAnswersWhatAnImmediateLaunchAnswers(t *testing.T) {
 	occupant := e.occupy(pool)
 	defer e.free(occupant)
 
-	_, w := e.launch(nil, e.reread(pool), `,"confinement_class":"CC1"`)
+	_, w := e.launch(e.person, e.reread(pool), `,"confinement_class":"CC2"`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("launch into a full pool = %d %s; want 201", w.Code, w.Body)
 	}
