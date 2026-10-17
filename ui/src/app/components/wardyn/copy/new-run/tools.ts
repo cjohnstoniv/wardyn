@@ -263,8 +263,11 @@ export const NR_TOOLS = {
   TOKEN_LABEL: "Token",
   TOKEN_CONFIRM: "Save token",
   TOKEN_SAVED: "Token saved.",
+  NOT_CHECKED: "Not checked yet — too many checks this minute. Check again in a moment.",
   STICKY_ONE: "1 item still needs setup",
   STICKY_MANY: (n: string | number) => `${n} items still need setup`,
   STICKY_DONE: "Everything is set up",
+  // What a screen reader hears for the footer count: the step's question, then the count.
+  STICKY_SPOKEN: (words: string) => `What else does it need? ${words}`,
   REVIEW_RUN: "Review run",
 } as const;

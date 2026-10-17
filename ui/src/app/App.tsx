@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
+import { RouteFallback } from "./components/wardyn/route-fallback";
 import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
@@ -201,22 +202,6 @@ const GettingStarted = React.lazy(() =>
     default: m.GettingStarted,
   })),
 );
-
-// Shown while a lazy route's chunk is in flight. Deliberately the same mark +
-// spinner as the auth probe above, so a slow chunk reads as the console still
-// connecting rather than as a broken screen.
-function RouteFallback() {
-  return (
-    <div
-      className="flex min-h-[60vh] flex-col items-center justify-center gap-3"
-      role="status"
-      aria-live="polite"
-    >
-      <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      <span className="sr-only">Loading…</span>
-    </div>
-  );
-}
 
 function suspend(screen: React.ReactNode) {
   return <React.Suspense fallback={<RouteFallback />}>{screen}</React.Suspense>;

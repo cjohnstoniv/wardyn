@@ -72,6 +72,10 @@ done
 mode="${FAKE_MODE:-$mode}"
 [ -z "${by:-}" ] || [ -z "${FAKE_BYPASS:-}" ] || mode=bypassPermissions
 [ -z "${man:-}" ] || mode="${FAKE_MANUAL_MODE:-default}"
+if [ -n "${FAKE_NO_INIT_FROM:-}" ]; then
+    n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
+    [ "$n" -lt "$FAKE_NO_INIT_FROM" ] || exit 1
+fi
 echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\",\"tools\":[$tools]}"
 exit 1
 FAKE
@@ -168,6 +172,17 @@ fake_cli "$pin" "${all[@]}"
 if out="$(FAKE_DENY_IGNORED=1 probe)"; then fail "a CLI that still lists a denied tool must FAIL"; fi
 grep -q "attended-rules/L0.json: Claude Code $pin still lists 'Bash'" <<<"$out" || fail "an ignored deny list must be named; got: $out"
 echo "ok  an ignored deny list fails"
+
+# 8f2. A CLI that prints no init event with a tools array for the managed-file runs => fail: an absent list
+# must not read as "the denied tools are gone". Count the init runs of a good pass, then starve the last
+# ones (one tools run per attended-rules document, after the unfiled control).
+: > "$TMP/n"; rm -f "$TMP/n"
+inits=$(FAKE_NO_INIT_FROM=99999 FAKE_COUNT="$TMP/n" probe >/dev/null; cat "$TMP/n")
+docs=$(ls "$TMP/internal/agentpolicy"/testdata/attended-rules/*.json | wc -l)
+rm -f "$TMP/n"
+if out="$(FAKE_NO_INIT_FROM=$((inits - docs + 1)) FAKE_COUNT="$TMP/n" probe)"; then fail "a CLI that prints no tools list for a managed run must FAIL"; fi
+grep -q "printed no init event with a tools array" <<<"$out" || fail "a missing tools list must be named; got: $out"
+echo "ok  a managed run with no tools list fails"
 
 # 8g. A CLI where bypass beats a managed ask => fail naming the document.
 if out="$(FAKE_ASK_BYPASSED=1 probe)"; then fail "a CLI that lets --dangerously-skip-permissions through a managed ask must FAIL"; fi

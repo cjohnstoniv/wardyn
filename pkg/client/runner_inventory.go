@@ -106,6 +106,12 @@ func (c *Client) ListRunnerTokensPage(ctx context.Context, owner string, opts ..
 	return tokens, hdr.Get("X-Wardyn-Truncated") == "true", err
 }
 
+// RevokeMyRunner revokes one of the caller's own runners: it is disconnected and never admitted again. An absent id,
+// another person's runner and one already revoked answer alike.
+func (c *Client) RevokeMyRunner(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/runners/"+id.String(), nil, nil)
+}
+
 // RevokeRunnerToken stops an unused registration token being redeemed (admin or security_admin).
 func (c *Client) RevokeRunnerToken(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/runners/tokens/"+id.String(), nil, nil)

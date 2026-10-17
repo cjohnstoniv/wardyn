@@ -168,7 +168,7 @@ func runnerSetCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			c := client()
-			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) })
+			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return c.ListRemoteRunners(cmd.Context()) }, nil)
 			if err != nil {
 				return err
 			}

@@ -403,3 +403,39 @@ func TestApprovalGrantReleasesEveryPortOnTheHost(t *testing.T) {
 		}
 	}
 }
+
+// TestRaiseStampsTheResolvedHold: a wait_for_review proxy puts the hold it resolved into the raise scope, so
+// the console reports the hold for as long as the proxy holds it; a passive proxy stamps none.
+func TestRaiseStampsTheResolvedHold(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode types.FirstUseMode
+		want int
+	}{
+		{"wait for review", types.FirstUseWaitForReview, 90},
+		{"deny with review", types.FirstUseDenyWithReview, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var scope struct {
+				RequestedScope struct {
+					Mode        string `json:"mode"`
+					HoldSeconds int    `json:"hold_seconds"`
+				} `json:"requested_scope"`
+			}
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&scope)
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: uuid.New(), State: types.ApprovalPending})
+			}))
+			defer cp.Close()
+			ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+			ap.configureHold(tc.mode, 90*time.Second, 4)
+			if _, err := ap.raise(context.Background(), "egress.test"); err != nil {
+				t.Fatal(err)
+			}
+			if scope.RequestedScope.HoldSeconds != tc.want {
+				t.Errorf("hold_seconds = %d, want %d (mode %q)", scope.RequestedScope.HoldSeconds, tc.want, scope.RequestedScope.Mode)
+			}
+		})
+	}
+}

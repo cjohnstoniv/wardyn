@@ -32,7 +32,7 @@ export const serviceIdentities = {
   // POST /api/v1/me/invitations/{id}/claim -> 201 with the new token, `token` holding the plaintext.
   async claimInvitation(id: string, body: ClaimInvitationRequest): Promise<ApiToken> {
     return asJson<ApiToken>(
-      await wfetch(`/me/invitations/${encodeURIComponent(id)}/claim`, { method: "POST", body: JSON.stringify(body) }),
+      await wfetch(`/me/invitations/${encodeURIComponent(id)}/claim`, { method: "POST", asPerson: true, body: JSON.stringify(body) }),
     );
   },
 
@@ -45,7 +45,7 @@ export const serviceIdentities = {
 
   // POST /api/v1/me/service-identities/{name}/tokens -> 201 with the new token, `token` holding the plaintext.
   async mintToken(name: string, body: MintServiceTokenRequest): Promise<ApiToken> {
-    return asJson<ApiToken>(await wfetch(tokensPath(name), { method: "POST", body: JSON.stringify(body) }));
+    return asJson<ApiToken>(await wfetch(tokensPath(name), { method: "POST", asPerson: true, body: JSON.stringify(body) }));
   },
 
   // GET /api/v1/me/service-identities/{name}/tokens -> the identity's tokens, revoked and expired included.

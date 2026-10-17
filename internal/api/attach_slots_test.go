@@ -153,14 +153,14 @@ func dialAttachRefusedAs(t *testing.T, ts *httptest.Server, srv *Server, runID u
 }
 
 // capRefusals is the session.attach rows refused at the cap, and their data.
-func capRefusals(audit *sshTestRecorder) []map[string]any {
+func capRefusals(audit *sshTestRecorder, limit int) []map[string]any {
 	var out []map[string]any
 	for _, ev := range audit.snapshot() {
 		var d map[string]any
 		if ev.Action != "session.attach" || ev.Outcome != "failure" || json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		if d["reason"] == reasonAttachSessionCapReached && d["state"] == "refused" && d["max"] == float64(maxAttachSessionsPerRun) {
+		if d["reason"] == reasonAttachSessionCapReached && d["state"] == "refused" && d["max"] == float64(limit) {
 			out = append(out, d)
 		}
 	}
@@ -197,7 +197,7 @@ func TestAttachSlots_TheNinthSessionIsRefusedBeforeItsExecOnBothLanes(t *testing
 	if n := fr.attachCount(); n != maxAttachSessionsPerRun {
 		t.Fatalf("Runner.Attach calls = %d, want %d: a refused session opened an exec", n, maxAttachSessionsPerRun)
 	}
-	got := capRefusals(audit)
+	got := capRefusals(audit, maxAttachSessionsPerRun)
 	if len(got) != 2 || got[0]["transport"] != nil || got[1]["transport"] != "ssh" {
 		t.Fatalf("cap refusals audited = %v, want the web one then the ssh one", got)
 	}
@@ -331,6 +331,44 @@ func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
 	}
 }
 
+// TestAttachSlots_TicketMintNamesThePrincipalCap: on an operator-owned run the mint refuses a principal
+// at its own cap, the cap its upgrade would hit, while the run still has room and another principal
+// mints as before.
+func TestAttachSlots_TicketMintNamesThePrincipalCap(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Lock()
+	ast.runs[run.ID] = run
+	ast.mu.Unlock()
+	for range maxAttachSessionsPerPrincipal {
+		if _, ok := srv.reserveAttachSlot(run, adminTokenPrincipal); !ok {
+			t.Fatal("a slot below the principal cap was refused")
+		}
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach-ticket", adminToken, "")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonAttachSessionCapReached) {
+		t.Fatalf("mint at the principal cap = %d %s, want 503 %s", w.Code, w.Body, reasonAttachSessionCapReached)
+	}
+	// The sentence names the cap that refused: the person's seven, not the run's eight.
+	if got := decodeErrorBody(t, w).Error; got != "you have too many open terminal sessions on this run (max 7 per person) — close one and retry" {
+		t.Errorf("mint at the principal cap said %q", got)
+	}
+	if refused := srv.attachSlotsFull(run, "bob@example.com"); refused != "" {
+		t.Errorf("another principal reads as full while the run has room: %q", refused)
+	}
+	// Fill the run: everyone is now told the run's cap.
+	if _, ok := srv.reserveAttachSlot(run, "bob@example.com"); !ok {
+		t.Fatal("the run's last slot was refused")
+	}
+	if got := srv.attachSlotsFull(run, "carol@example.com"); got != "too many open terminal sessions for this run (max 8) — close one and retry" {
+		t.Errorf("a full run said %q", got)
+	}
+}
+
 // TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter: on an operator-owned run one
 // principal stops at seven of the eight sessions and is refused the eighth like a full run, so another
 // principal still gets in; the run cap holds for everyone. A personal run admits only its owner's own
@@ -344,8 +382,8 @@ func TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter(t *testing
 	if code := dialAttachRefusedAs(t, ts, srv, run.ID, holderSecond); code != http.StatusServiceUnavailable {
 		t.Fatalf("the principal's eighth attach was refused with %d, want 503", code)
 	}
-	if got := capRefusals(audit); len(got) != 1 {
-		t.Fatalf("cap refusals audited = %v, want one, in the run cap's shape", got)
+	if got := capRefusals(audit, maxAttachSessionsPerPrincipal); len(got) != 1 {
+		t.Fatalf("cap refusals audited = %v, want one, naming the person's cap", got)
 	}
 	readAttachMode(t, dialAttach(t, ts, srv, run.ID, holderOwner, ""))
 	waitForSession(t, fr, maxAttachSessionsPerPrincipal)

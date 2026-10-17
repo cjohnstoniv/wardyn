@@ -72,7 +72,7 @@ Table `person_invitations`, in migration 0157. No secret column.
 | Principal fails `validSubject`, is reserved, or is a `service:` principal | `422` `invitation_target_invalid` |
 | No person row and no bound identity has that principal | `422` `invitation_target_unknown`: "create the person first with POST /people" |
 | `replaces_token_id` is not live, not admin-minted, or belongs to another principal | `422` `invitation_replaces_invalid` |
-| `expires_in_seconds` outside `1` to `14d`, or `token_ttl_seconds` negative | `400` `invitation_ttl_invalid` |
+| `expires_in_seconds` outside `1` to `14d`, or `token_ttl_seconds` negative or over 100 years | `400` `invitation_ttl_invalid` |
 | Ten pending invitations already name the target | `422` `invitation_cap_reached` |
 | Otherwise | `201` with the record and `console_path`, a row `invitation.create` |
 

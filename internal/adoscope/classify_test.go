@@ -703,3 +703,27 @@ func TestOptionsLocationDiscovery(t *testing.T) {
 		{name: "a zero Content-Length is not a body", req: withHeader(opt("/acme/_apis"), "Content-Length", "0"), want: CapDiscovery},
 	})
 }
+
+// An empty segment is refused, not collapsed: a service that collapses "//" reads a different path than the
+// one the rule judged. One leading and one trailing separator stay accepted.
+func TestDecodeSegments_RefusesAnEmptySegment(t *testing.T) {
+	for _, path := range []string{"/org//_apis/git/repositories", "/org/\\/_apis", "//", "/org//", "//org/_apis"} {
+		if segs, err := decodeSegments(path); err == nil {
+			t.Errorf("decodeSegments(%q) = %q, want an empty-segment refusal", path, segs)
+		} else if !strings.Contains(err.Error(), "empty segment") {
+			t.Errorf("decodeSegments(%q) error = %v, want it to name the empty segment", path, err)
+		}
+	}
+	for path, want := range map[string][]string{
+		"/org/_apis/":     {"org", "_apis"},
+		"org/_apis":       {"org", "_apis"},
+		"\\org\\_apis\\":  {"org", "_apis"},
+		"/":               nil,
+		"":                nil,
+		"/Org/_APIS/Git/": {"org", "_apis", "git"},
+	} {
+		if got, err := decodeSegments(path); err != nil || !slices.Equal(got, want) {
+			t.Errorf("decodeSegments(%q) = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}

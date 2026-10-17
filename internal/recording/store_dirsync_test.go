@@ -48,3 +48,28 @@ func TestFSStore_SaveCastIgnoresDirectorySyncThatIsNotSupported(t *testing.T) {
 		})
 	}
 }
+
+// The in-place copy of wardyn-rec's shared-volume file is acknowledged like a cast, so its bytes are
+// fsynced before SaveRecordingFile returns, and a failed fsync is a failed save.
+func TestFSStore_SaveRecordingFileSyncsTheFile(t *testing.T) {
+	const name = "11111111-1111-4111-8111-111111111111.log"
+	orig := syncFile
+	t.Cleanup(func() { syncFile = orig })
+	synced := 0
+	syncFile = func(f *os.File) error { synced++; return orig(f) }
+	s, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRecordingFile(context.Background(), name, strings.NewReader("data")); err != nil {
+		t.Fatal(err)
+	}
+	if synced != 1 {
+		t.Errorf("the file was fsynced %d times, want once", synced)
+	}
+	boom := errors.New("fsync failed")
+	syncFile = func(*os.File) error { return boom }
+	if err := s.SaveRecordingFile(context.Background(), name, strings.NewReader("more")); !errors.Is(err, boom) {
+		t.Errorf("a failed fsync returned %v, want it", err)
+	}
+}

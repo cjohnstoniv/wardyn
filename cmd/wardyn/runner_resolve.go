@@ -16,10 +16,11 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// runnerRef is a runner an argument names: one of your self-hosted runners (self) or a remote-hosted
-// runner (remote, its id).
+// runnerRef is a runner an argument names: one of your self-hosted runners (self), one of the
+// organization's own runners (org), or a remote-hosted runner (remote, its id).
 type runnerRef struct {
 	self   *uuid.UUID
+	org    *uuid.UUID
 	remote string
 	name   string
 	// unclaimed is set when the runner was read among your own and its owner has not claimed it yet.
@@ -52,11 +53,22 @@ func readClaims(cmd *cobra.Command, c *sdk.Client, refs []runnerRef) error {
 // in reports whether the pool's members include this runner.
 func (r runnerRef) in(members []sdk.RunnerPoolMemberView) bool {
 	for _, m := range members {
-		if (r.self != nil && m.ID == r.self.String()) || (r.self == nil && m.ID == r.remote) {
+		if id := r.id(); m.ID == id {
 			return true
 		}
 	}
 	return false
+}
+
+// id is the runner id the pool's members are matched by: a runner's own id, or a remote-hosted runner's.
+func (r runnerRef) id() string {
+	switch {
+	case r.self != nil:
+		return r.self.String()
+	case r.org != nil:
+		return r.org.String()
+	}
+	return r.remote
 }
 
 func (r runnerRef) kind() string {
@@ -66,12 +78,44 @@ func (r runnerRef) kind() string {
 	return "remote-hosted"
 }
 
-// resolveRunner reads <runner>: a runner id names your self-hosted runner as given; otherwise the name
-// (or a remote-hosted runner's id) is looked up among your own runners and the remote-hosted runners
-// remotes lists. A name both kinds answer to is refused; one neither answers to is passed on as a
-// remote-hosted runner's id, and the server's sentence says why it cannot join.
-func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func() ([]sdk.RemoteRunnerView, error)) (runnerRef, error) {
+// orgRunners reads the organization's own runners, claimed or not, from the administrators' runner list
+// (an admin or security admin; the server refuses it to anyone else, which unlessRefused drops).
+func orgRunners(cmd *cobra.Command, c *sdk.Client) ([]sdk.RunnerView, error) {
+	const page = 1000
+	var out []sdk.RunnerView
+	for offset := 0; ; offset += page {
+		rows, truncated, err := c.ListRunnersPage(cmd.Context(), "", sdk.ListOpts{Limit: page, Offset: offset})
+		if err := unlessRefused(err); err != nil || len(rows) == 0 {
+			return out, err
+		}
+		for _, r := range rows {
+			if r.OwnerKind == types.RunnerOwnerOrg {
+				out = append(out, r)
+			}
+		}
+		if !truncated {
+			return out, nil
+		}
+	}
+}
+
+// resolveRunner reads <runner>: a runner id names your self-hosted runner as given, unless orgs (set for an
+// organization pool) lists it as an organization runner; otherwise the name (or a remote-hosted runner's id)
+// is looked up among your own runners, the remote-hosted runners remotes lists and the organization runners
+// orgs lists. A name more than one answers to is refused; one none answers to is passed on as a remote-hosted
+// runner's id, and the server's sentence says why it cannot join.
+func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func() ([]sdk.RemoteRunnerView, error), orgs func() ([]sdk.RunnerView, error)) (runnerRef, error) {
+	var org []sdk.RunnerView
+	if orgs != nil {
+		var err error
+		if org, err = orgs(); err != nil {
+			return runnerRef{}, err
+		}
+	}
 	if id, err := uuid.Parse(arg); err == nil {
+		if i := slices.IndexFunc(org, func(r sdk.RunnerView) bool { return r.ID == id }); i >= 0 {
+			return runnerRef{org: &id, name: org[i].Name}, nil
+		}
 		return runnerRef{self: &id, name: arg, byID: true}, nil
 	}
 	var found []runnerRef
@@ -92,6 +136,12 @@ func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func()
 	for _, r := range rs {
 		if r.ID == arg || r.Name == arg {
 			found = append(found, runnerRef{remote: r.ID, name: arg})
+		}
+	}
+	for _, r := range org {
+		if r.Name == arg {
+			id := r.ID
+			found = append(found, runnerRef{org: &id, name: arg})
 		}
 	}
 	switch len(found) {
@@ -118,6 +168,9 @@ func resolveMember(pool sdk.RunnerPool, members []sdk.RunnerPoolMemberView, arg 
 				return runnerRef{}, fmt.Errorf("runner %q in %s has no runner id", arg, pool.Name)
 			}
 			ref = runnerRef{self: &id, name: arg}
+			if m.Runner != nil && m.Runner.OwnerKind == types.RunnerOwnerOrg {
+				ref = runnerRef{org: &id, name: arg}
+			}
 		}
 		found = append(found, ref)
 	}

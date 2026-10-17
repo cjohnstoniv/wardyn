@@ -102,7 +102,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		// A pinned image (the flag, whose default is the environment) outranks everything. Otherwise
 		// the organisation's answer at each connect wins; until the first connect, the image it named
 		// at registration, else this binary's release image, else an unmarked image an earlier setup left.
-		opts.proxyImagePinned = proxyImagePinned(opts.proxyImage, identity.ProxyImage, cmd.Flags().Changed("proxy-image"), os.Getenv)
+		opts.proxyImagePinned = proxyImagePinned(opts.proxyImage, identity.ProxyImage, proxyImageGiven(cmd), os.Getenv)
 		if !opts.proxyImagePinned {
 			opts.proxyImage = cmp.Or(identity.ProxyImage, releaseProxyImage(), opts.proxyImage)
 		}

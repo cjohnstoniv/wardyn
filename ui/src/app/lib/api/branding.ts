@@ -27,7 +27,7 @@ export const branding = {
     return asJson<Branding>(await wfetch("/branding/settings", { method: "GET" }));
   },
   async save(body: BrandingSave): Promise<Branding> {
-    return asJson<Branding>(await wfetch("/branding/settings", { method: "PUT", body: JSON.stringify(body) }));
+    return asJson<Branding>(await wfetch("/branding/settings", { method: "PUT", asPerson: true, body: JSON.stringify(body) }));
   },
   /** DELETE /branding/settings: everything goes, the console is Wardyn's own again. 204. */
   async remove(): Promise<void> {

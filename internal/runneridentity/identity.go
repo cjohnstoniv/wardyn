@@ -59,7 +59,8 @@ func Load(stateDir, orgURL string) (Identity, error) {
 	}
 	var id Identity
 	dec := json.NewDecoder(bytes.NewReader(meta))
-	dec.DisallowUnknownFields()
+	// Unknown keys are ignored (from 0.9.3 on) so an identity a later runner wrote still loads after a
+	// rollback; the file checks above and the key and organisation checks below still refuse.
 	if err := dec.Decode(&id); err != nil {
 		return Identity{}, fmt.Errorf("decode runner identity: %w", err)
 	}

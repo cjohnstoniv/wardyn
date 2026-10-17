@@ -26,7 +26,7 @@ import (
 )
 
 func newRegisterCommand() *cobra.Command {
-	var org, tokenFile, stateDir, name, sub, arch string
+	var org, tokenFile, stateDir, name, sub, arch, trustedCAFile string
 	var ifUnregistered bool
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
@@ -57,7 +57,7 @@ func newRegisterCommand() *cobra.Command {
 				return nil
 			}
 		}
-		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch})
+		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile})
 		if err != nil {
 			return err
 		}
@@ -74,6 +74,7 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
 	cmd.Flags().StringVar(&sub, "substrate", "docker", "where this runner's runs execute: docker or k8s (k8s measures nothing: give every total as a flag)")
 	cmd.Flags().StringVar(&arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture this runner reports, amd64 or arm64")
+	cmd.Flags().StringVar(&trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) the registration call trusts, as serve's flag of the same name")
 	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
@@ -123,6 +124,8 @@ type registerArgs struct {
 	noMeasure bool
 	// arch (k8s) is --arch, reported in place of the engine's.
 	arch string
+	// trustedCAFile is --trusted-ca-file: extra roots the registration call trusts beside the system's.
+	trustedCAFile string
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -151,6 +154,15 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		name = machine
 	}
 	token, err := readRegistrationToken(tokenFile)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	// Read before anything is spent, like the token: an unusable bundle keeps both.
+	bundle, _, err := loadTrustedCA(a.trustedCAFile)
+	if err != nil {
+		return registeredRunner{}, err
+	}
+	orgClient, err := orgHTTPClient(bundle)
 	if err != nil {
 		return registeredRunner{}, err
 	}
@@ -190,6 +202,9 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
+	if orgClient != nil {
+		client.HTTPClient.Transport = orgClient.Transport
+	}
 	arch := a.arch
 	if arch == "" && !a.noMeasure {
 		arch = engineArch(cmd.Context())

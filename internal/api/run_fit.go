@@ -94,6 +94,9 @@ func judgeFit(fit runner.Fit, waits bool) runFitVerdict {
 	for _, q := range fit.Quota {
 		if short := breachedAxes(q.Axes, waits); len(short) > 0 {
 			v.refusal = quotaExceededReason(q.Name, short)
+			if waits {
+				v.refusal = quotaNeverFitsReason(q.Name, short)
+			}
 			return v
 		}
 		if pct, ok := nearFullPct(q.Axes); ok {
@@ -142,7 +145,7 @@ func nearFullPct(axes []runner.QuotaAxis) (int, bool) {
 	return top, warn
 }
 
-// The five sentences below are the console's canon (mock packet M1, section 3) and the console
+// The six sentences below are the console's canon (mock packet M1, section 3) and the console
 // adds no string of its own: it shows the server's text. {need} and {left} count both of the
 // run's pods.
 
@@ -150,6 +153,14 @@ func quotaExceededReason(quota string, short []runner.QuotaAxis) string {
 	return fmt.Sprintf("this run needs %s, more than quota %s has left (%s). Stop a run, or ask your admin to raise the quota.",
 		quotaAmounts(short, func(a runner.QuotaAxis) int64 { return a.Need }), quota,
 		quotaAmounts(short, func(a runner.QuotaAxis) int64 { return a.Left }))
+}
+
+// quotaNeverFitsReason is the refusal of a run that waits for a slot: its need is above the quota's
+// hard limit, so no amount of waiting or stopping other runs makes room.
+func quotaNeverFitsReason(quota string, short []runner.QuotaAxis) string {
+	return fmt.Sprintf("this run needs %s, more than quota %s can ever hold (%s). Make the run smaller, or ask your admin to raise the quota.",
+		quotaAmounts(short, func(a runner.QuotaAxis) int64 { return a.Need }), quota,
+		quotaAmounts(short, func(a runner.QuotaAxis) int64 { return a.Hard }))
 }
 
 func quotaNearFullWarning(quota string, pct int, axes []runner.QuotaAxis) string {

@@ -154,6 +154,18 @@ want='^(TestCrossPkg|TestDirect|TestProbe|TestViaAlias|TestViaGroup|TestViaHelpe
 [ "${got}" = "${want}" ] || fail "selector picked ${got}, want ${want}"
 ok "selector: direct, helper, method, alias (single and grouped), cross-package and probe tests selected; plain and comment-only not"
 
+# The slices: the slow tests in a weights file are dealt out heaviest first to the lightest slice,
+# the rest by hash; together the slices cover the selection and share only the probe.
+printf '10\tTestViaHelper\n9\tTestDirect\n2\tTestViaMethod\n1\tTestViaAlias\n' > "${tmp}/weights.tsv"
+slice() { (cd "${tmp}/s" && PG_TEST_WEIGHTS="${tmp}/weights.tsv" "${REPO_ROOT}/scripts/pg-test-select.sh" --part "$1" ./...); }
+s1="$(slice 1/2)" || fail "slice 1/2 failed"; s2="$(slice 2/2)" || fail "slice 2/2 failed"
+for t in TestViaHelper TestViaAlias; do grep -qw "${t}" <<<"${s1}" || fail "${t} not in slice 1: ${s1}"; grep -qw "${t}" <<<"${s2}" && fail "${t} also in slice 2"; done
+for t in TestDirect TestViaMethod; do grep -qw "${t}" <<<"${s2}" || fail "${t} not in slice 2: ${s2}"; grep -qw "${t}" <<<"${s1}" && fail "${t} also in slice 1"; done
+all="$({ tr -d '^()$' <<<"${s1}"; echo '|'; tr -d '^()$' <<<"${s2}"; } | tr -d '\n' | tr '|' '\n' | sort -u | paste -sd'|')"
+[ "${all}" = "$(tr -d '^()$' <<<"${want}")" ] || fail "slices do not cover the selection: ${all}"
+[ "$(grep -o TestProbe <<<"${s1}${s2}" | wc -l)" = 2 ] || fail "the probe is not in both slices"
+ok "selector: --part packs the weighted tests by seconds, slices cover the selection, probe in every slice"
+
 # The guard: a unit run (DSN unset) where TestHidden skipped naming WARDYN_TEST_PG, but the selector
 # cannot see how it reaches the gate, must fail; one the selector does see must pass.
 ev() { printf '{"Action":"%s","Package":"fixture","Test":"%s"%s}\n' "$1" "$2" "${3:-}"; }

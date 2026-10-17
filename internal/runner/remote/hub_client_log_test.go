@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -122,4 +123,35 @@ func TestRunnerLogsGoawayReasonThenReady(t *testing.T) {
 	}
 	cancel()
 	_ = awaitValue(t, context.Background(), done)
+}
+
+// A runner whose registration changed while it authenticated is told so, in a GOAWAY, rather than
+// met with a bare close it can only retry.
+func TestHubTellsARunnerWhoseRegistrationChanged(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"),
+		State: types.RunnerClaimed, CreatedAt: time.Now()}
+	reads := 0
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example",
+		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) {
+			reads++
+			current := row
+			if reads > 1 {
+				current.PublicKey = ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)) // re-registered under another key
+			}
+			return current, nil
+		},
+	})
+	defer hub.Close()
+	org, run := runnerwire.Loopback()
+	go func() { _ = hub.Serve(ctx, org, row.ID) }()
+	_, err = runnerwire.AuthenticateOrg(ctx, run, row.ID.String(), "https://org.example", key, nil)
+	if !errors.Is(err, runnerwire.ErrGoaway) || !strings.Contains(err.Error(), runnerwire.ReasonRegistrationLapsed) {
+		t.Fatalf("the runner was told %v, want a GOAWAY naming %s", err, runnerwire.ReasonRegistrationLapsed)
+	}
 }

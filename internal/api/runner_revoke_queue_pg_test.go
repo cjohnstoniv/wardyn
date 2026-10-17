@@ -92,8 +92,8 @@ func (e *queueEnv) endedForRevokedRunner(id uuid.UUID) {
 }
 
 // A waiting run the revoke could not end is not left to wait out its deadline: the revoke answers 500
-// and says the queue sweep ends it, and the sweep does, once the run can be ended, with nobody revoking
-// again.
+// and says the queue sweep ends it, and the sweep does, once the run can be ended and its retry wait
+// (revokedEndRetry) is over, with nobody revoking again.
 func TestPG_QueueSweepEndsTheWaitingRunARevokeCouldNotEnd(t *testing.T) {
 	e := newQueueEnv(t)
 	p, a, _ := cappedLaptops(e, 1)
@@ -111,6 +111,8 @@ func TestPG_QueueSweepEndsTheWaitingRunARevokeCouldNotEnd(t *testing.T) {
 		t.Fatalf("the run whose end is still refused is %s, want it QUEUED for the next tick", got.State)
 	}
 	e.exec(`DROP TRIGGER refuse_end ON agent_runs`)
+	later := time.Now().Add(revokedEndFirstWait)
+	e.srv.cfg.Now = func() time.Time { return later }
 	e.sweep()
 	e.endedForRevokedRunner(stuck.ID)
 }

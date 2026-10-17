@@ -42,6 +42,9 @@ export const NR_RUN = {
   POOL_LABEL: "Pool",
   POOL_HELP:
     "A pool is required. Pools you can use stay visible, with the reason when one can't take this run.",
+  /** The pool select's two kinds of pool (M-POOLS v6 words); the select does not group by them yet. */
+  POOLS_ORG: "Organization pools",
+  POOLS_USER: "User pools",
   POOL_OPTION_REASON: (pool: string | number, reason: string | number) => `${pool} · ${reason}`,
   REASON_NO_ONLINE: "No online runners",
   /** pending W-55: the recommended text until the owner answers. */
@@ -93,6 +96,8 @@ export const NR_RUN = {
   SET_BY_RUNNERS: "Set by your runners",
   /** pending W-03: the recommended text until the owner answers. */
   SET_BY_ORG: "Set by your organisation",
+  /** pending W-03: the recommended text until the owner answers. */
+  SET_BY_SERVER: "Set by this server",
   LIMITS_LABEL: "Per-run limits",
   LIMITS_NOTE: (profile: string | number) => `Strictest of this pool, ${profile} and this server applies`,
   LIMITS_NOTE_UNGOVERNED: "Strictest of this pool and this server",

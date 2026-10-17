@@ -73,6 +73,11 @@ const runResourcesScript = `
 n=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
 [ -n "$n" ] && [ "$n" -gt 0 ] && echo "nproc=$n"
 
+# The sandbox's own CPU cap ("<quota> <period>", or "max <period>" when uncapped): a run pinned at its cap
+# on a many-core host must read 100%, not cap/cores.
+cm=$(awk '{print $1, $2}' /sys/fs/cgroup/cpu.max 2>/dev/null)
+[ -n "$cm" ] && echo "cpu_max=$cm"
+
 u1=$(awk '$1=="usage_usec"{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
 p1=$(awk '{print $1}' /proc/uptime 2>/dev/null)
 [ -n "$u1" ] && echo "cpu_usage_usec_1=$u1"
@@ -543,6 +548,21 @@ func kvInt64(kv map[string]string, key string) (int64, bool) {
 	return n, err == nil
 }
 
+// cpuMaxCores reads cgroup v2 cpu.max ("<quota> <period>"): the cores the sandbox may use. False for
+// "max" (uncapped), an unreadable value or a non-positive period.
+func cpuMaxCores(raw string) (float64, bool) {
+	f := strings.Fields(raw)
+	if len(f) != 2 {
+		return 0, false
+	}
+	quota, err1 := strconv.ParseFloat(f[0], 64)
+	period, err2 := strconv.ParseFloat(f[1], 64)
+	if err1 != nil || err2 != nil || quota <= 0 || period <= 0 {
+		return 0, false
+	}
+	return quota / period, true
+}
+
 func kvFloat64(kv map[string]string, key string) (float64, bool) {
 	s, ok := kv[key]
 	if !ok {
@@ -566,9 +586,14 @@ func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
 	p1, ok3 := kvFloat64(kv, "uptime_1")
 	p2, ok4 := kvFloat64(kv, "uptime_2")
 	n, ok5 := kvInt64(kv, "nproc")
-	if ok1 && ok2 && ok3 && ok4 && ok5 && n > 0 {
+	// The denominator is the cgroup's CPU cap in cores when it has one, else the host's cores.
+	cores := float64(n)
+	if capCores, ok := cpuMaxCores(kv["cpu_max"]); ok {
+		cores, ok5 = capCores, true
+	}
+	if ok1 && ok2 && ok3 && ok4 && ok5 && cores > 0 {
 		if wallSec := p2 - p1; wallSec > 0 {
-			pct := float64(u2-u1) / (wallSec * 1e6) / float64(n) * 100
+			pct := float64(u2-u1) / (wallSec * 1e6) / cores * 100
 			resp.CPUPercent = &pct
 		}
 	}

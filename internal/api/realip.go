@@ -99,10 +99,14 @@ func forwardedClient(peer string, xff []string, trusted []netip.Prefix) (string,
 	return "", false
 }
 
+// limitedBroadcast is the IPv4 all-hosts broadcast address, which names no client.
+var limitedBroadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
 // forwardedHop accepts an address, or an address with a port (some cloud
 // gateways append one). A zone, a hostname or "unknown" is malformed, and so
-// is a loopback or unspecified address: no remote client has one, and a
-// loopback source_ip would satisfy the local-mode loopback-peer gate.
+// is a loopback, unspecified, multicast or broadcast address: no remote client has one, and a
+// loopback source_ip would satisfy the local-mode loopback-peer gate. A link-local address stays
+// accepted: a client on the gateway's own segment can have one.
 func forwardedHop(h string) (netip.Addr, bool) {
 	a, err := netip.ParseAddr(h)
 	if err != nil {
@@ -113,7 +117,7 @@ func forwardedHop(h string) (netip.Addr, bool) {
 		a = ap.Addr()
 	}
 	a = a.Unmap()
-	if a.Zone() != "" || a.IsLoopback() || a.IsUnspecified() {
+	if a.Zone() != "" || a.IsLoopback() || a.IsUnspecified() || a.IsMulticast() || a == limitedBroadcast {
 		return netip.Addr{}, false
 	}
 	return a, true

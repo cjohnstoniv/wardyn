@@ -230,6 +230,9 @@ func startupShapeRefusal(req createRunRequest) *runRefusal {
 		if !includedToolIDRE.MatchString(s.Tool) || s.Command != "" {
 			return runModeInvalid("startup: a harness startup names one included tool and no command")
 		}
+		if s.Tool == noHarnessCLI && s.Prompt != "" {
+			return runModeInvalid("startup.prompt: Your own tools starts no CLI, so it takes no starting prompt. Remove the prompt, or start another harness.")
+		}
 		if s.Prompt != "" && !runModeText(s.Prompt, true) {
 			return runModeInvalid("startup.prompt: write the starting prompt, up to %d characters", maxRunTaskLen)
 		}

@@ -141,6 +141,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WHERE_LABEL` | mock | Where should it run? |
 | `POOL_LABEL` | mock | Pool |
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
+| `POOLS_ORG` | deviation (pool words) | Organization pools |
+| `POOLS_USER` | deviation (pool words) | User pools |
 | `POOL_OPTION_REASON(pool, reason)` | mock | {pool} · {reason} |
 | `REASON_NO_ONLINE` | mock | No online runners |
 | `FIT_STARTS_NOW` | pending (W-55) | Starts now |
@@ -178,6 +180,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SET_BY(source)` | deviation (DS-5 §8) | Set by {source} |
 | `SET_BY_RUNNERS` | pending (W-03) | Set by your runners |
 | `SET_BY_ORG` | pending (W-03) | Set by your organisation |
+| `SET_BY_SERVER` | pending (W-03) | Set by this server |
 | `LIMITS_LABEL` | mock | Per-run limits |
 | `LIMITS_NOTE(profile)` | deviation (DS-5 §8) | Strictest of this pool, {profile} and this server applies |
 | `LIMITS_NOTE_UNGOVERNED` | deviation (DS-5 §8) | Strictest of this pool and this server |
@@ -282,7 +285,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
 | `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
 | `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
-| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_POLICY(size)` | deviation (approved 2026-10-17) | Clamped to {size} by this run's policy. |
 | `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
 | `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
@@ -614,9 +617,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOKEN_LABEL` | mock | Token |
 | `TOKEN_CONFIRM` | mock | Save token |
 | `TOKEN_SAVED` | mock | Token saved. |
+| `NOT_CHECKED` | deviation (approved 2026-10-17) | Not checked yet — too many checks this minute. Check again in a moment. |
 | `STICKY_ONE` | mock | 1 item still needs setup |
 | `STICKY_MANY(n)` | mock | {n} items still need setup |
 | `STICKY_DONE` | mock | Everything is set up |
+| `STICKY_SPOKEN(words)` | deviation (0.9.3 screen-reader footer) | What else does it need? {words} |
 | `REVIEW_RUN` | mock | Review run |
 
 ### 7.7 Document
@@ -756,6 +761,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_FILES` | mock | Files and code |
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
+| `POLICY_ACCEPTS_EDITS` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Claude Code accepts file edits without asking. Every other tool asks first. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `RAW_TITLE(format)` | mock | {format} run document |
@@ -766,6 +772,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
 | `LAUNCH_RUN` | mock | Launch run |
+| `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
+| `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
 | `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 | `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 
@@ -884,6 +892,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
 | `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
+| `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
 | `EMPTY_ACTION` | mock | Start a new run |

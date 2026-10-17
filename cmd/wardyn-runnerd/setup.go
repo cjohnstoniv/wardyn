@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -231,6 +233,28 @@ func (h setupHost) checkServiceChoice(ctx context.Context, noService bool, planP
 	return nil
 }
 
+// checkSettings refuses a setting the service files cannot carry as written.
+func (h setupHost) checkSettings(plan setupPlan) error {
+	settings := []string{plan.org, plan.proxyImage, plan.network, h.dockerHost, plan.relayListen, plan.relayHostTarget}
+	if h.goos == "linux" {
+		// The unit and the env file carry these paths unquoted; a LaunchAgent plist escapes its own.
+		settings = append(settings, plan.paths.installed, plan.paths.stateDir, plan.trustedCAFile)
+	}
+	for _, v := range settings {
+		if v != "" && !safeSetting.MatchString(v) {
+			return fmt.Errorf("unsupported characters in a setting: %s", v)
+		}
+	}
+	// A plist escapes its own values, but the environment file --no-service writes is read back line by
+	// line: a path with a line break would not survive it.
+	for _, v := range []string{plan.paths.installed, plan.paths.stateDir, plan.trustedCAFile} {
+		if strings.ContainsFunc(v, unicode.IsControl) {
+			return fmt.Errorf("unsupported characters in a setting: %q", v)
+		}
+	}
+	return nil
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
@@ -286,15 +310,8 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, fmt.Errorf("token file not found: %s", o.tokenFile)
 		}
 	}
-	settings := []string{o.org, plan.proxyImage, o.network, h.dockerHost, o.relayListen, plan.relayHostTarget}
-	if h.goos == "linux" {
-		// The unit and the env file carry these paths unquoted; a LaunchAgent plist escapes its own.
-		settings = append(settings, plan.paths.installed, plan.paths.stateDir, o.trustedCAFile)
-	}
-	for _, v := range settings {
-		if v != "" && !safeSetting.MatchString(v) {
-			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
-		}
+	if err := h.checkSettings(plan); err != nil {
+		return setupPlan{}, err
 	}
 	if err := h.checkServiceChoice(cmd.Context(), o.noService, &plan.paths, paths); err != nil {
 		return setupPlan{}, err

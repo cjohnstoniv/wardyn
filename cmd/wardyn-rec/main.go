@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -227,7 +228,27 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
+	// A termination aimed at wardyn-rec reaches asciinema too, so the recorder ends and the cast is
+	// delivered below; without this wardyn-rec dies first and nothing is flushed.
+	forward := make(chan os.Signal, 1)
+	signal.Notify(forward, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(forward)
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("asciinema: %w", err)
+	}
+	waited := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case sig := <-forward:
+				_ = cmd.Process.Signal(sig)
+			case <-waited:
+				return
+			}
+		}
+	}()
+	runErr := cmd.Wait()
+	close(waited)
 	// Prefer the sidecar exit code (the agent's true $?) when the trailer wrote
 	// it — this is the load-bearing value, not asciinema's own. run removes any
 	// earlier call's sidecar first, so a file found here is this call's.

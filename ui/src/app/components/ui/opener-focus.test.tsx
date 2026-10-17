@@ -9,6 +9,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "./alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./dropdown-menu";
 import { holdExitAnimation } from "../../../test/exit-animation";
 
 afterEach(cleanup);
@@ -127,5 +128,39 @@ describe.each(["dialog", "alert"] as const)("a state-opened %s with an exit anim
     } finally {
       hold.release();
     }
+  });
+});
+
+// A dialog opened from a dropdown item: the item is the focused element when the dialog mounts, and it
+// unmounts with its menu, so focus went to the page body instead of the menu's trigger.
+function MenuHarness() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem onSelect={() => setOpen(true)}>Details</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogTitle>Title</DialogTitle>
+          <DialogDescription>Body</DialogDescription>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+describe("a dialog opened from a dropdown item", () => {
+  it("returns focus to the menu trigger on close", async () => {
+    const user = userEvent.setup();
+    render(<MenuHarness />);
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Details" }));
+    await screen.findByText("Title");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus());
   });
 });

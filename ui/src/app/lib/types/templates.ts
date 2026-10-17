@@ -201,7 +201,7 @@ export interface TemplateGroupAdmin {
 
 // The custom-component configuration schema (Go: types.ComponentConfigSchema).
 
-export type ConfigFieldKind = "string" | "boolean" | "integer" | "number" | "enum" | "string_list" | "secret_ref";
+export type ConfigFieldKind = "string" | "boolean" | "integer" | "number" | "enum" | "secret_ref";
 
 export type ConfigBindTarget = "config" | "secret";
 
@@ -239,7 +239,6 @@ export interface ConfigField {
   min?: number;
   max?: number;
   max_len?: number;
-  max_items?: number;
   options?: ConfigOption[];
   visible_when?: ConfigCondition;
   bind: ConfigBinding;
@@ -266,7 +265,6 @@ export const CONFIG_SCHEMA_BOUNDS = {
   maxFields: 64,
   maxGroups: 16,
   maxOptions: 64,
-  maxListItems: 32,
   maxLabelRunes: 80,
   maxDescriptionRunes: 500,
   maxOptionValueRunes: 128,

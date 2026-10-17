@@ -83,6 +83,8 @@ func TestRunModeRefusals(t *testing.T) {
 		{"a startup command", interactiveOK + `,"startup":{"kind":"command","command":"npm run dev"}`, "", "", 200},
 		{"startup none", interactiveOK + `,"startup":{"kind":"none"}`, "", "", 200},
 		{"a startup harness must be included", interactiveOK + `,"startup":{"kind":"harness","tool":"codex-cli"}`, reasonRunModeConflict, startupToolUnknownMsg("codex-cli"), 422},
+		{"Your own tools starts no CLI, so it takes no starting prompt", `"experience":"interactive","tools":[{"id":"none","kind":"harness"}],"startup":{"kind":"harness","tool":"none","prompt":"hi"},` + noRepos, reasonRunModeInvalid, "startup.prompt: Your own tools starts no CLI, so it takes no starting prompt. Remove the prompt, or start another harness.", 400},
+		{"Your own tools can be the started harness without a prompt", `"experience":"interactive","tools":[{"id":"none","kind":"harness"}],"startup":{"kind":"harness","tool":"none"},` + noRepos, "", "", 200},
 		{"a startup is one choice: harness and command", interactiveOK + `,"startup":{"kind":"harness","tool":"claude-code","command":"x"}`, reasonRunModeInvalid, "", 400},
 		{"a startup is one choice: none with a tool", interactiveOK + `,"startup":{"kind":"none","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},
 		{"a startup is one choice: command with a tool", interactiveOK + `,"startup":{"kind":"command","command":"x","tool":"claude-code"}`, reasonRunModeInvalid, "", 400},

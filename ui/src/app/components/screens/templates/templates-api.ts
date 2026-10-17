@@ -19,7 +19,7 @@ export const templatesApi = {
     asJson<Template>(await wfetch(`${path(id)}/revisions/${revision}`)),
 
   update: async (id: string, req: TemplateSaveRequest): Promise<Template> =>
-    asJson<Template>(await wfetch(path(id), { method: "PUT", body: JSON.stringify(req) })),
+    asJson<Template>(await wfetch(path(id), { method: "PUT", asPerson: true, body: JSON.stringify(req) })),
 
   remove: async (id: string): Promise<void> => {
     await asNoContent(await wfetch(path(id), { method: "DELETE" }));
@@ -27,5 +27,5 @@ export const templatesApi = {
 
   /** Publishes the template's current revision to the organisation (Admin view). */
   publishToOrg: async (id: string): Promise<Template> =>
-    asJson<Template>(await wfetch(`${path(id)}/copy`, { method: "POST", body: JSON.stringify({ scope: "org" }) })),
+    asJson<Template>(await wfetch(`${path(id)}/copy`, { method: "POST", asPerson: true, body: JSON.stringify({ scope: "org" }) })),
 };

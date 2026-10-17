@@ -105,3 +105,44 @@ func TestPG_RunnerClaimExpiresAtTwentyFourHoursWithoutSweep(t *testing.T) {
 		t.Fatalf("refused claim mutated runner: %v", err)
 	}
 }
+
+// A mint deletes the same owner's expired, unspent tokens and nothing else: a consumed token, an unexpired one and
+// another owner's expired one all stay.
+func TestPG_RunnerRegistrationMintDropsTheOwnersExpiredUnusedTokens(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	mint := func(owner string, expires time.Time) uuid.UUID {
+		tok := types.RunnerRegistrationToken{ID: uuid.New(), Owner: owner, MintedBy: owner, OrgURLSHA256: "org", CreatedAt: now.Add(-3 * time.Hour), ExpiresAt: expires}
+		if _, err := st.MintRunnerRegistrationToken(ctx, "wdr_"+tok.ID.String(), tok); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, tok.ID)
+		})
+		return tok.ID
+	}
+	expired := mint("regdrop-alice", now.Add(-time.Hour))
+	consumedID := mint("regdrop-alice", now.Add(-time.Hour))
+	if _, err := pool.Exec(ctx, `UPDATE runner_registration_tokens SET consumed_at=$2 WHERE id=$1`, consumedID, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	live := mint("regdrop-alice", now.Add(time.Hour))
+	otherOwner := mint("regdrop-bob", now.Add(-time.Hour))
+
+	fresh := types.RunnerRegistrationToken{ID: uuid.New(), Owner: "regdrop-alice", MintedBy: "regdrop-alice", OrgURLSHA256: "org", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if _, err := st.MintRunnerRegistrationToken(ctx, "wdr_"+fresh.ID.String(), fresh); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, fresh.ID)
+	})
+
+	for id, want := range map[uuid.UUID]bool{expired: false, consumedID: true, live: true, otherOwner: true, fresh.ID: true} {
+		_, err := st.GetRunnerRegistrationToken(ctx, id)
+		if got := err == nil; got != want || (!want && !errors.Is(err, store.ErrNotFound)) {
+			t.Errorf("token %s kept = %v (%v), want %v", id, got, err, want)
+		}
+	}
+}

@@ -55,7 +55,7 @@ export const keyDomains = {
   // PUT: 200/201 applied; 202 is a four-eyes hold, and nothing has changed yet.
   async set(type: KeyDomainSubjectType, subject: string, domain: string): Promise<KeyDomainWrite> {
     const res = await wfetch(assignmentPath(type, subject), {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain }),
     });

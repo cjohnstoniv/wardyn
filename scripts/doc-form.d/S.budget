@@ -144,7 +144,12 @@
 # docs/sdk.md 18450 adds 13 over 18437 (0.9.3 FIN-E), measured: the delegated-portal secret refusal and the runner row lock.
 # docs/sdk.md 18476 = 18450 + 26, measured: a credential's label and an organisation component's description.
 # docs/sdk.md 18562, measured at the FIN-E2 merge into the final train (both sides' sentences).
-docs/sdk.md=18562 share=21
+# docs/sdk.md 18501 adds 64: the mint refusal reasons and the harnesses/seed_auto_tools line (0.9.3 FIN-B2).
+# docs/sdk.md 18632 = 18626 + 6, measured: organization pools take organization runners, and AddRunnerPoolRunner.
+# docs/sdk.md 18640 adds 14 over 18626, measured: the run policy sits under spec (0.9.3 ASK-6).
+# docs/sdk.md 18657 adds 17 over 18640, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6 review).
+# docs/sdk.md 18663 measured after merging the organization-runner pool wording with the ASK-6 notes.
+docs/sdk.md=18663 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

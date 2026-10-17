@@ -275,6 +275,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)
 		return
 	}
+	// Launch's closed enums (confinement_class, task_mode, interactive_start, tool_approvals) and the
+	// codex-cli hold refusal: the same function, so Review refuses what launch 400s.
+	if _, refusal := runRequestEnums(req); refusal.write(s, w, r) {
+		return
+	}
 	// Same free-text field caps + control-character check launch runs over every
 	// caller-supplied string on this body (runs_create_fields.go): one loop, one
 	// 400 shape, shared so Review never previews a request the create door 400s.

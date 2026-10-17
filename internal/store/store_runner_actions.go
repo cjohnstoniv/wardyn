@@ -304,7 +304,8 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 // the stream's stored identity and runID the event's run; both must be the
 // action's own. The outcomes are success, deferred and refused; only refused
 // carries a reason, and its first receipt closes the action and writes
-// runner.action.refuse in the same transaction. observedAt is the
+// runner.action.refuse in the same transaction, and a first success writes
+// runner.action.apply. observedAt is the
 // runner's assertion and applied_at is the org clock. The first receipt
 // rechecks the owner, ref and execution generation the action was bound to;
 // a stop_proxy success on the still-kept loss records late containment in the
@@ -365,24 +366,39 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	if outcome == types.RunnerActionRefused {
+	if err := s.recordRunnerActionReceiptTx(ctx, tx, a, run, reason, observedAt, prepare); err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	return a, true, tx.Commit(ctx)
+}
+
+// recordRunnerActionReceiptTx writes what a first receipt of a bound action
+// records, in RecordRunnerActionResult's transaction: the refuse or apply
+// audit row, the retirement it settles, and a stop_proxy's late containment.
+func (s PG) recordRunnerActionReceiptTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, run types.AgentRun, reason string, observedAt time.Time,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
+	runID := a.RunID
+	if a.Outcome == types.RunnerActionRefused {
 		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
+			return err
 		}
 	}
-	if err := settleRetirementResultTx(ctx, tx, a, outcome); err != nil {
-		return types.RunnerPendingAction{}, false, err
+	if a.Outcome == types.RunnerActionSuccess {
+		if err := recordRunnerActionApplyTx(ctx, tx, a, &runID, observedAt, prepare); err != nil {
+			return err
+		}
+	}
+	if err := settleRetirementResultTx(ctx, tx, a, a.Outcome); err != nil {
+		return err
 	}
 	// A run that has since left the kept loss (killed, ended) has its own
 	// teardown record; the receipt still settles this exact action.
-	if outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionStopProxy && keptIncarnation(run, a.LostAt) {
+	if a.Outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionStopProxy && keptIncarnation(run, a.LostAt) {
 		proof := RunnerContainmentProof{
-			RunnerContainment: RunnerContainment{RunnerID: runnerID, RunID: runID, Generation: a.Generation, Ref: a.Ref, LostAt: *a.LostAt},
+			RunnerContainment: RunnerContainment{RunnerID: a.RunnerID, RunID: runID, Generation: a.Generation, Ref: a.Ref, LostAt: *a.LostAt},
 			ActionID:          a.ID, ObservedAt: observedAt,
 		}
-		if err := s.RecordRunnerContainmentTx(ctx, tx, proof, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
-		}
+		return s.RecordRunnerContainmentTx(ctx, tx, proof, prepare)
 	}
-	return a, true, tx.Commit(ctx)
+	return nil
 }

@@ -326,3 +326,21 @@ seed internal/store/store.go "package store // edited"
 run_preflight BASE=origin/main
 assert "plain preflight starts no PG and runs no selector" test "$(nopg)" -eq 0
 echo "ok  plain preflight is unchanged"
+
+# The guard list is the escape the candidate run closes: a whole-tree test that is not in it is the one
+# that goes red only on the hosted run. Pin what the list takes, on a throwaway tree, and that the two
+# guards that once slipped past by name are in the real list.
+GT="$TMP/guards"
+mkdir -p "$GT/pkg/walk" "$GT/pkg/docs" "$GT/pkg/plain"
+git -C "$GT" init -q
+printf 'package walk\nimport "path/filepath"\nfunc TestWalks(t *testing.T) {\n\t_ = filepath.WalkDir\n}\n' >"$GT/pkg/walk/walk_test.go"
+printf 'package docs\nfunc TestReadsDocs(t *testing.T) {\n\t_ = "../../docs/ENV.md"\n}\n' >"$GT/pkg/docs/docs_test.go"
+printf 'package plain\nfunc TestPlain(t *testing.T) {\n}\n' >"$GT/pkg/plain/plain_test.go"
+got="$(cd "$GT" && python3 -I "$ROOT/scripts/lib/candidate-tests.py" guards)"
+assert "a test that walks the tree is a guard" test "$(grep -c $'^pkg/walk\tTestWalks$' <<<"${got}")" -eq 1
+assert "a test that reads docs/ is a guard" test "$(grep -c $'^pkg/docs\tTestReadsDocs$' <<<"${got}")" -eq 1
+assert "a plain unit test is not" test "$(grep -c plain <<<"${got}")" -eq 0
+real="$(cd "$ROOT" && python3 -I scripts/lib/candidate-tests.py guards)"
+assert "the operator-census guard is in the real list" grep -q $'^internal/api\t.*\\bTestIsOperatorCensus\\b' <<<"${real}"
+assert "the retired-words guard is in the real list" grep -q $'^internal/runnerpool\t.*\\bTestRetiredPoolWordsAbsentFromCommandsConsoleAndDocs\\b' <<<"${real}"
+echo "ok  the guard list takes tree-walking and docs-reading tests and leaves plain ones"

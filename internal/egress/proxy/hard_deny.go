@@ -115,9 +115,18 @@ func errHardDenied(host string) error {
 }
 
 // validateHardDeny is the boot-time parse check.
+//
+// An upstream proxy named by an address inside the deny set is refused: the proxy would reach the
+// in-cluster address on every run's behalf, which the deny set exists to prevent.
 func (c *Config) validateHardDeny() error {
-	if _, err := compileHardDeny(c.HardDeny); err != nil {
+	h, err := compileHardDeny(c.HardDeny)
+	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if up, err := parseUpstreamProxy(c.UpstreamProxyURL); err == nil && up != nil {
+		if ip := net.ParseIP(up.host); ip != nil && h.ip(ip) {
+			return fmt.Errorf("config: upstream_proxy_url names an address inside hard_deny, so every run would reach it through the proxy")
+		}
 	}
 	return nil
 }

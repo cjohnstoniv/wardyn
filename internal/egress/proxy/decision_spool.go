@@ -354,11 +354,19 @@ func (s *decisionSink) emitLocal(log egress.DecisionLog) {
 		if !held.used {
 			keep = min(max(keep, 0), spoolFollowUpBytes)
 		}
-		s.heldBytes -= held.bytes - keep
+		freed := held.bytes - keep
 		held.bytes, held.used = keep, true
 		s.reservations[id] = held
 		charged = true
+		// The append runs without s.mu, so concurrent decisions share one spool commit (runnerspool's
+		// group commit) and admission does not wait behind it. freed stays held until the record is in
+		// the spool's own count, so no admission sees that room twice.
+		s.appending.Add(1)
+		s.mu.Unlock()
 		err = s.local.AppendAdmitted(ctx, log)
+		s.mu.Lock()
+		s.appending.Done()
+		s.heldBytes -= freed
 	} else if err == nil {
 		depth, bytes, _, statErr := s.local.Stats(ctx)
 		switch {

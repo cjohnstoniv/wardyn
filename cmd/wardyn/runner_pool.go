@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -62,14 +63,14 @@ func manageOnly(p sdk.RunnerPoolChoice) bool {
 	return p.Availability == sdk.RunnerPoolUnavailable && p.Reason == runnerpool.ReasonNotFound
 }
 
-// printRunnerPools is the list: ID NAME TYPE AVAILABILITY. A row the caller may only manage (availability
+// printRunnerPools is the list: ID NAME TYPE AVAILABILITY BARRIERS. A row the caller may only manage (availability
 // unavailable, reason runner_pool_not_found) is left out unless all is set, and then an OWNER column
 // is added.
 func printRunnerPools(w io.Writer, list sdk.RunnerPoolList, all bool) error {
 	tw := newTab(w)
-	head := "ID\tNAME\tTYPE\tAVAILABILITY"
+	head := "ID\tNAME\tTYPE\tAVAILABILITY\tBARRIERS"
 	if all {
-		head = "ID\tNAME\tTYPE\tOWNER\tAVAILABILITY"
+		head = "ID\tNAME\tTYPE\tOWNER\tAVAILABILITY\tBARRIERS"
 	}
 	fmt.Fprintln(tw, head)
 	for _, p := range list.Pools {
@@ -81,12 +82,36 @@ func printRunnerPools(w io.Writer, list sdk.RunnerPoolList, all bool) error {
 			availability += " (" + string(p.Reason) + ")"
 		}
 		if all {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, p.Owner, availability)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, p.Owner, availability, barrierSummary(p.BarrierOptions))
 		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, availability)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, availability, barrierSummary(p.BarrierOptions))
 		}
 	}
 	return tw.Flush()
+}
+
+// barrierSummary names each barrier with * on the default and the reason one is not available, e.g.
+// "CC1 (below_floor) CC2* CC3 (not_offered: kvm_missing)"; "-" for a row that carries none.
+func barrierSummary(opts []sdk.BarrierOption) string {
+	if len(opts) == 0 {
+		return "-"
+	}
+	cells := make([]string, 0, len(opts))
+	for _, o := range opts {
+		cell := string(o.Class)
+		if o.Default {
+			cell += "*"
+		}
+		if !o.Available {
+			reason := string(o.ReasonCode)
+			if o.ReasonDetail != "" {
+				reason += ": " + o.ReasonDetail
+			}
+			cell += " (" + reason + ")"
+		}
+		cells = append(cells, cell)
+	}
+	return strings.Join(cells, " ")
 }
 
 func runnerPoolDefaultCmd(client clientFn) *cobra.Command {

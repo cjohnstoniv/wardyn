@@ -917,3 +917,38 @@ func TestAcked_RetainedRowOlderThanTheCheckpointIsNotAGap(t *testing.T) {
 		t.Errorf("checkpoint = %d resets = %d, want 5 and 0", acked, resets)
 	}
 }
+
+// A full batch of retained rows older than the checkpoint holds nothing to judge a benign
+// verdict by, so the verdict survives it: retention that then drops the checkpoint's successor
+// is still reported on the next batch.
+func TestAcked_BenignVerdictSurvivesAFullBatchOfOlderRows(t *testing.T) {
+	t.Parallel()
+
+	all := ackedRows(14)
+	st := &fakeDeliveryStore{haveRow: true, acked: 10, hash: "h10"}
+	// Seqs 2,3,11: the checkpoint row 10 is gone, nothing unacknowledged is, and the first
+	// batch of two is both older rows.
+	st.setRows([]types.FederatedAuditEvent{all[1], all[2], all[10]})
+	col := &lineCollector{}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms", BatchSize: 2}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	ctx := context.Background()
+	if _, stop := a.step(ctx); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 0 {
+		t.Fatalf("recorder holds %d events after the older rows, want none", n)
+	}
+	st.setRows([]types.FederatedAuditEvent{all[1], all[2], all[12], all[13]}) // 11 is dropped; 13,14 follow
+	if _, stop := a.step(ctx); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 1 {
+		t.Errorf("recorder holds %d events, want one audit.delivery.reset for the dropped seq 11", n)
+	}
+}

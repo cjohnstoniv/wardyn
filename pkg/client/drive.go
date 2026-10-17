@@ -75,4 +75,6 @@ const (
 	MeDriveUnavailablePaused      = "paused"
 	MeDriveUnavailableUnmountable = "unmountable"
 	MeDriveUnavailableNotInPool   = "not_in_pool"
+	// MeDriveUnavailablePlacementDenied: the caller's profile denies remote runs, and drives mount only there.
+	MeDriveUnavailablePlacementDenied = "placement_denied"
 )

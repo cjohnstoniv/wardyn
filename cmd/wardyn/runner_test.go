@@ -104,3 +104,26 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 		t.Fatal("runner set without --max-runs was accepted")
 	}
 }
+
+// `wardyn runner revoke` revokes one of your own runners through the owner's route, by id or by name, and
+// refuses a name that is not one of yours before it sends a revoke.
+func TestRunnerRevokeRevokesYourOwnRunner(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed}})
+	out, err := execCmdCapture(t, "runner", "revoke", "laptop-7", "--url", srv.URL, "--token", "personal-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := srv.last(); req.method != http.MethodDelete || req.path != "/api/v1/me/runners/"+id.String() {
+		t.Fatalf("revoke sent %s %s, want DELETE /api/v1/me/runners/%s", req.method, req.path, id)
+	}
+	if !strings.Contains(out, "revoked runner laptop-7") {
+		t.Fatalf("output = %q", out)
+	}
+	if _, err := execCmdCapture(t, "runner", "revoke", "someone-elses", "--url", srv.URL, "--token", "personal-token"); err == nil || !strings.Contains(err.Error(), "not one of your own runners") {
+		t.Fatalf("revoking a name that is not yours = %v, want it refused", err)
+	}
+	if req := srv.last(); req.method == http.MethodDelete {
+		t.Fatalf("a refused revoke still sent %s %s", req.method, req.path)
+	}
+}

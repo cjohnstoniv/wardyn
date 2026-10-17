@@ -83,6 +83,15 @@ describe("Run step: pool select", () => {
     expect(intentNow().runner_pool_id).toBe(TEAM_LAPTOPS.id);
   });
 
+  it("says so on the step when the draft's pool is no longer in the list, and not when the person simply has none yet", async () => {
+    show({ ...AGENT, runner_pool_id: "gone" }, list([SHARED, TEAM_LAPTOPS]));
+    expect(await screen.findByText(RUNNER_POOL_REFUSAL.NOT_FOUND())).toBeInTheDocument();
+    cleanup();
+    show(AGENT, list([SHARED, TEAM_LAPTOPS]));
+    await poolSelect();
+    expect(screen.queryByText(RUNNER_POOL_REFUSAL.NOT_FOUND())).not.toBeInTheDocument();
+  });
+
   it.each([
     ["runner_pool_unavailable", NR_RUN.REASON_SWITCHED_OFF],
     ["placement_denied", NR_RUN.REASON_NOT_ALLOWED_PROFILE],
@@ -196,7 +205,7 @@ describe("Run step: pool select", () => {
 describe("Run step: pool summary", () => {
   it("shows total capacity as a meter against the pool's maximum, and the maximum", async () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 3, waiting: 0, max: 10, verdict: "starts_now" } }]));
-    const meter = await screen.findByRole("meter", { name: NR_RUN.CAPACITY_LABEL });
+    const meter = await screen.findByRole("meter", { name: NR_RUN.CAPACITY_ARIA });
     expect(meter).toHaveAttribute("aria-valuetext", NR_RUN.USED_OF_MAX(3, 10));
     expect(screen.getByText(NR_RUN.MAX_RUNS(10))).toBeInTheDocument();
   });
@@ -205,7 +214,7 @@ describe("Run step: pool summary", () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 4, waiting: 0, verdict: "starts_now" } }]));
     expect(await screen.findByText(NR_RUN.RUNNING_ONLY(4))).toBeInTheDocument();
     expect(screen.getByText(NR_RUN.POOL_LIMIT_FROM_RUNNERS)).toBeInTheDocument();
-    expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_LABEL })).not.toBeInTheDocument();
+    expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_ARIA })).not.toBeInTheDocument();
   });
 
   it("hides total capacity and the waiting cell until the server sends slots", async () => {
@@ -217,7 +226,7 @@ describe("Run step: pool summary", () => {
 
   it("counts the allowance across all pools, singular and plural, and says when there is no personal limit", async () => {
     show(AGENT, list([SHARED], { allowance: { active: 1, max: 5 } }));
-    const meter = await screen.findByRole("meter", { name: NR_RUN.ALLOWANCE_LABEL });
+    const meter = await screen.findByRole("meter", { name: NR_RUN.ALLOWANCE_ARIA });
     expect(meter).toHaveAttribute("aria-valuetext", NR_RUN.ALLOWANCE_USED(1, 5));
     expect(screen.getByText(NR_RUN.ALLOWANCE_INCLUDES_ONE)).toBeInTheDocument();
     cleanup();
@@ -283,6 +292,13 @@ describe("Run step: pool summary", () => {
     expect(within(cell("drive")).getByText(NR_SHARED.GIB("10"))).toBeInTheDocument();
     expect(within(cell("drive")).getByText(NR_RUN.LIMIT_EXTRA_DRIVES)).toBeInTheDocument();
     expect(within(cell("drive")).getByText(NR_RUN.SET_BY_POOL)).toBeInTheDocument();
+  });
+
+  it("says a limit the deployment bounds is set by this server", async () => {
+    const limits = effectiveLimits("interactive", { memory_mib: { default: { value: 1024 }, cap: { value: 4096 }, cap_source: "deployment" } });
+    show(AGENT, list([{ ...SHARED, limits: [limits] }]));
+    await screen.findByText(NR_RUN.LIMITS_LABEL);
+    expect(within(document.querySelector('[data-limit="memory"]') as HTMLElement).getByText(NR_RUN.SET_BY_SERVER)).toBeInTheDocument();
   });
 
   it("reads the limits of the run type asked, not the pool's other type", async () => {

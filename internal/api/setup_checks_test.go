@@ -757,7 +757,7 @@ var setupCheckBlockingStatus = map[string]string{
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
-	"key_domains": true, "principal_keys": true, "key_domain_changes": true,
+	"key_domains": true, "key_domain_assignments": true, "principal_keys": true, "key_domain_changes": true,
 	"kek_service": true, "kek_service_static_key": true, "kek_local": true, "kek_local_rows": true,
 	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
@@ -1098,6 +1098,20 @@ func TestKeyCustodyRows(t *testing.T) {
 		c.Fix != "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete." {
 		t.Errorf("3 changes: %+v", c)
 	}
+	// Under WARDYN_AUDIT_SEAL=full every human actor is a pseudonym; it is never shown.
+	if c := row(keyCustody{Changes: keydomain.Changes{Count: 1, Latest: now, LatestBy: "subject:7f9c"}}, "key_domain_changes"); !strings.Contains(c.Detail, "the latest today by an admin whose name the audit seal hides.") || strings.Contains(c.Detail, "subject:") {
+		t.Errorf("a sealed actor: %+v", c)
+	}
+	c = row(keyCustody{Domains: []string{"finance"}, Undeclared: []keydomain.UndeclaredDomain{{Domain: "legal", Assignments: 2}, {Domain: "research", Assignments: 1}}}, "key_domain_assignments")
+	if c.Status != "warn" || c.Detail != "Key-domain assignments name domains that WARDYN_KEY_DOMAINS_FILE does not declare: legal (2), research (1). Every person such an assignment covers fails to get a key." ||
+		c.Fix != "Declare each domain in WARDYN_KEY_DOMAINS_FILE again and restart, or assign those people to a declared domain." {
+		t.Errorf("undeclared domains: %+v", c)
+	}
+	for _, c := range keyCustodyChecks(keyCustody{Now: now}) {
+		if c.ID == "key_domain_assignments" {
+			t.Errorf("the undeclared-domain row is shown with none undeclared: %+v", c)
+		}
+	}
 	if c := row(keyCustody{Changes: keydomain.Changes{Count: 1, Latest: now.Add(-time.Hour), LatestBy: "a"}}, "key_domain_changes"); !strings.Contains(c.Detail, "1 key-domain assignment change in") || !strings.Contains(c.Detail, "the latest today by a.") {
 		t.Errorf("1 change: %+v", c)
 	}
@@ -1114,7 +1128,8 @@ func TestStaticKeyServiceCheck(t *testing.T) {
 	}
 	node, ok := staticKeyServiceCheck("AWS KMS in us-east-1", false, true)
 	if !ok || node.ID != "kek_service_static_key" || node.Status != "warn" ||
-		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity") {
+		!strings.Contains(node.Detail, "node's instance role") || !strings.Contains(node.Fix, "IRSA or EKS Pod Identity on Kubernetes") ||
+		!strings.Contains(node.Detail, "pod or process") { // a plain EC2 Docker host has no pods
 		t.Fatalf("node role row = %+v, %v", node, ok)
 	}
 	for name, c := range map[string]struct {

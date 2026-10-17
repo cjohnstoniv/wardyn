@@ -19,7 +19,7 @@ export const baseImages = {
   // used as written; the server names the row from the reference's last path
   // segment and upserts on (kind, image), so adding a listed ref twice is one row.
   async add(image: string): Promise<BaseImageEntry> {
-    const res = await wfetch("/base-images", { method: "POST", body: JSON.stringify({ kind: "byo", image }) });
+    const res = await wfetch("/base-images", { method: "POST", asPerson: true, body: JSON.stringify({ kind: "byo", image }) });
     return asJson<BaseImageEntry>(res);
   },
 };
