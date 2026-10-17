@@ -124,7 +124,9 @@ type PendingLoss struct {
 
 // Spool is safe across goroutines and independently opened proxy/daemon handles.
 type Spool struct {
-	mu    sync.Mutex
+	// sem is the handle's lock, a one-slot channel: a waiter gives up when its context ends, and waiters
+	// are served in the order they arrived.
+	sem   chan struct{}
 	root  *os.Root
 	lock  *os.File
 	runID uuid.UUID
@@ -135,7 +137,7 @@ type Spool struct {
 	qmu      sync.Mutex
 	queue    []*queuedAppend
 	commitMu sync.Mutex
-	// manifestWrites counts this handle's manifest commits, under mu (the group-commit pin reads it).
+	// manifestWrites counts this handle's manifest commits, under sem (the group-commit pin reads it).
 	manifestWrites uint64
 }
 
@@ -177,7 +179,7 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		root.Close()
 		return nil, errors.New("unsafe spool lock file")
 	}
-	s := &Spool{root: root, lock: lock, runID: runID}
+	s := &Spool{sem: make(chan struct{}, 1), root: root, lock: lock, runID: runID}
 	// After the checks above: only a regular 0600 file that is the name's own (and, in Keep, has no
 	// other link) is ever handed to the spool's owner.
 	if err := spoolowner.Keep(root, lock); err != nil {
@@ -218,22 +220,20 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 
 // Close releases this process's handles; it never deletes pending decisions.
 func (s *Spool) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sem <- struct{}{}
+	defer func() { <-s.sem }()
 	return errors.Join(s.lock.Close(), s.root.Close())
 }
 
-// locked runs fn holding the spool lock. Both waits end with ctx: a commit may hold s.mu while it waits
+// locked runs fn holding the spool lock. Both waits end with ctx: a commit may hold sem while it waits
 // on the file lock, and a proxy's admission check must still answer within its own deadline.
 func (s *Spool) locked(ctx context.Context, fn func() error) error {
-	for !s.mu.TryLock() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Millisecond):
-		}
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	defer s.mu.Unlock()
+	defer func() { <-s.sem }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -345,6 +345,7 @@ func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
 	if m.Sealed {
 		return ErrSealed
 	}
+	read := m
 	wrote, changed := false, false
 	for i, q := range batch {
 		if q.decision.Request.RunID != s.runID {
@@ -368,6 +369,12 @@ func (s *Spool) commit(batch []*queuedAppend, errs []error) error {
 			continue
 		}
 		if err := s.writeFile(recordName(r.Seq), b); err != nil {
+			// The batch fails, but a drop counted in it is still kept: its caller was told ErrFull, and
+			// replay must report it. Nothing written in the batch is committed.
+			if m.Drops != read.Drops {
+				read.Drops = m.Drops
+				err = errors.Join(err, s.writeManifest(read))
+			}
 			return err
 		}
 		m.Last = r.Seq

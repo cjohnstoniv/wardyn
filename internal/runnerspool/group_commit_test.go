@@ -14,9 +14,9 @@ import (
 func TestAppendersQueuedBehindACommitShareOneManifestWrite(t *testing.T) {
 	ctx := context.Background()
 	s, _, id := testSpool(t)
-	s.mu.Lock()
+	s.sem <- struct{}{}
 	before := s.manifestWrites
-	s.mu.Unlock()
+	<-s.sem
 
 	const n = 8
 	s.commitMu.Lock() // a commit in progress
@@ -41,9 +41,9 @@ func TestAppendersQueuedBehindACommitShareOneManifestWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s.mu.Lock()
+	s.sem <- struct{}{}
 	writes := s.manifestWrites - before
-	s.mu.Unlock()
+	<-s.sem
 	if writes != 1 {
 		t.Fatalf("%d queued appends took %d manifest writes, want 1", n, writes)
 	}
