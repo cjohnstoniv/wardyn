@@ -16,7 +16,7 @@ import (
 func (s *Spool) readJSON(name string, limit int64, out any) error {
 	f, err := s.root.Open(name)
 	if err != nil {
-		return err
+		return inDir(s.dir, err)
 	}
 	defer f.Close()
 	st, err := f.Stat()
@@ -52,9 +52,9 @@ func (s *Spool) writeJSON(name string, v any) error {
 
 func (s *Spool) writeBytes(name string, b []byte) error {
 	if err := s.writeFile(name, b); err != nil {
-		return err
+		return inDir(s.dir, err)
 	}
-	return s.syncDir()
+	return inDir(s.dir, s.syncDir())
 }
 
 // writeFile replaces name with b, synced, without the directory sync that makes the rename durable.

@@ -4,9 +4,11 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -377,5 +379,28 @@ func TestLocalSpoolAdmissionBoundedBehindASlowDecision(t *testing.T) {
 	}
 	if took := time.Since(start); took > spoolAdmitTimeout+time.Second || w.Code != http.StatusServiceUnavailable || w.Header().Get("X-Should-Retry") != "true" {
 		t.Fatalf("took %v status %d headers %v, want a retryable 503 within the %v admission deadline", took, w.Code, w.Header(), spoolAdmitTimeout)
+	}
+}
+
+// The field's state: the proxy holds its run's spool directory and has served from it, then state.json is
+// gone from its view of that directory, while wardyn-runnerd's copy is healthy (a VM-backed engine's file
+// sharing that no longer shows the proxy the file wardyn-runnerd renamed into place). Every admission is
+// refused, and the refusal names the directory it could not read, not just "state.json".
+func TestLocalSpoolRefusalNamesTheSpoolDirectory(t *testing.T) {
+	_, p, dir, id := linkTestSink(t)
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if w := serveOne(p, id, httptest.NewRequest("GET", "http://allowed.test/first", nil)); w.Code != http.StatusOK {
+		t.Fatalf("first request: status %d", w.Code)
+	}
+	if err := os.Remove(filepath.Join(dir, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	w := serveOne(p, id, httptest.NewRequest("POST", "http://allowed.test/v1/messages", nil))
+	want := "openat " + filepath.Join(dir, "state.json") + ": no such file or directory"
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(logs.String(), want) {
+		t.Fatalf("status %d, log:\n%s\nwant a 503 whose logged error is %q", w.Code, logs.String(), want)
 	}
 }
