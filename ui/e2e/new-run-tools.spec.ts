@@ -149,6 +149,17 @@ async function openToolsFor(page: Page, intentLines: string[], access: object) {
 }
 const card = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
 
+test.describe("New Run, step 5: one teal action", () => {
+  test("the catalogue's Add buttons are outline; Review run is the one teal action (DR-0057)", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    const add = page.getByRole("button", { name: new RegExp(`^${NR_TOOLS.CARD_ADD} \\S`) });
+    await expect(add.first()).toBeVisible();
+    for (const b of await add.all()) await expect(b).not.toHaveClass(/bg-primary/);
+    await expect(page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN, exact: true })).toHaveClass(/bg-primary/);
+  });
+});
+
 test.describe("New Run, step 5: the harness card", () => {
   test("a harness that is only available is not labelled as starting with the run (DR-0230)", async ({ page }) => {
     await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED]));

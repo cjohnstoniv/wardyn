@@ -136,6 +136,13 @@ describe("catalogue", () => {
     expect(card("Azure Dev").queryByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeNull();
   });
 
+  // DR-0057: a card's Add is a repeated per-card action, so it is not teal.
+  it("draws a card's Add as an outline button", async () => {
+    await show();
+    const add = await within(await screen.findByRole("heading", { name: "Linear" }).then((el) => el.closest("li") as HTMLElement)).findByRole("button", { name: `${NR_TOOLS.CARD_ADD} Linear` });
+    expect(add).not.toHaveClass("bg-primary");
+  });
+
   it("adds an organisation row by its id and removes it again", async () => {
     await show();
     await userEvent.click(await within(await screen.findByRole("heading", { name: "Linear" }).then((el) => el.closest("li") as HTMLElement)).findByRole("button", { name: `${NR_TOOLS.CARD_ADD} Linear` }));

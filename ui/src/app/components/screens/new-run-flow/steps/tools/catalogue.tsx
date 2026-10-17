@@ -129,7 +129,7 @@ function RowAction({ name, attached, reason, status, onAdd, onRemove }: { name: 
   return (
     <>
       <span />
-      <Button type="button" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
+      <Button type="button" variant="outline" size="sm" aria-label={`${NR_TOOLS.CARD_ADD} ${name}`} onClick={onAdd}>{NR_TOOLS.CARD_ADD}</Button>
     </>
   );
 }
