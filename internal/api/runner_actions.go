@@ -184,6 +184,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		Ready: func() {
 			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
 			s.startResidentErase(id)
+			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub)
 		},
 	}, nil
 }
