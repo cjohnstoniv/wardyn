@@ -63,6 +63,10 @@ type AckedWebhook struct {
 	// the checkpoint, so ackedStore.Set(zero) keeps the durable position (and
 	// the resets counter) as it is: the next accepted batch moves it anyway.
 	benignReset bool
+	// benignAt is the checkpoint a benign reset classified, held until the
+	// replacement batch is in hand: reset and the batch are two reads, and
+	// retention can drop the first unacknowledged row between them.
+	benignAt ackcursor.Pos
 	// benignPending is true from a skipped durable reset until the next accepted
 	// batch: the cursor's memory is at zero while the durable checkpoint is
 	// still p, so a failed delivery must re-read p and re-run the gap check,
@@ -250,11 +254,16 @@ func (a *AckedWebhook) recordError(ctx context.Context, msg string, halted bool)
 func (a *AckedWebhook) reset(ctx context.Context, p ackcursor.Pos) {
 	if rows, err := a.st.ListAuditEventsAfterSeq(ctx, p.Seq-1, 1); err == nil &&
 		len(rows) == 1 && rows[0].Seq == p.Seq+1 {
-		a.benignReset = true
+		a.benignReset, a.benignAt = true, p
 		slog.Info("sinks.acked: retention removed the audit row at the delivery checkpoint; nothing unacknowledged was lost",
 			"destination", AckedDestination, "acked_seq", p.Seq)
 		return
 	}
+	a.reportGap(ctx, p)
+}
+
+// reportGap logs a delivery gap at ERROR and records it as an audit event.
+func (a *AckedWebhook) reportGap(ctx context.Context, p ackcursor.Pos) {
 	slog.Error("sinks.acked: the audit row at the delivery checkpoint is gone or changed; resending from the oldest retained row",
 		"destination", AckedDestination, "acked_seq", p.Seq, "acked_row_hash", p.Hash)
 	data, err := json.Marshal(map[string]any{"destination": AckedDestination, "acked_seq": p.Seq})
@@ -355,6 +364,18 @@ func (s ackedStore) Set(ctx context.Context, p ackcursor.Pos) error {
 type ackedSink struct{ a *AckedWebhook }
 
 func (s ackedSink) Deliver(ctx context.Context, rows []types.FederatedAuditEvent) (int64, error) {
+	if p := s.a.benignAt; p.Seq != 0 {
+		s.a.benignAt = ackcursor.Pos{}
+		// The replacement batch is the read that gets delivered: if it no
+		// longer starts at the first unacknowledged seq, the benign verdict
+		// is stale and rows were lost after all, so count and report the reset.
+		if len(rows) == 0 || rows[0].Seq != p.Seq+1 {
+			if err := s.a.st.SetAuditDeliveryCursor(ctx, AckedDestination, 0, ""); err != nil {
+				return 0, err
+			}
+			s.a.reportGap(ctx, p)
+		}
+	}
 	if len(rows) == 0 {
 		return 0, nil
 	}

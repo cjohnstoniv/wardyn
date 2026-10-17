@@ -792,3 +792,50 @@ func TestAcked_BenignGapThenOutageStillReportsALaterLoss(t *testing.T) {
 		t.Errorf("checkpoint = %d, want 7", acked)
 	}
 }
+
+// swapAfterGapCheck replaces the rows once the second read has run (the cursor
+// reads the checkpoint row, then reset re-reads it to classify the gap): the
+// interleaving of retention running between the gap check and the batch read.
+type swapAfterGapCheck struct {
+	*fakeDeliveryStore
+	after []types.FederatedAuditEvent
+	reads int
+}
+
+func (s *swapAfterGapCheck) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
+	rows, err := s.fakeDeliveryStore.ListAuditEventsAfterSeq(ctx, seq, limit)
+	if s.reads++; s.reads == 2 {
+		s.setRows(s.after)
+	}
+	return rows, err
+}
+
+// A gap that looked benign when checked must still be reported when retention
+// drops the first unacknowledged row before the batch is read: the batch that
+// is delivered no longer begins at the checkpoint's successor.
+func TestAcked_BenignVerdictGoesStaleBeforeTheBatchIsRead(t *testing.T) {
+	t.Parallel()
+
+	all := ackedRows(7)
+	base := &fakeDeliveryStore{haveRow: true, acked: 3, hash: "h3"}
+	// Seqs 4,5 remain: only accepted rows are gone, so the check says benign. Then 4,5 are dropped.
+	base.setRows(all[3:5])
+	st := &swapAfterGapCheck{fakeDeliveryStore: base, after: all[5:]}
+	col := &lineCollector{}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 1 {
+		t.Errorf("recorder holds %d events, want one audit.delivery.reset for the lost rows", n)
+	}
+	if acked, _, _, _, resets := base.state(); resets != 1 || acked != 7 {
+		t.Errorf("checkpoint = %d resets = %d, want 7 and 1", acked, resets)
+	}
+}

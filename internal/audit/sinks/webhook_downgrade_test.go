@@ -5,6 +5,7 @@ package sinks
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -57,5 +58,33 @@ func TestWebhookSink_RedirectDowngradeToHTTPIsNotFollowed(t *testing.T) {
 	}
 	if n := plainHits.Load(); n != 0 {
 		t.Errorf("the plain-http target got %d requests, want none", n)
+	}
+}
+
+// A collector that answers with a body must not cost a new connection per batch:
+// postNDJSON reads the reply before closing it, so the next POST reuses the connection.
+func TestPostNDJSON_ReusesTheConnectionAfterAReplyBody(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	var conns atomic.Int32
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	client := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
+	for range 3 {
+		if _, _, err := postNDJSON(context.Background(), client, WebhookConfig{URL: srv.URL}, []byte("{}\n")); err != nil {
+			t.Fatalf("postNDJSON: %v", err)
+		}
+	}
+	if n := conns.Load(); n != 1 {
+		t.Errorf("collector saw %d connections for 3 batches, want 1", n)
 	}
 }
