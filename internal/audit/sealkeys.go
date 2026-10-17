@@ -75,11 +75,20 @@ var sealFields = map[string][]SealField{
 	"approval.decide": {{Path: "reason", Subject: SubjectActor}},
 	// The free text the rejecting admin typed with the decision (gov4).
 	"governance.change.reject": {{Path: "reason", Subject: SubjectActor}},
+	// The person whose sessions were revoked: the target column's own name, repeated in data.
+	"session.revoke": {{Path: "sub", Subject: SubjectTarget}},
+	// The person a token mint was asked for, repeated from the target column.
+	"person.token.create": {{Path: "target", Subject: SubjectTarget}},
+	// The namespace owner an admin enumerated, repeated from the target column.
+	"secret.list": {{Path: "secret_owner", Subject: SubjectTarget}},
+	// The identity provider's sub of the person signing in, who is the actor on both rows: the
+	// attached person on success, the sub's own person when the attach is ignored.
+	"person.attach": {{Path: "sub", Subject: SubjectActor}},
 }
 
 // SealLeafNames is the closed set of data key names a field may carry to be a
 // candidate for sealing. It does not seal anything by itself.
-var SealLeafNames = []string{"task", "prompt", "message", "reason", "comment", "note", "email", "display_name", "query", "command"}
+var SealLeafNames = []string{"task", "prompt", "message", "reason", "comment", "note", "email", "display_name", "query", "command", "sub", "target", "secret_owner"}
 
 // UnsealedActions are actions whose rows are never sealed, so the record of an
 // erasure survives the key it destroys and a person's key is named in the

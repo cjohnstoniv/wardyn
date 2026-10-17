@@ -66,6 +66,9 @@ type leaverForms struct {
 	// targets are bound plus every email alias that is the person's plus, when no row binds a principal,
 	// the one principal each email names: the forms the cutoff, the credential sweep and the kill sweep run under.
 	targets []string
+	// named are the principals the emails of a person no row binds name: principals, though one may be
+	// spelled as an address, so a purge erases under them as it does under bound.
+	named []string
 	// shared are the email forms of a bound person that another principal holds (store.HeldEmails). A
 	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
 	// the person's own are reached through bound and the identity deactivation.
@@ -188,6 +191,7 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		return f, nil
 	}
 	f.targets = nonEmptyForms(slices.Concat(f.bound, own, subs)...)
+	f.named = nonEmptyForms(subs...)
 	if ident.Principal != "" {
 		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, own); err != nil {
 			f.refusal, f.targets, f.shared = reasonIdentityDirectoryUnreadable, f.bound, nil

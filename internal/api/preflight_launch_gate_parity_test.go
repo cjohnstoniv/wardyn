@@ -128,6 +128,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepBaseline", foldCreate | foldPreflight | foldPreview},
 	{"stepPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepSeedWorkspace", foldCreate | foldPreflight | foldPreview},
+	{"stepADOOverride", foldCreate | foldPreflight | foldPreview},
 	{"stepDrive", foldCreate | foldPreflight | foldPreview},
 	{"stepWorkspaces", foldCreate | foldPreflight | foldPreview},
 	{"stepHarnessSet", foldCreate | foldPreflight | foldPreview},

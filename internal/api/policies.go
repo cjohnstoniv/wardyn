@@ -162,6 +162,10 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	resp := defaultPolicyResponse{
 		RunPolicySpec: redactSpecForRead(ceiling.Spec, s.isSecurityOperator(r.Context())),
 	}
+	if ceiling.Limits.DenyUIApps {
+		// A run under this ceiling gets no UI apps, so the read lists none.
+		resp.UIApps = nil
+	}
 	if ceiling.Profile != nil {
 		resp.GovernanceProfileName = ceiling.Profile.Name
 	}

@@ -422,8 +422,8 @@ func agentActivityDecision(ruleSource string) bool {
 
 // approvalClosed resumes a paused run once it has no open request left: the
 // agent has an answer to act on. Every writer that moves a request out of
-// PENDING calls it; the pause sweep's backstop catches a waiting pause whose
-// request closed without one (the expiry sweeper). It resumes an idle pause
+// PENDING calls it; the pause sweep's backstop catches a pause whose
+// request closed without one (the expiry sweeper, or a lock it could not take). It resumes an idle pause
 // too: a request raised by traffic in flight when the run froze is still the
 // agent's to answer.
 //
@@ -464,17 +464,30 @@ func (s *Server) approvalsClosed(ctx context.Context, runIDs []uuid.UUID) {
 	}
 }
 
-// resumeWaitingRun is the sweep's backstop resume of a waiting pause whose requests have all closed. It
-// takes the run's lock without waiting, as the sweep's pause does, and decides on the row it reads under
-// it: the candidate listing may be older than a pause or resume that has since settled.
-func (s *Server) resumeWaitingRun(ctx context.Context, pauser store.RunPauser, runID uuid.UUID) {
-	ctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+// resumeClosedRun is the sweep's backstop resume of a paused run whose requests have all closed without a
+// writer telling it: a waiting pause, or an idle pause that a request decided after it began (a request
+// raised by traffic in flight when the run froze, whose closing could not take the run's lock). It takes
+// the run's lock without waiting, as the sweep's pause does, and decides on the row it reads under it: the
+// candidate listing may be older than a pause or resume that has since settled, so an idle pause is only
+// the listed one, and a request opened since the listing keeps the run paused.
+func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c store.PauseCandidate) {
+	ctx, unlock, ok := s.tryLockRunOp(ctx, c.Run.ID)
 	if !ok {
 		return
 	}
 	defer unlock()
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.PausedAt == nil || run.PausedReason != types.PauseWaiting {
+	run, err := s.cfg.Store.GetRun(ctx, c.Run.ID)
+	if err != nil || run.PausedAt == nil {
+		return
+	}
+	switch {
+	case run.PausedReason == types.PauseWaiting:
+	case run.PausedReason == types.PauseIdle && c.RequestDecidedSincePause &&
+		c.Run.PausedAt != nil && run.PausedAt.Equal(*c.Run.PausedAt):
+	default:
+		return
+	}
+	if open, err := pauser.RunHasOpenRequest(ctx, run.ID); err != nil || open {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -533,7 +546,7 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 
 // sweepRunPauses is one pass of the pause over every live run: settle the ones
 // a pause compensation left unsettled (settlePauses), pause the ones nobody is
-// at, and resume a waiting one whose requests have all closed. Every
+// at, and resume a paused one whose requests have all closed. Every
 // write is a conditional UPDATE. With a SweeperLease only the elected leader
 // sweeps, its context ends when the lease is lost, and its epoch fences each
 // pause (pauseRun).
@@ -584,11 +597,13 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 			continue
 		}
 		if run.PausedAt != nil {
-			// Only a waiting pause is the backstop's: an idle pause is marked
-			// with no request open, so no open request is the state it paused
-			// in, not a reason to wake.
-			if run.PausedReason == types.PauseWaiting && !c.OpenRequest {
-				s.resumeWaitingRun(ctx, pauser, run.ID)
+			// A waiting pause is the backstop's once no request is open. An idle
+			// pause is marked with no request open, so no open request is the state
+			// it paused in, not a reason to wake: only one decided after the pause
+			// began is.
+			if !c.OpenRequest && (run.PausedReason == types.PauseWaiting ||
+				run.PausedReason == types.PauseIdle && c.RequestDecidedSincePause) {
+				s.resumeClosedRun(ctx, pauser, c)
 			}
 			continue
 		}

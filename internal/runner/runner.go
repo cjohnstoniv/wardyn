@@ -172,6 +172,9 @@ type ProxyConfig struct {
 	AzureARM *proxy.AzureARMGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
+	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its
+	// placeholder until the runner fills it; the proxy answers their mints (proxy.Config.ResidentMints).
+	ResidentMints []proxy.ResidentMint
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
 	// chains egress through; control-plane calls bypass it. Empty => direct dial.
 	UpstreamProxyURL string

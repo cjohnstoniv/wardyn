@@ -126,7 +126,8 @@ func (s *Server) viaOrgRunFor(runID, runner uuid.UUID) (*viaOrgRun, bool) {
 	run := &viaOrgRun{id: runID, runner: runner, bytes: spent, done: make(chan struct{}), streams: map[*viaOrgStream]struct{}{}, idleSince: time.Now(),
 		byteCap: viaOrgByteCap, idle: viaOrgIdle, period: viaOrgWatchEvery}
 	s.viaOrg.runs[runID] = run
-	go s.watchViaOrgRun(run)
+	// Background work, so a stopping daemon waits for the watcher and the engine close it starts.
+	s.goBackground(func() { s.watchViaOrgRun(run) })
 	return run, true
 }
 
@@ -278,7 +279,7 @@ func (s *Server) releaseViaOrgRun(run *viaOrgRun, final, retire bool) {
 	run.engine = nil
 	run.mu.Unlock()
 	if gen != nil {
-		go closeViaOrgGen(run.id, gen)
+		s.goBackground(func() { closeViaOrgGen(run.id, gen) })
 	}
 	run.smu.Lock()
 	if run.closed {

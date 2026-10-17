@@ -148,8 +148,6 @@ func (s *Server) putRecordResult(ctx context.Context, wsID uuid.UUID, taskKey st
 	return s.cfg.Store.SetWorkspaceRecordResult(ctx, wsID, taskKey, mustJSON(res), onlyIfStatus)
 }
 
-// DRAFT (M2 canon pending)
-//
 // recordLabelCollisionMsg is the 409 a re-record under a DIFFERENT name that
 // slugs onto an existing session's key gets. It names BOTH labels because the
 // collision is invisible otherwise — the two names do not look alike, only

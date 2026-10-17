@@ -171,6 +171,53 @@ func TestAttachRoundTrip(t *testing.T) {
 	}
 }
 
+// A stream's controls stay on the session that opened it: once a reconnect replaces that session, a
+// resize on the old pty or the old exec fails and reaches nothing on the new session, whose streams
+// may reuse the old ids, while the new session's own streams work.
+func TestStreamControlsStayOnTheirSession(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	oldPty, err := rig.Sub.Attach(ctxT(t), sb.Ref, runner.AttachOptions{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldExec, err := rig.Sub.ExecStream(ctxT(t), sb.Ref, runner.ExecSpec{Argv: []string{"sh"}, TTY: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.Connect(t)
+	curPty, err := rig.Sub.Attach(ctxT(t), sb.Ref, runner.AttachOptions{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	curExec, err := rig.Sub.ExecStream(ctxT(t), sb.Ref, runner.ExecSpec{Argv: []string{"sh"}, TTY: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oldPty.Resize(ctxT(t), 120, 40); err == nil {
+		t.Error("a resize on the replaced session's pty succeeded")
+	}
+	if err := oldExec.Resize(130, 50); err == nil {
+		t.Error("a resize on the replaced session's exec succeeded")
+	}
+	if err := curPty.Resize(ctxT(t), 100, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := curExec.Resize(90, 20); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.Fake.Resizes; len(got) != 2 || got[0] != [2]uint16{100, 30} || got[1] != [2]uint16{90, 20} {
+		t.Fatalf("resizes = %v, want only the current session's two", got)
+	}
+	_ = oldExec.Close()
+	if err := curExec.Resize(91, 21); err != nil {
+		t.Fatalf("the current exec after the old one closed: %v", err)
+	}
+	_ = oldPty.Close()
+	_ = curPty.Close()
+	_ = curExec.Close()
+}
+
 func TestExecStreamRoundTrip(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	rig.Fake.ExitCode = 3

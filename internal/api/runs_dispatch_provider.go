@@ -28,7 +28,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending).
 const (
 	// Cause-neutral on purpose (#1489): a credential that is not there looks the
 	// same whether it was never stored, was deleted when an admin changed the
@@ -387,7 +386,6 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 const mpRunSignInNotPrimary = "Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, " +
 	"so nothing was started. Launch the run again with %s first, or with another provider for it."
 
-// DRAFT (M2 canon pending).
 const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +
 	"already uses, so nothing was started. An admin gives each harness's provider its own address."
 

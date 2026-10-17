@@ -74,8 +74,9 @@ var (
 
 // RunnerPoolsMax bounds the organisation's live pools and RunnerPoolsPerOwnerMax one person's, so a
 // person's catalogue read is bounded and no person's pools can crowd the organisation's out of it.
-// RunnerPoolsOversightMax bounds the oversight read, which lists the organisation's pools and then the
-// caller's own before anyone else's, so neither can drop out of it.
+// RunnerPoolsOversightMax bounds the oversight list, which lists the organisation's pools and then the
+// caller's own before anyone else's, so neither can drop out of it. The read takes one more row, so the
+// list can say that more exist.
 const (
 	RunnerPoolsMax          = 200
 	RunnerPoolsPerOwnerMax  = 10
@@ -206,7 +207,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		ORDER BY CASE WHEN p.owner IS NULL THEN 0 WHEN p.owner = $1 THEN 1 ELSE 2 END, lower(p.name), p.id LIMIT $2`
 	limit := RunnerPoolsMax + RunnerPoolsPerOwnerMax
 	if all {
-		limit = RunnerPoolsOversightMax
+		limit = RunnerPoolsOversightMax + 1
 	}
 	return collect(ctx, s.Pool, "list", "runner pools", q, []any{owner, limit, all}, func(row pgx.Row) (RunnerPoolCatalogueRow, error) {
 		var r RunnerPoolCatalogueRow
@@ -375,7 +376,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // DeleteRunnerPoolsByOwner is a person's erasure of their pools: each live pool owner holds is deleted
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
-// meanwhile is either deleted here or made after it. Returns the deletions, in pool id order.
+// meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
+// same transaction. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -399,7 +401,11 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 			}
 			out = append(out, d)
 		}
-		_, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner)
+		if _, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner); err != nil {
+			return err
+		}
+		// The person's stored preferences (their default pool among them) go with their pools.
+		_, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner)
 		return err
 	})
 	return out, err

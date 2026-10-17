@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -181,6 +182,76 @@ func TestAdminRoutesRefuseMemberDrives(t *testing.T) {
 	}
 	if len(rn.calls) != 0 {
 		t.Errorf("reclaim reached the substrate %d times", len(rn.calls))
+	}
+}
+
+// TestMemberDriveDeleteRefusesBeforeTheTombstoneWhileARunStarts: a run of the owner's in STARTING may
+// attach the drive, so the owner's delete answers in use before writing the tombstone that run would
+// meet as drive_not_found, and never reaches the substrate. Another person's STARTING run does not
+// hold it.
+func TestMemberDriveDeleteRefusesBeforeTheTombstoneWhileARunStarts(t *testing.T) {
+	st := newMemberDriveStore()
+	d := seedMemberDrive(st, aliceSub, "Notes")
+	st.starting = map[string]bool{aliceSub: true}
+	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+	srv, rec := memberDriveServer(st, rn, "docker")
+	wantReason(t, deleteMyDrive(srv, aliceSub, d.ID.String()), http.StatusConflict, reasonMemberDriveInUse)
+	if got, kept := st.drives[d.ID]; !kept || got.DeleteStartedAt != nil || st.begins != 0 || len(rn.calls) != 0 {
+		t.Fatalf("kept = %v (tombstone %v), tombstone writes = %d, substrate calls = %d; want kept, never tombstoned, no call",
+			kept, got.DeleteStartedAt, st.begins, len(rn.calls))
+	}
+	if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "refused" || data["by"] != "owner" {
+		t.Errorf("audit = %v, want outcome refused by the owner", data)
+	}
+	st.starting = map[string]bool{bobSub: true}
+	if w := deleteMyDrive(srv, aliceSub, d.ID.String()); w.Code != http.StatusNoContent || len(rn.calls) != 1 {
+		t.Fatalf("delete beside another person's starting run = %d (calls %d), want 204 after one reclaim: %s", w.Code, len(rn.calls), w.Body.String())
+	}
+}
+
+// TestMemberDriveAdminDeleteRefusesBeforeTheTombstoneWhileARunStarts: the
+// admin route reads the drive's owner first, so a run of the owner's in
+// STARTING keeps the drive with no tombstone written and no substrate call.
+func TestMemberDriveAdminDeleteRefusesBeforeTheTombstoneWhileARunStarts(t *testing.T) {
+	st := newMemberDriveStore()
+	d := seedMemberDrive(st, aliceSub, "Notes")
+	st.starting = map[string]bool{aliceSub: true}
+	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+	srv, rec := memberDriveServer(st, rn, "docker")
+	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
+	w := memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": d.ID.String()})
+	wantReason(t, w, http.StatusConflict, reasonUserDriveReclaimConflict)
+	if got, kept := st.drives[d.ID]; !kept || got.DeleteStartedAt != nil || st.begins != 0 || len(rn.calls) != 0 {
+		t.Fatalf("kept = %v (tombstone %v), tombstone writes = %d, substrate calls = %d; want kept, never tombstoned, no call",
+			kept, got.DeleteStartedAt, st.begins, len(rn.calls))
+	}
+	if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "refused" || data["by"] != "admin" {
+		t.Errorf("audit = %v, want outcome refused by the admin", data)
+	}
+}
+
+// TestMemberDriveDeleteWaitsOutAStartingRun: past the tombstone the starting
+// read runs again, so a run that started between the first read and the
+// tombstone still keeps the drive and clears the tombstone.
+func TestMemberDriveDeleteWaitsOutAStartingRun(t *testing.T) {
+	st := newMemberDriveStore()
+	d := seedMemberDrive(st, aliceSub, "Notes")
+	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+	srv, rec := memberDriveServer(st, rn, "docker")
+	ctx := withActor(context.Background(), types.ActorHuman, "sub-admin")
+	tomb, started, err := st.BeginMemberDriveDelete(ctx, aliceSub, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.starting = map[string]bool{aliceSub: true} // the run started after the first read
+	if res := srv.deleteMemberDrive(ctx, st, tomb, started, memberDriveByAdmin); res.reason != reasonMemberDriveInUse {
+		t.Fatalf("deletion = %+v, want refused in use", res)
+	}
+	if got, kept := st.drives[d.ID]; !kept || got.DeleteStartedAt != nil || len(rn.calls) != 0 {
+		t.Fatalf("kept = %v (tombstone %v), substrate calls = %d; want kept, tombstone cleared, no call", kept, got.DeleteStartedAt, len(rn.calls))
+	}
+	if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "refused" {
+		t.Errorf("audit = %v, want outcome refused", data)
 	}
 }
 

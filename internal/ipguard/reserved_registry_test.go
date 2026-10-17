@@ -44,6 +44,7 @@ func TestReservedCoversTheIANANonGloballyReachableBlocks(t *testing.T) {
 		{"3fff::1", "3fff::/20 documentation (RFC9637)"},
 		{"5f00::1", "5f00::/16 SRv6 SIDs (RFC9602)"},
 		{"100::1", "100::/64 discard-only (RFC6666)"},
+		{"100:0:0:1::1", "100:0:0:1::/64 dummy IPv6 prefix (RFC9780)"},
 	} {
 		ok, why := PrivateReserved(net.ParseIP(tc.ip))
 		if !ok {

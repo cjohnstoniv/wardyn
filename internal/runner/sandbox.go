@@ -191,6 +191,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
+		ResidentMints:        pc.ResidentMints,
 		ADOGrant:             pc.ADOGrant,
 		AzureGates:           pc.AzureGates,
 		GitHubAPI:            pc.GitHubAPI,

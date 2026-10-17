@@ -247,16 +247,13 @@ const (
 	maxFirstUseHoldSeconds = 600
 )
 
-// DRAFT (M2 canon pending)
-
 // The two bound refusals a policy author reads in a 400 body. They name the
 // accepted RANGE rather than the ceiling alone, because 0 is a meaningful third
 // value on both fields (keep the built-in default) and "may not exceed N" reads
 // as "lower it", which for 0 is the wrong instruction. Each echoes the value so
 // someone editing a pasted policy can see which field they are being told about.
 const (
-	maxHoldsRefusal = "max_holds must be between 0 (the built-in default) and %d, got %d"
-	// DRAFT (M2 canon pending)
+	maxHoldsRefusal            = "max_holds must be between 0 (the built-in default) and %d, got %d"
 	firstUseHoldSecondsRefusal = "first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d"
 )
 

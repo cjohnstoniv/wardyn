@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -85,6 +86,68 @@ func residentClass(kind types.GrantKind) string {
 	return ""
 }
 
+// residentADOGitPATRefused: an Azure DevOps git token is its owner's own (the
+// shared one is retired), runner_resident delivers an operator's value, and a
+// connection's runner_resident opt-in admits only its minted PAT, a class whose
+// resident delivery is not built.
+const residentADOGitPATRefused = "an Azure DevOps git token is never delivered runner_resident"
+
+// residentADOGitPAT reports whether g is a git_pat for an Azure DevOps host
+// under sc. Create refuses it resident and delivery checks it again against
+// the site config of that moment.
+func residentADOGitPAT(sc types.SiteConfig, g types.GrantSpec) bool {
+	if g.Kind != types.GrantGitPAT {
+		return false
+	}
+	pat, err := types.DecodeGitPATScope(g.Scope)
+	if err != nil {
+		return true
+	}
+	// A stored host that is not a hostname once folded (a scheme, a path or
+	// userinfo written before the host was checked) cannot be shown not to be
+	// Azure DevOps, so it is refused the same.
+	host := gitPATHostKey(pat.Host)
+	return !validGitPATHost(host) || host == "dev.azure.com" || strings.HasSuffix(host, ".dev.azure.com") || adoGrantHost(sc, host)
+}
+
+// gitPATHostKey is host as a forge names it: lowercased, trimmed of space and
+// of a trailing dot, with a numeric port split off. A stored scope written before
+// the host had to be bare (validGitPATHost) is judged on this form.
+func gitPATHostKey(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if h, port, err := net.SplitHostPort(host); err == nil && port != "" && strings.Trim(port, "0123456789") == "" {
+		host = strings.TrimSuffix(h, ".") // a numeric port only: "https://x" keeps its scheme and is refused
+	}
+	return host
+}
+
+// residentGrantRefusal is why create refuses g runner_resident although the
+// policy and table admit its class; "" when it is admitted. A grant that needs
+// an approval to mint is never resident (no approval reaches a value the runner
+// holds); a git_pat is resident only while the PAT broker is off, since the
+// broker serves it proxy-side; an Azure DevOps git token never is.
+func (s *Server) residentGrantRefusal(ctx context.Context, g types.GrantSpec) string {
+	switch {
+	case g.RequiresApproval:
+		return "a grant that requires approval is never delivered runner_resident"
+	case g.Kind != types.GrantGitPAT:
+		return ""
+	case !s.cfg.DisableGitPATBroker:
+		return residentPATBrokered
+	}
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		var err error
+		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
+			return "the site configuration could not be read"
+		}
+	}
+	if residentADOGitPAT(sc, g) {
+		return residentADOGitPATRefused
+	}
+	return ""
+}
+
 // residentForSandbox reports whether the runner may place a value of class in
 // the sandbox (env_secret, file_secret) rather than its own proxy only.
 func residentForSandbox(class string) bool {
@@ -100,7 +163,7 @@ func residentForSandbox(class string) bool {
 // be used: the caller skips the grant as it skips any unreadable one.
 func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, grant types.CredentialGrant, secretName string) (residentValue, error) {
 	class := residentClass(grant.Spec.Kind)
-	if class == "" || grant.Delivery != types.GrantDeliveryResident || run.RunnerID == nil || s.cfg.Secrets == nil {
+	if class == "" || grant.Delivery != types.GrantDeliveryResident || grant.RunID != run.ID || run.RunnerID == nil || s.cfg.Secrets == nil {
 		return residentValue{}, errors.New("api: the grant cannot be delivered runner_resident")
 	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": grant.ID, "runner_id": *run.RunnerID,
@@ -263,6 +326,9 @@ func (s *Server) deliverResident(ctx context.Context, run types.AgentRun, policy
 	for _, v := range values {
 		if v.grant.Delivery != types.GrantDeliveryResident || v.grant.RunID != run.ID {
 			return refuse(placement.ReasonPlacementCredential, v.grant.ID, "only a grant of this run recorded runner_resident is handed to its runner")
+		}
+		if residentADOGitPAT(sc, v.grant.Spec) {
+			return refuse(placement.ReasonPlacementCredential, v.grant.ID, residentADOGitPATRefused)
 		}
 		origin := placement.CredentialOrigin{Class: placement.ClassOperator, Delivery: v.class, GrantKind: v.grant.Spec.Kind}
 		if r := placement.ResidentAdmits(origin, p, "runner_resident."+v.class); r != nil {

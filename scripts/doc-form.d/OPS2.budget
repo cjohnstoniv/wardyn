@@ -49,4 +49,8 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 2141 adds 380 over 1761 (0.9.3 PKG), measured: the macOS package and MDM section and its managed-preferences key table.
 # docs/operations/hybrid-laptops.md 2255 adds 114 over 2141 (0.9.3 PKG round 2), measured: Open Anyway and MDM-agent install wording, the single-instance lock, the per-user profile path.
 # docs/operations/hybrid-laptops.md 3439 = 2945 + 494 (PKG), measured at the wave-B merge.
-docs/operations/hybrid-laptops.md=3439 share=35
+# docs/operations/hybrid-laptops.md 3747 adds 308 over 3439 (0.9.3 RR-de), measured: four runner_resident classes, best-effort erasure and its four late cases, the broker and Azure DevOps limits.
+# docs/operations/hybrid-laptops.md 3765 adds 18 over 3747 (0.9.3 RR-de review), measured: the run end in the keystore cap and the older-runner refusal.
+# docs/operations/hybrid-laptops.md 3538 adds 99 over 3439 (0.9.3 FIN-E), measured: the posture-on-record notes and the proxy-image skew note.
+# docs/operations/hybrid-laptops.md 3864, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/operations/hybrid-laptops.md=3864 share=35

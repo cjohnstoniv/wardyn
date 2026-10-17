@@ -86,7 +86,8 @@ export function AdminMintedTokens() {
   React.useEffect(load, [load]);
 
   const live = tokens ? tokens.filter((t) => !t.revoked_at) : [];
-  const revokedShown = tokens ? tokens.length - live.length : 0;
+  // The rows the toggle brings: the server lists revoked tokens and expired ones minted for others only when asked.
+  const toggleShown = tokens ? tokens.filter((t) => t.revoked_at || isExpired(t)).length : 0;
   // "Still work" counts what authenticates: an expired token is listed, but is not one of them.
   const working = live.filter((t) => !isExpired(t)).length;
   const shown = includeRevoked ? (tokens ?? []) : live;
@@ -149,9 +150,9 @@ export function AdminMintedTokens() {
             <p className="mt-2 text-xs text-muted-foreground">{working === 0 ? MINTED.NONE_LIVE : MINTED.COUNT(working)}</p>
             <p className="text-xs text-muted-foreground">{MINTED.NOTE}</p>
             {toggle}
-            {includeRevoked && revokedShown > 0 && (
+            {includeRevoked && toggleShown > 0 && (
               <p role="status" className="mt-1.5 text-xs text-muted-foreground">
-                {MINTED.SHOWING_REVOKED(revokedShown)}
+                {MINTED.SHOWING_REVOKED(toggleShown)}
               </p>
             )}
             <div className="mt-3 overflow-x-auto scroll-thin">

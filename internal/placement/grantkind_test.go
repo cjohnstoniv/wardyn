@@ -265,6 +265,7 @@ func TestGrantKindLiteralReaderSeesBothConstForms(t *testing.T) {
 
 // Resident Bedrock role credentials sign in-process: even the person's own
 // bedrock_sso is runner_resident or refuse (design 6.3, 7.2), never allowed.
+// Its runner_resident delivery is not built, so even its placeholder refuses.
 func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing.T) {
 	path := "SandboxSpec.SecretEnv[ROLE_SIGNING_KEY]"
 	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassBedrockRoleCreds, Stored: true, OwnNamespace: true, OwnerOnly: true}
@@ -276,7 +277,7 @@ func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing
 	p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}
 	p.Trust = types.RunnerTrustPersonal
 	p.Spec.SecretEnv = map[string]string{"ROLE_SIGNING_KEY": ResidentPlaceholder(uuid.New())}
-	if _, r := LocalEligibility(p); r != nil {
-		t.Fatalf("mode runner_resident: %v", r)
+	if _, r := LocalEligibility(p); r == nil || r.Field != path || r.Detail != "runner_resident delivery of this credential is not built yet" {
+		t.Fatalf("mode runner_resident: %v, want the not-built refusal", r)
 	}
 }

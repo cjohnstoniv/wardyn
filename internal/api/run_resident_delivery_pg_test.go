@@ -228,7 +228,7 @@ func (f *residentFix) dispatchRefusal(t *testing.T, runID uuid.UUID) map[string]
 // past 24 hours after delivery; a run ending within a minute is refused before
 // anything is written or sent.
 func TestDispatch_ResidentNotAfterBound(t *testing.T) {
-	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	at := func(d time.Duration) *time.Time { v := now.Add(d); return &v }
 	for name, c := range map[string]struct {
 		capAt, endsAt *time.Time

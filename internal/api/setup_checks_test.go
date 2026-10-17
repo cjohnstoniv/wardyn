@@ -306,7 +306,7 @@ func TestInternalHostsCheck(t *testing.T) {
 		t.Errorf("ID = %q, want internal_hosts", chk.ID)
 	}
 	if chk.Label != internalHostsCheckLabel {
-		t.Errorf("Label = %q, want the DRAFT constant %q", chk.Label, internalHostsCheckLabel)
+		t.Errorf("Label = %q, want the constant %q", chk.Label, internalHostsCheckLabel)
 	}
 	if chk.Status != "info" {
 		t.Errorf("Status = %q, want info (a fail/warn here would wrongly activate the setup gate on a deliberate, "+

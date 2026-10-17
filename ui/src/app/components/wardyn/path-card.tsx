@@ -18,8 +18,8 @@ const CARD = "flex min-h-[270px] flex-col rounded-xl border bg-card p-[22px] tex
 
 /**
  * A way in. Plain `onSelect` makes the whole card one button; `actions` makes it a region
- * holding its own buttons (never a button around buttons); `comingSoon` is aria-disabled
- * and says so in words.
+ * holding its own buttons (never a button around buttons); `comingSoon` has no button and says so in
+ * words (an article can't carry aria-disabled).
  */
 export function PathCard({
   title,

@@ -361,7 +361,7 @@ export const MEMBER_DRIVES = {
 // ADO_ENTRA_EDITOR / ADO_GROUP_COPY / ADO_CAP_COPY — the Azure DevOps row's
 // Entra section (entra-editor.tsx), transcribed from the approved G1 mock's
 // strings table. Not in the frozen §7 doc tables, so separate exports, the
-// PROVIDERS_DRAFT way. The mock's "See Part 2." (a pointer inside the review
+// way PROVIDERS_EXTRA is. The mock's "See Part 2." (a pointer inside the review
 // packet itself) is left off PER_RUN_POINTER.
 export const ADO_ENTRA_EDITOR = {
   SECTION_TITLE: "Azure DevOps sign-in (Entra)",

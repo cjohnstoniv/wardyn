@@ -281,9 +281,43 @@ func (b *accessBuilder) addHost(host, via, rowID string) {
 }
 
 // addCredential appends a credential to the last row and to the total.
+// credentialLabel names a credential by its kind and whose it is, for the Credentials total and the
+// rows that list it. It never names a secret. A model credential has none: the console names it by
+// its provider.
+func credentialLabel(kind, owner string) string {
+	shared := owner == credOwnerShared
+	switch kind {
+	case credKindGitHubApp:
+		return "Your organisation's GitHub App"
+	case credKindADOSignIn:
+		return "Your Azure DevOps sign-in"
+	case credKindAWSRole:
+		return "Your AWS sign-in"
+	case credKindAzureARM:
+		return "Your Azure sign-in"
+	case credKindGitPAT:
+		if shared {
+			return "A Git token your organisation provides"
+		}
+		return "Your Git token"
+	case credKindSSHKey:
+		if shared {
+			return "An SSH key your organisation provides"
+		}
+		return "Your SSH key"
+	case credKindSecret:
+		if shared {
+			return "A secret your organisation provides"
+		}
+		return "Your secret"
+	}
+	return ""
+}
+
 func (b *accessBuilder) addCredential(c client.AccessCredential) {
 	row := &b.out.Rows[len(b.out.Rows)-1]
 	c.Row = row.ID
+	c.Label = credentialLabel(c.Kind, c.Owner)
 	row.Credentials = append(row.Credentials, c.ID)
 	b.out.Credentials = append(b.out.Credentials, c)
 }

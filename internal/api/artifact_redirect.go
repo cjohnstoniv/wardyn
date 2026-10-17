@@ -274,7 +274,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			// on another port that mirror gets none, which is worth a row.
 			if port := redirectPort(r.To); port != first {
 				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-					run.ID.String(), "warn", mustJSON(map[string]any{
+					run.ID.String(), "denied", mustJSON(map[string]any{
 						"ecosystem": r.Ecosystem, "host": host, "port": port,
 						"detail": fmt.Sprintf("another redirect to this host already carries the token, on port %d; this port was applied without token injection", first),
 					})))

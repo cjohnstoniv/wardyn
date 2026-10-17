@@ -311,6 +311,21 @@ func TestTemplateFullCoverage(t *testing.T) {
 	}
 }
 
+// A full background template can fix the agent and leave the prompt for use time under the run-mode
+// carriers, as it can with the older task field; a Run document is still held to the run's own shape.
+func TestTemplateAgentTaskLeavesItsPromptForUseTime(t *testing.T) {
+	const intent = `{"experience":"background","workload":{"kind":"agent_task","agent":"claude-code"},` +
+		`"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true}`
+	doc := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"full","intent":` + intent + `}`
+	if diags := validateTemplateImport([]byte(doc), client.TemplateFormatJSON, "").Diagnostics; len(diags) != 0 {
+		t.Fatalf("a full agent-task template with no prompt: %v", diagReasons(diags))
+	}
+	blank := strings.Replace(doc, `"agent":"claude-code"}`, `"agent":"claude-code","task":"  "}`, 1)
+	if diags := validateTemplateImport([]byte(blank), client.TemplateFormatJSON, "").Diagnostics; len(diags) == 0 {
+		t.Fatal("a prompt of spaces is text the template wrote, and is held to the run's shape")
+	}
+}
+
 // TestTemplatePendingRulesAreStillRefusedByTheRun keeps a request field's
 // Pending flag honest. A pending row whose field now exists on CreateRunRequest
 // must still be refused by the run itself; when its lane honours the field, the

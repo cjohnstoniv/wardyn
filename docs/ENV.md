@@ -700,6 +700,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - List the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`).
 - Needs `list` on `nodes` (a ClusterRole; chart: `k8s.readNodes`).
 - It compares requests to node allocatable, honouring `WARDYN_K8S_SANDBOX_PLACEMENT`, which is size and not free capacity: other namespaces' pods are invisible, and the scheduler stays the authority.
+- It also shortens a start wait. A pod the scheduler reports `Unschedulable` normally waits `WARDYN_SANDBOX_CAPACITY_WAIT`.
+  - With the read on, it fails at `WARDYN_SANDBOX_START_TIMEOUT` instead when a Ready, schedulable node exists and no node passes the placement's selector, required affinity and taints.
+  - So a mistyped `nodeSelector` is not a 15-minute wait.
+  - Node-lifecycle taints (cordon, not ready, unreachable, pressure) and the autoscalers' deletion taints are not counted, so a pool that is only draining or cordoned keeps waiting.
+  - Zero nodes, or no Ready node, keeps the wait too.
+  - A pool an autoscaler scales up from zero nodes reads as no match while other nodes are healthy.
+  - Leave the flag off for such a cluster, or its runs fail at the start timeout instead of waiting for the new node.
 - The runs namespace's ResourceQuota read needs no flag and no env.
 - Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
 

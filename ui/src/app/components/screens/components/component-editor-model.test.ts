@@ -78,3 +78,12 @@ describe("newUuid", () => {
     }
   });
 });
+
+describe("description", () => {
+  it("keeps a stored description, trims an edited one and sends none when cleared", () => {
+    const withDesc = { ...stored, definition: { ...stored.definition, description: "Charges cards." } };
+    expect(draftOf(withDesc).description).toBe("Charges cards.");
+    expect(requestOf({ ...draftOf(withDesc), description: "  Refunds too.  " }).definition.description).toBe("Refunds too.");
+    expect(requestOf({ ...draftOf(withDesc), description: "   " }).definition).not.toHaveProperty("description");
+  });
+});

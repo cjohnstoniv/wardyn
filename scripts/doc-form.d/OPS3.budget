@@ -55,13 +55,15 @@ docs/operations/admin-only-writes.md=3645 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
-docs/operations/three-roles.md=4194 share=35
+# docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
+docs/operations/three-roles.md=4218 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
-docs/operations/governance-writes.md=3086 share=35
+# docs/operations/governance-writes.md 3132 adds 46 over 3086 (0.9.3 FIN-E), measured: the runner trust row and held remote-hosted runner changes.
+docs/operations/governance-writes.md=3132 share=35
 docs/operations/member-runs.md=1044 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
@@ -77,7 +79,12 @@ docs/operations/custom-components.md=1184 share=35
 # docs/operations/api-tokens.md 4053 adds 51: on Entra ID a portal-issued token exchanges only for a person who signed in here once or was set up by object id.
 # docs/operations/api-tokens.md 5527 measured after merging the batch into R1-identity-1 (52 over 5475: the same portal-token sentence).
 # docs/operations/api-tokens.md 5529 adds 2 over 5527, measured: expired rows are also left out of the token move list.
-docs/operations/api-tokens.md=5529 share=35
+# docs/operations/api-tokens.md 5531 adds 2 over 5529, measured: the toggle is now named "Also show revoked and expired tokens".
+# docs/operations/api-tokens.md 5569 adds 40 over 5529, measured (FIN-A2b): an expired or retired-identity token needs a decision, and the target's own token may list invitations.
+# docs/operations/api-tokens.md 5571, measured at the FIN-A2b merge into the final train (both sides' sentences).
+# docs/operations/api-tokens.md 5540 adds 11 over 5529 (0.9.3 FIN-E), measured: the unbind refusals for a sponsor or a pending invitation.
+# docs/operations/api-tokens.md 5582, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/operations/api-tokens.md=5582 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
@@ -89,8 +96,9 @@ docs/operations/api-tokens.md=5529 share=35
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
 # docs/operations/denials.md 4948 adds 17 over 4931 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/operations/denials.md 4963 adds 15 over 4948 (0.9.1 L8), measured: the me.runners.tokens target of capability_feature.
+# docs/operations/denials.md 4973 adds 10 over 4963, measured (FIN-A2b): the claim and sponsor doors' capability_feature targets.
 # docs/operations/denials.md 5001 adds 38: the sponsor_not_entitled denial row (0.9.3 FIN-B2).
-docs/operations/denials.md=5001 share=35
+docs/operations/denials.md=5011 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

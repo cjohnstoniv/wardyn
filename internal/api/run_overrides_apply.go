@@ -40,6 +40,9 @@ type overrideEdits struct {
 	// missingSecrets are the added secrets the person does not hold, which Review (and only Review)
 	// reports as setup items instead of refusing: the refusal is create's.
 	missingSecrets []client.SecretOverride
+	// adoPending is an Azure DevOps narrowing of a policy that names no set, waiting for the
+	// workspace seeding (stepADOOverride).
+	adoPending *client.ADOOverrides
 }
 
 // reviewDoorKey marks a fold that is Review's: the person is still choosing, so a secret they have not
@@ -183,11 +186,11 @@ func (s *Server) applyRunOverrides(ctx context.Context, r *http.Request, spec ty
 		applyRunEgressOverrides(&spec, *eg, e)
 	}
 	if o.AzureDevOps != nil {
-		base, refusal := s.adoOverrideBase(ctx, r, spec, req)
-		if refusal == nil {
-			refusal = applyADOOverride(&spec, *o.AzureDevOps, base, e)
-		}
-		if refusal != nil {
+		if len(spec.AzureDevOpsCapabilities) == 0 {
+			// The set to narrow is the default profile of the row that admits the run's repository,
+			// which a selected workspace names only once it is seeded: stepADOOverride narrows it then.
+			e.adoPending = o.AzureDevOps
+		} else if refusal := applyADOOverride(&spec, *o.AzureDevOps, spec.AzureDevOpsCapabilities, e); refusal != nil {
 			return spec, nil, refusal
 		}
 	}

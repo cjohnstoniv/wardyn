@@ -122,6 +122,13 @@ func (s PG) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (t
 		`SELECT `+driveRowCols+` FROM user_drives WHERE id = $1 AND owner_subject = $2`, id, owner))
 }
 
+// GetMemberDrive returns member drive id, whoever owns it, else ErrNotFound (an
+// organisation drive is not a member drive).
+func (s PG) GetMemberDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error) {
+	return scanDriveRow(s.Pool.QueryRow(ctx,
+		`SELECT `+driveRowCols+` FROM user_drives WHERE id = $1 AND owner_subject <> ''`, id))
+}
+
 // beginMemberDriveDeleteSQL sets the tombstone on a member drive (an empty $2 means
 // any owner) unless a delete started under a minute ago. RETURNING the row
 // carries the tombstone the caller later finishes or aborts with.
@@ -137,6 +144,19 @@ func (s PG) BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UU
 		return types.UserDrive{}, time.Time{}, errMemberDriveNoOwner
 	}
 	return s.beginMemberDriveDelete(ctx, owner, id)
+}
+
+// MemberDriveOwnerStarting reports whether owner has a run in STARTING, the state in which dispatch
+// re-reads a run's member drives and then creates its sandbox. The owner compares as
+// types.CanonicalUserSubject does, so it never misses the owner's own runs.
+func (s PG) MemberDriveOwnerStarting(ctx context.Context, owner string) (bool, error) {
+	var starting bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE state = 'STARTING'
+		AND (btrim(created_by) = $1 OR lower(btrim(created_by)) = $1))`, owner).Scan(&starting)
+	if err != nil {
+		return false, fmt.Errorf("store: read the owner's starting runs: %w", err)
+	}
+	return starting, nil
 }
 
 // BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner.

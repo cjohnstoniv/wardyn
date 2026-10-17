@@ -39,6 +39,11 @@ type govCrudStore struct {
 	existing uuid.UUID
 }
 
+// DryRunGovernance runs nothing: a direct delete reads the row it removes for its audit row
+// (readDeleteAudit) through a database querier this fake has none of, so the row records no detail;
+// governance_delete_audit_pg_test pins what it records.
+func (s *govCrudStore) DryRunGovernance(context.Context, func(store.Querier) error) error { return nil }
+
 func (s *govCrudStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return s.profiles, s.listProfilesErr
 }

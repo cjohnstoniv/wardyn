@@ -180,6 +180,47 @@ test.describe("one door — keyed by provider (User view)", () => {
     expect(writes).toEqual([JSON.stringify({ value: "gw-e2e-token" })]);
   });
 
+  test("a write the store refuses (unavailable) renders the refusal: no success toast, the door stays open, nothing is retried", async ({
+    page,
+  }) => {
+    const GATEWAY = {
+      id: "corp-gateway",
+      name: "Corp gateway",
+      kind: "custom_endpoint",
+      harnesses: ["claude-code"],
+      default_for: ["claude-code"],
+      host: "gateway.corp.example",
+    };
+    const REFUSAL = "the secret store is unavailable, so nothing was saved";
+    await mockMemberRole(page);
+    await spliceStatus(page, (body) => {
+      body.model_providers = [GATEWAY];
+      body.provider_access = [{ provider: GATEWAY.id, state: "not_configured" }];
+    });
+    let writes = 0;
+    await page.route(`**/api/v1/model-providers/${GATEWAY.id}/credential`, async (route) => {
+      writes++;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: REFUSAL }) });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+    await page.getByRole("button", { name: "Add your token" }).click();
+    const door = page.getByRole("dialog", { name: "Add your token for Corp gateway" });
+    await door.getByLabel("Token").fill("gw-e2e-token");
+    await door.getByRole("button", { name: KEY_DOOR.SAVE }).click();
+
+    await expect(door.getByRole("alert")).toContainText(REFUSAL);
+    await expect(page.getByText("Token saved")).toHaveCount(0);
+    await expect(door).toBeVisible();
+    // The refusal replaces the storage note (packet F §1 d), the typed value is
+    // still the person's own to retry or change, and nothing wrote twice.
+    await expect(door).not.toContainText(KEY_DOOR.NOTE);
+    await expect(door.getByLabel("Token")).toHaveValue("gw-e2e-token");
+    await expect(door.getByRole("button", { name: KEY_DOOR.SAVE })).toBeEnabled();
+    expect(writes).toBe(1);
+  });
+
   test("on an Azure key service the notice says the key is held in Key Vault", async ({ page }) => {
     const GATEWAY = {
       id: "corp-gateway",

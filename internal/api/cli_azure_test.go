@@ -494,6 +494,12 @@ func TestAzureCLI_ComponentGate(t *testing.T) {
 		t.Fatalf("another person's launch = %+v, want their own sign-in asked for", refused)
 	}
 
+	// A service identity can never sign in to Azure, so it is told so rather than asked to.
+	svc := &componentAdmission{caller: types.ServicePrincipalPrefix + "ci-bot", credentials: true}
+	if _, refused := admit(svc); refused == nil || refused.refusal == nil || !strings.Contains(refused.refusal.body.Error, azureCLIServiceIdentityRefusal) {
+		t.Fatalf("a service identity's launch = %+v, want the service identity sentence", refused)
+	}
+
 	f.srv.cfg.AzureCLIEntra = nil
 	if _, refused := admit(launch()); refused == nil || refused.reason != reasonComponentCLIAzureNoEntra {
 		t.Fatalf("no console Entra sign-in = %+v, want %s", refused, reasonComponentCLIAzureNoEntra)
@@ -529,8 +535,8 @@ func TestAzureCLI_DoorsAndPreviewFacts(t *testing.T) {
 	}
 	c := slices.IndexFunc(ans.Access.Credentials, func(c client.AccessCredential) bool { return c.Kind == credKindAzureARM })
 	if c < 0 || ans.Access.Credentials[c].Delivery != deliveryProxy || ans.Access.Credentials[c].Owner != credOwnerOwn ||
-		!ans.Access.Credentials[c].Renewed || ans.Access.Credentials[c].AfterEnd != afterEndGone {
-		t.Errorf("credentials = %+v, want one proxy-only credential of the person's own, renewed and gone at the end", ans.Access.Credentials)
+		!ans.Access.Credentials[c].Renewed || ans.Access.Credentials[c].AfterEnd != afterEndGone || ans.Access.Credentials[c].Label != "Your Azure sign-in" {
+		t.Errorf("credentials = %+v, want one proxy-only credential of the person's own, renewed, gone at the end and labelled", ans.Access.Credentials)
 	}
 	for _, host := range []string{armscope.Host, proxy.AzureLoginHost} {
 		if h, ok := accessHost(ans.Access, host); !ok || h.Via != viaInjected || h.Verdict != verdictAllowed {
@@ -789,6 +795,18 @@ func TestAzureCLI_DispatchRefusals(t *testing.T) {
 			}
 		})
 	}
+	// A run a service identity started fails with the sentence that names why, never "not signed in":
+	// a service identity has no Azure sign-in to make.
+	t.Run("a service identity", func(t *testing.T) {
+		f := newAzCLIFixture(t, types.ComponentAccessRead, azCLISubA)
+		f.st.run.CreatedBy = types.ServicePrincipalPrefix + "ci-bot"
+		env, policy := map[string]string{}, &types.RunPolicySpec{}
+		_, _, ok := f.srv.authorAzureCLI(context.Background(), f.st.run, &azureCLIDispatch{ComponentID: f.id.String(), Azure: *f.st.attached[0].Definition.CLI.Azure},
+			"ca", "ca", policy, env, nil)
+		if ok || f.st.failedTo != types.RunFailed || !strings.Contains(f.st.hint, "a service identity has none") {
+			t.Errorf("ok %v state %q hint %q, want FAILED saying a service identity has no Azure sign-in", ok, f.st.failedTo, f.st.hint)
+		}
+	})
 }
 
 // NO REAL TOKEN IN THE SANDBOX. Whatever the person's sign-in holds and
@@ -1076,7 +1094,7 @@ func TestAzureCLI_ServiceIdentityIsToldItCannotSignIn(t *testing.T) {
 		if refused == nil || refused.reason != reasonComponentCLISignInRequired || c.needsSignIn {
 			t.Fatalf("credentials=%v: refused %+v needsSignIn %v, want the sign-in refusal and no setup item", credentials, refused, c.needsSignIn)
 		}
-		if want := "components[0]: " + azureCLINotServiceRefusal; !strings.Contains(refused.refusal.body.Error, want) {
+		if want := "components[0]: " + azureCLIServiceIdentityRefusal; !strings.Contains(refused.refusal.body.Error, want) {
 			t.Errorf("credentials=%v: refusal %q lacks %q", credentials, refused.refusal.body.Error, want)
 		}
 	}
@@ -1084,7 +1102,7 @@ func TestAzureCLI_ServiceIdentityIsToldItCannotSignIn(t *testing.T) {
 	f.st.run.CreatedBy = service
 	_, _, ok := f.srv.authorAzureCLI(context.Background(), f.st.run, &azureCLIDispatch{ComponentID: f.id.String(), Azure: *f.st.attached[0].Definition.CLI.Azure},
 		"ca", "ca", &types.RunPolicySpec{}, map[string]string{}, nil)
-	if ok || f.st.hint != azureCLINotServiceRefusal {
-		t.Errorf("dispatch: ok %v hint %q, want a refusal with %q", ok, f.st.hint, azureCLINotServiceRefusal)
+	if ok || f.st.hint != azureCLIServiceIdentityRefusal {
+		t.Errorf("dispatch: ok %v hint %q, want a refusal with %q", ok, f.st.hint, azureCLIServiceIdentityRefusal)
 	}
 }

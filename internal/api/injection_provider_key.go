@@ -18,7 +18,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending)
 const (
 	providerKeyNotRecorded = "A model provider's key is injected only through the grant Wardyn authors when a run launches on " +
 		"that provider, which records whose key the run uses; this grant carries no such record"

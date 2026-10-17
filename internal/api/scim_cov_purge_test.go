@@ -48,6 +48,7 @@ func scimCovSeedPurgee(st *scimCovStore) scimCovLeaver {
 		{SubjectType: types.CapabilitySubjectAll, Subject: "sub-pat", DriveID: group},
 	}
 	st.grantsDeleted, st.assignDeleted = 3, 2
+	st.poolsNarrowed, st.poolsEmptied = 2, 1
 	return l
 }
 
@@ -109,7 +110,8 @@ func TestSCIMCovDeletePurgesAndRecordsEveryStep(t *testing.T) {
 
 	d := e.auditData(e.purgeRow())
 	if d["workspaces_reassigned"] != float64(2) || d["grants_deleted"] != float64(3) || d["assignments_deleted"] != float64(2) ||
-		d["credentials_erased"] != float64(0) || d["masks_fenced"] != float64(0) {
+		d["credentials_erased"] != float64(0) || d["masks_fenced"] != float64(0) ||
+		d["pools_narrowed"] != float64(2) || d["pools_emptied"] != float64(1) {
 		t.Errorf("purge row data = %v, want the counts of the steps", d)
 	}
 	if drives, _ := d["drives"].([]any); len(drives) != 2 || drives[0] != "alpha" || drives[1] != "zeta" {

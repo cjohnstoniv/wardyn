@@ -12,7 +12,7 @@
 | Concern | Org | Laptop |
 | --- | --- | --- |
 | Scheduling, placement, the ceiling | Yes, the only scheduler | Nothing decides locally |
-| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own. `runner_resident` values are not yet delivered to runners in 0.9 |
+| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own, and `runner_resident` values of four classes (`env_secret`, `file_secret`, `ssh_key`, `git_pat_helper`), held in the runner's OS keystore for the run |
 | A `via_org` credential's requests | The org re-checks each one and injects the credential on a TLS leg it dials itself | The proxy forwards them through the relay; it never holds the value, but sees the request in plaintext |
 | Audit | The org is the only writer; every local run is an org run record | The runner carries bytes and spools rows while offline |
 | Control plane, Postgres, OIDC client, `age.key` | Yes | None of them |
@@ -33,8 +33,8 @@
 ## Resident credentials and posture
 
 > [!NOTE]
-> `runner_resident` values are not yet delivered to runners in 0.9. An admin can set the mode and a runner reports its posture, but a run that needs such a credential is still refused.
-> The refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`.
+> A runner holds four classes as `runner_resident`: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper`. Any other class set to `runner_resident` is still refused.
+> A refusal is `runner_posture_unmet` when the run's confinement floor or the runner's posture misses the class's requirement, otherwise `placement_credential`. Whoever controls the laptop as root can read a value while the runner holds it, so erasure is best-effort and never promised.
 
 | Credential class | Modes |
 | --- | --- |
@@ -47,9 +47,28 @@
 - `via_org` does not carry an MCP server's header credential: a run whose MCP server uses one the organisation shares is refused on your runner (`placement_credential`).
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
 - The runner reports its posture when it connects and again when it changes. A root-owned posture file from your MDM wins over the runner's own probe: `/etc/wardyn/posture.json` on Linux and `/Library/Application Support/Wardyn/posture.json` on macOS.
-- A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and erases it at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
+- A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and deletes it at run end, reporting each delete (`runner.resident.erase`). On a computer whose root user is the developer, erasure is best-effort, never promised. A runner with no keystore refuses (`runner_keystore_unavailable`).
+- **When the keystore copy goes.** The cap is the earliest of the run's lifetime cap, the run's end and 24 hours after delivery.
+  - **From the cap on, nothing can read the value.** The runner refuses to read it, a revive is refused, and the proxy stops answering for an SSH key or git token.
+  - **Deleting the bytes is best-effort, with retry.** Normally the runner deletes the copy when the run ends, or at its next minute sweep after the cap. In four cases the delete lands later:
+    1. a keychain call is busy or stuck at the cap (for example, a macOS keychain prompt waiting for a click). The copy is deleted at the first sweep after the call returns;
+    2. the delete keeps failing. It is retried every minute;
+    3. the runner daemon is stopped at the cap. The copy is deleted when it next starts;
+    4. the runner is offline when the run ends. The copy is deleted when it reconnects, or at the cap, whichever comes first.
+  - Wardyn cannot guarantee that bytes are physically gone from a computer the developer controls.
+- A value already inside the sandbox or the running proxy stays there until the run ends.
+- A key or token already handed to the sandbox stays valid at the forge until you rotate it.
+- On macOS a value over about 3 KB is refused.
+- A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`).
+- A grant that requires approval is never `runner_resident`.
+- `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
+- A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
+- A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
+- Placement judges the posture on record, the runner's last report, so a change on the laptop counts once the runner reports it.
+- A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`).
+- `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
 ### bedrock_sso on a laptop runner
 
@@ -135,6 +154,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 - An unpinned runner follows the organisation: at every connect it takes the proxy image the organisation answers for its architecture, so an upgraded organisation's image reaches the laptop without a reinstall. Runs started from then on use it; runs already going keep theirs.
 - It takes any well-formed image the organisation names, including an older one. There is no version floor, and the change is logged at info level only.
+- A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
 ### The Docker engine setup and serve use

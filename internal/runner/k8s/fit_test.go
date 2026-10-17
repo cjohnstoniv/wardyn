@@ -78,7 +78,7 @@ func TestCheckFit_TwoApplicableQuotas(t *testing.T) {
 			q.Spec.Scopes = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeTerminating}
 			return q
 		}(),
-		quota("unrelated-objects", corev1.ResourceList{"count/secrets": resource.MustParse("5")}, nil),
+		quota("unrelated-objects", corev1.ResourceList{"count/configmaps": resource.MustParse("5")}, nil),
 	)
 
 	fit, err := d.CheckFit(context.Background(), fitRes)
@@ -108,6 +108,33 @@ func TestCheckFit_TwoApplicableQuotas(t *testing.T) {
 }
 
 const mi = int64(1) << 20
+
+// TestCheckFit_RunObjectsCountAgainstObjectQuotas: CreateSandbox makes one Secret and two
+// NetworkPolicies per run, so an object-count quota on them is predicted, counted once per run.
+func TestCheckFit_RunObjectsCountAgainstObjectQuotas(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	seed(t, cs, quota("objects", corev1.ResourceList{
+		"secrets":       resource.MustParse("10"),
+		"count/secrets": resource.MustParse("10"),
+		"count/networkpolicies.networking.k8s.io": resource.MustParse("4"),
+	}, corev1.ResourceList{
+		"secrets":       resource.MustParse("9"),
+		"count/secrets": resource.MustParse("9"),
+		"count/networkpolicies.networking.k8s.io": resource.MustParse("3"),
+	}))
+	fit, err := d.CheckFit(context.Background(), fitRes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fit.Quota) != 1 {
+		t.Fatalf("quotas = %+v, want the object-count quota to apply", fit.Quota)
+	}
+	for key, want := range map[string][2]int64{"secrets": {1, 1}, "count/secrets": {1, 1}, "count/networkpolicies.networking.k8s.io": {2, 1}} {
+		if a, ok := axisOf(fit.Quota[0], key); !ok || a.Need != want[0] || a.Left != want[1] {
+			t.Errorf("%s = %+v (found %v), want need %d, left %d", key, a, ok, want[0], want[1])
+		}
+	}
+}
 
 // TestCheckFit_PriorityClassScope: a scopeSelector on PriorityClass applies only to a run whose
 // placement sets that class.

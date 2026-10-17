@@ -67,14 +67,14 @@ const (
 	azureCLIGrantTTLSec = 3600 // bounds the mint, never the hold: a re-resolve redeems afresh
 )
 
-// DRAFT (canon pending). Member-visible sentences of the arm.
+// Member-visible sentences of the arm.
 const (
 	azureCLISecondRowRefusal = "a run can attach one Azure CLI component; remove the second"
 	azureCLINoEntraRefusal   = "This run uses the Azure CLI, which signs you in through this deployment's Microsoft Entra console sign-in, " +
 		"and none is configured. Remove the Azure CLI from the run, or ask your admin."
 	azureCLINotPersonRefusal = "This run uses the Azure CLI, which uses your own Azure sign-in, and the admin token is a shared " +
 		"credential rather than a person. Sign in to the console and start the run as yourself."
-	azureCLINotServiceRefusal = "This run uses the Azure CLI, which uses a person's own Azure sign-in, and a service identity cannot sign in to Azure. " +
+	azureCLIServiceIdentityRefusal = "This run uses the Azure CLI, which uses a person's own Azure sign-in, and a service identity has none. " +
 		"Remove the Azure CLI from the run, or have a person start it."
 	azureCLINotSignedIn = "This run uses the Azure CLI, and you are not signed in to Azure for it. " +
 		"Sign in to Azure for the component, then start the run again."
@@ -309,7 +309,7 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 	case !s.credentialPerson(owner):
 		return refuse(azureCLINotPersonRefusal)
 	case isServicePrincipal(owner):
-		return refuse(azureCLINotServiceRefusal)
+		return refuse(azureCLIServiceIdentityRefusal)
 	}
 	if signedIn, err := s.azureCLISignedIn(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), owner, cli.ComponentID); err != nil {
 		return refuse("Wardyn couldn't read your Azure sign-in for this run's Azure CLI just now — nothing was started. Try again in a moment.")

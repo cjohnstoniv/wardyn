@@ -130,9 +130,9 @@ describe("Admin > Credentials state column", () => {
   it.each<[string, string]>([
     ["State", MINTED.COL_STATE],
     ["No token an admin created for someone else still works.", MINTED.NONE_LIVE],
-    ["Also show revoked tokens", MINTED.INCLUDE_REVOKED],
-    ["Showing 3 revoked tokens as well.", MINTED.SHOWING_REVOKED(3)],
-    ["Showing 1 revoked token as well.", MINTED.SHOWING_REVOKED(1)],
+    ["Also show revoked and expired tokens", MINTED.INCLUDE_REVOKED],
+    ["Showing 3 revoked or expired tokens as well.", MINTED.SHOWING_REVOKED(3)],
+    ["Showing 1 revoked or expired token as well.", MINTED.SHOWING_REVOKED(1)],
     ["Service identity:", MINTED.SERVICE_IDENTITY],
     ["Invite the owner with wardyn person invite, or move the token with wardyn token move. The console does neither.", MINTED.FOOTNOTE.join("")],
     ["Needs a decision", DISPOSITION.needs_decision.label],

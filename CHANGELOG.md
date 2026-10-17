@@ -8,6 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
+  `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `runner_resident_runs`
+  (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
+  `0183_runner_retirements`). Without them a runner cannot be handed a
+  `runner_resident` credential, and a finished runner run's output is never retired.
+
 ## [0.9.3-rc.2] — 2026-10-17
 
 Laptop runners, second candidate: session recordings follow the organisation, an Azure DevOps credential follows the

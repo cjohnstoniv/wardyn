@@ -433,7 +433,7 @@ const (
 	egressRetryNever  = "never"
 )
 
-// DRAFT (M2 canon pending) — the FIVE sentences a builtin:private-ip 403 can tell
+// The FIVE sentences a builtin:private-ip 403 can tell
 // a HOSTNAME's operator, each its own constant so the owner's canon sitting is a
 // one-line diff. Four compose the LIFTABLE refusal (cause, remedy, the console's
 // second copy of the cidrs hint, lifetime); the fifth replaces the remedy and the
@@ -533,8 +533,8 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}
-		// The join site for the four DRAFT sentences above: cause, remedy,
-		// hint, lifetime. Any owner ruling is an edit to this expression and
+		// The join site for the four sentences above: cause, remedy,
+		// hint, lifetime. Any wording change is an edit to this expression and
 		// the constant it names, nowhere else.
 		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
 			siteInternalHostsCIDRHint + " " + egressDenialSuffix

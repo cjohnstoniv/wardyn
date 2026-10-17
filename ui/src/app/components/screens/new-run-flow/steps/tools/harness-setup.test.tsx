@@ -213,8 +213,12 @@ describe("HarnessSetup", () => {
   describe("tool rules", () => {
     it("shows the policy's rows locked, with no enforcement note, on any lane (A23 a)", () => {
       show([CLAUDE_GATED_LOCKED]);
-      const locked = () => screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked")).map((r) => r.textContent);
+      const locked = () => screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked")).map((r) => r.textContent?.replace(NR_TOOLS.ROW_LOCKED, ""));
       expect(locked()).toEqual(["WebFetchBlock it", "BashAsk first"]);
+      // A lock icon is all a sighted person sees; a screen reader hears who set the row.
+      for (const row of screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"))) {
+        expect(row).toHaveTextContent("Set by your organisation's policy");
+      }
       cleanup();
       show([CLAUDE_UNGATED_LOCKED]);
       expect(locked()).toEqual(["WebFetchBlock it"]);

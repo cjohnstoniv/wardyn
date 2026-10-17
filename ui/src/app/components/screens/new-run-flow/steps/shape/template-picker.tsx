@@ -41,7 +41,7 @@ export function TemplatePicker({ selectedId, onPick }: { selectedId?: string; on
         }}
       >
         <SelectTrigger id="nr-template" aria-busy={loaded.status === "loading"} className="w-full bg-card dark:bg-card">
-          <SelectValue />
+          <SelectValue placeholder={loaded.status === "loading" ? NR_SHAPE.TEMPLATES_LOADING : undefined} />
         </SelectTrigger>
         <SelectContent>
           {templates.map((t) => (

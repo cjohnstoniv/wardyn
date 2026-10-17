@@ -49,7 +49,7 @@ type harnessLoginDispatch struct {
 	ExtraEnv map[string]string
 }
 
-// DRAFT (M2 canon pending) — the run's failure_hint when the dispatch ceiling
+// The run's failure_hint when the dispatch ceiling
 // cannot be resolved AFTER the run row exists. Synchronously this would be a
 // 500 with no run to speak of; here the caller already holds a 200 and a run
 // id, so the run itself has to carry the reason or it sits PENDING forever
@@ -57,7 +57,7 @@ type harnessLoginDispatch struct {
 // unresolved-ceiling sentence (runs_dispatch.go), in this lane's words.
 const harnessLoginCeilingUnresolved = "this sign-in sandbox was not launched: Wardyn could not resolve the governance ceiling that bounds it — try again, and tell your admin if it keeps failing"
 
-// DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
+// The run's failure_hint when the detached launch
 // PANICS. It needs its own sentence: the panic window is almost entirely inside
 // dispatchRun, so the ceiling sentence above would tell an operator Wardyn could
 // not resolve a ceiling it in fact resolved, which is both untrue and

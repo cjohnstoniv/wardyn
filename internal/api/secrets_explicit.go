@@ -45,8 +45,8 @@ func (s *Server) mountExplicitSecretRoutes(r, operatorOnly chi.Router) {
 
 // personalSecretOwner is the caller's own namespace: the verified person's subject, whatever their
 // role and whichever view the console shows. A caller with no verified person (the admin token,
-// local mode, a device, a portal acting for someone) has none and is refused, because a namespace
-// derived from an attribution string could be one nothing reads.
+// local mode, a device) has none and is refused, because a namespace derived from an attribution
+// string could be one nothing reads. A portal acting for someone is refused first, as delegation_scope.
 func (s *Server) personalSecretOwner(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if s.refuseDelegated(w, r) {
 		return "", false

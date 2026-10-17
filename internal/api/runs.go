@@ -28,7 +28,6 @@ import (
 // devcontainer build pulls a base image and runs the repo's full setup.
 const imageBuildTimeout = 30 * time.Minute
 
-// DRAFT (M2 canon pending)
 const (
 	// createRunGrantAbortHint is the failure_hint a run carries when POST /runs
 	// answered 500 AFTER the run row existed: the row is persisted and the

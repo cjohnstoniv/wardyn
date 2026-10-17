@@ -108,7 +108,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return s.refuseUnproved(ctx, st, ident, forms.unproved)
 	}
 	forms = forms.destructive()
-	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
+	isEmail := func(t string) bool {
+		return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) && !slices.Contains(forms.named, t)
+	}
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
 	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}, {Step: jobStepInvites}, {Step: jobStepSponsor}}
@@ -132,8 +134,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepGrants}, func() (map[string]int, error) {
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
-			grants, assignments, kept, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
-			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments), "email_rows_kept": int(kept)}, err
+			n, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
+			return map[string]int{"grants_deleted": int(n.Grants), "assignments_deleted": int(n.Assignments), "email_rows_kept": int(n.Kept),
+				"pools_narrowed": int(n.PoolsNarrowed), "pools_emptied": int(n.PoolsEmptied)}, err
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
 			return s.revokeLeaverRunners(ctx, principals)
@@ -453,6 +456,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
 		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"],
 		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {
@@ -537,6 +541,8 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	// An owed refusal row is drained whatever became of the person since: a reactivated person or a member
 	// added back is no longer leaver or mover work above (run last, so a row those resumes just drained or
 	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
+	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
+	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
 	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, o := range owed {

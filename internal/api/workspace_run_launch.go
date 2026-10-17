@@ -641,9 +641,15 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// would make a member's directory writable past the member writable roots,
 	// and a refused session leaves no run behind.
 	before := len(policy.EligibleGrants)
-	reqEvents, refusal := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	// Held to the launching operator's ceiling, as recordSessionPolicy's confinedEgressDomains is: a
+	// required row the ceiling does not cover must not come back into the replay's AllowedDomains here.
+	bound := &egressBound{trusted: ceiling.Spec.AllowedDomains}
+	reqEvents, refusal := s.applyWorkspaceRequirementsFor(ctx, nil, &policy, "claude-code", []types.Workspace{ws}, []types.Workspace{ws}, nil, bound)
 	if refusal != nil {
 		return types.AgentRun{}, false, abort(refusal)
+	}
+	for _, warn := range bound.dropped {
+		slog.WarnContext(ctx, "wardynd: "+warn, slog.String("run_id", runID.String()))
 	}
 	created, err := s.createRun(ctx, run)
 	if err != nil {

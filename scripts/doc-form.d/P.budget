@@ -19,7 +19,8 @@
 # docs/POLICIES.md 18258 = 18207 + 51 (DOCS3), measured at the wave-B merge.
 # docs/POLICIES.md 18237 adds 47 over 18190, measured: requirement-row egress safety rests on write-side authorization and provenance, not a fold-time clamp.
 # docs/POLICIES.md 18311 = 18258 + 53 (RV4f), measured at the wave-C merge.
+# docs/POLICIES.md 18332 = 18311 + 21, measured: a component definition's description.
 # docs/POLICIES.md 18317 adds 6 over 18311: the approval scope also carries the hold seconds (0.9.3 FIN-B2).
-docs/POLICIES.md=18317 share=12
+docs/POLICIES.md=18338 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

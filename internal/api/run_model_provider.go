@@ -15,8 +15,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mpRun* — the run-create refusals of a model-provider choice. DRAFT (M2 canon
-// pending). mpRunRefusal is the design's one sentence (multi-provider §2.6):
+// mpRun* — the run-create refusals of a model-provider choice.
+// mpRunRefusal is the design's one sentence (multi-provider §2.6):
 // provider, state, remedy.
 const (
 	mpRunRefusal         = "This run's model provider is %s, and %s — %s Wardyn does not substitute a different model provider."
@@ -322,7 +322,6 @@ func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Reque
 	return choice, true
 }
 
-// DRAFT (M2 canon pending).
 const (
 	mpAccessProvisioned = "model access provisioned for agent %q: your own credential for model provider %s is injected proxy-side — it is never resident in the sandbox."
 	mpAccessNoProvider  = "no model access for agent %q: no model provider serves it on this deployment — an admin adds one under Settings → Model providers."

@@ -687,3 +687,26 @@ func TestPG_OrgDefaultNamingAPoolDeletedAfterTheCheckIs404(t *testing.T) {
 		t.Errorf("the refused write named %v", got.PoolID)
 	}
 }
+
+// The oversight list stops at the cap and says that more exist; under the cap it says nothing.
+func TestPG_RunnerPoolsOversightListSaysWhenItIsTruncated(t *testing.T) {
+	e := newPoolEnv(t, false)
+	e.createPool("Laptops", types.RunnerPoolUser)
+	list := func() (*httptest.ResponseRecorder, int) {
+		w := e.call(e.alice, http.MethodGet, "/api/v1/runner-pools", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list = %d %s", w.Code, w.Body)
+		}
+		return w, len(decodeJSON[client.RunnerPoolList](t, w).Pools)
+	}
+	if w, _ := list(); w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Fatal("a list under the cap says it is truncated")
+	}
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pools (id, name, scope, owner)
+		SELECT gen_random_uuid(), 'bulk-' || g, 'user', 'sub-bulk-' || g FROM generate_series(1, $1::int) g`, store.RunnerPoolsOversightMax); err != nil {
+		t.Fatal(err)
+	}
+	if w, n := list(); w.Header().Get("X-Wardyn-Truncated") != "true" || n != store.RunnerPoolsOversightMax {
+		t.Fatalf("over the cap: %d pools, truncated %q", n, w.Header().Get("X-Wardyn-Truncated"))
+	}
+}

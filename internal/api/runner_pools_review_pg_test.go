@@ -159,8 +159,13 @@ func TestPG_RunnerPoolLeaverPurgeStripsUseSubjectsAndNeverWidens(t *testing.T) {
 	e.call(e.alice, http.MethodPut, usePolicyPath(solo.ID), `{"subjects":[{"subject_type":"user","subject":"sub-leaver"}]}`)
 	revShared, revSolo := e.revision(shared.ID), e.revision(solo.ID)
 
-	if _, _, _, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-leaver"}, nil); err != nil {
+	n, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-leaver"}, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The purge says what it did to the pools: both narrowed, one of them left permitting nobody.
+	if n.PoolsNarrowed != 2 || n.PoolsEmptied != 1 {
+		t.Errorf("pools narrowed %d, emptied %d; want 2 and 1", n.PoolsNarrowed, n.PoolsEmptied)
 	}
 	got := e.policySubjects(shared.ID)
 	if len(got) != 2 || got[0].Subject != "sub-stays" || got[1].Subject != "pool-users" || e.revision(shared.ID) != revShared+1 {

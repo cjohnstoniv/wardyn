@@ -97,7 +97,7 @@ describe("the State column", () => {
     await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
     expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
     expect(listMintedMock).toHaveBeenLastCalledWith(true);
-    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked tokens as well.");
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked or expired tokens as well.");
     expect(rowOf("dana@example.com").getByText("Replaced by the owner")).toBeInTheDocument();
     expect(rowOf("dana@example.com").getByText("Revoked 2 days ago, when they claimed their own.")).toBeInTheDocument();
     expect(rowOf("eli@example.com").getByText("Moved to a service identity")).toBeInTheDocument();
@@ -137,8 +137,22 @@ describe("the State column", () => {
     expect(await screen.findByText(MINTED.EMPTY)).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
     expect(await screen.findByText(MINTED.NONE_LIVE)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked tokens as well.");
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 3 revoked or expired tokens as well.");
     expect(screen.queryByText(MINTED.CHIP(0))).not.toBeInTheDocument();
+  });
+
+  it("counts expired tokens the toggle brings, with no revoked ones", async () => {
+    const expired = [
+      token("x1", "hal", "needs_decision", { expires_at: aheadByHours(-48) }),
+      token("x2", "ivy", "needs_decision", { expires_at: aheadByHours(-2) }),
+    ];
+    listMintedMock.mockImplementation(async (includeRevoked?: boolean) => (includeRevoked ? [...live, ...expired] : live));
+    render(<AdminMintedTokens />);
+    await screen.findByText("alice@example.com");
+    await user.click(screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED }));
+    expect(await screen.findByText("hal@example.com")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Showing 2 revoked or expired tokens as well.");
+    expect(screen.getByText(MINTED.CHIP(3))).toBeInTheDocument();
   });
 
   it("shows a state this console does not know as written, in a neutral chip, and a row with none shows nothing", async () => {

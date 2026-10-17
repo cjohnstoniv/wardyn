@@ -21,7 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending): the action sentences provider_access composes for
+// The action sentences provider_access composes for
 // the kinds modelaccess.go's AWS-only vocabulary does not already cover.
 const (
 	providerAccessAddKeyAction   = "Add your key"
@@ -93,7 +93,7 @@ func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfi
 	return mp, access, checks
 }
 
-// The checklist copy for the per-provider rows. DRAFT (M2 canon pending).
+// The checklist copy for the per-provider rows.
 // %s is the credential's noun (providerCredentialNoun).
 const (
 	providerAccessLiveDetail     = "Your %s for this provider is connected; runs on it use your own credential."

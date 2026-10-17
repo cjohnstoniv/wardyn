@@ -302,6 +302,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ExclusionUnknown:     exclusionUnknown,
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
+	p.residentMints = residentMintsByGrant(cfg.ResidentMints)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if p.hardDeny, err = compileHardDeny(cfg.HardDeny); err != nil {
 		_ = sink.close(context.Background())

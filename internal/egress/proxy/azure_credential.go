@@ -14,8 +14,6 @@ import (
 // What a sandbox reads when the Entra token for an azure_foundry host could not be attached: a sign-in
 // hold that ended without a sign-in, or any other failure of the resolve. Always 403, never 401, which
 // a model client reads as "try another credential" and answers with its own key or a retry storm.
-//
-// DRAFT (M2 canon pending)
 const (
 	azureSignInTimedOutRefusal = "Wardyn held this Azure request while its owner was asked to sign in to Azure again, " +
 		"and nobody signed in before the hold expired. Nothing was substituted; retry once they have signed in."
