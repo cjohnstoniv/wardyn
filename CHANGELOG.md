@@ -56,16 +56,16 @@ what to set for the old behaviour.
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `runner_resident_runs`
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
-  `runner_resident` credential, and a finished runner run's output is never retired. Grant it `SELECT` on
-  `deployment_versions` (migration `0190_deployment_versions`), or setup status leaves out the defaults an upgrade changed.
+  `runner_resident` credential, and a finished runner run's output is never retired. Grant it `SELECT, INSERT, UPDATE,
+  DELETE` on `run_containment_pending` and `SELECT, INSERT, UPDATE` on `run_node_records` (migration
+  `0189_run_containment_pending`), or a Kubernetes runner's state page is refused while it holds a run as containment
+  pending. Grant it `SELECT` on `deployment_versions` (migration `0190_deployment_versions`), or setup status leaves out
+  the defaults an upgrade changed.
 - Upgrading from before 0.9.1, migration `0178_self_host_runner_restriction` now keeps self-hosting open whenever a
   runner is claimed, including one whose registration token an admin minted. A database that already applied it is
   not asked again: if people who are not admins are refused `403 capability_feature` on `POST /me/runners/tokens`,
   write `POST /api/v1/permissions/grants` with
   `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}`.
-- The same installs: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_containment_pending` and
-  `SELECT, INSERT, UPDATE` on `run_node_records` (migration `0189_run_containment_pending`). Without them a
-  Kubernetes runner's state page is refused while it holds a run as containment pending.
 - A repository URL with a user name, password or token before its http(s) host is now refused (`400`
   `repo_url_credentials`). Workspaces, library sources, policies, presets and templates stored with one now fail
   closed at launch and scan, and must be edited to the plain URL with the credential in a `git_pat` grant. Azure
