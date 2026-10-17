@@ -55,8 +55,10 @@ func (s PG) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID)
 	return collect(ctx, s.Pool, "list", "pending approvals for runs", q, []any{runIDs}, scanApproval)
 }
 
-// ListExpiredPendingApprovals — see approval.Store. Keyset on id, so each sweep page is an index
-// range over the partial pending index and a failed row never makes the next page re-read it.
+// ListExpiredPendingApprovals — see approval.Store. Keyset on id, so a failed row never makes the next
+// page re-read it and a page is at most limit rows in memory. The partial pending index is on (state), not
+// id, so each page reads the pending rows and orders them by id: that set is small, because decided rows
+// leave it.
 func (s PG) ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
 	q := `
 		SELECT ` + approvalCols + `
