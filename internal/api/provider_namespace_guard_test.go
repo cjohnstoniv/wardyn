@@ -43,7 +43,7 @@ var strictProviderReaders = map[string]string{
 var readersThatMustRefuseProviderNames = map[string]string{
 	"handleInternalInjection":     "the minted grant's SecretName, owner-then-operator by design for injections",
 	"resolveLLMInspectionSecrets": "the policy's LLM-inspection secret names, owner-then-operator at dispatch",
-	"resolveEnvSecretGrants":      "an env_secret grant's SecretName, owner-then-operator at dispatch",
+	"resolveEnvSecretValues":      "an env_secret grant's SecretName, owner-then-operator at dispatch (resolveEnvSecretGrants is its rows-less wrapper); refuses a wardyn-provider- name before its Get (nameSinkReservedSecret)",
 	"resolveFileSecretGrants":     "a file_secret grant's SecretName, owner-then-operator at dispatch (owner-only for an owner_only grant); refuses a wardyn-provider- name before its Get (nameSinkReservedSecret)",
 }
 
