@@ -700,7 +700,9 @@ func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
 // lapseSetup starts self-lapse-end-to-end early, since its proof waits out one renew interval: a live
 // run renews through the relay once, then its row is made terminal in the org's database (the fault: the
 // org ends a run without the stop reaching runnerd), so its next renew (10 min +-1 after a success) is
-// refused permanently.
+// refused permanently. The row is written as a finalize that believed its stop succeeded leaves it,
+// sandbox_ref cleared: with the ref kept, wardynd's terminal-sandbox sweep (every 5 min) retries the
+// stop and tears the sandbox down before that renew.
 func (o *orgEnv) lapseSetup(t *testing.T) {
 	o.lapse = &lapseRun{}
 	parent := t
@@ -712,7 +714,7 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 		o.lapse.id = id
 		o.waitAudit(t, id, 2*time.Minute, "a successful renew", func(r auditRow) bool { return r.Action == "identity.renew" && r.Outcome == "success" })
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",
-			"UPDATE agent_runs SET state = 'FAILED' WHERE id = '"+id+"'")
+			"UPDATE agent_runs SET state = 'FAILED', sandbox_ref = '' WHERE id = '"+id+"'")
 		o.lapse.marked = time.Now()
 	})
 	if !ok {
