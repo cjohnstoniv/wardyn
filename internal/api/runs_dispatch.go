@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -938,34 +937,6 @@ func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
 	}
 	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
 	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
-// patBrokerGrants converts the run's {host: grant_id} PAT grants into the
-// proxy's per-host broker allowlist, or nil when the lane is off.
-//
-// It converts what it is handed and filters nothing: dispatchRun feeds it the
-// map dropBrokeredGrants already narrowed, so a brokered forge never reaches
-// here. Re-deriving "is this forge brokered?" inside would be a second answer to
-// a question the sandbox half also answers — which is exactly how the two halves
-// came apart.
-//
-// The username is left empty here on purpose: the control plane resolves the
-// host's git username at MINT time (ADO wants "pat", GitLab "oauth2", and an
-// operator may override), so duplicating that resolution at dispatch would be a
-// second place for it to drift. The proxy uses whatever the mint returns.
-func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
-	if !on || len(pat) == 0 {
-		return nil
-	}
-	out := make(map[string]proxy.PATGrant, len(pat))
-	for host, id := range pat {
-		gid, err := uuid.Parse(id)
-		if err != nil {
-			continue // a malformed id cannot broker; the host simply is not granted
-		}
-		out[strings.ToLower(strings.TrimSpace(host))] = proxy.PATGrant{GrantID: gid}
-	}
-	return out
 }
 
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
