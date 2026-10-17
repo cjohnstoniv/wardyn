@@ -118,6 +118,9 @@ type Config struct {
 	// TrustedCAPEM is runnerd's corporate CA bundle, applied to the proxy config and the sandbox
 	// before pod construction (design K1 §5.2).
 	TrustedCAPEM string
+	// Arch is --arch (amd64 or arm64), merged into the node selector of every pod as
+	// kubernetes.io/arch (design K1 §6.1). Required in runner mode.
+	Arch string
 	// MaxPodLifetime caps both pods' activeDeadlineSeconds (N6). Zero leaves the server spec as is.
 	MaxPodLifetime time.Duration
 	// Evidence persists each run's k8s record in its offline record (the manager's atomic write).
@@ -292,6 +295,12 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		// Design K1 §3.4 item 1: only an enforced canary verdict boots a runner.
 		if cfg.AllowUnenforcedNetPol || cfg.AckAmbientDefaultDeny {
 			return nil, errRunnerNetPolOverride
+		}
+		if cfg.Arch == "" {
+			return nil, errors.New("k8s: runner mode requires an arch")
+		}
+		if placement, err = placement.withArch(cfg.Arch); err != nil {
+			return nil, err
 		}
 	}
 	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort, now: time.Now}

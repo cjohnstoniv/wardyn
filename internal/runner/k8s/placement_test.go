@@ -180,3 +180,74 @@ func TestPlacement_RefusedAtBoot(t *testing.T) {
 		})
 	}
 }
+
+// TestPlacement_RunnerArch: a runner's --arch joins the operator's node selector as
+// kubernetes.io/arch on every pod, the canary included, and the operator's own keys stay.
+func TestPlacement_RunnerArch(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false)
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: `{"nodeSelector": {"pool": "sandbox"}}`,
+		RunnerID: testRunnerID, Arch: "arm64", Evidence: &memEvidence{}, HardDeny: &HardDeny{},
+	})
+	if err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	want := map[string]string{"pool": "sandbox", corev1.LabelArchStable: "arm64"}
+	check := func(what string, got map[string]string) {
+		t.Helper()
+		if len(got) != len(want) || got["pool"] != want["pool"] || got[corev1.LabelArchStable] != "arm64" {
+			t.Errorf("%s nodeSelector = %v, want %v", what, got, want)
+		}
+	}
+	canaries := 0
+	for _, a := range cs.Actions() {
+		if ca, ok := a.(clienttesting.CreateAction); ok && a.GetResource().Resource == "pods" {
+			canaries++
+			check("canary pod", ca.GetObject().(*corev1.Pod).Spec.NodeSelector)
+		}
+	}
+	if canaries == 0 {
+		t.Fatal("boot created no canary pod")
+	}
+	for _, component := range []string{componentAgent, componentProxy} {
+		pod := &corev1.Pod{}
+		d.placement.apply(pod, uuid.New(), component, nil)
+		check(component+" pod", pod.Spec.NodeSelector)
+	}
+}
+
+// TestPlacement_RunnerArchRefusals: a runner with no arch, or whose operator selector names another
+// arch, refuses boot before the canary creates anything. The same arch is not a conflict.
+func TestPlacement_RunnerArchRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name, arch, json, wantErr string
+	}{
+		{"no arch", "", ``, "requires an arch"},
+		{"conflicting operator arch", "amd64", `{"nodeSelector": {"kubernetes.io/arch": "arm64", "pool": "x"}}`, "kubernetes.io/arch=arm64 conflicts with --arch amd64"},
+		{"same operator arch", "amd64", `{"nodeSelector": {"kubernetes.io/arch": "amd64"}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := fake.NewClientset()
+			installCanaryReactor(t, cs, false)
+			_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
+				Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
+				RunnerID: testRunnerID, Arch: tc.arch, Evidence: &memEvidence{}, HardDeny: &HardDeny{},
+			})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("boot refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("boot error %v, want %q", err, tc.wantErr)
+			}
+			for _, a := range cs.Actions() {
+				if a.GetVerb() == "create" {
+					t.Errorf("refused boot still created %s", a.GetResource().Resource)
+				}
+			}
+		})
+	}
+}

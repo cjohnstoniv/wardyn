@@ -73,6 +73,13 @@ tagged="$(render --set image.tag=1.2.3)"
 grep -q '"--proxy-image=ghcr.io/cjohnstoniv/wardyn-proxy:1.2.3"' <<<"$tagged" || die "the proxy image does not follow runnerd's tag"
 ok "runnerd and proxy share one tag"
 
+arm="$(render --set sandbox.arch=arm64 | yq 'select(.kind == "Deployment") | .spec.template.spec')"
+[ "$(val "$arm" '.initContainers[0].args[] | select(. == "--arch=*")')" = "--arch=arm64" ] \
+  || die "register is not passed --arch=arm64: the runner would report no arch"
+[ "$(val "$arm" '.containers[0].env[] | select(.name == "WARDYN_RUNNERD_ARCH") | .value')" = "arm64" ] \
+  || die "serve is not given WARDYN_RUNNERD_ARCH=arm64: run pods would not be pinned to arm64 nodes"
+ok "sandbox.arch reaches register --arch and serve WARDYN_RUNNERD_ARCH"
+
 refused() { # <label> <message pattern> <helm args...>
   local label="$1" pattern="$2" err
   shift 2

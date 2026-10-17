@@ -32,6 +32,7 @@ var k8sEnvRead = []string{
 	"WARDYN_RUNNERD_APISERVER_PEERS",
 	"WARDYN_RUNNERD_HARD_DENY_CIDRS",
 	"WARDYN_RUNNERD_POD_SELECTOR",
+	archEnv,
 	"WARDYN_CONFINEMENT_MAP",
 	"WARDYN_K8S_READ_NODES",
 	"WARDYN_K8S_IMAGE_PULL_SECRET",
@@ -99,6 +100,11 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 	}
 	if err := json.Unmarshal([]byte(env["WARDYN_RUNNERD_POD_SELECTOR"]), &e.podSelector); err != nil || len(e.podSelector) == 0 {
 		errs = append(errs, fmt.Errorf("WARDYN_RUNNERD_POD_SELECTOR: want a JSON object of runnerd's pod labels, got %q", env["WARDYN_RUNNERD_POD_SELECTOR"]))
+	}
+	if v, ok := env[archEnv]; ok {
+		if err := checkArch(v); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if e.confinement, err = parseConfinementMap(env["WARDYN_CONFINEMENT_MAP"]); err != nil {
 		errs = append(errs, err)
@@ -186,10 +192,14 @@ func checkSubstrateFlags(substrate string, changed func(string) bool) error {
 	return nil
 }
 
-// checkArch accepts the architectures runner images are built for.
+// archEnv is --arch's environment twin, on serve and register alike.
+const archEnv = "WARDYN_RUNNERD_ARCH"
+
+// checkArch accepts the architectures runner images are built for. A k8s runner requires one: it
+// pins every sandbox pod to nodes of that arch (design K1 §6.1).
 func checkArch(a string) error {
 	if a != "amd64" && a != "arm64" {
-		return fmt.Errorf("--arch %q: want amd64 or arm64", a)
+		return fmt.Errorf("--arch (%s) %q: want amd64 or arm64", archEnv, a)
 	}
 	return nil
 }

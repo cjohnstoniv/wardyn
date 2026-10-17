@@ -63,6 +63,7 @@ spec:
             - --token-file=/etc/wardyn/registration/token
             - --state-dir={{ $stateDir }}
             - --name={{ $fullname }}
+            - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
             {{- range $flag, $key := dict "max-runs" "maxRuns" "total-cpu" "totalCPU" "total-memory" "totalMemory" "total-disk" "totalDisk" "per-run-cpu" "perRunCPU" "per-run-memory" "perRunMemory" "per-run-disk" "perRunDisk" }}
             {{- with index $.Values.limits $key }}
             - {{ printf "--%s=%v" $flag . | quote }}
@@ -95,7 +96,6 @@ spec:
             - {{ printf "--runs-namespace=%s" .Values.runsNamespace | quote }}
             - {{ printf "--relay-service=%s.%s.svc.%s" $fullname .Release.Namespace .Values.clusterDomain | quote }}
             - --relay-listen=$(POD_IP)
-            - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
             - {{ printf "--proxy-image=%s:%s" .Values.proxyImage.repository $tag | quote }}
             - {{ printf "--recording-store=%s" .Values.recording | quote }}
             - {{ printf "--max-pod-lifetime=%s" .Values.sandbox.maxPodLifetime | quote }}
@@ -109,6 +109,9 @@ spec:
                   fieldPath: status.podIP
             # Settings runnerd reads from its environment (cmd/wardyn-runnerd/k8s_env.go); it refuses an
             # unknown WARDYN_RUNNERD_* name, and TestChartSetsOnlyWhatRunnerdReads holds this list to its.
+            # Pinned as every run pod's kubernetes.io/arch node selector; one release per arch.
+            - name: WARDYN_RUNNERD_ARCH
+              value: {{ .Values.sandbox.arch | quote }}
             - name: WARDYN_RUNNERD_POD_SELECTOR
               value: {{ include "runnerd.selectorLabels" . | fromYaml | toJson | quote }}
             - name: WARDYN_RUNNERD_RELAY_PORT

@@ -58,7 +58,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 				return err
 			}
 		}
-		if err := checkSubstrateFlags(opts.substrate, cmd.Flags().Changed); err != nil {
+		// A Docker runner reports its engine's arch, so --arch's environment twin counts as set too.
+		changed := func(f string) bool { return cmd.Flags().Changed(f) || f == "arch" && opts.arch != "" }
+		if err := checkSubstrateFlags(opts.substrate, changed); err != nil {
 			return err
 		}
 		var err error
@@ -112,7 +114,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in)")
 	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
-	cmd.Flags().StringVar(&opts.arch, "arch", "", "k8s: the sandbox node architecture, amd64 or arm64")
+	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")
 	cmd.Flags().DurationVar(&opts.maxPodLifetime, "max-pod-lifetime", 0, "k8s: the most any run pod may live (activeDeadlineSeconds), e.g. 24h")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd
