@@ -57,7 +57,8 @@ docs/operations/admin-only-writes.md=3645 share=35
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
 # docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
-docs/operations/three-roles.md=4238 share=35
+# docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
+docs/operations/three-roles.md=4650 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
@@ -134,3 +135,5 @@ docs/operations/denials.md=5011 share=35
 # docs/operations/governance-writes.md 3076 adds 29 over 3047, measured: a held role mapping carries the effect its proposer acknowledged.
 # three-roles.md 4173 (+49) and governance-writes.md 3086 (+10), measured: a maximum where no size is set can raise the member cap.
 # docs/operations/admin-only-writes.md 3495 adds 51 over 3444, measured: the two security-tier rows for GET and PUT /governance/credential-delivery (the tier table covered neither).
+# docs/operations/three-roles.md 4578 adds 360 over 4218, measured: the baseline the rubric grades against (built-in set, the operator's baseline hosts) and the profile-write posture advisory.
+# docs/operations/three-roles.md 4630 adds 52 over 4578, measured: the graded Bedrock host is its base URL's host when set, and the advisory's secrets reach counts every launchable harness.

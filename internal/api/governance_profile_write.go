@@ -279,6 +279,9 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		warns = governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits)
 	}
 	warns = append(warns, effective.AdminWarnings...)
+	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
+		warns = append(warns, posture)
+	}
 	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
 }
 

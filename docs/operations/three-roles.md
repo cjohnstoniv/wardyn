@@ -215,6 +215,30 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.
   - **Not in the posture:** the model-provider hosts egress dispatch resolves from global configuration after this gate runs (a Bedrock run's region, for one), and any stored-credential residency.
   - A run's autonomy level is graded on what the run can reach and hold, not on where its model credential lives.
+- **The baseline the rubric grades against.**
+  - Egress `open` means an allowlisted host beyond the baseline, and secrets `powerful` includes an `api_key` to a host outside it.
+  - Both read one set: Wardyn's built-in public hosts (the vendor model APIs, the public code hosts and the package registries, `safeBaselineDomains` in [`internal/composer/risk.go`](../../internal/composer/risk.go)), plus what the operator declares.
+  - An operator declares hosts with `PUT /governance/egress-baseline`, or in the console under Governance, Baseline hosts.
+    - `baseline_hosts` are exact hostnames.
+    - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that suffix and every host under it.
+  - Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
+  - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
+  - Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
+  - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
+- **What the rubric can see here, at profile-write time.**
+  - A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
+  - It names the egress, secrets and confinement grades a run under the profile can get on this deployment, the rows those grades select, and the rows that cap nothing here.
+  - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
+
+    ```text
+    on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful
+    ```
+
+  - It claims only what the deployment forces on every run, so a row it calls inert really is.
+    - Confinement: the classes the deployment's executor offers at or above the profile's floor. With self-hosted runners on, or an executor that cannot answer, every class counts.
+    - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
+    - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
+    - Egress: always from `sealed` up, because a run can narrow its allowlist.
 ## When everyone is an admin, and what a refused person is told
 
 **The everyone-is-an-admin warning.** With SSO configured, the setup checklist's "Who is an admin" row grades `warn` — holding the console in the People step and showing every admin a banner above every page — on either of two conditions (#491):
