@@ -111,8 +111,11 @@ func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, erro
 			err = runnerspool.ErrFull
 		}
 	}
-	if err != nil {
+	if errors.Is(err, runnerspool.ErrFull) {
 		return uuid.Nil, errors.Join(err, s.refuse(ctx))
+	}
+	if err != nil {
+		return uuid.Nil, err
 	}
 	id := uuid.New()
 	s.reservations[id] = spoolReservation{epoch: runneractivity.Capture(s.activityDir), bytes: need}
@@ -120,9 +123,11 @@ func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, erro
 	return id, nil
 }
 
-// refuse counts one refused admission, whatever refused it, for the builtin:spool-full record. The
-// count runs on its own deadline: a request refused because its admission deadline ran out behind
-// other requests' fsyncs is a refusal too, and that deadline has already passed. The caller holds s.mu.
+// refuse counts one refused admission for the builtin:spool-full record. Only a genuinely full spool is
+// counted: a count trips the overflow that refuses all egress until replay, so an admission that ran out
+// of time or whose client hung up (context.DeadlineExceeded, context.Canceled) gets an uncounted 503
+// instead. The count runs on its own deadline, since the request's own may be nearly spent. The caller
+// holds s.mu.
 func (s *decisionSink) refuse(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), spoolAdmitTimeout)
 	defer cancel()

@@ -240,9 +240,10 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 	release()
 }
 
-func TestLocalSpoolCountsAnAdmissionRefusedByItsDeadline(t *testing.T) {
-	// The refusal a busy spool gives a request whose admission deadline ran out is counted like a full
-	// spool's, though that deadline has passed by the time it is counted.
+func TestLocalSpoolCountsOnlyAFullSpoolsRefusal(t *testing.T) {
+	// A full spool's refusal is counted once. A request whose admission deadline ran out or whose client
+	// hung up is refused with a 503 but not counted: a count would put the whole run's egress into
+	// overflow, and the next request must still be admitted.
 	ctx := context.Background()
 	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
 	if err != nil {
@@ -250,14 +251,43 @@ func TestLocalSpoolCountsAnAdmissionRefusedByItsDeadline(t *testing.T) {
 	}
 	defer s.close(ctx)
 	p := &Proxy{sink: s}
-	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
-	defer cancel()
-	w := httptest.NewRecorder()
-	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(expired)); admitted != nil || w.Code != 503 {
-		t.Fatalf("an admission past its deadline: admitted %v, status %d, want a 503 refusal", admitted != nil, w.Code)
+	drops := func() uint64 {
+		t.Helper()
+		_, _, d, err := s.local.Stats(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
 	}
-	if _, _, drops, err := s.local.Stats(ctx); err != nil || drops != 1 {
-		t.Fatalf("drops %d (err %v), want the refusal counted once", drops, err)
+	expired, cancelExpired := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancelExpired()
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	for name, c := range map[string]context.Context{"deadline": expired, "cancel": cancelled} {
+		w := httptest.NewRecorder()
+		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil).WithContext(c), ""); admitted != nil || w.Code != 503 {
+			t.Fatalf("%s: admitted %v, status %d, want a 503 refusal", name, admitted != nil, w.Code)
+		}
+		if d := drops(); d != 0 {
+			t.Fatalf("%s: drops %d, want an uncounted refusal", name, d)
+		}
+	}
+	w := httptest.NewRecorder()
+	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/next", nil), "")
+	if r == nil {
+		t.Fatalf("a timed-out or cancelled admission closed admission: status %d", w.Code)
+	}
+	release()
+
+	s.mu.Lock()
+	s.heldBytes = runnerspool.MaxBytes
+	s.mu.Unlock()
+	w = httptest.NewRecorder()
+	if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/", nil), ""); admitted != nil || w.Code != 503 {
+		t.Fatalf("full spool: admitted %v, status %d, want a 503 refusal", admitted != nil, w.Code)
+	}
+	if d := drops(); d != 1 {
+		t.Fatalf("full spool: drops %d, want the refusal counted once", d)
 	}
 }
 
