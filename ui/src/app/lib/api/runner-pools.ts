@@ -20,6 +20,7 @@ import type {
   RunnerPoolList,
   RunnerPoolMember,
   RunnerPoolMemberView,
+  RunnerPoolRunType,
   RunnerPoolSubject,
   RunnerPoolUsePolicy,
   UpdateRemoteRunnerRequest,
@@ -55,7 +56,9 @@ const remoteMemberPath = (poolId: string, rid: string) => `${myPool(poolId)}/rem
 const remote = (rid: string) => `/remote-runners/${seg(rid)}`;
 
 export const runnerPools = {
-  list: () => get<RunnerPoolList>("/runner-pools"),
+  /** The pools the caller may use; a run type asks for the limits and barriers of that type alone. */
+  list: (runType?: RunnerPoolRunType, signal?: AbortSignal) =>
+    send<RunnerPoolList>(`/runner-pools${runType ? `?run_type=${runType}` : ""}`, { method: "GET", signal }),
   /** The pools the caller may use: for an administrator, without the oversight rows of other people's user pools. */
   listMine: () => get<RunnerPoolList>("/me/runner-pools"),
   get: (id: string) => get<RunnerPool>(pool(id)),

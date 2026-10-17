@@ -15,6 +15,7 @@ import { makeRun } from "../../../../test/factories";
 import type { AgentRun } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { RunRow } from "./run-row";
 
 const signInMock = vi.fn();
@@ -61,6 +62,15 @@ describe("RunRow — Revive (F1)", () => {
     reject(new Error("boom"));
     expect(await screen.findByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(toastErrorMock).toHaveBeenCalled();
+  });
+
+  it("a wait that ended before the runner answered says the runner is still starting the run, not an error", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
+    renderRow(makeRun({ attention: { kind: "lost", by: "you", pending: 0 } }));
+    await user.click(screen.getByRole("button", { name: "Revive" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("The runner is still starting this run. Check back in a minute."));
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("by=owner (not you): no action button at all", () => {

@@ -139,6 +139,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WHERE_LABEL` | mock | Where should it run? |
 | `POOL_LABEL` | mock | Pool |
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
+| `POOLS_ORG` | deviation (pool words) | Organization pools |
+| `POOLS_USER` | deviation (pool words) | User pools |
 | `POOL_OPTION_REASON(pool, reason)` | mock | {pool} · {reason} |
 | `REASON_NO_ONLINE` | mock | No online runners |
 | `FIT_STARTS_NOW` | pending (W-55) | Starts now |
@@ -176,6 +178,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SET_BY(source)` | deviation (DS-5 §8) | Set by {source} |
 | `SET_BY_RUNNERS` | pending (W-03) | Set by your runners |
 | `SET_BY_ORG` | pending (W-03) | Set by your organisation |
+| `SET_BY_SERVER` | pending (W-03) | Set by this server |
 | `LIMITS_LABEL` | mock | Per-run limits |
 | `LIMITS_NOTE(profile)` | deviation (DS-5 §8) | Strictest of this pool, {profile} and this server applies |
 | `LIMITS_NOTE_UNGOVERNED` | deviation (DS-5 §8) | Strictest of this pool and this server |

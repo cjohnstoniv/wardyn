@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, Recording } from "../../lib/types";
 import { makeRun } from "../../../test/factories";
@@ -220,6 +220,23 @@ describe("RecordingScreen", () => {
     fireEvent.click(await screen.findByText("ship the fix"));
 
     await waitFor(() => expect(screen.getByTestId("player")).toHaveAttribute("data-run", "run_1"));
+  });
+
+  it("says a runner-reported recording was reported by the runner, and says nothing on one the organisation made", async () => {
+    listRunsMock.mockResolvedValue(
+      page([recorded("run_1", { task: "from a runner", evidence_source: "runner_asserted" }), recorded("run_2", { task: "from the substrate", evidence_source: "substrate" })]),
+    );
+    getRecordingMock.mockImplementation(async (id: string) => recording(id));
+    renderScreen();
+
+    fireEvent.click(await screen.findByText("from a runner"));
+    expect(await within(await screen.findByRole("dialog")).findByText("Reported by this runner")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("from the substrate"));
+    await screen.findByRole("dialog");
+    expect(screen.queryByText("Reported by this runner")).not.toBeInTheDocument();
   });
 
   // The other half of the F077 pin: a cast is fetched exactly once, exactly

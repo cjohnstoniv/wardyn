@@ -42,6 +42,14 @@ describe("runner pool calls", () => {
     expect(JSON.parse(wfetchMock.mock.calls[6][1].body)).toEqual({ pool_id: "p1" });
   });
 
+  it("asks the pool list for one run type, with the caller's own abort signal", async () => {
+    wfetchMock.mockImplementation(async () => new Response('{"pools":[]}', { status: 200, headers: { "content-type": "application/json" } }));
+    const signal = new AbortController().signal;
+    await runnerPools.list("background", signal);
+    expect(wfetchMock.mock.calls[0][0]).toBe("/runner-pools?run_type=background");
+    expect(wfetchMock.mock.calls[0][1].signal).toBe(signal);
+  });
+
   it("deletes answer 204 with no body", async () => {
     wfetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await runnerPools.removeMyRunner("p1", "r1");
