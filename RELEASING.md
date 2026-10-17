@@ -289,6 +289,10 @@ crash or a usage limit resumes with the same command:
    - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
      (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
      cutting — this has drifted from the shipped version before, twice.
+   - **At a final release (not a release candidate), move the split-role anchor.** Set `UNRELEASED_FROM` in
+     [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) to the first migration number this
+     release does not ship, and keep this release's `Split-role installs` bullet in its own section; the next release
+     starts a new bullet.
    - **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
      - `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]` (`grep -q "## \[Unreleased\]" CHANGELOG.md || exit 1`), so renaming it away and not restoring it leaves the gate red for the *next* release —
        - which is a confusing failure to debug from the tag commit backwards.
