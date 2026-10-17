@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -41,9 +42,19 @@ func TestFakeExecStreamPipesAndClose(t *testing.T) {
 			t.Errorf("%s: stdout still readable after Close", name)
 		}
 	}
-	// Closed before stderr is read: the writer is released, so Close is all a caller owes it.
+	// Closed before stderr is read: the writer goroutine ends with Close, and a TTY exec never had one.
 	early, _ := f.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh"}})
-	if err := early.Close(); err != nil {
-		t.Errorf("early close = %v", err)
+	ttyEarly, _ := f.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"sh"}, TTY: true})
+	for _, s := range []*runner.ExecSession{early, ttyEarly} {
+		if err := s.Close(); err != nil {
+			t.Errorf("early close = %v", err)
+		}
+	}
+	ended := make(chan struct{})
+	go func() { f.stderrWriters.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stderr writer goroutine outlived Close")
 	}
 }

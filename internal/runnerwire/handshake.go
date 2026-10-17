@@ -44,7 +44,7 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 		return Auth{}, err
 	}
 	if row.ClaimExpired(time.Now()) {
-		return Auth{}, ErrAuth
+		return Auth{}, fmt.Errorf("%w: the runner's claim has lapsed", ErrAuth)
 	}
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
@@ -54,7 +54,7 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	}
 	hash := federation.OrgURLSHA256(orgURL)
 	if row.OrgURLSHA256 != hash {
-		return Auth{}, ErrAuth
+		return Auth{}, fmt.Errorf("%w: the runner was registered with another organisation URL", ErrAuth)
 	}
 	hello := Hello{Versions: []int{ProtocolVersion}, Nonce: nonce[:], ServerTime: time.Now().UTC(), OrgURLSHA256: hash}
 	if err := WriteControl(ctx, conn, TypeHello, hello); err != nil {
@@ -67,7 +67,7 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	var auth Auth
 	if f.Type != TypeAuth || Unmarshal(f.Payload, &auth) != nil || auth.Version != ProtocolVersion ||
 		auth.RunnerID != row.ID.String() || !VerifyAuth(row.PublicKey, nonce[:], auth.RunnerID, hash, auth.Sig) {
-		return Auth{}, ErrAuth
+		return Auth{}, fmt.Errorf("%w: the runner's proof did not verify against its registered key", ErrAuth)
 	}
 	if row.State == types.RunnerRevoked {
 		_ = WriteControl(ctx, conn, TypeRevoked, Reason{Reason: "runner_revoked"})
@@ -137,7 +137,16 @@ func goaway(payload []byte) error {
 	if Unmarshal(payload, &r) != nil || r.Reason == "" {
 		return ErrGoaway
 	}
+	if say, ok := goawaySentences[r.Reason]; ok {
+		return fmt.Errorf("%w: %s (%s)", ErrGoaway, say, r.Reason)
+	}
 	return fmt.Errorf("%w: %s", ErrGoaway, r.Reason)
+}
+
+// goawaySentences say what the org's GOAWAY reasons mean to the person reading the runner's log.
+var goawaySentences = map[string]string{
+	"runner_unclaimed":      "this runner is waiting for its owner to claim it (run `wardyn runner claim`)",
+	"runner_owner_inactive": "this runner's owner is deactivated, so the organisation will not admit it",
 }
 
 func checkAuthOK(payload []byte, resume *Resume) (AuthOK, error) {

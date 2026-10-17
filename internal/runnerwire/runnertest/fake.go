@@ -25,6 +25,8 @@ type Fake struct {
 	ExitCode int // the agent's exit code, and an exec's
 	// RecoverHold, when set, holds RecoverOutput's bytes back until it is closed (or the call's context ends).
 	RecoverHold chan struct{}
+	// stderrWriters counts the stderr-line goroutines still running, so a test can see them end.
+	stderrWriters sync.WaitGroup
 
 	mu         sync.Mutex
 	sandboxes  map[string]uuid.UUID // local ref -> run id
@@ -277,7 +279,9 @@ func (f *Fake) ExecStream(_ context.Context, ref string, spec runner.ExecSpec) (
 	if !spec.TTY {
 		var errW *io.PipeWriter
 		errR, errW = io.Pipe()
+		f.stderrWriters.Add(1)
 		go func() {
+			defer f.stderrWriters.Done()
 			_, _ = io.WriteString(errW, "argv:"+spec.Argv[0]+"\n")
 			_ = errW.Close()
 		}()
