@@ -6,23 +6,64 @@
 // The Storage tab of /providers — ephemeral scratch (default/max, §6.1-§6.3)
 // and the drive ceiling (§6.4), then the EXISTING UserDrivesCard as the link
 // out. No drives table is embedded here (Q7 — the move steps.ts forbids).
+import * as React from "react";
 import { nonNegativeInt } from "../../../lib/format";
 import type { StorageProviders } from "../../../lib/api/providers";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { MEMBER_DRIVES, PROVIDERS } from "../../../lib/workspace-providers-copy";
-import { Field, Switch } from "../../wardyn/form-primitives";
+import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { Input } from "../../ui/input";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { enforcementGloss, isUncappedEnforcement } from "../drives/display";
+import { parseSize, sizeField, type SizeUnit } from "../new-run-flow/lenses/files-lens";
+import { NR_FILES } from "../../wardyn/copy/new-run/files";
+import { NR_SHARED } from "../../wardyn/copy/new-run/shared";
 
 function numberField(v: number | undefined): number | "" {
   return v ? v : "";
+}
+
+const UNIT_WORD: Record<SizeUnit, string> = { GiB: NR_SHARED.GIB("").trim(), MiB: NR_SHARED.MIB("").trim() };
+
+// The member-drive size: GiB with one decimal from 0.1 GiB up, whole MiB under
+// it (the New Run main drive's rule), and the exact MiB whenever the text does
+// not say the stored size.
+function DriveSizeField({ mib, onChange, disabled }: { mib: number | undefined; onChange: (mib: number | undefined) => void; disabled: boolean }) {
+  const [typed, setTyped] = React.useState<{ text: string; unit: SizeUnit } | null>(null);
+  const stored = mib && mib > 0 ? mib : undefined;
+  const shown = typed ?? (stored !== undefined ? sizeField(stored) : { text: "", unit: "GiB" as SizeUnit });
+  const exact = stored !== undefined && parseSize(shown.text, shown.unit) !== stored ? stored : undefined;
+  return (
+    <Field label={MEMBER_DRIVES.FIELD_SIZE} htmlFor="provider-member-drives-size" hint={MEMBER_DRIVES.SIZE_HINT}>
+      <span className="relative flex items-center">
+        <Input
+          id="provider-member-drives-size"
+          aria-describedby={fieldHintId("provider-member-drives-size")}
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step={shown.unit === "GiB" ? 0.1 : 1}
+          className="pr-12 font-mono"
+          disabled={disabled}
+          value={shown.text}
+          onChange={(e) => {
+            setTyped({ text: e.target.value, unit: shown.unit });
+            onChange(parseSize(e.target.value, shown.unit));
+          }}
+          onBlur={() => setTyped(null)}
+        />
+        <span aria-hidden="true" className="pointer-events-none absolute right-3 text-sm text-muted-foreground">{UNIT_WORD[shown.unit]}</span>
+      </span>
+      {exact !== undefined && <span className="mt-1 block text-meta text-muted-foreground">{NR_FILES.SIZE_EXACT(exact)}</span>}
+    </Field>
+  );
 }
 
 export function StorageTab({
   storage,
   onChange,
   enforcement,
+  kubernetes,
   operator,
 }: {
   storage: StorageProviders;
@@ -30,6 +71,9 @@ export function StorageTab({
   /** From /setup/status's runner block — the AUTHORING daemon's driver,
    *  operators only (redactSetupStatusForUser strips it for a member). */
   enforcement: StorageEnforcement | undefined;
+  /** The runner is the Kubernetes driver: the only substrate where a member drive takes a size
+   *  (the server refuses one on Docker). From /setup/status's runner block. */
+  kubernetes?: boolean;
   operator: boolean;
 }) {
   const ephemeral = storage.ephemeral ?? {};
@@ -131,6 +175,13 @@ export function StorageTab({
               onChange={(e) => setMemberCreate({ max_per_person: nonNegativeInt(e.target.value) })}
             />
           </Field>
+          {kubernetes && (
+            <DriveSizeField
+              mib={memberCreate.size_mib}
+              disabled={!operator || !memberCreate.enabled}
+              onChange={(size_mib) => setMemberCreate({ size_mib })}
+            />
+          )}
         </div>
         <div className="mt-4">
           <UserDrivesCard />

@@ -405,6 +405,22 @@ test.describe("New Run, Review: what the summaries say the server will do", () =
   });
 });
 
+test.describe("New Run, Review: what the summaries say the server will do (defaults)", () => {
+  test("a default of no end, with no end asked for, reads No end", async ({ page }) => {
+    const unlimited = { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } };
+    await stub(page, { preflight: { ...CLEAR, limits: { ...SAVED_LIMITS, lifetime_sec: unlimited } } as never });
+    await openReviewWith(page, ENV);
+    await expect(page.locator("[data-review-group=limits]")).toContainText(ENDS_NONE);
+  });
+
+  test("an interactive Claude Code default that accepts file edits says so in the Tools and pushes row", async ({ page }) => {
+    const accepting = { ...CLAUDE_UNGATED, default: { ...CLAUDE_UNGATED.default, effective: "hold", source: { kind: "harness", id: "accept_edits", name: "Claude Code settings" } } };
+    await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [accepting] } } as never });
+    await openReviewWith(page, ENV);
+    await expect(page.locator("[data-policy-row=tools]")).toContainText(NR_REVIEW.POLICY_ACCEPTS_EDITS);
+  });
+});
+
 test.describe("New Run, Review: Save as and the saver's own drives (DR-0221)", () => {
   const MINE = "c1111111-1111-4111-8111-111111111111";
   const TEAM = "c2222222-2222-4222-8222-222222222222";

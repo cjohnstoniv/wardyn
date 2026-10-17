@@ -106,8 +106,26 @@ export async function addRepository(page: Page, name: string, text?: string): Pr
   await expect(addDialog(page)).toBeHidden();
 }
 
+/** Adds one folder on this machine through the dialog, filmed: Add (with `text`), the Folder type, the workspace's folder, Continue, Add. */
+export async function addFolder(page: Page, name: string, text?: string): Promise<void> {
+  await act(page, addFilesButton(page), text);
+  await act(page, sourceTypeButton(page, NR_FILES.FOLDER_TITLE));
+  await act(page, sourceRadio(page, name));
+  await act(page, dialogContinue(page));
+  await act(page, dialogAdd(page));
+  await expect(addDialog(page)).toBeHidden();
+}
+
 /** Step 5: a harness's model-provider picker. */
 export const providerPicker = (page: Page, harness: string): Locator => page.locator(`#nr-provider-${harness}`);
+
+/** Picks the first connected provider by its label (the option after the "Choose a model provider" placeholder), so a reordered list cannot change which one is chosen silently. */
+export async function chooseProvider(picker: Locator, timeout?: number): Promise<void> {
+  await expect(picker).toBeEnabled({ timeout });
+  await expect.poll(async () => (await picker.locator("option").allTextContents()).filter((t) => t.trim() !== NR_TOOLS.PROVIDER_CHOOSE).length, { timeout, message: "no model provider is offered for this harness" }).toBeGreaterThan(0);
+  const label = (await picker.locator("option").allTextContents()).map((t) => t.trim()).find((t) => t !== NR_TOOLS.PROVIDER_CHOOSE);
+  await picker.selectOption({ label });
+}
 
 /** Review's Launch run, the Name dialog and its fields and buttons. */
 export const launchRunButton = (page: Page): Locator => page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN });

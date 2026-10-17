@@ -61,6 +61,7 @@ import {
   newRunHeading,
   nextStep,
   openNameDialog,
+  chooseProvider,
   providerPicker,
   runTitleField,
   startGuided,
@@ -465,7 +466,7 @@ test("act 5 — a real run", async () => {
   if (!SHELL_ACT5) {
     const provider = providerPicker(page, "claude-code");
     await spotlight(page, provider);
-    await provider.selectOption({ index: 1 }, { timeout: 60_000 });
+    await chooseProvider(provider, 60_000);
     await spotlight(page, null);
   }
 

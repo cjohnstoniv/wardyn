@@ -86,7 +86,7 @@ describe("Harnesses step: roster rows", () => {
   });
 
   it("disables a row whose combination no image carries, and says so", async () => {
-    show({ ...INTERACTIVE, tools: [harness("claude-code")] }, { ...ROSTER, sets: [] });
+    show({ ...INTERACTIVE, tools: [harness("claude-code")] }, { harnesses: ROSTER.harnesses.slice(0, 2), sets: [] });
     expect(await screen.findByText(NR_HARNESSES.NO_COMBINATION("Claude Code", "Codex CLI"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
   });
@@ -105,9 +105,17 @@ describe("Harnesses step: roster rows", () => {
     show({ ...INTERACTIVE, tools: [harness("claude-code")] });
     await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
     expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code", "codex-cli"]);
-    // Your own tools is in no set with both, so the button now says why it cannot add.
-    expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
-    expect(screen.getByText(NR_HARNESSES.NO_COMBINATION("Claude Code, Codex CLI", "Your own tools"))).toBeInTheDocument();
+    // Your own tools brings no CLI, so the pair a set carries still serves it, as the server resolves it.
+    await user.click(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code", "codex-cli", "none"]);
+  });
+
+  it("allows Your own tools beside a harness even when no set is declared, and still refuses a second CLI", async () => {
+    const user = userEvent.setup();
+    show({ ...INTERACTIVE, tools: [harness("claude-code")] }, { ...ROSTER, sets: [] });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code", "none"]);
+    expect(screen.queryByText(NR_HARNESSES.NO_COMBINATION("Claude Code", "Your own tools"))).not.toBeInTheDocument();
   });
 
   it("moves focus to the new harness's select when the Add button disables", async () => {
