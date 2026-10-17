@@ -176,7 +176,7 @@ func (s *Server) validatePresetRequest(w http.ResponseWriter, r *http.Request, n
 			"request.%s is set per launch, so a preset cannot carry it", bad[0]))
 		return false
 	}
-	if presetRunModeRefusal(req.Request).write(s, w, r) || s.runContractRefusal(req.Request).write(s, w, r) {
+	if presetRunModeRefusal(req.Request).write(s, w, r) || s.presetContractRefusal(req.Request).write(s, w, r) {
 		return false
 	}
 	if paths := documentAvailabilityRefusal(req.Request); len(paths) > 0 {

@@ -150,6 +150,8 @@ func (s *Server) componentAzureCLIAdmitted(r *http.Request, adm *componentAdmiss
 	switch {
 	case signedIn:
 		return nil
+	case isServicePrincipal(adm.caller):
+		return own(fmt.Sprintf("components[%d]: %s", i, azureCLINotServiceRefusal))
 	case !adm.credentials:
 		c.needsSignIn = true
 		return nil

@@ -151,3 +151,20 @@ func TestLaunchRecordRun_GrantWriteFailure_HintsCarryNoDriverText(t *testing.T) 
 		t.Errorf("record card = %q / %q, want failed with the fixed sentence", last.Status, last.FailureHint)
 	}
 }
+
+// The grants read at dispatch is unconditional, so the hint a failed read leaves does not
+// blame git_pat grants, which most runs do not have.
+func TestDispatch_GrantReadFailure_HintNamesCredentialGrants(t *testing.T) {
+	srv, st, _, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
+	st.grantsErr = errors.New(driverText)
+
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1},
+	})
+
+	want := "This run was not launched: its credential grants could not be read. Launch it again."
+	if got := st.FailureHint(); got != want {
+		t.Errorf("failure hint = %q, want %q", got, want)
+	}
+}

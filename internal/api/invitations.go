@@ -144,7 +144,7 @@ func invitationLifetime(w http.ResponseWriter, req createInvitationRequest) (tim
 		return life, true
 	}
 	writeErrorReason(w, http.StatusBadRequest, reasonInvitationTTLInvalid,
-		"expires_in_seconds: between 1 second and 14 days; token_ttl_seconds: not negative and at most 100 years")
+		"expires_in_seconds: between 1 second and 14 days; token_ttl_seconds: between 0 and a hundred years")
 	return 0, false
 }
 

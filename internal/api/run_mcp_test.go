@@ -396,3 +396,20 @@ func TestInheritedMCPHoldRefusesACommandsHarness(t *testing.T) {
 		}
 	}
 }
+
+// TestAdmitMCPHarnesses_NoHarnessCanTakeIt: an MCP component on a run whose
+// harnesses cannot use one is refused, not admitted for zero harnesses.
+func TestAdmitMCPHarnesses_NoHarnessCanTakeIt(t *testing.T) {
+	def := *mcpInline("linear").Inline
+	got, bad := admitMCPHarnesses(def, nil, []string{"none"})
+	if bad == nil || got != nil {
+		t.Fatalf("admitMCPHarnesses = %v, %v; want a refusal", got, bad)
+	}
+	want := "mcp_harnesses: this run has no harness that can use an MCP server. Add Claude Code or Codex CLI, or remove the component."
+	if bad.status != http.StatusUnprocessableEntity || bad.reason != reasonRequestFieldUnavailable || bad.msg != want {
+		t.Errorf("refusal = %d %s %q", bad.status, bad.reason, bad.msg)
+	}
+	if got, bad := admitMCPHarnesses(def, nil, []string{"none", "claude-code"}); bad != nil || !slices.Equal(got, []string{"claude-code"}) {
+		t.Errorf("a run with a usable harness = %v, %v; want [claude-code]", got, bad)
+	}
+}

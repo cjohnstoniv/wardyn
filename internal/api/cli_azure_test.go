@@ -1063,3 +1063,28 @@ func TestAzureARM_DeadSignInHoldsThenResumes(t *testing.T) {
 		t.Errorf("a boot resolve raised %d request(s), want none", n)
 	}
 }
+
+// A service identity has no Azure sign-in of its own to use, so create, Review and
+// dispatch tell it so rather than asking it to sign in or for a person it is not.
+func TestAzureCLI_ServiceIdentityIsToldItCannotSignIn(t *testing.T) {
+	f := newAzCLIFixture(t, types.ComponentAccessRead, azCLISubA)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	service := types.ServicePrincipalPrefix + "ci"
+	for _, credentials := range []bool{true, false} {
+		c := attachedComponent{snapshot: f.st.attached[0], source: "org"}
+		refused := f.srv.componentAzureCLIAdmitted(req, &componentAdmission{caller: service, credentials: credentials}, &c, 0)
+		if refused == nil || refused.reason != reasonComponentCLISignInRequired || c.needsSignIn {
+			t.Fatalf("credentials=%v: refused %+v needsSignIn %v, want the sign-in refusal and no setup item", credentials, refused, c.needsSignIn)
+		}
+		if want := "components[0]: " + azureCLINotServiceRefusal; !strings.Contains(refused.refusal.body.Error, want) {
+			t.Errorf("credentials=%v: refusal %q lacks %q", credentials, refused.refusal.body.Error, want)
+		}
+	}
+
+	f.st.run.CreatedBy = service
+	_, _, ok := f.srv.authorAzureCLI(context.Background(), f.st.run, &azureCLIDispatch{ComponentID: f.id.String(), Azure: *f.st.attached[0].Definition.CLI.Azure},
+		"ca", "ca", &types.RunPolicySpec{}, map[string]string{}, nil)
+	if ok || f.st.hint != azureCLINotServiceRefusal {
+		t.Errorf("dispatch: ok %v hint %q, want a refusal with %q", ok, f.st.hint, azureCLINotServiceRefusal)
+	}
+}

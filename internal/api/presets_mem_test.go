@@ -409,3 +409,31 @@ func TestSetRunFieldsNamesOnlyNonZeroFieldsByJSONKey(t *testing.T) {
 		t.Errorf("zero request names %v, want none", got)
 	}
 }
+
+// TestPreset_UnappliedFieldSaysItCannotBeStored: the preset door reuses the run
+// contract, and a field this server does not apply yet is told in terms of the
+// preset, not of a run that was never being created.
+func TestPreset_UnappliedFieldSaysItCannotBeStored(t *testing.T) {
+	f := newMemPresetFixture(t)
+	image := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets", AllowedImage: "ghcr.io/acme/base:1"}
+	builtin := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets",
+		Components: []client.ComponentRef{{Builtin: "azure_devops", Org: "acme"}}}
+	for _, tc := range []struct {
+		name string
+		req  client.CreateRunRequest
+		want string
+	}{
+		{"allowed image", image, "request.allowed_image: this server does not apply an image choice yet, so it cannot be stored in a preset."},
+		{"built-in component", builtin, "request.components[0]: built-in azure_devops access is not available on this server yet, so it cannot be stored in a preset."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := f.put(t, "p", client.PresetRequest{Request: tc.req})
+			if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonRequestFieldUnavailable {
+				t.Fatalf("= %d %s, want 422 %s", w.Code, w.Body.String(), reasonRequestFieldUnavailable)
+			}
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("body %s lacks %q", w.Body.String(), tc.want)
+			}
+		})
+	}
+}
