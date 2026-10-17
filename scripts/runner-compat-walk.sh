@@ -9,7 +9,12 @@
 #
 #   1. a released organisation (the released wardynd and proxy images): the
 #      candidate wardyn-runnerd registers, is claimed, goes online and runs one
-#      exec run to COMPLETED;
+#      exec run to COMPLETED. Below 0.9.3 the run must instead FAIL with the
+#      refusal that names its fix: a 0.9.3 runner hands its proxy a setting
+#      (decision_sink) an older proxy image refuses, which is the documented
+#      "upgrade the organisation before its laptop runners" break, so the run is
+#      FAILED and its reason says "upgrade the organisation before its runners".
+#      Any other outcome, a completed run included, fails the step;
 #   2. rollback on that organisation: a candidate runner's state directory is
 #      served by the released wardyn-runnerd, which must come online and run one
 #      exec run to COMPLETED. A release before 0.9.3 cannot take back a runner
@@ -212,6 +217,25 @@ smoke() {
   else fail "$1: no egress.deny for the denied host from runner:$3"; return 1; fi
 }
 
+# smoke_refused LABEL CLI: below 0.9.3, the run on a candidate runner under a released organisation fails at
+# its proxy's config load, and the failure names the fix.
+smoke_refused() {
+  local rc run_id
+  WARDYN_URL="${ORG_URL}" WARDYN_TOKEN="${MEMBER_TOKEN}" "$2" run --agent claude-code --task-mode exec --placement local \
+    --policy-file "${TMP}/policy.json" --wait --timeout 8m --json --task "echo compat-walk-marker" \
+    >"${TMP}/run.json" 2>"${TMP}/run.err"
+  rc=$?
+  run_id="$(jq -r '.id // empty' "${TMP}/run.json" 2>/dev/null)"
+  [[ -n "${run_id}" ]] || { fail "$1: no run id (exit ${rc}): $(tail -3 "${TMP}/run.err")"; return 1; }
+  api "${MEMBER_TOKEN}" GET "/api/v1/runs/${run_id}" >/dev/null
+  cp "${TMP}/resp.json" "${EVIDENCE_DIR}/run-$1.json"
+  cp "${TMP}/run.err" "${EVIDENCE_DIR}/run-$1.err"
+  if [[ "${rc}" -ne 0 ]] && jq -e '.state == "FAILED"' "${TMP}/resp.json" >/dev/null \
+    && grep -q 'reason: .*upgrade the organisation before its runners' "${TMP}/run.err"; then
+    pass "$1: run ${run_id} FAILED with the refusal that names its fix: $(grep -m1 -o 'the proxy image is older[^;]*' "${TMP}/run.err")"
+  else fail "$1: run ${run_id} exit ${rc}, $(jq -c '{state, runner_id}' "${TMP}/resp.json"); want FAILED naming the fix, got: $(tail -3 "${TMP}/run.err")"; return 1; fi
+}
+
 revoke() {
   [[ "$(api "${MEMBER_TOKEN}" DELETE "/api/v1/me/runners/$1")" == 200 ]] || fail "revoking $1: $(cat "${TMP}/resp.json")"
 }
@@ -288,7 +312,12 @@ log "STEP 1: candidate wardyn-runnerd against the released organisation (${REL_T
 org_up released "${REL_WARDYND}" "${REL_PROXY}"
 register cand-on-rel "${CAND_RUNNERD}" "${CAND_CLI}" "${TMP}/state-cand-on-rel"
 CAND_RID="${RID}"
-serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke cand-on-rel "${REL_CLI}" "${CAND_RID}"; stop_serve; }
+if from_093 "${REL_VER}"; then
+  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke cand-on-rel "${REL_CLI}" "${CAND_RID}"; stop_serve; }
+else
+  echo "${REL_VER} predates decision_sink: the run must fail naming the fix (upgrade the organisation first)"
+  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke_refused cand-on-rel "${REL_CLI}"; stop_serve; }
+fi
 
 log "STEP 2: rollback, the released wardyn-runnerd serving a candidate runner's state directory"
 if from_093 "${REL_VER}"; then

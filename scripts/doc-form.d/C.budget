@@ -9,7 +9,8 @@
 # docs/CI.md 7639 = 7606 + 33 (PKG), measured at the wave-B merge.
 # docs/CI.md 7708 = 7639 + 69 (0.9.3 K6): the k6-kind-conformance.sh operator-script row, measured at the prep/093-final merge.
 # docs/CI.md 7774 = 7708 + 66, measured: the runner-compat-walk.sh bullet (the nightly runner/organisation version compatibility job)
-docs/CI.md=7774 share=35 # +32 (0.9.3 CI): the mirror action restarts dockerd once and keeps mirror.gcr.io behind it, replacing the per-job gcr step; +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
+# docs/CI.md 7789 = 7774 + 15, measured: the compat bullet states the below-0.9.3 refusal contract
+docs/CI.md=7789 share=35 # +32 (0.9.3 CI): the mirror action restarts dockerd once and keeps mirror.gcr.io behind it, replacing the per-job gcr step; +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
 # docs/ci-jobs-as-runs.md 2175 adds 84 over 2091 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/ci-jobs-as-runs.md 2360 adds 185 over 2175 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
 docs/ci-jobs-as-runs.md=2360 share=35

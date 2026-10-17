@@ -280,7 +280,8 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
   - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job; self-skips unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
-  - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run; the released `wardyn-runnerd` then serves a candidate runner's state directory and completes one; the released runner registers with this tree's organisation and completes one.
+  - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
+  - the released `wardyn-runnerd` serves a candidate runner's state directory and completes a run, then registers with this tree's organisation and completes one.
   - Runs in `nightly.yml`'s `runner-compat-walk` job, which `release.yml` watches; needs a native Docker engine; self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **[`scripts/run-e2e-ssh-k8s.sh`](../scripts/run-e2e-ssh-k8s.sh)** (`make test-e2e-ssh-k8s`) — the SSH gateway proven against a **Pod** rather than a container: the run's sandbox confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec lane,
   - a nonzero exit code surviving that lane's out-of-band status channel, the interactive shell reaching tmux, the `ssh.exec` / `session.attach{transport:ssh}` rows for both,
