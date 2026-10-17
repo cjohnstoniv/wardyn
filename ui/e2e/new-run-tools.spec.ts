@@ -260,4 +260,15 @@ test.describe("New Run, step 5: the Add dialogs", () => {
     await expect(page.locator("#ccd-name")).toHaveValue("Billing");
     await expect(page.locator("#ccd-hosts")).toHaveValue("billing.acme.internal");
   });
+
+  test("closing the full editor puts focus back on the Custom component button", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    await press(page, NR_TOOLS.CUSTOM_COMPONENT);
+    await press(page, NR_TOOLS.CC_MORE_OPTIONS);
+    await expect(page.locator("#ccd-name")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#ccd-name")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeFocused();
+  });
 });

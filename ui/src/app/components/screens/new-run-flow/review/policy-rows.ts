@@ -30,6 +30,9 @@ export interface PolicyRow {
 /** The tool default's effect in the canon's words: Hold and Run automatically as Review has them, Block it as the tool rules do. */
 const EFFECT_VALUE: Record<string, string> = { allow: NR_REVIEW.POLICY_AUTOMATIC, hold: NR_REVIEW.POLICY_HOLD, deny: NR_TOOLS.EFFECT_DENY };
 
+/** The server's source id for an interactive Claude Code default whose settings accept file edits unasked (run_access_facts.go). */
+const ACCEPT_EDITS_SOURCE = "accept_edits";
+
 const joined = (...parts: (string | undefined)[]): string | undefined =>
   parts.filter((p): p is string => !!p).reduce<string | undefined>((all, p) => (all ? NR_SHARED.JOIN(all, p) : p), undefined);
 
@@ -107,6 +110,6 @@ export function policyRows(
     : effects.length > 1
       ? joined(...defaults.map((d) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(d.harness), effectOf(d))))
       : effects[0];
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? defaults[0].default.source.name : undefined });
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? joined(defaults[0].default.source.name, defaults[0].default.source.id === ACCEPT_EDITS_SOURCE ? NR_REVIEW.POLICY_ACCEPTS_EDITS : undefined) : undefined });
   return rows;
 }

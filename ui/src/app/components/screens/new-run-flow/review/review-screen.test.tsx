@@ -231,7 +231,7 @@ describe("Review blockers", () => {
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(5));
     const items = within(blockerList()).getAllByRole("listitem").map((li) => li.textContent);
     expect(items).toEqual([
-      NR_SHARED.STEP_SHAPE,
+      NR_SHAPE.SHAPE_REQUIRED,
       NR_REVIEW.BLOCKER_UNSUPPORTED("legacy_extra"),
       NR_TEMPLATES.NEEDS_SETUP("Model provider"),
       "None of your runners is online.",
@@ -239,7 +239,7 @@ describe("Review blockers", () => {
     ]);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_MANY(5));
     expect(launch()).toBeDisabled();
-    await user.click(within(blockerList()).getByRole("button", { name: NR_SHARED.STEP_SHAPE }));
+    await user.click(within(blockerList()).getByRole("button", { name: NR_SHAPE.SHAPE_REQUIRED }));
     await waitFor(() => expect(path()).toContain("step=shape"));
   });
 

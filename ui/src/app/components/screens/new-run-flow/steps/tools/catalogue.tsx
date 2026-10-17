@@ -170,6 +170,10 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
   const { mine, failed } = useMyComponents();
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
+  // A dialog that chains into another (the custom form into the full editor) unmounts the button that opened it, so
+  // focus would fall to the page. The button is remembered and takes focus back once the last dialog is gone.
+  const opener = React.useRef<HTMLElement | null>(null);
+  const open = (d: Door) => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setDoor(d); };
   const [names, setNames] = React.useState<string[] | null>(null);
   const [namesError, setNamesError] = React.useState<string>();
   const [namesTry, setNamesTry] = React.useState(0);
@@ -186,6 +190,18 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
     return () => { live = false; };
   }, [door, namesTry]);
   const namesFailure = namesError ? { message: namesError, retry: () => setNamesTry((n) => n + 1) } : undefined;
+
+  React.useEffect(() => {
+    if (door) return;
+    const back = opener.current;
+    opener.current = null;
+    if (!back) return;
+    const t = setTimeout(() => {
+      const active = document.activeElement;
+      if ((!active || active === document.body) && back.isConnected) back.focus();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [door]);
 
   const edit = (apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply });
   const close = () => { setDoor(null); setNames(null); setNamesError(undefined); };
@@ -265,7 +281,7 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
           <p className="text-sm text-muted-foreground">{NR_TOOLS.ADD_BODY}</p>
         </div>
         <div className="flex max-w-[16rem] flex-col items-end gap-1">
-          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => setDoor("custom")}>
+          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => open("custom")}>
             <Plus aria-hidden />
             {NR_TOOLS.CUSTOM_COMPONENT}
           </Button>
@@ -321,9 +337,9 @@ export function AddTools({ access, answered, intent, answeredFor }: AddToolsProp
         {show("api") && org("api").map(orgCard)}
         {show("secret") && (
           <>
-            <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => setDoor("secret")} />
-            <DoorCard icon={CARD_ICON.host} title={NR_TOOLS.HOST_CARD_TITLE} body={NR_TOOLS.HOST_CARD_BODY} button={NR_TOOLS.HOST_CARD_BUTTON} onOpen={() => setDoor("host")} />
-            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => setDoor("mcp")} />
+            <DoorCard icon={CARD_ICON.secret} title={NR_TOOLS.SECRET_CARD_TITLE} body={NR_TOOLS.SECRET_CARD_BODY} button={NR_TOOLS.SECRET_CARD_BUTTON} onOpen={() => open("secret")} />
+            <DoorCard icon={CARD_ICON.host} title={NR_TOOLS.HOST_CARD_TITLE} body={NR_TOOLS.HOST_CARD_BODY} button={NR_TOOLS.HOST_CARD_BUTTON} onOpen={() => open("host")} />
+            <DoorCard icon={CARD_ICON.mcp} title={NR_TOOLS.MCP_CARD_TITLE} body={NR_TOOLS.MCP_CARD_BODY} button={NR_TOOLS.MCP_CARD_BUTTON} reason={noDefine} onOpen={() => open("mcp")} />
           </>
         )}
       </ul>

@@ -123,6 +123,7 @@ export const NR_REVIEW = {
   POLICY_FILES: "Files and code",
   POLICY_TOOLS: "Tools and pushes",
   POLICY_HOLD: "Hold for approval",
+  POLICY_ACCEPTS_EDITS: "Claude Code accepts file edits without asking. Every other tool asks first.",
   POLICY_AUTOMATIC: "Run automatically",
   /** One harness's default when the included harnesses default differently. */
   POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,

@@ -12,6 +12,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { modalLayerOpen } from "../../../lib/modal-layer-open";
 import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { useRequestIdentity } from "../../wardyn/operator-context";
+import { RouteFallback } from "../../wardyn/route-fallback";
 import type { CreateRunResult } from "../../../lib/types/run-create";
 import { draftReducer, isDirty, type DraftAction } from "./draft/draft-reducer";
 import { prefillSeed } from "./draft/prefill-seed";
@@ -249,7 +250,7 @@ export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }
     <NewRunDraftProvider owner={operatorResolved ? principal : ""}>
       <PendingLaunchContext.Provider value={pending}>
         <AnnounceContext.Provider value={setMessage}>
-          <React.Suspense fallback={null}>
+          <React.Suspense fallback={<RouteFallback />}>
             <NewRunFlow loaders={loaders} screens={screens} />
           </React.Suspense>
           <div role="status" aria-live="polite" className="sr-only">{message}</div>

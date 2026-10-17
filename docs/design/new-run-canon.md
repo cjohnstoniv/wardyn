@@ -753,6 +753,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_FILES` | mock | Files and code |
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
+| `POLICY_ACCEPTS_EDITS` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Claude Code accepts file edits without asking. Every other tool asks first. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `RAW_TITLE(format)` | mock | {format} run document |
@@ -879,6 +880,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
 | `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
+| `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
 | `EMPTY_ACTION` | mock | Start a new run |

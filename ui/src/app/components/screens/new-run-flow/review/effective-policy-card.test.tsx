@@ -152,6 +152,16 @@ describe("Effective policy card", () => {
     expect(tools).toHaveTextContent("Team policy");
   });
 
+  it("says what an interactive Claude Code default that accepts file edits does, and nothing for another source", () => {
+    const withSource = (source: { kind: string; id?: string }) =>
+      ({ ...SCENARIO_ACCESS.member, harnesses: [{ ...harnessDefault("claude-code", "hold"), default: { ...CLAUDE_UNGATED.default, effective: "hold", source } }] }) as never;
+    const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: withSource({ kind: "harness", id: "accept_edits" }) } as never} preview={null} />);
+    expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent(NR_REVIEW.POLICY_ACCEPTS_EDITS);
+    view.unmount();
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: withSource({ kind: "harness" }) } as never} preview={null} />);
+    expect(document.querySelector("[data-policy-row=tools]")).not.toHaveTextContent(NR_REVIEW.POLICY_ACCEPTS_EDITS);
+  });
+
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
     "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
       const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;

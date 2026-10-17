@@ -100,6 +100,14 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const settled = !finished || waiting ? new Set<string>() : new Set(setup.filter((i) => i.status === "satisfied" && finished.ids.has(i.id)).map((i) => i.id));
   const items = [...missing, ...setup.filter((i) => settled.has(i.id))];
   const pending = waiting ? finished.ids : new Set<string>();
+  // The footer line is announced when its words change, so it keeps the last settled answer through a recheck
+  // (the same words would otherwise be cleared and read out again) and clears only when the check fails.
+  const footerNow = access && answered && failure === null && !waiting ? (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length)) : undefined;
+  const [footerText, setFooterText] = React.useState("");
+  React.useEffect(() => {
+    if (footerNow !== undefined) setFooterText(footerNow);
+    else if (failure !== null) setFooterText("");
+  }, [footerNow, failure]);
   const finish = (id: string) => {
     setFinished((old) => ({ ids: new Set(old?.ids).add(id), base: access }));
     recheck();
@@ -119,7 +127,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
         start: <Button type="button" variant="ghost" onClick={() => go({ screen: "step", step: "files" })}>{NR_SHARED.BACK}</Button>,
         end: (
           <span aria-live="polite" className="self-center text-sm text-muted-foreground">
-            {access && answered && failure === null && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
+            {footerText}
           </span>
         ),
       }}
@@ -127,7 +135,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       {failure === null ? (
         <>
           <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
-          <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
+          <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answeredFor={answeredFor} answered={answered} names={names} onSignedIn={recheck} />
         </>
       ) : (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle p-4 text-sm text-danger">

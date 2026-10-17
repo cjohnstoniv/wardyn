@@ -146,6 +146,19 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     await expect(page.getByRole("heading", { name: NR_RUN.TITLE_ENV })).toBeVisible();
     await expect(page).toHaveURL(/step=run/);
   });
+
+  test("a model credential refusal keeps the setup blockers it carries, and Launch stays shut", async ({ page }) => {
+    const [item] = SCENARIO_PREFLIGHT.app.setup_items ?? [];
+    await stub(page, {
+      preflight: {
+        status: 422,
+        body: { error: "Your AWS sign-in no longer works.", reason: "model_credential", provider: "bedrock-sso", setup_items: [item] },
+      },
+    });
+    await openReview(page);
+    await expect(launch(page)).toBeDisabled();
+    await expect(page.locator("#nr-blockers")).toContainText(item.label);
+  });
 });
 
 test.describe("New Run, placement: the pool a person picks", () => {

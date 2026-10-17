@@ -39,6 +39,8 @@ export interface HarnessSetupProps {
   /** The preview's `harness_set`: the provider the server chose for a harness whose draft entry names none. */
   harnessSet?: HarnessSetFact;
   intent: RunIntent;
+  /** The draft's components that `access` answered; its "inline:<n>" rows point into this list. */
+  answeredFor?: RunIntent["components"];
   /** The server has answered exactly this body; until it has, the last answer is held, not claimed. */
   answered: boolean;
   names?: HarnessNames;
@@ -113,7 +115,7 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
   );
 }
 
-function HarnessCard({ fact, access, harnessSet, intent, name, answered, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; harnessSet?: HarnessSetFact; intent: RunIntent; name: string; answered: boolean; status: SetupStatus | null; onSignedIn: () => void }) {
+function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answered, status, onSignedIn }: { fact: ToolPolicyFact; access: AccessFacts; harnessSet?: HarnessSetFact; intent: RunIntent; answeredFor?: RunIntent["components"]; name: string; answered: boolean; status: SetupStatus | null; onSignedIn: () => void }) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
@@ -131,11 +133,11 @@ function HarnessCard({ fact, access, harnessSet, intent, name, answered, status,
   const componentId = (server: AccessRow) => server.source.id ?? server.id;
   // The person's own choice for the server stands until the server's next answer; before one, the server's fact does.
   const harnessesOf = (server: AccessRow): string[] =>
-    ((intent.components ?? []) as McpComponentRef[])[mcpComponentIndex(intent, componentId(server), server.name)]?.mcp_harnesses ?? server.mcp?.harnesses ?? [];
+    ((intent.components ?? []) as McpComponentRef[])[mcpComponentIndex(intent, componentId(server), server.name, answeredFor)]?.mcp_harnesses ?? server.mcp?.harnesses ?? [];
   const toggle = (server: AccessRow, on: boolean) => {
     const now = harnessesOf(server);
     const next = on ? [...new Set([...now, fact.harness])] : now.filter((h) => h !== fact.harness);
-    edit((i) => setMcpHarnesses(i, componentId(server), server.name, next));
+    edit((i) => setMcpHarnesses(i, componentId(server), server.name, next, answeredFor));
   };
 
   return (
@@ -177,7 +179,7 @@ function HarnessCard({ fact, access, harnessSet, intent, name, answered, status,
   );
 }
 
-export function HarnessSetup({ access, harnessSet, intent, answered, names, onSignedIn }: HarnessSetupProps) {
+export function HarnessSetup({ access, harnessSet, intent, answeredFor, answered, names, onSignedIn }: HarnessSetupProps) {
   const headingId = React.useId();
   const { status } = useShellSetupStatus();
   if (!access) return null;
@@ -191,7 +193,7 @@ export function HarnessSetup({ access, harnessSet, intent, answered, names, onSi
         <p className="text-sm text-muted-foreground">{NR_TOOLS.NO_HARNESSES}</p>
       ) : (
         access.harnesses.map((fact) => (
-          <HarnessCard key={fact.harness} fact={fact} access={access} harnessSet={harnessSet} intent={intent} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
+          <HarnessCard key={fact.harness} fact={fact} access={access} harnessSet={harnessSet} intent={intent} answeredFor={answeredFor} name={names?.get(fact.harness) ?? fact.harness} answered={answered} status={status} onSignedIn={onSignedIn} />
         ))
       )}
     </section>

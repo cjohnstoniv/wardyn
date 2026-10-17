@@ -361,6 +361,15 @@ describe("Tools and access step", () => {
     expect(screen.getByText(NR_TOOLS.SETUP_DONE)).toBeInTheDocument();
   });
 
+  it("keeps the footer line through a recheck, so the same words are not announced twice", async () => {
+    answer(SCENARIO_ACCESS.app, true);
+    show();
+    expect(await screen.findByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+    await saveToken();
+    await waitFor(() => expect(h.checks.invalidateChecks).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(NR_TOOLS.STICKY_ONE)).toBeInTheDocument();
+  });
+
   it("brings an item back with its door when the next answer still lists it as missing", async () => {
     answer(SCENARIO_ACCESS.app, true);
     const view = show();
