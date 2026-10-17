@@ -2,7 +2,7 @@
 
 Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 ships, with the questions the build settled. Operators read [Organisation runners in a Kubernetes cluster](../../operations/k8s-runners.md); this note is why it is shaped that way.
 
-<!-- K7-VERIFY: checked against prep/093-final 841dbea50; the one open item is the org-side containment handling below, and K6's results (see the guide). -->
+<!-- K7-VERIFY: checked against prep/093-final 841dbea50 and the K6 kind run (both kubelets green); the one open item is the org-side containment handling, marked below. -->
 
 ## Decisions
 
@@ -59,7 +59,7 @@ Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 sh
 - The relay listens on the pod IP at `relay.targetPort`; the Service exposes `relay.servicePort`. A run whose control-plane URL port differs from `relay.servicePort` is refused by name.
 - Corporate CA: the bundle reaches the proxy configuration, the sandbox and the org session's HTTP client (`SystemCertPool` plus the bundle), on both substrates.
 - Recording: the per-run `record` choice is stamped on the agent pod as `wardyn.record`; `--recording-store` is the runner's ceiling. Uploads ride the relay and are stored `runner_asserted`.
-- `hard_deny` goes into every proxy configuration: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver and `apiServer.peers`, and `egress.hardDenyCIDRs`. It is checked before the `internal_hosts` lift, for agent egress only. Operator-authored dial paths (the brokered model gateway, trusted URLs) do not pass through it.
+- `hard_deny` goes into every proxy configuration: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, the apiserver and `apiServer.peers`, and `egress.hardDenyCIDRs`. It is checked before the `internal_hosts` lift, for agent egress only, and a refusal is audited under rule source `builtin:private-ip` (there is no `hard_deny` source). Operator-authored dial paths (the brokered model gateway, trusted URLs) do not pass through it, and an upstream proxy inside the cluster voids the protection for names it resolves itself.
 
 ## Startup checks
 
@@ -111,7 +111,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | Pending states | `contained_agent_only` and `contained_pending_delete`; reported as `ContainmentPending`, never plain containment; NetworkPolicies held until evidence |
 
 - Name reuse is detected from the before, after, anchor and closing lists. A reuse latches a generation; only the two-person record releases such a run.
-- The unbound-pod arm (a pod deleted before it was bound) ships enabled, gated on K6's bind and delete race at the floor and at the latest release.
+- The unbound-pod arm (a pod deleted before it was bound) ships enabled. K6's bind and delete race, serial and overlapping with both winning orders, passed on the 1.31 floor and on 1.35.
 - Operational threat model: this guards against honest failure, not against a holder of a node's kubelet credentials. Two kubelets under one Node name are unsupported.
 
 <!-- K7-VERIFY: in prep/093-final 841dbea50 the org side of this table is absent: no `ContainmentPending` handling, no "node powered off" form or route, no `relay_ip_fenced` run-lost reason. runnerd's side is shipped. -->

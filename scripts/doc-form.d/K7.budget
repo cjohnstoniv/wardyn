@@ -1,3 +1,3 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S.
-# docs/operations/k8s-runners.md 3280 measured (0.9.3 K7): the new operator guide for an organisation runner in a Kubernetes cluster; its K7-VERIFY comments count until they are resolved.
-docs/operations/k8s-runners.md=3280 share=35
+# docs/operations/k8s-runners.md 3687 measured (0.9.3 K7): the operator guide for an organisation runner in a Kubernetes cluster, resolved against the merged code and the K6 kind results (3280 at the draft).
+docs/operations/k8s-runners.md=3687 share=35

@@ -277,21 +277,38 @@ A revoked runner whose runnerd never returns leaves objects behind. Admin → Ru
 
 ## What K6 proves
 
-<!-- K7-VERIFY: K6 is unmerged; this lists the design's test plan, to be replaced by the harness's own list and results. -->
+`scripts/k6-kind-conformance.sh` (`WARDYN_TEST_K8S=1`) is the proof.
 
-- A kind install from the rendered Role, on the 1.31 kubelet floor and on the latest release.
-- Server-mode conformance with the Role plus `pods: patch`, and the server driver unchanged.
-- The runs namespace's `default` ServiceAccount has automount off.
-- The retained-policy probe: a pod held for deletion, and one whose object is gone, still has egress refused until the process is killed. This records the kind CNI's behaviour only.
-- The stop cases: normal stop, node deleted after stop, pre-timeout force delete, node delete, bind and delete race, restart while unbound, short-lived container, never initialised, reimage under a kept Node, and an in-flight terminal status.
-- The bind and delete race, serial and overlapping, covering both winning orders at the floor and at the latest release, is the release gate for the unbound-pod arm.
-- A walk that registers, claims, places a run and ends it.
+- It builds a kind cluster of one control plane and two workers on Calico, and installs this chart with its rendered Role against a fake organisation.
+- It runs [`test/k6`](../../test/k6/k6_test.go) under runnerd's own ServiceAccount token, never cluster-admin.
+- It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`. Both passed the 19 cases below on the 0.9.3 tree.
 
-It does not prove:
+| Case | What it shows |
+|---|---|
+| In-cluster runnerd boot | The chart Role, access review, foreign-object scan, kubelet floor, relay listen and relay source probe pass on Calico |
+| Rendered Role | A pod naming runnerd's ServiceAccount is refused; seven denials hold under runnerd's token |
+| Keystore | Set (create, then replace), Get and Delete work under the own-namespace Role |
+| Finalizer semantics | A force delete leaves a finalized object held; a patch with a wrong UID or stale version is refused |
+| Normal stop | `StopProxy` ends in the `terminal` arm with a causal association |
+| Pod IP reuse after stop | A stopped proxy's IP is released and a later proxy that receives it starts; an IP still fenced for another run is refused |
+| Bind and delete, serial and overlapping | Both winning orders were observed on each kubelet: delete-first gives arm `unbound_deleted`, bind-first gives `never_initialized` or `terminal` with a causal association |
+| Never initialised | An image pull that fails, and a cancel during the pull, both complete |
+| Restart while unbound | A restart between the unbound read and the bind keeps the run causal |
+| Crash gaps | A crash between steps of `StopProxy`, label teardown and the orphan sweep finishes after restart |
+| Hard deny in proxy config | `svc`, the cluster domain, the relay ClusterIP and the apiserver are in the proxy's `hard_deny` |
+| Retained-policy probe | A pod held for deletion, and one whose finalizer was stripped, make 0 connections through the retained policy on kind's Calico |
+| Node name reuse | A pod GC mark and a reused name are recorded on the tick, and `StopProxy` is refused |
 
-- Enforcement on a CNI other than kind's, or on a managed cloud's control plane.
+The bind and delete cases are the release gate for the unbound-pod arm, and they passed on both versions.
+
+The run did not cover:
+
+- Cases that need an organisation hub session, which the fake organisation does not provide. They are a renew through the relay, the proxy's self-lapse end to end, and a hard-denied agent request.
+- The same missing hub hides restart fence replay, sink re-registration, the organisation-triggered sweep and keystore deletion on revoke. They also hide an in-flight request across the 3-second drain. These have unit tests only; none ran in a cluster.
+- Placement by trust class for an organisation runner and the refusal for a personal runner.
+- Enforcement on a CNI other than Calico on kind, or a managed cloud's control plane.
 - Two kubelets under one Node name, or a holder acting on a stale snapshot. Both are unsupported; the operator requirement above stands in for them.
-- That a provider names replacement nodes freshly. Check your provider's documentation; Wardyn makes no claim about any provider's default naming.
+- Whether a provider names replacement nodes freshly. Check your provider's documentation; Wardyn makes no claim about any provider's default naming.
 
 ## Residuals
 
