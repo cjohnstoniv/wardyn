@@ -465,12 +465,13 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 }
 
 // evidenceForwarder breaks the construction cycle: the driver needs the manager's evidence store,
-// and the manager needs the driver. The driver reads no evidence before the manager exists.
+// and the manager needs the driver. Before the manager exists the driver only stops an earlier
+// registration's proxies (SetAsidePrevious), whose runs this runner holds no record of.
 type evidenceForwarder struct{ m *offline.Manager }
 
 func (e *evidenceForwarder) LoadEvidence(id uuid.UUID) ([]byte, error) {
 	if e.m == nil {
-		return nil, errors.New("evidence store not ready")
+		return nil, nil // an earlier registration's run: no sink key, so nothing to settle
 	}
 	return e.m.LoadEvidence(id)
 }

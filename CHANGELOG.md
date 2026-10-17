@@ -34,6 +34,9 @@ what to set for the old behaviour.
 
 ### Before you upgrade
 
+- Upgrade the organisation before its laptop runners. A runner from this release configures its proxy with
+  `decision_sink`, which the proxy image of 0.9.3-rc.2 and older refuses, so an unpinned runner's runs do not start
+  until the organisation serves the new image; a pinned runner needs an image at least as new as its own release.
 - Migration `0181_runner_org_trust` adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and
   `registration_token_id` to `runners`, and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to
   `runner_registration_tokens`. Existing runners become `person` and `personal`.
@@ -263,11 +266,9 @@ what to set for the old behaviour.
   registered says the token it was given was not used.
 - macOS and other VM-backed engines no longer refuse requests with `audit_spool_unavailable`, because the proxy no
   longer shares a directory with the runner: it sends its decisions to wardyn-runnerd, the spool's only writer, as a
-  Kubernetes runner's proxy does. Upgrade the organisation first: an unpinned runner takes the organisation's proxy
-  image, and one from an older release refuses the new configuration, so the run does not start; a pinned runner needs
-  an image at least as new as its own release. A spool error names
-  its directory (`openat <dir>/state.json`), and macOS runners get their state directory as `--state-dir` in the
-  LaunchAgent, as Linux units always have.
+  Kubernetes runner's proxy does (see Before you upgrade for the order). A spool error names its directory (`openat
+  <dir>/state.json`), and macOS runners get their state directory as `--state-dir` in the LaunchAgent, as Linux units
+  always have.
 - A runner whose organisation link stalls no longer waits in silence: a stream dial that is never answered fails after
   30 seconds, as does a Docker engine that never answers `serve` at start or a resumed session's containment, and a
   runner with no session logs `runner still offline, retrying` at most once a minute.

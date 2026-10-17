@@ -425,3 +425,16 @@ func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
 		t.Fatalf("after the restart new proxies get %q (%v), want %q", again.proxyURL(), err, url)
 	}
 }
+
+// TestEvidenceForwarderBeforeTheManagerHoldsNoRecord: before the manager exists, the only proxies the
+// driver stops are an earlier registration's (SetAsidePrevious), so a read finds no record and the stop
+// settles nothing, while a write is still refused.
+func TestEvidenceForwarderBeforeTheManagerHoldsNoRecord(t *testing.T) {
+	var ev evidenceForwarder
+	if b, err := ev.LoadEvidence(uuid.New()); err != nil || b != nil {
+		t.Fatalf("read before the manager = %q, %v; want no record and no error", b, err)
+	}
+	if err := ev.SaveEvidence(uuid.New(), []byte("{}")); err == nil {
+		t.Fatal("a write before the manager was accepted")
+	}
+}
