@@ -201,6 +201,11 @@ type RunnerPoolDefaults struct {
 	Barrier ConfinementClass `json:"barrier,omitempty"`
 	// Recording is the organisation's alone, like Barrier: whether every run must be recorded.
 	Recording RecordingRequirement `json:"recording,omitempty"`
+	// Revision is the organisation's document alone: it starts at 1 and rises by one on every write
+	// to it. A read answers it, and a write that names it is refused (409 runner_pool_stale) when the
+	// document has moved on; a write that omits it is unconditional. A person's own document never
+	// carries one.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 // Validate checks the document's shape. Whether the pool exists, is permitted
@@ -215,6 +220,9 @@ func (d RunnerPoolDefaults) Validate() error {
 	}
 	if !d.Recording.Valid() {
 		return fmt.Errorf("recording %q is not preferred or required", d.Recording)
+	}
+	if d.Revision < 0 {
+		return errors.New("revision is the number you read")
 	}
 	return nil
 }

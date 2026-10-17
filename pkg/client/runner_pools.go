@@ -97,7 +97,7 @@ const (
 //
 // Limits and Barriers are never filled on these doors: the list carries a
 // pool's limits and barrier_options, and preflight carries this run's.
-// MainDrive is filled on the list and on both doors.
+// MainDrive and MyRunners are filled on the list and on both doors.
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
@@ -109,6 +109,11 @@ type RunnerPoolChoice struct {
 	// MainDrive is what this pool's runners do with a run's main-drive size, for the caller's own eligible
 	// targets. Absent on a pool the caller may only manage. The enforcement word reaches members only here.
 	MainDrive *MainDriveFacts `json:"main_drive,omitempty"`
+	// MyRunners is every one of the caller's OWN self-hosted runners that is a member of a user pool,
+	// whether or not it can take a run now; never another person's. It is how a person reads which
+	// pools each of their runners is in, and how Review says how many are online. Filled on the pool
+	// list and on both dry doors.
+	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 }
 
 // MainDriveEnforcement is how a pool binds a run's main-drive size. Never request or external.
@@ -170,10 +175,6 @@ type RunnerPoolCatalogueEntry struct {
 	// RunTypesSource is RunTypesSourcePool or RunTypesSourceNone.
 	RunTypesSource string          `json:"run_types_source,omitempty"`
 	BarrierOptions []BarrierOption `json:"barrier_options"`
-	// MyRunners is every one of the caller's OWN self-hosted runners that is a
-	// member of a user pool, whether or not it can take a run now; never another
-	// person's. It is how a person reads which pools each of their runners is in.
-	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 	// Slots is how busy the pool is; absent on a row the caller may only manage.
 	Slots *PoolSlots `json:"slots,omitempty"`
 	// Capacity is its runners' limits and usage added up; absent on a row the caller may only manage.
@@ -181,6 +182,12 @@ type RunnerPoolCatalogueEntry struct {
 	// Owner is a user pool's owner: the caller on their own pools, and the
 	// person each other pool belongs to on an administrator's oversight rows.
 	Owner string `json:"owner,omitempty"`
+	// State, Revision and PoolLimits are the pool's own record, as GET /runner-pools/{id} reads it
+	// (PoolLimits is that record's raw limits, not the effective ones in Limits), on every row,
+	// including one the caller may only manage, so a list needs no read of each pool.
+	State      RunnerPoolState   `json:"state,omitempty"`
+	Revision   int64             `json:"revision,omitempty"`
+	PoolLimits *RunnerPoolLimits `json:"pool_limits,omitempty"`
 }
 
 // The Verdict of PoolSlots: advisory, since the launch decides.

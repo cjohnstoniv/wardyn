@@ -190,6 +190,8 @@ export interface ManagedSettingsFact {
   path: string;
   /** The bytes agentpolicy.ForAgent returns. */
   document: string;
+  /** Whose document this is: the started agent's, else the first harness of the set that brings one. */
+  harness?: string;
   locked?: boolean;
   locked_by?: "profile" | "organisation";
   profile?: string;

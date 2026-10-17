@@ -716,6 +716,7 @@ func TestRunModeRefusalSentencesMatchGolden(t *testing.T) {
 		"HARNESS_SET_NO_IMAGE":       func(a []string) string { return harnessSetNoImageMsg(a...) },
 		"HARNESS_SET_CUSTOM_IMAGE":   func([]string) string { return harnessSetCustomImageMsg() },
 		"HARNESS_PROVIDERS_CONFLICT": func(a []string) string { return harnessProvidersConflictMsg(a[0], a[1]) },
+		"HARNESS_SIGNIN_NOT_PRIMARY": func(a []string) string { return harnessSignInNotPrimaryMsg(a[0], a[1]) },
 		"MAIN_DRIVE_UNENFORCEABLE":   func([]string) string { return mainDriveUnenforceableMsg() },
 		"CODEX_BUILTIN_RULE":         func(a []string) string { return codexBuiltinRuleMsg(a[0]) },
 		"POLICY_OVERLAY_INVALID":     func(a []string) string { return policyOverlayInvalidMsg(a[0], a[1]) },

@@ -75,6 +75,9 @@ func TestComponentFacts_AgentActualDoors(t *testing.T) {
 					if fact.Agent.ManagedSettings == nil || fact.Agent.ManagedSettings.Path != path || fact.Agent.ManagedSettings.Document != string(content) {
 						t.Fatalf("managed document differs from dispatch's generator: %+v", fact.Agent.ManagedSettings)
 					}
+					if fact.Agent.ManagedSettings.Harness != agent {
+						t.Fatalf("managed settings name harness %q, want the document's own %q", fact.Agent.ManagedSettings.Harness, agent)
+					}
 				} else if fact.Agent.ManagedSettings != nil {
 					t.Fatal("non-Claude harness has no managed-settings parser")
 				}
@@ -391,5 +394,18 @@ func TestComponentFacts_ExecRunUnchanged(t *testing.T) {
 		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"managed_settings"`) || strings.Contains(w.Body.String(), `"kind":"agent"`) {
 			t.Fatalf("%s exec = %d %s", door, w.Code, w.Body.String())
 		}
+	}
+}
+
+// FUG-L748: the harness the fact names is the one whose document dispatch writes, which is not the
+// started agent's when it has none: a codex-cli start in a set with claude-code carries claude-code's.
+func TestAgentPolicyDocumentNamesTheHarnessWhoseDocumentItIs(t *testing.T) {
+	set := []types.RunHarness{{Harness: "codex-cli"}, {Harness: claudeCodeHarness}}
+	doc, err := agentPolicyDocument("codex-cli", "", set, true, false, nil)
+	if err != nil || !doc.ok {
+		t.Fatalf("document = %+v, %v", doc, err)
+	}
+	if doc.harness != claudeCodeHarness {
+		t.Errorf("document harness = %q, want %q: codex-cli has none, so the set's first that does supplies it", doc.harness, claudeCodeHarness)
 	}
 }

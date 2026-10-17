@@ -388,6 +388,7 @@ func poolRefusal(ref *runnerpool.Refusal) *runRefusal {
 func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows []store.RunnerPoolCatalogueRow, denied []types.Placement) ([]client.RunnerPoolChoice, *runRefusal) {
 	out := make([]client.RunnerPoolChoice, 0, len(rows))
 	read := s.onceExecutorFacts(ctx)
+	var names map[uuid.UUID]string // the caller's runners' names, read on the first row that has any
 	for _, row := range rows {
 		st, refusal := s.poolAvailability(ctx, ps, row, denied)
 		if refusal != nil {
@@ -395,6 +396,14 @@ func (s *Server) poolChoices(ctx context.Context, ps store.RunnerPoolStore, rows
 		}
 		choice := st.choice(row)
 		choice.MainDrive = s.poolMainDriveFor(row, st.own, read)
+		if len(row.OwnRunnerIDs) > 0 {
+			if names == nil {
+				if names, refusal = s.callerRunnerNames(ctx); refusal != nil {
+					return nil, refusal
+				}
+			}
+			choice.MyRunners = s.myRunnersIn(row, names)
+		}
 		out = append(out, choice)
 	}
 	return out, nil
