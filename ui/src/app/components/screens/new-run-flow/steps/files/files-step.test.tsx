@@ -580,7 +580,7 @@ describe("mount map and summary", () => {
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
     expect(await within(map).findByText("└ /srv/checkout/payments")).toBeInTheDocument();
     expect(within(map).getByText(`${NR_FILES.MOUNT_ITEM("payments")} ${NR_FILES.MOUNT_STARTS}`)).toBeInTheDocument();
-    expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
+    expect(within(map).getByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
     expect(within(card("payments")).getByTitle("/srv/checkout/payments")).toBeInTheDocument();
   });
 

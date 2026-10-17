@@ -348,18 +348,18 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
-| `MOUNT_MAIN(n)` | mock | Main drive · {n} GiB |
+| `MOUNT_MAIN(size)` | mock | Main drive · {size} |
 | `MOUNT_ITEM(name)` | mock | ← {name} |
 | `MOUNT_STARTS` | mock | (Starts here) |
 | `MOUNT_READ_ONLY` | mock | (read-only) |
-| `SUMMARY_MAIN(n)` | mock | Main drive {n} GiB |
+| `SUMMARY_MAIN(size)` | mock | Main drive {size} |
 | `SUMMARY_STARTS(name)` | mock | starts in {name} |
 | `SUMMARY_KEPT_ONE(names)` | mock | {names} is kept |
 | `SUMMARY_KEPT_MANY(names)` | mock | {names} are kept |
 | `SUMMARY_DELETED` | mock | the main drive is deleted when the run ends |
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
-| `SUMMARY_NO_EXTRA(n, life)` | mock | Main drive {n} GiB · no extra files · {life}. |
+| `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
@@ -692,7 +692,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_NONE` | mock | No repositories or drives |
 | `WORK_ITEM_ONE` | mock | 1 item attached |
 | `WORK_ITEMS(n)` | mock | {n} items attached |
-| `MAIN_DRIVE(n)` | mock | Main drive · {n} GiB |
+| `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |

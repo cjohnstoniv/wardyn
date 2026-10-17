@@ -238,7 +238,7 @@ describe("main drive", () => {
     expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "prompt");
     await userEvent.type(size(), "4");
     await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
-    expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
+    expect(within(map).getByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
   });
 });
 
@@ -257,6 +257,8 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     expect(drawn().resources).toEqual({ disk_mib: 32 });
     // The field says the exact size, so nothing more needs saying.
     expect(exact()).toBeNull();
+    // The map and the summary never read it as zero.
+    expect(within(screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE })).getByText(NR_FILES.MOUNT_MAIN("32 MiB"))).toBeInTheDocument();
   });
 
   it("reads the field's number in the unit beside it", async () => {

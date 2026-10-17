@@ -65,7 +65,7 @@ export const NR_REVIEW = {
   WORK_NONE: "No repositories or drives",
   WORK_ITEM_ONE: "1 item attached",
   WORK_ITEMS: (n: string | number) => `${n} items attached`,
-  MAIN_DRIVE: (n: string | number) => `Main drive · ${n} GiB`,
+  MAIN_DRIVE: (size: string | number) => `Main drive · ${size}`,
   NO_HARNESSES: "No harnesses",
   TOOLS_COMMAND_ONE: "Command · 1 optional harness",
   TOOLS_COMMAND: (n: string | number) => `Command · ${n} optional harnesses`,

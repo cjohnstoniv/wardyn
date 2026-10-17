@@ -20,7 +20,7 @@ import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
-import { attachDrive, chooseNothing, mibToGibText, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
+import { attachDrive, chooseNothing, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { issue, type StepIssue } from "../../lenses/step-issues";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -34,6 +34,7 @@ import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
 import { FilesSummary, summaryText } from "./files-summary";
 import { FilesGroup } from "./kind-visuals";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
+import { fieldSizeWords } from "./size-words";
 import { MountMap } from "./mount-map";
 import { cleanSubfolder, StartingFolder, SUBFOLDER_ID } from "./starting-folder";
 
@@ -169,7 +170,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
   const sizeMib = size.mib;
   // No size is no number: the summary asks for one, and the map names the drive alone.
-  const sizeText = sizeMib === undefined ? undefined : mibToGibText(sizeMib);
+  const sizeText = sizeMib === undefined ? undefined : fieldSizeWords(sizeMib);
   const settled = noExtra || (items.length > 0 && !!start);
   const empty = !noExtra && items.length === 0;
 

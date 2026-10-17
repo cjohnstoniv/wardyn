@@ -528,7 +528,7 @@ describe("Review Files and Limits detail", () => {
     checks.current = answered({ ...pre, main_drive: { applied_mib: 20480, basis: "default", soft: true }, runner_pools: [pool] } as unknown as PreflightResult);
     open(AGENT);
     await ready();
-    expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE(20))).toBeInTheDocument();
+    expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE("20 GiB"))).toBeInTheDocument();
     expect(group("work").getByText(NR_FILES.NOT_ENFORCED)).toBeInTheDocument();
   });
 

@@ -108,14 +108,9 @@ const MIB_PER_GIB = 1024;
 /** Under 0.1 GiB one decimal would read a valid size as zero, so the field shows whole MiB there instead. */
 export const underTenthGiB = (mib: number): boolean => mib * 10 < MIB_PER_GIB;
 
-/**
- * One decimal, the way an admin's sub-GiB cap reads; a cap rounds down so "up to" is never overstated.
- * Under 0.1 GiB, where one decimal would show zero, it keeps four so a valid size never reads as none.
- */
+/** One decimal, the way an admin's sub-GiB cap reads; a cap rounds down so "up to" is never overstated. */
 export const mibToGibText = (mib: number, rounding: "round" | "floor" = "round"): string =>
-  underTenthGiB(mib)
-    ? String(Math.max(0.0001, Math[rounding]((mib / MIB_PER_GIB) * 1e4) / 1e4))
-    : String(Math[rounding]((mib / MIB_PER_GIB) * 10) / 10);
+  String(Math[rounding]((mib / MIB_PER_GIB) * 10) / 10);
 
 export type SizeUnit = "GiB" | "MiB";
 

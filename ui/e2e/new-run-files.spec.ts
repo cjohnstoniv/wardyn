@@ -301,11 +301,11 @@ test.describe("New Run, Files: repositories", () => {
 
     await addRepo(page, "web");
     const map = page.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    await expect(map).toContainText(NR_FILES.MOUNT_MAIN("10"));
+    await expect(map).toContainText(NR_FILES.MOUNT_MAIN("10 GiB"));
     await expect(map).toContainText(`└ ${REPOS[0].target}`);
     await expect(map).toContainText(`${NR_FILES.MOUNT_ITEM("web")} ${NR_FILES.MOUNT_STARTS}`);
 
-    const summary = [NR_FILES.SUMMARY_MAIN("10"), NR_FILES.SUMMARY_STARTS("web"), NR_FILES.SUMMARY_DELETED].reduce((all, p) => NR_SHARED.JOIN(all, p));
+    const summary = [NR_FILES.SUMMARY_MAIN("10 GiB"), NR_FILES.SUMMARY_STARTS("web"), NR_FILES.SUMMARY_DELETED].reduce((all, p) => NR_SHARED.JOIN(all, p));
     await expect(page.getByRole("status").filter({ hasText: summary })).toBeVisible();
   });
 
@@ -314,7 +314,7 @@ test.describe("New Run, Files: repositories", () => {
     await toFiles(page);
     await noExtra(page).check();
     await expect.poll(() => last(sent).no_repositories_or_drives).toBe(true);
-    const nothing = NR_FILES.SUMMARY_NO_EXTRA("10", NR_FILES.SUMMARY_DELETED);
+    const nothing = NR_FILES.SUMMARY_NO_EXTRA("10 GiB", NR_FILES.SUMMARY_DELETED);
     await expect(page.getByRole("status").filter({ hasText: nothing })).toBeVisible();
     await expect(page.getByRole("region", { name: NR_FILES.MOUNT_TITLE }).getByText(/←/)).toHaveCount(0);
 

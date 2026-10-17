@@ -21,12 +21,11 @@ import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
 import { FilesGroup } from "./kind-visuals";
+import { sizeWords } from "./size-words";
 
 export const SIZE_INPUT_ID = "nr-main-drive-size";
 const UNIT_WORD: Record<SizeUnit, string> = { GiB: NR_SHARED.GIB("").trim(), MiB: NR_SHARED.MIB("").trim() };
 
-/** A size with its unit: "{n} GiB" when it is a whole tenth of a GiB, else "{n} MiB". Only halves of a GiB are whole MiB tenths. */
-export const sizeWords = (mib: number): string => (mib % 512 === 0 ? NR_SHARED.GIB(mib / 1024) : NR_SHARED.MIB(mib));
 
 const hoursText = (sec: number): string => {
   const hours = Number((sec / 3600).toFixed(2));

@@ -112,14 +112,12 @@ describe("main drive size (A8)", () => {
     expect(mibToGibText(1000)).toBe("1");
   });
 
-  it("keeps a size under 0.1 GiB out of zero: whole MiB in the field, four decimals where a GiB text is needed", () => {
+  it("keeps a size under 0.1 GiB out of zero: whole MiB in the field", () => {
     expect(sizeField(32)).toEqual({ text: "32", unit: "MiB" });
     expect(sizeField(102)).toEqual({ text: "102", unit: "MiB" });
     expect(sizeField(103)).toEqual({ text: "0.1", unit: "GiB" });
     expect(sizeField(1000, "floor")).toEqual({ text: "0.9", unit: "GiB" });
     expect(sizeField(4096)).toEqual({ text: "4", unit: "GiB" });
-    expect(mibToGibText(32)).toBe("0.0313");
-    expect(mibToGibText(1)).toBe("0.001");
   });
 
   it("reads the field's text in its own unit", () => {

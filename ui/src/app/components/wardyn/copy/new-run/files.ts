@@ -118,11 +118,11 @@ export const NR_FILES = {
   CHOOSE_FILES: "Add what it needs, or choose No extra files.",
   MOUNT_TITLE: "Mount map",
   MOUNT_BODY: "Read-only view of where files appear in the sandbox.",
-  MOUNT_MAIN: (n: string | number) => `Main drive · ${n} GiB`,
+  MOUNT_MAIN: (size: string | number) => `Main drive · ${size}`,
   MOUNT_ITEM: (name: string | number) => `← ${name}`,
   MOUNT_STARTS: "(Starts here)",
   MOUNT_READ_ONLY: "(read-only)",
-  SUMMARY_MAIN: (n: string | number) => `Main drive ${n} GiB`,
+  SUMMARY_MAIN: (size: string | number) => `Main drive ${size}`,
   SUMMARY_STARTS: (name: string | number) => `starts in ${name}`,
   SUMMARY_KEPT_ONE: (names: string | number) => `${names} is kept`,
   SUMMARY_KEPT_MANY: (names: string | number) => `${names} are kept`,
@@ -131,8 +131,8 @@ export const NR_FILES = {
   SUMMARY_KEPT: (grace: string | number) => `the main drive is kept ${grace} after its end time`,
   /** pending W-12: the recommended text until the owner answers. */
   SUMMARY_NO_END: "the main drive is kept until you end the run",
-  SUMMARY_NO_EXTRA: (n: string | number, life: string | number) =>
-    `Main drive ${n} GiB · no extra files · ${life}.`,
+  SUMMARY_NO_EXTRA: (size: string | number, life: string | number) =>
+    `Main drive ${size} · no extra files · ${life}.`,
   // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
   ATTACH_TITLE: "Repositories, drives and folders",
   ATTACH_BODY: "Each one appears in the sandbox at its mount path.",
