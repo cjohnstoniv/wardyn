@@ -129,8 +129,12 @@ func (s *Server) defaultRunnerHooks() {
 
 // runnerOwnerInactive says the runner's owner is deactivated or purged (a SCIM suspension): the
 // identity read the token and SSH-key lanes make. The runner stays claimed, so a reactivation
-// readmits it with no re-claim.
+// readmits it with no re-claim. An organization's runner names no person, so its standing is its own
+// claim and revocation: inactive unless claimed and unrevoked.
 func (s *Server) runnerOwnerInactive(ctx context.Context, rn types.Runner) (bool, error) {
+	if rn.OwnerKind == types.RunnerOwnerOrg {
+		return rn.Owner != "" || rn.State != types.RunnerClaimed || rn.RevokedAt != nil, nil
+	}
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return false, nil

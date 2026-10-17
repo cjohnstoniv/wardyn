@@ -118,6 +118,17 @@ func TestPG_OrgRunnerTokenDoors(t *testing.T) {
 		!human.ExpiresAt.Equal(human.CreatedAt.Add(72*time.Hour)) {
 		t.Fatalf("a security admin's org token = %+v", human)
 	}
+	if row, err := e.pg.GetRunnerRegistrationToken(context.Background(), human.ID); err != nil || row.MintedByEmail == "" {
+		t.Fatalf("the org token's stored minter email = %q (%v), want the minter's email", row.MintedByEmail, err)
+	}
+	var self types.RunnerRegistrationToken
+	e.mintToken(e.personP, "person@corp.example", "user") // a person the operator mint can name
+	if w := e.call(e.super, http.MethodPost, "/api/v1/runners/tokens", `{"owner":"`+e.personP+`"}`); w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &self) != nil {
+		t.Fatalf("an operator's person mint = %d %s", w.Code, w.Body)
+	}
+	if row, err := e.pg.GetRunnerRegistrationToken(context.Background(), self.ID); err != nil || row.MintedByEmail != "" {
+		t.Fatalf("the person token's stored minter email = %q (%v), want none: only the org claim reads it", row.MintedByEmail, err)
+	}
 	if data := e.auditData(placement.ActionRunnerTokenCreate, human.ID.String()); len(data) != 1 || data[0]["owner_kind"] != "org" ||
 		data[0]["minted_by_kind"] != "human" || data[0]["name"] != "cluster-a" {
 		t.Fatalf("runner.token.create rows = %v", data)
@@ -147,8 +158,10 @@ func TestPG_OrgRunnerClaimFourEyes(t *testing.T) {
 			t.Fatalf("%s claimed the org runner: %d %s", name, code, body)
 		}
 	}
-	if code, body := e.claimOrg(e.alice, id); !strings.Contains(body, "second_human_required") {
-		t.Fatalf("the minter's claim was refused for another reason: %d %s", code, body)
+	for name, c := range map[string]*http.Cookie{"the minter": e.alice, "the minter's email twin": e.twin} {
+		if code, body := e.claimOrg(c, id); !strings.Contains(body, "second_human_required") {
+			t.Fatalf("%s's claim was refused for another reason: %d %s", name, code, body)
+		}
 	}
 	if row := e.runnerRow(id); row.State != types.RunnerUnclaimed {
 		t.Fatalf("a refused claim changed the runner: %+v", row)
@@ -265,5 +278,38 @@ func TestPG_RunnerTrustWriteFourEyes(t *testing.T) {
 	}
 	if rows := e.auditData("governance.change.bypass", id.String()); len(rows) != 1 || rows[0]["target_kind"] != govKindRunnerTrust {
 		t.Fatalf("governance.change.bypass rows = %v", rows)
+	}
+}
+
+// An organization's runner's limits are a security operator's to set on PUT /runners/{id}; a person's
+// runner is not reachable there, and the /me route never reaches an org runner.
+func TestPG_OrgRunnerLimits(t *testing.T) {
+	e := newOrgRunnerEnv(t, false)
+	id := e.registerWith(e.mintOrg(e.alice).Token)
+	if code, body := e.claimOrg(e.alice, id); code != http.StatusOK {
+		t.Fatalf("claim = %d %s", code, body)
+	}
+	l := roomyRunnerLimits()
+	l.RunsAtOnce = 1
+	body, _ := json.Marshal(types.RunnerUpdateRequest{Limits: l})
+	path := "/api/v1/runners/" + id.String()
+	if w := e.call(e.user, http.MethodPut, path, string(body)); w.Code != http.StatusForbidden {
+		t.Fatalf("a member's org limits write = %d %s, want 403", w.Code, w.Body)
+	}
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/me/runners/"+id.String(), string(body)); w.Code != http.StatusNotFound {
+		t.Fatalf("the /me limits write on an org runner = %d %s, want 404", w.Code, w.Body)
+	}
+	if w := e.call(e.alice, http.MethodPut, path, string(body)); w.Code != http.StatusOK {
+		t.Fatalf("a security admin's org limits write = %d %s", w.Code, w.Body)
+	}
+	if row := e.runnerRow(id); row.Limits == nil || row.Limits.RunsAtOnce != 1 {
+		t.Fatalf("the org runner's limits = %+v, want runs at once 1", row.Limits)
+	}
+	if data := e.auditData(placement.ActionRunnerUpdate, id.String()); len(data) != 1 {
+		t.Fatalf("runner.update rows = %v, want one", data)
+	}
+	person := e.claimedRunner("sub-user")
+	if w := e.call(e.alice, http.MethodPut, "/api/v1/runners/"+person.String(), string(body)); w.Code != http.StatusNotFound {
+		t.Fatalf("a security admin's write of a person's runner limits = %d %s, want 404", w.Code, w.Body)
 	}
 }

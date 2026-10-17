@@ -45,7 +45,7 @@ func (h *Hub) currentActivity(ctx context.Context, row types.Runner, a Admission
 	}
 	current, err := h.cfg.Lookup(ctx, row.ID)
 	if err != nil || current.ID != row.ID || current.State != types.RunnerClaimed || current.RevokedAt != nil ||
-		current.Owner == "" || current.Owner != row.Owner || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
+		!current.OwnerHeld() || current.OwnerKind != row.OwnerKind || current.Owner != row.Owner || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
 		return runnerwire.ErrAuth
 	}
 	// Activity is a lossy idle signal: a refusal (the run already left RUNNING

@@ -197,3 +197,40 @@ func TestRunnerOrgSessionPathPG(t *testing.T) {
 		t.Fatalf("org runner spool ingestion = %v", err)
 	}
 }
+
+// An org runner's pending action binds to the run's creator, the same person a person's runner binds to
+// (there owner == created_by), and the 0150 binding CHECK (a named owner) holds; a result then applies.
+func TestRunnerOrgPendingActionPG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	org, err := st.CreateRunner(ctx, newOrgRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if org, err = st.ClaimOrgRunner(ctx, org.ID, org.KeyFingerprint, "org", "sec-a", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f := actionFixture{pool: pool, st: st, rn: org}
+	run := f.localRun(t, org, "alice")
+	gen := f.issue(t, run)
+	a := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
+	if a.Owner != "alice" || !a.Bound {
+		t.Fatalf("the org runner's action = %+v, want bound to the run's creator", a)
+	}
+	if _, _, err := st.RecordRunnerActionResult(ctx, org.ID, run.ID, a.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
+		t.Fatalf("the org runner's action result = %v", err)
+	}
+	person := claimed(t, st, ctx, "bob")
+	pf := actionFixture{pool: pool, st: st, rn: person}
+	foreign := pf.localRun(t, person, "alice")
+	if _, _, err := st.QueueRunnerAction(ctx, pf.action(foreign, types.RunnerActionKill, uuid.Nil)); !errors.Is(err, store.ErrRunnerActionRefused) {
+		t.Fatalf("a person's runner on another person's run = %v, want ErrRunnerActionRefused", err)
+	}
+	if _, err := st.RevokeRunner(ctx, org.ID, time.Now(), "sec-a", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.QueueRunnerAction(ctx, f.action(f.localRun(t, org, "alice"), types.RunnerActionKill, uuid.Nil)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a revoked org runner's action = %v, want ErrNotFound", err)
+	}
+}

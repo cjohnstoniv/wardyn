@@ -46,6 +46,12 @@ type admissionFixture struct {
 }
 
 func newAdmissionFixture(t *testing.T) *admissionFixture {
+	return newAdmissionFixtureOf(t, types.RunnerOwnerPerson)
+}
+
+// newAdmissionFixtureOf is newAdmissionFixture with a runner of kind: an org runner is claimed by a
+// security admin and its run is created by another person.
+func newAdmissionFixtureOf(t *testing.T, kind types.RunnerOwnerKind) *admissionFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -53,16 +59,25 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	st := store.NewPG(pool)
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	id := uuid.New()
-	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "admission-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
+	owner, creator := "admission-owner", "admission-owner"
+	if kind == types.RunnerOwnerOrg {
+		owner, creator = "", "org-run-creator"
+	}
+	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: owner, OwnerKind: kind, Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
 		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rn, err = st.ClaimRunner(ctx, rn.ID, rn.Owner, rn.KeyFingerprint, time.Now()); err != nil {
+	if kind == types.RunnerOwnerOrg {
+		rn, err = st.ClaimOrgRunner(ctx, rn.ID, rn.KeyFingerprint, rn.OrgURLSHA256, "sec-admin", time.Now())
+	} else {
+		rn, err = st.ClaimRunner(ctx, rn.ID, rn.Owner, rn.KeyFingerprint, time.Now())
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	run := newFinalizeRun()
-	run.CreatedBy, run.Placement, run.RunnerID = rn.Owner, types.PlacementLocal, &rn.ID
+	run.CreatedBy, run.Placement, run.RunnerID = creator, types.PlacementLocal, &rn.ID
 	if run, err = st.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
