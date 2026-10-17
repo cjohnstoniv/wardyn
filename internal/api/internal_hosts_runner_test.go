@@ -47,23 +47,6 @@ func (s siteConfigDispatchStore) GetSiteConfig(context.Context) (types.SiteConfi
 // run fails, and here it fails at the runner lease (see dispatchInternalHostsRun).
 func (siteConfigDispatchStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error { return nil }
 
-// reviveTrustDispatchStore adds the trust facts a local revive re-reads (trustChangedRefusal): the
-// bound runner's stored class and the class the run was admitted at, both personal. createRun records
-// the latter, and dispatchInternalHostsRun writes its run without it, so a revive test swaps this in.
-type reviveTrustDispatchStore struct{ siteConfigDispatchStore }
-
-func (reviveTrustDispatchStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
-	return types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal}, nil
-}
-
-func (reviveTrustDispatchStore) RunRunnerTrustClass(context.Context, uuid.UUID) (types.RunnerTrustClass, error) {
-	return types.RunnerTrustPersonal, nil
-}
-
-func (reviveTrustDispatchStore) SetRunRunnerTrustClass(context.Context, uuid.UUID, types.RunnerTrustClass) error {
-	return nil
-}
-
 // dispatchInternalHostsRun runs the organisation's dispatch (dispatchRun) for a
 // local-placement run bound to runnerID under *sc and returns the runner spec
 // its proxy config makes. Dispatch renders internal_hosts from the site config
