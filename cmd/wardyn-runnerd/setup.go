@@ -269,7 +269,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
 		}
 	}
-	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
+	if err := h.checkServiceManager(cmd.Context(), &plan.paths); err != nil {
 		return setupPlan{}, err
 	}
 	// Always, flags or not: serve runs the same check at every start, after the token is spent.
