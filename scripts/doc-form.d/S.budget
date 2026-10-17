@@ -129,7 +129,9 @@
 # docs/sdk.md 18238 = 18199 + 39 (K3a), measured at the wave-A merge.
 # docs/sdk.md 17936 adds 38 (0.9.3 C2), measured: recording_off for a declining runner's run; the org-defaults PUT keeps an omitted recording.
 # docs/sdk.md 18276 = 18238 + 38 (C2), measured at the rc.2 into final merge.
-docs/sdk.md=18276 share=21
+# docs/sdk.md 17742 adds 73 over 17669 (0.9.3 SEC3), measured: the repo_url_credentials reason, its Azure DevOps and ssh:// rules and the reads it redacts.
+# docs/sdk.md 18349 = 18276 + 73 (SEC3), measured at the wave-B merge.
+docs/sdk.md=18349 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

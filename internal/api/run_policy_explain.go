@@ -402,7 +402,7 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 		m[fieldMounts] = append(m[fieldMounts], mnt.Target)
 	}
 	for _, r := range sp.WorkspaceRepos {
-		key := r.Repo
+		key := redactRepoURL(r.Repo) // a legacy row
 		if r.Ref != "" {
 			key += "@" + r.Ref
 		}

@@ -75,7 +75,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",
-  workspace_repo_not_admitted: "files", capability_workspace: "files", capability_workspace_provider: "files",
+  workspace_repo_not_admitted: "files", repo_url_credentials: "files", capability_workspace: "files", capability_workspace_provider: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
   placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",

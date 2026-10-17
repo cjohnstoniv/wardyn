@@ -204,13 +204,17 @@ func validateADOCapabilities(caps []adoscope.Capability) error {
 }
 
 // specRefusalReason is the wire reason for a validatePolicySpec failure: the
-// unknown-capability arm carries its own, every other arm the door's bucket.
+// unknown-capability, SSH-conflict and repository-userinfo arms carry their own,
+// every other arm the door's bucket.
 func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errADOCapabilityUnknown) {
 		return reasonADOCapabilityUnknown
 	}
 	if errors.Is(err, errPATNarrowingSSHConflict) {
 		return reasonGitPATNarrowingSSHConflict
+	}
+	if errors.Is(err, errRepoURLUserinfo) {
+		return reasonRepoURLCredentials
 	}
 	return bucket
 }
@@ -823,6 +827,9 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 			if !repoFieldSafe(f.value) {
 				return fmt.Errorf("workspace_repos[%d]: "+repoField400Charset, i, f.name)
 			}
+		}
+		if repoURLHasUserinfo(wr.Repo) {
+			return fmt.Errorf("workspace_repos[%d].repo: %w", i, errRepoURLUserinfo)
 		}
 		if wr.Target == "" {
 			// No explicit dest: the default (~/work/<name> convention) is derived

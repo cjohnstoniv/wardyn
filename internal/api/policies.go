@@ -187,6 +187,7 @@ func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
 // handleGetDefaultPolicy (which reads a bare spec, not a stored types.RunPolicy)
 // gets the same redaction without a fake wrapper row.
 func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
+	spec.WorkspaceRepos = redactWorkspaceRepoList(spec.WorkspaceRepos) // a legacy row, every tier
 	if !operator {
 		spec = redactSpecForUser(spec)
 	}
