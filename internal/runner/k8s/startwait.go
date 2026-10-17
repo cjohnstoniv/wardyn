@@ -47,17 +47,19 @@ func (d *Driver) newStartClock() *startClock {
 	return c
 }
 
-// placementExcludesEveryNode reads the node list (cached) and reports true only when it was read
-// and no node passes the run's selector, required affinity and taint tolerations. Any doubt is false:
-// a pod then keeps waiting for room as before.
+// placementExcludesEveryNode reads the node list (cached) and reports true only when a Ready,
+// schedulable node exists and no node at all passes the run's selector, required affinity and
+// taints, the node-lifecycle and autoscaler taints not counted (transientTaint). Zero nodes, only
+// unhealthy ones, or any node that would take the pod is doubt: false, and the pod keeps waiting for
+// room. A pool an autoscaler scales from zero reads as no match, so that case needs the flag off.
 func (d *Driver) placementExcludesEveryNode() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), fitReadTimeout)
 	defer cancel()
 	nodes, state := d.cachedNodes(ctx)
-	if state != runner.ReadOK || len(nodes) == 0 {
+	if state != runner.ReadOK || !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.healthy }) {
 		return false
 	}
-	return !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.holds(podDemand{}, d.placement) })
+	return !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.placementOK(d.placement, transientTaint) })
 }
 
 // capacityBlocked reports a pod the scheduler cannot place for lack of room.
