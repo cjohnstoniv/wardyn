@@ -10,6 +10,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
 
