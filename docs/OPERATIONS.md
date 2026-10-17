@@ -3472,6 +3472,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - After an upgrade, setup status shows a "Runner limits" warning, for operators only, while any runner has none. `wardyn runner list --all --no-limits` and `wardyn runner remote list --no-limits` list the runners without limits.
 - If `wardyn runner remote propose` says the runner reports no CPU or memory, the message names the read that failed: grant the node read with `k8s.readNodes=true`, or create a ResourceQuota in the runs namespace that sets `requests.cpu`, `requests.memory` and `requests.ephemeral-storage`, then propose again.
+- An existing `go` redirect now keeps Go's checksum database on: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so a mirror that does not proxy `/sumdb/` fails its runs' module downloads until the redirect sets `go_checksum_db_off` (see the `go` redirect notes under Corporate network egress).
 - First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
 
 - Migrations are **forward-only**.
