@@ -27,6 +27,7 @@ import (
 type localJudgement struct {
 	policy placement.DeliveryPolicy
 	trust  types.RunnerTrustClass
+	floor  types.ConfinementClass // the run's blast-radius floor (Q7), which no runner_resident credential meets
 }
 
 // candidateTrusts is the distinct trust classes of the run's eligible runners in the order create judges

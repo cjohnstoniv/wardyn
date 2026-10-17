@@ -108,7 +108,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, po
 		return localJudgement{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	if pooled {
-		return localJudgement{policy: p.Delivery, trust: trust}, nil
+		return localJudgement{policy: p.Delivery, trust: trust, floor: p.ConfinementFloor}, nil
 	}
 	return localJudgement{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
 }
@@ -367,7 +367,7 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
 			continue
 		}
-		resident, rref := placement.ResidentGrant(origin, j.policy, j.trust)
+		resident, rref := placement.ResidentGrant(origin, j.policy, j.trust, j.floor)
 		if rref != nil {
 			return types.RunPolicySpec{}, nil, runError(rref.Reason.Status(), string(rref.Reason), fmt.Sprintf("eligible_grants[%d]: %s", i, rref.Error()))
 		}

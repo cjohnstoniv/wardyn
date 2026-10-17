@@ -48,7 +48,7 @@
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
 - The runner reports its posture when it connects and again when it changes. A root-owned posture file from your MDM wins over the runner's own probe: `/etc/wardyn/posture.json` on Linux and `/Library/Application Support/Wardyn/posture.json` on macOS.
 - A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and deletes it at run end, reporting each delete (`runner.resident.erase`). On a computer whose root user is the developer, erasure is best-effort, never promised. A runner with no keystore refuses (`runner_keystore_unavailable`).
-- **When the keystore copy goes.** The cap is the run's lifetime cap or 24 hours after delivery, whichever comes first.
+- **When the keystore copy goes.** The cap is the earliest of the run's lifetime cap, the run's end and 24 hours after delivery.
   - **From the cap on, nothing can read the value.** The runner refuses to read it, a revive is refused, and the proxy stops answering for an SSH key or git token.
   - **Deleting the bytes is best-effort, with retry.** Normally the runner deletes the copy when the run ends, or at its next minute sweep after the cap. In four cases the delete lands later:
     1. a keychain call is busy or stuck at the cap (for example, a macOS keychain prompt waiting for a click). The copy is deleted at the first sweep after the call returns;
@@ -59,6 +59,7 @@
 - A value already inside the sandbox or the running proxy stays there until the run ends.
 - A key or token already handed to the sandbox stays valid at the forge until you rotate it.
 - On macOS a value over about 3 KB is refused.
+- A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`).
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).

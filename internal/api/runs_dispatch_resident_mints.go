@@ -71,6 +71,7 @@ func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, ro
 		}
 		host, secretName, knownHostsRef, _, err := storedSecretGrantPairing(row.Spec)
 		if err != nil {
+			s.skipResidentMint(ctx, run, row, "the grant's scope names no stored secret")
 			continue
 		}
 		mint := proxy.ResidentMint{GrantID: row.ID, Kind: kind, Token: placement.ResidentPlaceholder(row.ID), ExpiresAt: residentNotAfter(run, s.cfg.Now())}
@@ -83,6 +84,7 @@ func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, ro
 			if knownHostsRef != "" {
 				kh, ok := s.readResidentKnownHosts(ctx, run, row, knownHostsRef)
 				if !ok {
+					s.skipResidentMint(ctx, run, row, "its known_hosts secret could not be read")
 					continue
 				}
 				mint.KnownHosts = kh
@@ -93,6 +95,7 @@ func (s *Server) authorResidentMints(ctx context.Context, run types.AgentRun, ro
 		}
 		v, err := s.readResidentValue(ctx, run, row, secretName)
 		if err != nil {
+			s.skipResidentMint(ctx, run, row, "its stored secret could not be read")
 			continue
 		}
 		mints = append(mints, mint)
@@ -153,4 +156,46 @@ func (s *Server) refuseResidentDispatch(ctx context.Context, run types.AgentRun,
 	bg := context.WithoutCancel(ctx)
 	s.failAndRevoke(bg, run.ID, types.RunStarting, "This run was not launched on your own runner: "+detail)
 	s.recordAudit(bg, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
+}
+
+// skipResidentMint records a resident ssh_key or git_pat grant that dispatch
+// authors no mint for: the clone then meets a refusal at the proxy, and this
+// row names the grant and why. The run is not failed.
+func (s *Server) skipResidentMint(ctx context.Context, run types.AgentRun, row types.CredentialGrant, reason string) {
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.resident_mint.skip", row.ID.String(), "failure",
+		mustJSON(map[string]any{"grant_id": row.ID, "kind": row.Spec.Kind, "reason": reason})))
+}
+
+// residentRunnerTooOld is the refusal of a resident run whose runner does not
+// advertise Caps.Resident.
+const residentRunnerTooOld = "the runner does not hold runner_resident credentials; upgrade wardyn-runnerd to 0.9.3 or later"
+
+// beginValueResolution opens the run's masking manifest, then refuses a
+// resident run whose runner cannot hold its values: both before dispatch
+// resolves any value. false means the run has been failed.
+func (s *Server) beginValueResolution(ctx context.Context, run types.AgentRun) bool {
+	return s.beginMaskManifest(ctx, run) && s.residentRunnerReady(ctx, run)
+}
+
+// residentRunnerReady refuses a local run with a runner_resident grant whose
+// runner does not advertise Caps.Resident, before dispatch reads any resident
+// value or authors any mint; false means the run has been failed.
+func (s *Server) residentRunnerReady(ctx context.Context, run types.AgentRun) bool {
+	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
+		return true
+	}
+	rows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		s.refuseResidentDispatch(ctx, run, uuid.Nil, "its grants could not be read to check its runner holds runner_resident credentials")
+		return false
+	}
+	i := slices.IndexFunc(rows, func(g types.CredentialGrant) bool { return g.Delivery == types.GrantDeliveryResident })
+	if i < 0 {
+		return true
+	}
+	if c, ok := s.runnerEndpoint(*run.RunnerID).sub.Caps(); ok && c.Resident {
+		return true
+	}
+	s.refuseResidentDispatch(ctx, run, rows[i].ID, residentRunnerTooOld)
+	return false
 }

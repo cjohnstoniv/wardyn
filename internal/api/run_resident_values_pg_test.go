@@ -117,6 +117,7 @@ func TestDispatch_ResidentEnvSecretValuesReachTheRunner(t *testing.T) {
 func TestDispatch_ResidentEnvSecretRefusedAtClassifyBeforeTheLease(t *testing.T) {
 	f := newResidentFix(t, nil, `{"classes":{"env_secret":{"mode":"runner_resident","require_posture":{"disk_encrypted":true}}}}`)
 	f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
+	f.reportCaps(t, true)
 	ctx := t.Context()
 	run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
 	g := f.envGrant(t, run, "A_TOKEN", "a-secret", "a-value", types.GrantDeliveryResident)

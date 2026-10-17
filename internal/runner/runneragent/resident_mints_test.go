@@ -5,6 +5,7 @@ package runneragent
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -78,5 +79,25 @@ func TestResident_ResidentMintsFilledForTheProxyOnly(t *testing.T) {
 	late.clock.add(2 * time.Hour)
 	if err := late.create(runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{ResidentMints: mints[1:]}}); err == nil || len(late.fake.Created) != 0 {
 		t.Fatalf("a resident mint was filled past its not_after (%v)", err)
+	}
+}
+
+// A runner advertises Caps.Resident exactly when it holds runner_resident
+// credentials; the flag is omitted otherwise, so an older runner's caps and a
+// runner without the adapter both decode as false at the org.
+func TestDispatcher_ResidentsAdvertised(t *testing.T) {
+	if (&Dispatcher{}).Residents() {
+		t.Fatal("a runner with no resident adapter advertised Resident")
+	}
+	if !(&Dispatcher{cfg: Config{Resident: &Resident{}}}).Residents() {
+		t.Fatal("a runner with a resident adapter did not advertise Resident")
+	}
+	raw, err := json.Marshal(runnerwire.Caps{Version: "0.9.2"})
+	if err != nil || strings.Contains(string(raw), "resident") {
+		t.Fatalf("caps without the flag = %s (%v), want it omitted", raw, err)
+	}
+	var older runnerwire.Caps
+	if err := json.Unmarshal([]byte(`{"support":{},"version":"0.9.2"}`), &older); err != nil || older.Resident {
+		t.Fatalf("an older runner's caps decode Resident=%v (%v), want false", older.Resident, err)
 	}
 }

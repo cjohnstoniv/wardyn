@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -99,7 +100,22 @@ func residentADOGitPAT(sc types.SiteConfig, g types.GrantSpec) bool {
 		return false
 	}
 	pat, err := types.DecodeGitPATScope(g.Scope)
-	return err != nil || adoGrantHost(sc, pat.Host)
+	if err != nil {
+		return true
+	}
+	host := gitPATHostKey(pat.Host)
+	return host == "dev.azure.com" || strings.HasSuffix(host, ".dev.azure.com") || adoGrantHost(sc, host)
+}
+
+// gitPATHostKey is host as a forge names it: lowercased, trimmed of space and
+// of a trailing dot, with any port split off. A stored scope written before
+// the host had to be bare (validGitPATHost) is judged on this form.
+func gitPATHostKey(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = strings.TrimSuffix(h, ".")
+	}
+	return host
 }
 
 // residentGrantRefusal is why create refuses g runner_resident although the

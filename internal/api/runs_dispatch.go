@@ -207,8 +207,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 
 	// The run's masking manifest opens before any value is resolved and completes
-	// before the sandbox exists (mask_manifest.go).
-	if !s.beginMaskManifest(ctx, run) {
+	// before the sandbox exists (mask_manifest.go); a resident value needs a runner that holds one.
+	if !s.beginValueResolution(ctx, run) {
 		return
 	}
 

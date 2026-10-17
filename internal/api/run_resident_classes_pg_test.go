@@ -62,11 +62,12 @@ func (f *residentFix) classGrant(t *testing.T, run types.AgentRun, c residentCla
 	return g
 }
 
-// reportManagedFiles has the runner report that it delivers managed files, as
-// a file_secret dispatch requires.
-func (f *residentFix) reportManagedFiles(t *testing.T) {
+// reportCaps has the runner report that it delivers managed files, as a
+// file_secret dispatch requires, and whether it holds runner_resident
+// credentials (an older runner does not say so).
+func (f *residentFix) reportCaps(t *testing.T, resident bool) {
 	t.Helper()
-	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC2}, ManagedFiles: true}, Version: "test"})
+	data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC2}, ManagedFiles: true}, Version: "test", Resident: resident})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestResidentClassPins_AuthorClassifyDeliver(t *testing.T) {
 		t.Run(c.class, func(t *testing.T) {
 			f := newResidentFix(t, nil, residentAllClassesPolicy)
 			f.srv.cfg.DisableGitPATBroker = true
-			f.reportManagedFiles(t)
+			f.reportCaps(t, true)
 			ctx := t.Context()
 			sec := f.cfg.Secrets.(*memSecrets)
 			val := "resident " + c.class + " value\n"
@@ -245,7 +246,7 @@ func TestResidentClassPins_RefuseEraseRevoke(t *testing.T) {
 		t.Run(c.class, func(t *testing.T) {
 			f := newResidentFix(t, nil, residentAllClassesPolicy)
 			f.srv.cfg.DisableGitPATBroker = true
-			f.reportManagedFiles(t)
+			f.reportCaps(t, true)
 			ctx := t.Context()
 			if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte("held value")); err != nil {
 				t.Fatal(err)
@@ -372,7 +373,7 @@ func TestDispatch_ResidentClassesLiftedThroughDispatch(t *testing.T) {
 			f := newResidentFix(t, nil, residentAllClassesPolicy)
 			f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
 			f.srv.cfg.DisableGitPATBroker = true
-			f.reportManagedFiles(t)
+			f.reportCaps(t, true)
 			ctx := t.Context()
 			if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte("dispatched value")); err != nil {
 				t.Fatal(err)
@@ -430,9 +431,18 @@ func TestResidentGitPAT_FlagMatrix(t *testing.T) {
 	if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{approval}}, policy); ref == nil {
 		t.Fatal("a grant that requires approval was admitted runner_resident")
 	}
-	ado := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"dev.azure.com","secret_name":"op-pat"}`)}
-	if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{ado}}, policy); ref == nil || !strings.Contains(ref.body.Error, residentADOGitPATRefused) {
-		t.Fatalf("an Azure DevOps git token was admitted runner_resident: %+v", ref)
+	// Every spelling of an Azure DevOps host, including a stored scope from
+	// before a host had to be bare.
+	for _, host := range []string{"dev.azure.com", "dev.azure.com:443", "Dev.Azure.Com.", "ssh.dev.azure.com", "org.dev.azure.com", "org.visualstudio.com"} {
+		ado := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"` + host + `","secret_name":"op-pat"}`)}
+		if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{ado}}, policy); ref == nil || !strings.Contains(ref.body.Error, residentADOGitPATRefused) {
+			t.Fatalf("an Azure DevOps git token for %q was admitted runner_resident: %+v", host, ref)
+		}
+	}
+	floored := policy
+	floored.floor = types.CC3
+	if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{grant}}, floored); ref == nil || ref.body.Reason != string(placement.ReasonRunnerPostureUnmet) {
+		t.Fatalf("a CC3-floor run at create: %+v, want runner_posture_unmet", ref)
 	}
 
 	// Off at create, on at dispatch.
@@ -550,5 +560,91 @@ func TestResident_ForeignRunAndAzureDevOpsGitTokenRefused(t *testing.T) {
 	}
 	if delivered, _ := f.side.calls(); len(delivered) != 0 {
 		t.Fatalf("delivered %+v, want nothing", delivered)
+	}
+}
+
+// A git_pat scope's host is a hostname at every policy write: a port, a scheme
+// or a path is refused (a trailing dot is a hostname's own form, which the
+// Azure DevOps check folds), so the proxy's per-host key carries no port.
+func TestValidatePolicySpec_GitPATHostIsBare(t *testing.T) {
+	for host, ok := range map[string]bool{
+		"git.example.com": true, "Dev.Azure.Com": true, "gitlab-01.corp": true, "Dev.Azure.Com.": true,
+		"dev.azure.com:443": false, ".": false, "https://dev.azure.com": false,
+		"dev.azure.com/org": false, "-bad.example.com": false, "a..b": false, "dev azure.com": false,
+	} {
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"` + host + `","secret_name":"op-pat"}`)}}}
+		if err := validatePolicySpec(spec); (err == nil) != ok {
+			t.Errorf("host %q: err %v, want ok=%v", host, err, ok)
+		}
+	}
+}
+
+// A runner that does not advertise Caps.Resident (one older than 0.9.3, or
+// one that has advertised nothing) is refused a resident run before any
+// resident value is read or mint authored; one that does takes it.
+func TestDispatch_ResidentRunRefusedOnARunnerWithoutTheCapability(t *testing.T) {
+	for _, c := range residentClassCases {
+		t.Run(c.class, func(t *testing.T) {
+			f := newResidentFix(t, nil, residentAllClassesPolicy)
+			f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
+			f.srv.cfg.DisableGitPATBroker = true
+			f.reportCaps(t, false)
+			ctx := t.Context()
+			if err := f.cfg.Secrets.(*memSecrets).Put(ctx, "op-secret", []byte("old runner value")); err != nil {
+				t.Fatal(err)
+			}
+			run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
+			g := f.classGrant(t, run, c, "op-secret")
+			p := dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policyOf(g)}
+			switch c.kind {
+			case types.GrantSSHKey:
+				p.SSHGrants = map[string]string{c.host: g.ID.String()}
+			case types.GrantGitPAT:
+				p.GitPATGrants = map[string]string{c.host: g.ID.String()}
+			}
+			f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), p)
+			f.srv.WaitBackground()
+			got := f.dispatchRefusal(t, run.ID)
+			if got["reason"] != string(placement.ReasonPlacementCredential) || got["grant_id"] != g.ID.String() {
+				t.Fatalf("refusal = %v, want placement_credential naming the grant", got)
+			}
+			for _, ev := range syncAuditRows(f.audit, "secret.read") {
+				if ev.RunID != nil && *ev.RunID == run.ID {
+					t.Fatalf("a resident value was read for a runner without the capability: %s", ev.Data)
+				}
+			}
+			if delivered, _ := f.side.calls(); len(delivered) != 0 {
+				t.Fatalf("delivered %+v", delivered)
+			}
+			if st := f.runState(t, run.ID); st != types.RunFailed {
+				t.Fatalf("run is %s, want FAILED", st)
+			}
+		})
+	}
+}
+
+// An unreadable resident ssh_key or git_pat gets no mint and a dispatch-side
+// row naming the grant; the run is not failed.
+func TestResidentMints_UnreadableSecretIsRecorded(t *testing.T) {
+	for _, c := range residentClassCases[2:] {
+		t.Run(c.class, func(t *testing.T) {
+			f := newResidentFix(t, nil, residentAllClassesPolicy)
+			f.srv.cfg.DisableGitPATBroker = true
+			run := f.startingRun(t, nil)
+			g := f.classGrant(t, run, c, "op-missing")
+			spec, values, ok := f.authorClass(t, run, c, false)
+			if !ok || len(spec.ProxyConfig.ResidentMints) != 0 || len(values) != 0 {
+				t.Fatalf("ok=%v mints=%+v values=%d, want the grant skipped", ok, spec.ProxyConfig.ResidentMints, len(values))
+			}
+			var rows []types.AuditEvent
+			for _, ev := range syncAuditRows(f.audit, "run.resident_mint.skip") {
+				if ev.RunID != nil && *ev.RunID == run.ID {
+					rows = append(rows, ev)
+				}
+			}
+			if len(rows) != 1 || rows[0].Outcome != "failure" || !strings.Contains(string(rows[0].Data), g.ID.String()) {
+				t.Fatalf("skip rows %+v, want one failure naming the grant", rows)
+			}
+		})
 	}
 }
