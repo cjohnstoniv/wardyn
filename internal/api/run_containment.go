@@ -112,6 +112,12 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "read node records", err)
 		return
 	}
+	// A record's source id names infrastructure, as the tuple does: security operators only.
+	if !s.isSecurityOperator(r.Context()) {
+		for i := range out.Records {
+			out.Records[i].SourceID = ""
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
