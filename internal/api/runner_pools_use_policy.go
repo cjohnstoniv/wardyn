@@ -337,15 +337,12 @@ func (s *Server) applyExecutorAttach(ctx context.Context, q store.Querier, poolI
 }
 
 func applyExecutorDetach(ctx context.Context, q store.Querier, poolID uuid.UUID, executor string) (govApplied, error) {
-	removed, rev, err := store.RemoveRunnerPoolExecutorQ(ctx, q, poolID, executor)
+	_, rev, err := store.RemoveRunnerPoolExecutorQ(ctx, q, poolID, executor)
 	if errors.Is(err, store.ErrNotFound) {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if err != nil {
 		return govApplied{}, err
-	}
-	if !removed {
-		return govApplied{}, nil // nothing was detached: no detach row (governance.change.approve still records the decision)
 	}
 	return govApplied{action: auditPoolRunnerRemove, target: poolID.String(), data: map[string]any{
 		"runner_kind": types.RunnerKindRemoteHosted, "remote_runner_id": executor, "scope": types.RunnerPoolOrganization, "revision": rev}}, nil

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -402,8 +403,9 @@ func TestPG_RunnerPoolDetachFromAPolicyPoolIsHeld(t *testing.T) {
 	}
 }
 
-// A held detach whose executor was taken out meanwhile removes nothing, so it writes no detach row.
-func TestPG_RunnerPoolHeldDetachOfAnAbsentExecutorWritesNoDetachRow(t *testing.T) {
+// A held detach whose executor was taken out meanwhile is refused as stale, never applied as a
+// no-op, so no detach row is written for a removal that did not happen.
+func TestPG_RunnerPoolHeldDetachOfAnAbsentExecutorIsStale(t *testing.T) {
 	e := newPoolEnv(t, true)
 	a := e.createPool("A", types.RunnerPoolOrganization)
 	if w := e.call(e.super, http.MethodPut, poolPath(a.ID)+"/remote-runners/fake", ""); w.Code != http.StatusOK {
@@ -411,13 +413,16 @@ func TestPG_RunnerPoolHeldDetachOfAnAbsentExecutorWritesNoDetachRow(t *testing.T
 	}
 	e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(a.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`)).ID)
 	held := e.pending(e.call(e.super, http.MethodDelete, poolPath(a.ID)+"/remote-runners/fake", ""))
-	if w := e.admin(http.MethodDelete, poolPath(a.ID)+"/remote-runners/fake", ""); w.Code != http.StatusNoContent || e.members(a.ID) != 0 {
-		t.Fatalf("admin token detach = %d", w.Code)
+	if _, err := e.pool.Exec(t.Context(), `DELETE FROM runner_pool_members WHERE pool_id = $1`, a.ID); err != nil {
+		t.Fatal(err)
 	}
 	before := len(e.audits(auditPoolRunnerRemove))
-	e.approveExecutor(held.ID)
+	w := e.call(e.superTwo, http.MethodPost, "/api/v1/governance/changes/"+held.ID.String()+"/approve", `{"reason":"ok"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "governance_change_stale") {
+		t.Fatalf("approving a detach of an absent executor = %d %s, want 409 governance_change_stale", w.Code, w.Body)
+	}
 	if n := len(e.audits(auditPoolRunnerRemove)); n != before {
-		t.Errorf("approving a detach that removed nothing wrote %d detach rows, want %d", n, before)
+		t.Errorf("a stale detach wrote %d detach rows", n-before)
 	}
 }
 
