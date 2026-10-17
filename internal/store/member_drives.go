@@ -122,6 +122,13 @@ func (s PG) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (t
 		`SELECT `+driveRowCols+` FROM user_drives WHERE id = $1 AND owner_subject = $2`, id, owner))
 }
 
+// GetMemberDrive returns member drive id, whoever owns it, else ErrNotFound (an
+// organisation drive is not a member drive).
+func (s PG) GetMemberDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error) {
+	return scanDriveRow(s.Pool.QueryRow(ctx,
+		`SELECT `+driveRowCols+` FROM user_drives WHERE id = $1 AND owner_subject <> ''`, id))
+}
+
 // beginMemberDriveDeleteSQL sets the tombstone on a member drive (an empty $2 means
 // any owner) unless a delete started under a minute ago. RETURNING the row
 // carries the tombstone the caller later finishes or aborts with.

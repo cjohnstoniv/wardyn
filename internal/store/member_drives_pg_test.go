@@ -266,3 +266,26 @@ func TestMemberDriveOwnerStarting(t *testing.T) {
 		t.Fatal("the owner's starting run was missed")
 	}
 }
+
+// TestGetMemberDrive: the admin route's read finds a member drive by id
+// whoever owns it, and never an organisation drive or an unknown id.
+func TestGetMemberDrive(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	d, err := st.CreateMemberDrive(ctx, memberDrive("alice", "Notes"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	org, err := st.UpsertUserDrive(ctx, mintedDrive("team"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetMemberDrive(ctx, d.ID); err != nil || got.ID != d.ID || got.OwnerSubject != "alice" {
+		t.Fatalf("GetMemberDrive(member) = %+v, %v; want alice's drive", got, err)
+	}
+	for name, id := range map[string]uuid.UUID{"organisation drive": org.ID, "unknown id": uuid.New()} {
+		if _, err := st.GetMemberDrive(ctx, id); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetMemberDrive(%s) = %v, want ErrNotFound", name, err)
+		}
+	}
+}

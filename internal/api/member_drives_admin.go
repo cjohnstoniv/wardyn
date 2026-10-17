@@ -103,6 +103,17 @@ func (s *Server) handleDeleteMemberDriveAdmin(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusNotFound, reasonUserDriveNotFound, "member drive not found")
 		return
 	}
+	if d, gerr := ms.GetMemberDrive(r.Context(), id); gerr == nil {
+		refused, serr := s.memberDriveOwnerStarting(withRequestActor(r), ms, d, memberDriveByAdmin)
+		if serr != nil {
+			writeServerError(w, r, "read the owner's starting runs", serr)
+			return
+		}
+		if refused {
+			writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "delete refused: a run of the drive's owner is starting")
+			return
+		}
+	}
 	d, started, err := ms.BeginMemberDriveDeleteAdmin(r.Context(), id)
 	if notFoundIf(w, err, "member drive", reasonUserDriveNotFound) {
 		return

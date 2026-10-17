@@ -96,6 +96,13 @@ func (s *memberDriveStore) GetMemberDriveOf(_ context.Context, owner string, id 
 	return types.UserDrive{}, store.ErrNotFound
 }
 
+func (s *memberDriveStore) GetMemberDrive(_ context.Context, id uuid.UUID) (types.UserDrive, error) {
+	if d, ok := s.drives[id]; ok && d.OwnerSubject != "" {
+		return d, nil
+	}
+	return types.UserDrive{}, store.ErrNotFound
+}
+
 func (s *memberDriveStore) BeginMemberDriveDelete(_ context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error) {
 	s.begins++
 	d, ok := s.drives[id]
