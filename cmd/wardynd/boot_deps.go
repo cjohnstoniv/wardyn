@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
@@ -60,10 +61,11 @@ import (
 // turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
 func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
 	warnAllowUnknownMigrations(allowUnknownMigrations)
-	migrate := db.Migrate
+	apply := db.Migrate
 	if allowUnknownMigrations {
-		migrate = db.MigrateAllowingUnknown
+		apply = db.MigrateAllowingUnknown
 	}
+	migrate := func(ctx context.Context, p *pgxpool.Pool) error { return migrateRecordingVersion(ctx, p, apply) }
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()
 	pool, err := db.Connect(connectCtx, dsn)
@@ -138,6 +140,24 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		return nil, aerr
 	}
 	return pool, nil
+}
+
+// migrateRecordingVersion applies the migrations and records this release in deployment_versions
+// (migration 0192), keeping the newest migration the database held before, so setup status can name
+// the defaults an upgrade changed. A record that cannot be written is logged, not fatal: it feeds an
+// information row, and that row is left out while this release has no record.
+func migrateRecordingVersion(ctx context.Context, p *pgxpool.Pool, apply func(context.Context, *pgxpool.Pool) error) error {
+	prior, priorErr := db.NewestAppliedMigration(ctx, p)
+	if err := apply(ctx, p); err != nil {
+		return err
+	}
+	if priorErr == nil {
+		priorErr = db.RecordDeploymentVersion(ctx, p, version.Version, prior)
+	}
+	if priorErr != nil {
+		slog.WarnContext(ctx, "wardynd: could not record this release in deployment_versions; setup status leaves out the defaults this upgrade changed", slog.Any("err", priorErr))
+	}
+	return nil
 }
 
 // verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0111.

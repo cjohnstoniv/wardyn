@@ -765,7 +765,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"agent_image":        true,
 	"runner_limits":      true,
 	"runner_arch_images": true,
-	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
+	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
 }
@@ -799,6 +799,12 @@ func TestSetupCheckBlocking(t *testing.T) {
 	// arms — ssoRBACCheck has two distinct warn causes (#484's original and
 	// #491's default-role cause), both exercised below.
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
+	if chk, ok := selfHostGrantCheck(upgradeEstate{SelfHostRestricted: true, ClaimedSelfHosted: 1}); ok {
+		assertSetupCheckBlocking(t, chk)
+	}
+	if chk, ok := defaultsChangedCheck("0.9.2", defaultChanges); ok {
+		assertSetupCheckBlocking(t, chk)
+	}
 	if chk, ok := runnerLimitsCheck(2); ok {
 		assertSetupCheckBlocking(t, chk)
 	}
