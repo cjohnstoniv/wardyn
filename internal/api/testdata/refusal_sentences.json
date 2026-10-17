@@ -126,13 +126,13 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"me.tokens\"",
-    "sentence": "apiTokenFeatureRefusal"
+    "target": "\"runs.component\"",
+    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"runs.component\"",
-    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+    "target": "target",
+    "sentence": "apiTokenFeatureRefusal"
   },
   {
     "reason": "capKinds[capPolicy].reason",
