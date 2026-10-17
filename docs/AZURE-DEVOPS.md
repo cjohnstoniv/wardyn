@@ -261,7 +261,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
   - It never covers `devcontainer_repo`, which the server clones.
   - `inline_policy.workspace_repos` naming a repository that is not onboarded is still refused.
 - A run that names an Azure DevOps repository but does not get the credential starts without it and says why, in its Credentials panel, `wardyn run get` and its clone failure line.
-- A run with no person behind it (an operator token, local mode, a service identity or a device) starts without the credential instead of being refused.
+- A run with no person behind it (an operator token, local mode or a service identity) starts without the credential; a device is still refused.
 - A person who has not connected cannot launch against the row:
   - the launch is refused ("you are not connected to Azure DevOps — connect and start the run again"),
   - and a run that reaches dispatch without a stored connection fails with "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
