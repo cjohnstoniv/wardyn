@@ -86,7 +86,7 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await openTools(page);
     const setup = page.getByRole("region", { name: NR_TOOLS.SETUP_TITLE });
     await expect(setup.getByText(SECRET)).toBeVisible();
-    await expect(page.getByText(NR_TOOLS.STICKY_ONE)).toBeVisible();
+    await expect(page.getByText(NR_TOOLS.STICKY_ONE, { exact: true })).toBeVisible();
 
     // Reviewing now is allowed: the same item is a blocker there, and it links back here.
     await press(page, NR_TOOLS.REVIEW_RUN);
@@ -100,7 +100,7 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await stub(page, false);
     await openTools(page);
     await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
-    await expect(page.getByText(NR_TOOLS.STICKY_DONE)).toBeVisible();
+    await expect(page.getByText(NR_TOOLS.STICKY_DONE, { exact: true })).toBeVisible();
     await press(page, NR_TOOLS.REVIEW_RUN);
     await expect(page.getByText(NR_REVIEW.BLOCKERS_ONE)).toHaveCount(0);
     await expect(launch(page)).toBeEnabled();
@@ -124,6 +124,8 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await expect(dialog).toHaveCount(0);
     // The earlier answer was about a different draft: it must not still read as "everything is set up".
     await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toHaveCount(0);
+    // The footer line holds back its all-clear as well; only what a screen reader hears is kept.
+    await expect(page.getByText(NR_TOOLS.STICKY_DONE, { exact: true })).toHaveCount(0);
     release();
     await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
   });
@@ -229,6 +231,30 @@ test.describe("New Run, step 5: the harness card", () => {
     await expect(box).toBeChecked();
     await box.click();
     await expect(box).not.toBeChecked();
+  });
+});
+
+test.describe("New Run, step 5: two inline MCP servers with one name", () => {
+  test("while the next answer is out, the row of a removed server changes nothing on the one now in its place", async ({ page }) => {
+    const row = (n: number) => ({ ...MCP_DOCS, id: `inline:${n}`, source: { kind: "component", id: `inline:${n}`, name: "Docs" } });
+    const server = (host: string) => ["  - name: Docs", "    inline:", `      hosts: [${host}]`, "      mcp:", `        url: https://${host}/mcp`, "        transport: http"];
+    const lines = [...ENV_CLAUDE, "components:", ...server("one.example.com"), ...server("two.example.com")];
+    await openToolsFor(page, lines, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED], [row(0), row(1)]));
+    const boxes = card(page, "Claude Code").getByRole("checkbox", { name: "Docs" });
+    await expect(boxes).toHaveCount(2);
+
+    // Every edit from here asks again, and the answer is held: the rows on screen stay the first answer's.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/runs/policy-preview", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await page.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Docs` }).first().click();
+    // The first row's server is gone from the draft; the second now sits in its place.
+    await boxes.first().click();
+    await expect(boxes.first()).toBeChecked();
+    release();
   });
 });
 

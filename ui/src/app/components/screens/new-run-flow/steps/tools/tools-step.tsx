@@ -100,8 +100,9 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const settled = !finished || waiting ? new Set<string>() : new Set(setup.filter((i) => i.status === "satisfied" && finished.ids.has(i.id)).map((i) => i.id));
   const items = [...missing, ...setup.filter((i) => settled.has(i.id))];
   const pending = waiting ? finished.ids : new Set<string>();
-  // The footer line is announced when its words change, so it keeps the last settled answer through a recheck
-  // (the same words would otherwise be cleared and read out again) and clears only when the check fails.
+  // The visible footer line is shown only for the answer in hand, so a stale all-clear never stands beside the Setup
+  // card's own held-back one. What a screen reader hears is kept apart: it keeps the last settled words through a
+  // recheck, so the same words are not read out again, and clears only when the check fails.
   const footerNow = access && answered && failure === null && !waiting ? (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length)) : undefined;
   const [footerText, setFooterText] = React.useState("");
   React.useEffect(() => {
@@ -126,9 +127,10 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       footerExtras={{
         start: <Button type="button" variant="ghost" onClick={() => go({ screen: "step", step: "files" })}>{NR_SHARED.BACK}</Button>,
         end: (
-          <span aria-live="polite" className="self-center text-sm text-muted-foreground">
-            {footerText}
-          </span>
+          <>
+            <span aria-hidden="true" className="self-center text-sm text-muted-foreground">{footerNow}</span>
+            <span aria-live="polite" className="sr-only">{footerText && NR_SHARED.JOIN(NR_TOOLS.TITLE, footerText)}</span>
+          </>
         ),
       }}
     >
