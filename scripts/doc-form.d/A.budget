@@ -138,7 +138,8 @@
 # docs/AUDIT-ACTIONS.md 46519 adds 109 over 46410, measured (0.9.3 ADO): run.ado_lane.skip and the Outcomes paragraph.
 # docs/AUDIT-ACTIONS.md 46532 = 46423 + 109 (ADO), measured at the rc.2 merge.
 # docs/AUDIT-ACTIONS.md 46558 adds 26 (0.9.3 C2), measured: recording.upload refuses recording_off for a runner_declined run.
-docs/AUDIT-ACTIONS.md=46558 share=8
+# docs/AUDIT-ACTIONS.md 46579 adds 21 over 46558, measured (0.9.3 RV6 merge of UIM into batch/093): the run.create pids_limit wording UIa added joins the recording-off reasons C added.
+docs/AUDIT-ACTIONS.md=46579 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
