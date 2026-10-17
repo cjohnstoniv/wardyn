@@ -166,7 +166,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 }
 
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
-	// Every refusal is counted, a full spool's and one that timed out waiting behind the others' fsyncs.
+	// Every refusal of a spool held full by the admitted reservations is counted.
 	ctx := context.Background()
 	id := uuid.New()
 	dir := filepath.Join(t.TempDir(), "spool")
