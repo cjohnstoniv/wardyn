@@ -34,6 +34,15 @@ const (
 	maxConfigBytes = 1 << 20 // 1 MiB per config/.gitmodules file
 )
 
+// skipDirNames are package-manager trees the walk never descends: dependencies
+// the workspace did not author, which can hold thousands of directories and
+// whose own repos are not the workspace's remotes. A subset of workspacescan's
+// list: vendor, target, dist and build can hold a checked-out repo or submodule.
+var skipDirNames = map[string]struct{}{
+	"node_modules": {}, ".venv": {}, "venv": {}, "__pycache__": {}, ".tox": {},
+	".yarn": {}, ".pnpm-store": {}, "bower_components": {},
+}
+
 // DetectGitHubRepos walks root (bounded, no symlink following) and returns the
 // sorted, de-duplicated set of github.com "owner/repo" remotes found in
 // .git/config and .gitmodules files, plus the sorted set of non-GitHub remote
@@ -65,7 +74,7 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 		}
 		// Never descend a repo's .git internals: it is stat'd directly below, so
 		// re-walking it would make the scan O(git-objects) instead of O(repo-roots).
-		if d.Name() == ".git" {
+		if _, skip := skipDirNames[d.Name()]; skip || d.Name() == ".git" {
 			return fs.SkipDir
 		}
 		if depthUnder(root, p) > maxDepth {
@@ -117,8 +126,8 @@ func depthUnder(root, p string) int {
 
 // resolveConfigPath returns the path to the config file for a .git entry: a
 // directory yields <gitPath>/config; a "gitdir: X" pointer file is resolved to
-// <X>/config but ONLY if X stays inside root (else skipped). Non-following on
-// symlinks too.
+// <X>/config but ONLY if X, symlinks resolved, stays inside root (else skipped).
+// Non-following on symlinks too.
 func resolveConfigPath(gitPath string, fi os.FileInfo, root string) string {
 	if fi.IsDir() {
 		return filepath.Join(gitPath, "config")
@@ -140,7 +149,14 @@ func resolveConfigPath(gitPath string, fi os.FileInfo, root string) string {
 	if !within(root, target) {
 		return "" // pointer escapes the workspace — ignore
 	}
-	return filepath.Join(target, "config")
+	// A lexically inner path can still run through a symlink out of root (root is
+	// already resolved), so judge where it really lands. A target that does not
+	// exist has no config to read.
+	real, err := filepath.EvalSymlinks(target)
+	if err != nil || !within(root, real) {
+		return ""
+	}
+	return filepath.Join(real, "config")
 }
 
 func within(root, p string) bool {
