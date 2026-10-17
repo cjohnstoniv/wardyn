@@ -280,7 +280,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
 | `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
 | `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
-| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_POLICY(size)` | deviation (approved 2026-10-17) | Clamped to {size} by this run's policy. |
 | `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
 | `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |

@@ -82,7 +82,7 @@ function preflightFor(body: Body, capSource: string, capMib = CAP_MIB) {
     // As the dry door draws it: the run's limits at the top level, the pool choices without limits.
     runner_pools: [{ ...POOL, availability: "available", main_drive: { enforcement: "filesystem", basis: "substrate", keep: { supported: false }, drive_mounts: true } }],
     limits: limitsFor(body.experience ?? "interactive", capSource, capMib),
-    main_drive: body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: false } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: false },
+    main_drive: body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: true } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: true },
     attachments,
   };
 }
