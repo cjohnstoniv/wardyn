@@ -140,7 +140,24 @@ runs:
           "$conf" > "$RUNNER_TEMP/daemon.json"
         sudo install -m 0644 "$RUNNER_TEMP/daemon.json" "$conf"
         running="$(docker ps -q)"; sudo systemctl restart docker
-        [ -z "$running" ] || docker start $running >/dev/null
+        if [ -n "$running" ]; then
+          # shellcheck disable=SC2086 # one word per container id
+          docker start $running >/dev/null
+          # A restarted container's health check starts over at "starting": wait for each
+          # container that has one, so a service is usable when this step returns.
+          for c in $running; do
+            [ -n "$(docker inspect --format '{{if .State.Health}}y{{end}}' "$c")" ] || continue
+            healthy=0
+            for _ in $(seq 60); do
+              if [ "$(docker inspect --format '{{.State.Health.Status}}' "$c")" = healthy ]; then healthy=1; break; fi
+              sleep 1
+            done
+            [ "$healthy" = 1 ] || {
+              echo "::error title=base-image-mirror::service container $(docker inspect --format '{{.Name}}' "$c") was not healthy 60 s after the dockerd restart"
+              exit 1
+            }
+          done
+        fi
         want="${local_mirror:-$FALLBACK_MIRROR}"
         if [ -n "$want" ]; then
           for _ in 1 2 3 4 5 6 7 8 9 10; do
