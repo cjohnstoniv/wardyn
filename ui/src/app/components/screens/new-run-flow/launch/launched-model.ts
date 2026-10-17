@@ -31,7 +31,8 @@ export const waitingSince = (queuedAt: string, now: number): string =>
 
 /** "In N hours" while an hour or more is left; inside the last hour, the time it gives up. */
 export function givesUp(deadlineAt: string, now: number): string {
-  const hours = Math.round((Date.parse(deadlineAt) - now) / HOUR);
+  const left = Date.parse(deadlineAt) - now;
+  const hours = left < HOUR ? 0 : Math.round(left / HOUR);
   return hours >= 1 ? NR_LAUNCH.GIVES_UP_IN(hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(hours)) : shortTime(deadlineAt);
 }
 

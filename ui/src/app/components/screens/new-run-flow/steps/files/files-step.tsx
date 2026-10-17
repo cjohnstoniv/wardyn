@@ -107,15 +107,16 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const noExtra = intent.no_repositories_or_drives === true;
   const start = items.find((i) => i.starts);
 
-  // Environment opens with the person's own drive when it can attach, once, and only while nothing is chosen (A18).
-  const preselected = React.useRef(false);
+  // Environment opens with the person's own drive when it can attach, once per draft, and only while nothing is
+  // chosen (A18). The draft remembers it, so removing the drive and coming back to the step does not undo that.
+  const preselected = draft.guided.drivePreselected === true;
   const legacy = drives.catalogue?.drives.find((d) => d.legacy && !d.unavailable_reason);
   const preselectId = !drives.reason ? legacy?.id : undefined;
   React.useEffect(() => {
-    if (preselected.current || !preselectId || intent.shape !== "environment" || !nothingChosen(intent)) return;
-    preselected.current = true;
+    if (preselected || !preselectId || intent.shape !== "environment" || !nothingChosen(intent)) return;
+    dispatch({ type: "guided", patch: { drivePreselected: true } });
     edit((i) => setStartsAtDrive(attachDrive(i, preselectId, preselectId), preselectId, preselectId));
-  }, [preselectId, intent, edit]);
+  }, [preselected, preselectId, intent, edit, dispatch]);
 
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const [dialog, setDialog] = React.useState<DialogOpen | null>(null);
@@ -134,8 +135,9 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const onSave: AddDialogProps["onSave"] = (apply, saved, mode) => {
     edit((i) => {
       const next = apply(i);
-      if (mode === "edit" || fileItems(next, src).some((x) => x.starts)) return next;
-      // The first thing added is where the run starts, until the person moves it.
+      if (fileItems(next, src).some((x) => x.starts)) return next;
+      // The first thing added is where the run starts, until the person moves it; an edit that moved the start
+      // away with its card (to another source) gives it to the edited card.
       const after = fileItems(next, src);
       const added = after.find((x) => x.key === saved.key);
       // A folder that cannot be a start brings its workspace's first folder, which can.

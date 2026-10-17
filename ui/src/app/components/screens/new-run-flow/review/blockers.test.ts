@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
@@ -36,8 +37,12 @@ describe("Review blockers", () => {
     expect(setup).toMatchObject({ text: "Add the deploy key.", to: { screen: "step", step: "tools" } });
   });
 
+  it("says a missing pool in the canon's words (FR-0099)", () => {
+    expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
+  });
+
   it("falls back to the screen's name for a local issue the canon has no sentence for, and links a refusal to nowhere when it is not known", () => {
-    const out = buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }], refusal: { text: "Refused.", reason: "something_new" } });
+    const out = buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "command_required", focus: "nr-command" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[0].text).toBe(NR_SHARED.STEP_RUN);
     expect(out[1].to).toBeUndefined();
   });

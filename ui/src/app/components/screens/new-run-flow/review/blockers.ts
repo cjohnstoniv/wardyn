@@ -11,6 +11,7 @@ import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
@@ -45,14 +46,14 @@ const HOME_LABEL: Record<FieldHome, string> = {
   tools: NR_SHARED.STEP_TOOLS, document: NR_DOCUMENT.TITLE, review: "", excluded: "",
 };
 
-// TODO(E1d follow-up): the canon has no sentence for the "" codes. Such a blocker links under the name of the
+// TODO(E1d follow-up): the canon has no sentence for the remaining "" codes. Such a blocker links under the name of the
 // screen that fixes it, which is canon text, until the sentences land.
 const ISSUE_TEXT: Record<StepIssueCode, string> = {
   shape_required: "",
   harness_required: "",
   task_required: NR_HARNESSES.TASK_ERROR,
   command_required: "",
-  pool_required: "",
+  pool_required: NR_RUN.POOL_HELP,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: "",

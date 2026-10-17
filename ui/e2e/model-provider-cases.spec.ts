@@ -237,8 +237,8 @@ test.describe("Model provider cases (design §5) — real backend, real per-pers
 // (b) — Claude Code offering the subscription, the key and the gateway, the
 // default being the gateway. Stubbed, unlike every case above: introducing an
 // anthropic_subscription provider for REAL 400s in this harness (E4 —
-// WARDYN_AGENT_IMAGES carries no "claude-code" pin here, so the Claude
-// sign-in image never resolves; model_providers.go's mp400SignInImage). That
+// WARDYN_AGENT_IMAGES pins "claude-code" to a local tag nothing builds here, so
+// the Claude sign-in image does not resolve; model_providers.go's mp400SignInImage). That
 // is exactly the gate model-provider-editor.spec.ts's own Claude-subscription
 // test already works around by stubbing the same route, for the same reason
 // — this is that precedent, not a new one. What a real write already proves

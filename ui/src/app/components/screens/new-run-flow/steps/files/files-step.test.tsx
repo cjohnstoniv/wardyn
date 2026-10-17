@@ -381,6 +381,34 @@ describe("drives (GET /me/drives)", () => {
     await userEvent.click(await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("Your drive") }));
     expect(drawn().drives).toBeUndefined();
   });
+
+  it("does not attach the person's own drive again when the step is opened again after they removed it (FR-0109)", async () => {
+    function Remountable() {
+      const [n, setN] = React.useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setN(n + 1)}>remount</button>
+          <FilesStep key={n} location={{ screen: "step", step: "files" }} go={go} startFromScratch={() => {}} />
+        </>
+      );
+    }
+    render(
+      <MemoryRouter>
+        <NewRunDraftProvider owner="alice">
+          <Seed intent={{ shape: "environment", experience: "interactive" }} />
+          <Remountable />
+          <Drawn />
+        </NewRunDraftProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(drawn().drives).toEqual([{ drive_id: YOUR_DRIVE.id }]));
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("Your drive") }));
+    expect(drawn().drives).toBeUndefined();
+    await userEvent.click(screen.getByRole("button", { name: "remount" }));
+    await screen.findByRole("button", { name: NR_FILES.ADD_ARIA });
+    await act(async () => {});
+    expect(drawn().drives).toBeUndefined();
+  });
 });
 
 describe("folders", () => {
@@ -489,6 +517,8 @@ describe("folders", () => {
     await openAdd();
     await waitFor(() => expect(dialogButton(new RegExp(`^${NR_FILES.FOLDER_TITLE}`))).toBeDisabled());
     expect(within(dialog()).getByText(NR_FILES.FOLDER_REMOTE)).toBeInTheDocument();
+    // FR-0094: the unavailable kind is hatched, not faded, so its reason line keeps the AA contrast the hatch pins.
+    expect(dialogButton(new RegExp(`^${NR_FILES.FOLDER_TITLE}`)).className).not.toContain("opacity-");
   });
 });
 
@@ -674,11 +704,8 @@ describe("the starting folder's subfolder follows the draft's start", () => {
     await userEvent.click(dialogButton(/^Continue/));
     await userEvent.click(dialogButton(NR_FILES.SAVE));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(drawn().start_folder).toBeUndefined();
-    expect(subfolder()).toHaveValue("");
-    // The next start is automatic: the first thing added. It starts at its own top.
-    await add(NR_FILES.REPOSITORY_BADGE, "data");
-    expect(drawn().start_folder).toEqual({ kind: "attachment", attachment: "ws-data", repo: "github.com/acme/data" });
+    // The start moved with the edit to the card it became, at its own top (FR-0108), never a subfolder of the old one.
+    expect(drawn().start_folder).toEqual({ kind: "attachment", attachment: "ws-docs", repo: "github.com/acme/docs" });
     expect(subfolder()).toHaveValue("");
     expect(startsHere()).not.toHaveTextContent("notes");
   });

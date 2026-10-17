@@ -55,6 +55,8 @@ export interface GuidedFacts {
   mainDriveClampNote?: string;
   /** Free-text ref per `${workspaceId}/${repo}` while the branch list is unavailable. */
   refText: Record<string, string>;
+  /** The Files step has already chosen the person's own drive for an Environment, so a later visit does not choose it again. */
+  drivePreselected?: boolean;
 }
 
 export interface DocDiagnostic {

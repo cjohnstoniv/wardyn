@@ -299,6 +299,15 @@ describe("Tools and access step", () => {
     expect(network().queryByText(NR_TOOLS.NET_ALLOWED)).not.toBeInTheDocument();
   });
 
+  it("holds the all-clear back while the next answer is out (FUG-L445)", async () => {
+    answer(SCENARIO_ACCESS.member, true);
+    const view = show();
+    expect(await screen.findByText(NR_TOOLS.SETUP_ALL_SET)).toBeInTheDocument();
+    answer(SCENARIO_ACCESS.member, false);
+    view.rerender(<NewRunDraftProvider owner="alice"><Seed intent={READY}><ToolsStep {...props} /><Revision /></Seed></NewRunDraftProvider>);
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).not.toBeInTheDocument();
+  });
+
   it("names harnesses by their display name from the shell's setup status", async () => {
     answer(SCENARIO_ACCESS.interactive2, true);
     show();

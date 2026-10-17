@@ -119,7 +119,7 @@ describe("New Run fixtures", () => {
     expect(multiple.tools?.map((t) => t.model_provider)).toEqual(["bedrock-team", "openai-team"]);
     expect(multiple.startup).toEqual({ kind: "harness", tool: "claude-code" });
     const rules = newRunFixture("v19/harness-rules").contract?.mode?.tools ?? [];
-    expect(rules.map((t) => [t.id, t.default_effect])).toEqual([["claude-code", "allow"], ["codex-cli", "hold"]]);
+    expect(rules.map((t) => [t.id, t.default_effect])).toEqual([["claude-code", "deny"], ["codex-cli", "hold"]]);
     // Exactly one starting folder, and the explicit choice of none.
     expect(wire("v16/starting-folder").start_folder).toMatchObject({ kind: "attachment", subpath: "services/api" });
     expect(wire("v17/repos-none-chosen").no_repositories_or_drives).toBe(true);

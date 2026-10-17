@@ -6,6 +6,7 @@
 // The run-create request/result shapes (POST /api/v1/runs).
 
 import type { Agent, AgentRun, ConfinementClass } from "./runs";
+import type { AppliedResources } from "./new-run-contract";
 
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
@@ -64,4 +65,4 @@ export interface CreateRunInput {
 // The run still launched — warnings are surfaced (toast / inline notice) but they
 // never block. Structurally assignable to AgentRun, so onCreated callbacks that
 // expect an AgentRun keep working.
-export type CreateRunResult = AgentRun & { warnings?: string[] };
+export type CreateRunResult = AgentRun & { warnings?: string[]; resources_applied?: AppliedResources };

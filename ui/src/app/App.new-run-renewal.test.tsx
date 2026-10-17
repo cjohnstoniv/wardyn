@@ -134,7 +134,7 @@ const launchButton = () => screen.findByRole("button", { name: NR_REVIEW.LAUNCH_
 // The Name dialog's title is where the draft's one visible field lives; Review reopens it.
 async function openName() {
   if (!screen.queryByLabelText(NR_LAUNCH.TITLE_LABEL)) fireEvent.click(await launchButton());
-  return screen.findByLabelText(NR_LAUNCH.TITLE_LABEL);
+  return screen.findByLabelText(NR_LAUNCH.TITLE_LABEL, undefined, REVIEW_WAIT);
 }
 const nameBox = () => screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
 // Launch from the Name dialog; `answered` waits for the dialog's own check to let it through.
