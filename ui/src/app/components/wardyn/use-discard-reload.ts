@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { health } from "../../lib/api/health";
+import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import { appURL, routerPath } from "../../lib/base-path";
 import { useRequestIdentity } from "./operator-context";
 
@@ -21,8 +22,12 @@ export function useDiscardReload(load: () => void): () => void {
       .whoami()
       .then((me) => {
         if (me?.principal && operatorResolved && me.principal !== principal) {
+          // Discard was the answer: the browser's own leave prompt would ask a second time.
+          releaseUnloadGuard(true);
           const { search, hash } = window.location;
-          window.location.assign(appURL(`${routerPath()}${search}${hash}`));
+          // Assigning the current URL with a fragment only moves within the page.
+          if (hash) window.location.reload();
+          else window.location.assign(appURL(`${routerPath()}${search}`));
           return;
         }
         load();

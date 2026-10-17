@@ -14,7 +14,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- "Discard mine and reload" on the Providers and Agents screens now also re-reads who you are signed in as and reloads the page when another tab switched the session to someone else, so the page no longer keeps refusing every save as the previous person.
+- "Discard mine and reload" on the Providers and Agents screens and the model provider editor now also re-reads who you are signed in as and reloads the page when another tab switched the session to someone else, so the page no longer keeps refusing every save as the previous person.
 - The run page's "Not recorded by the runner" note no longer claims the organization's sessions are recorded now.
 
 ## [0.9.3-rc.3] — 2026-10-17
