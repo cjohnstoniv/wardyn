@@ -52,33 +52,36 @@ func seedRunnerRow(t *testing.T, pool *pgxpool.Pool, state, minter string) {
 	pgExec(t, pool, `INSERT INTO runners (id, owner, public_key, key_fingerprint, state, max_runs, minted_by) VALUES (gen_random_uuid(), 'sub-person', decode(repeat('ab', 32), 'hex'), md5(random()::text), $1, 2, $2)`, state, minter)
 }
 
-// TestMigration0178_KeepsSelfHostingWhereASelfMintedRunnerIsClaimed: upgrading an estate where someone
-// claimed a runner whose token they minted themself adds the all-allow, since 0.9.0 could not stage it.
-func TestMigration0178_KeepsSelfHostingWhereASelfMintedRunnerIsClaimed(t *testing.T) {
-	pool, _ := partialSchemaPool(t, selfHostRunnerMigration)
-	seedRunnerRow(t, pool, "revoked", "sub-person")
-	seedRunnerRow(t, pool, "claimed", "sub-person")
-	if err := Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("Migrate applying 0178: %v", err)
-	}
-	if n := pgScalar[int](t, pool, selfHostGrant); n != 1 {
-		t.Errorf("capability_grants holds %d migration:0178 self_host_runner allows, want 1", n)
+// TestMigration0178_KeepsSelfHostingWhereARunnerIsClaimed: upgrading an estate where a runner is claimed
+// adds the all-allow, since 0.9.0 could not stage it, whoever minted the runner's registration token: the
+// person themself, an admin for them, or nobody recorded.
+func TestMigration0178_KeepsSelfHostingWhereARunnerIsClaimed(t *testing.T) {
+	for _, minter := range []string{"sub-person", "sub-admin", ""} {
+		t.Run("minted by "+minter, func(t *testing.T) {
+			pool, _ := partialSchemaPool(t, selfHostRunnerMigration)
+			seedRunnerRow(t, pool, "revoked", "sub-person")
+			seedRunnerRow(t, pool, "claimed", minter)
+			if err := Migrate(context.Background(), pool); err != nil {
+				t.Fatalf("Migrate applying 0178: %v", err)
+			}
+			if n := pgScalar[int](t, pool, selfHostGrant); n != 1 {
+				t.Errorf("capability_grants holds %d migration:0178 self_host_runner allows, want 1", n)
+			}
+		})
 	}
 }
 
-// TestMigration0178_StartsClosedWithoutASelfMintedClaim: only revoked runners, an unclaimed self-minted
-// one, or a claimed one an admin minted for the person (minted_by is not the owner) add no grant.
-func TestMigration0178_StartsClosedWithoutASelfMintedClaim(t *testing.T) {
+// TestMigration0178_StartsClosedWithoutAClaimedRunner: only revoked runners, or an unclaimed one, add no grant.
+func TestMigration0178_StartsClosedWithoutAClaimedRunner(t *testing.T) {
 	pool, _ := partialSchemaPool(t, selfHostRunnerMigration)
 	seedRunnerRow(t, pool, "revoked", "sub-person")
 	seedRunnerRow(t, pool, "unclaimed", "sub-person")
-	seedRunnerRow(t, pool, "claimed", "sub-admin")
-	seedRunnerRow(t, pool, "claimed", "")
+	seedRunnerRow(t, pool, "unclaimed", "sub-admin")
 	if err := Migrate(context.Background(), pool); err != nil {
 		t.Fatalf("Migrate applying 0178: %v", err)
 	}
 	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_grants WHERE value = 'self_host_runner'`); n != 0 {
-		t.Errorf("capability_grants holds %d self_host_runner rows for an estate with no self-minted claim, want 0", n)
+		t.Errorf("capability_grants holds %d self_host_runner rows for an estate with no claimed runner, want 0", n)
 	}
 }
 
