@@ -313,7 +313,7 @@ func (r *Resident) deliver(ctx context.Context, a runnerwire.DeliverResidentArgs
 	if g, ok := r.entry(a.RunID, a.GrantID); ok && g.State == grantHeld && !g.EraseRequested && !g.Unsettled {
 		return nil
 	}
-	return runnerwire.Refuse("resident grant %s is not held: its run was erased while the value was written", a.GrantID)
+	return runnerwire.Refuse("resident grant %s is not held: its run was erased, or its not_after passed, while the value was written", a.GrantID)
 }
 
 // register is deliver's one critical section: the run is not erased here, the
@@ -362,14 +362,14 @@ func (r *Resident) register(a runnerwire.DeliverResidentArgs, account string) er
 }
 
 // write is the one keystore write of a delivery; it owns the busy account
-// until every call it makes has returned. A successful write that no erase
-// asked to undo is held; otherwise the value is deleted before the account is
-// free again.
+// until every call it makes has returned. A successful write that lands before
+// NotAfter and that no erase asked to undo is held; otherwise the value is
+// deleted before the account is free again.
 func (r *Resident) write(run, grant uuid.UUID, account, value string) error {
 	err := r.keystore.Set(account, value)
 	r.mu.Lock()
 	g, _ := r.entry(run, grant)
-	if err == nil && !g.EraseRequested {
+	if err == nil && !g.EraseRequested && r.now().Before(g.NotAfter) {
 		g.State = grantHeld
 		r.put(run, grant, g)
 		if err = r.saveLocked(); err == nil {

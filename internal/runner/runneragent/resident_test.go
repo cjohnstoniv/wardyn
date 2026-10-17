@@ -1141,8 +1141,9 @@ func TestResident_ExpiryBetweenTicks(t *testing.T) {
 }
 
 // A keystore call held across NotAfter: the sweep skips the busy account and
-// issues no overlapping call, the read is refused, nothing is marked erased,
-// and the first sweep after the call returns deletes the value.
+// issues no overlapping call, the read is refused and nothing is marked
+// erased. A write landing past NotAfter is not kept (its completion deletes
+// it); after a held delete fails, the first sweep deletes the value.
 func TestResident_BusyAcrossExpiry(t *testing.T) {
 	ctx := context.Background()
 	t.Run("set", func(t *testing.T) {
@@ -1163,7 +1164,11 @@ func TestResident_BusyAcrossExpiry(t *testing.T) {
 			t.Fatalf("entry while busy = %+v, deletes %d: want skipped, not erased", g, f.ks.count("delete "))
 		}
 		close(f.ks.setGate)
-		<-delivered
+		// A write that lands past not_after is not kept: the delivery fails and
+		// the completion deletes the value.
+		if err := <-delivered; err == nil || !strings.Contains(err.Error(), "not held") {
+			t.Fatalf("a delivery whose write landed past not_after = %v, want refused", err)
+		}
 		settled(t, f.res)
 		if err := f.valueOf(grant); err == nil {
 			t.Fatal("a read past not_after was served once the write returned")
@@ -1172,7 +1177,7 @@ func TestResident_BusyAcrossExpiry(t *testing.T) {
 			t.Fatal(err)
 		}
 		if g, _ := f.entry(grant); g.State != grantErased || f.ks.size() != 0 || len(f.ks.overlaps) != 0 {
-			t.Fatalf("after the first sweep past the write: %+v items=%d overlaps=%v", g, f.ks.size(), f.ks.overlaps)
+			t.Fatalf("after the write returned: %+v items=%d overlaps=%v", g, f.ks.size(), f.ks.overlaps)
 		}
 	})
 	t.Run("delete", func(t *testing.T) {
