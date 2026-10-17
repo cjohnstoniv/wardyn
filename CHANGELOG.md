@@ -110,8 +110,7 @@ what to set for the old behaviour.
   person under `WARDYN_GOVERNANCE_SECOND_HUMAN` and audited as `runner.trust.write`. Credential delivery can differ by
   class (`by_trust`), and a revive on a runner whose class changed is refused `409` `runner_trust_changed`.
 - The operator guide for organisation runners, docs/operations/k8s-runners.md, with a design note and a setup skill.
-  <!-- pending merge: K7 -->
-- A kind conformance suite runs the Kubernetes runner against kubelets 1.31 and 1.35. <!-- pending merge: K6 -->
+- A kind conformance suite runs the Kubernetes runner against kubelets 1.31 and 1.35.
 - A laptop runner now holds `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` values set to
   `runner_resident` in its OS keystore for the run, and deletes each at run end (`runner.resident.erase`). A refusal is
   `runner_posture_unmet` when the confinement floor or the runner's posture misses the requirement, otherwise
