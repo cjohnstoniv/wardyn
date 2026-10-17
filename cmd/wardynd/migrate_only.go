@@ -77,7 +77,7 @@ func migrateOnlyMode(f *bootFlags) error {
 
 	migrateCtx, cancel := context.WithTimeout(ctx, *f.migrateTimeout)
 	defer cancel()
-	if err := db.MigrateConn(migrateCtx, s.conn); err != nil {
+	if err := migrateRecordingVersion(migrateCtx, s.conn, func() error { return db.MigrateConn(migrateCtx, s.conn) }); err != nil {
 		return &exitCodeError{code: exitMigrateFailed, err: fmt.Errorf("migrate: %w", err)}
 	}
 	slog.Info("wardynd: -migrate-only finished; every pending migration is applied and nothing was served")

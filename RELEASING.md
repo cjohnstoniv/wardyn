@@ -278,6 +278,14 @@ crash or a usage limit resumes with the same command:
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format already in use
    (`### Added` / `### Changed` / `### Fixed`).
    - Keep entries user-facing and specific.
+   - **Fill `### Defaults changed by this upgrade`**, the section's first heading after its summary.
+     - It lists every default this release changes with an effect an operator can see on upgrade.
+     - Each entry says what changed, which deployments it reaches and what to set for the old behaviour; write
+       `None.` when there are none.
+     - Every entry also lands in the registry `defaultChanges` ([internal/api/defaults_changed.go](internal/api/defaults_changed.go)),
+       with a predicate over a deployment's own configuration, so setup status names it where it applies.
+     - A registry entry names the first release that shipped the change, a release candidate included (`0.9.3-rc.2`), so
+       an estate on that candidate is not told again at the final release.
    - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
      (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
      cutting — this has drifted from the shipped version before, twice.

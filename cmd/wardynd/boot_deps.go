@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -34,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
@@ -60,9 +62,12 @@ import (
 // turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
 func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
 	warnAllowUnknownMigrations(allowUnknownMigrations)
-	migrate := db.Migrate
+	apply := db.Migrate
 	if allowUnknownMigrations {
-		migrate = db.MigrateAllowingUnknown
+		apply = db.MigrateAllowingUnknown
+	}
+	migrate := func(ctx context.Context, p *pgxpool.Pool) error {
+		return migrateRecordingVersion(ctx, p, func() error { return apply(ctx, p) })
 	}
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()
@@ -138,6 +143,33 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		return nil, aerr
 	}
 	return pool, nil
+}
+
+// pgExecutor is what internal/db's migration steps run on: a *pgxpool.Pool or a *pgxpool.Conn.
+type pgExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// migrateRecordingVersion runs apply (the migrations, on q) and records this release in
+// deployment_versions (migration 0190), keeping the newest migration the database held before, so
+// setup status can name the defaults an upgrade changed. Both a boot and -migrate-only call it: a
+// stopped-writer upgrade migrates in the Job, and the serving pod's boot then finds nothing pending.
+// A record that cannot be written is logged, not fatal: it feeds an information row, and that row is
+// left out while this release has no record.
+func migrateRecordingVersion(ctx context.Context, q pgExecutor, apply func() error) error {
+	prior, priorErr := db.NewestAppliedMigration(ctx, q)
+	if err := apply(); err != nil {
+		return err
+	}
+	if priorErr == nil {
+		priorErr = db.RecordDeploymentVersion(ctx, q, version.Version, prior)
+	}
+	if priorErr != nil {
+		slog.WarnContext(ctx, "wardynd: could not record this release in deployment_versions; setup status leaves out the defaults this upgrade changed", slog.Any("err", priorErr))
+	}
+	return nil
 }
 
 // verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0111.

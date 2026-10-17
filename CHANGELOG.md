@@ -14,7 +14,23 @@ keystore for a run. A security operator sets each runner's trust class, and macO
 package and an MDM profile. This section lists the changes since 0.9.3-rc.2; read it with the rc.1 and rc.2 notes
 below.
 
-<!-- lead: verify the summary's scope claims once K6, K7, ASK6D and SPOOL have merged. -->
+<!-- lead: verify the summary's scope claims once K6, K7 and SPOOL have merged. -->
+
+### Defaults changed by this upgrade
+
+Setup status lists the ones that reach your deployment ("Defaults changed by this upgrade", admins only), each with
+what to set for the old behaviour.
+
+- **Recording defaults to `preferred`.** A run that a non-recording laptop runner takes goes ahead unrecorded and says
+  why (`runner_declined`), where a runner older than 0.9.3 recorded it regardless. It reaches deployments with claimed
+  self-hosted runners and a recording store. For the old behaviour, set `"recording": "required"` with
+  `PUT /api/v1/runner-pool-defaults`, beside the stored `pool_id` and `barrier` (read them first with `GET`: a write
+  that leaves `barrier` out clears it). A run only a non-recording runner could take is then refused instead of
+  running unrecorded.
+- **A laptop runner records a run only when its organisation keeps recordings.** With `WARDYN_RECORDING_STORE=off`,
+  runs are marked `org_off` and nothing is uploaded, where before the runner recorded and its upload failed. It reaches
+  deployments with claimed self-hosted runners and the recording store off. For the old behaviour, turn the
+  recording store on (`pg` or `fs`); `wardyn-runnerd serve --recording-store` stays the runner's ceiling.
 
 ### Before you upgrade
 
@@ -40,7 +56,13 @@ below.
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `runner_resident_runs`
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
-  `runner_resident` credential, and a finished runner run's output is never retired.
+  `runner_resident` credential, and a finished runner run's output is never retired. Grant it `SELECT` on
+  `deployment_versions` (migration `0190_deployment_versions`), or setup status leaves out the defaults an upgrade changed.
+- Upgrading from before 0.9.1, migration `0178_self_host_runner_restriction` now keeps self-hosting open whenever a
+  runner is claimed, including one whose registration token an admin minted. A database that already applied it is
+  not asked again: if people who are not admins are refused `403 capability_feature` on `POST /me/runners/tokens`,
+  write `POST /api/v1/permissions/grants` with
+  `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}`.
 - The same installs: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_containment_pending` and
   `SELECT, INSERT, UPDATE` on `run_node_records` (migration `0189_run_containment_pending`). Without them a
   Kubernetes runner's state page is refused while it holds a run as containment pending.
@@ -135,7 +157,11 @@ below.
   secrets `baseline`, not `powerful`. Nothing is declared by default, so grading changes only when someone adds a host.
 - A governance profile write whose rubric sets any row now says what the rubric can see on this deployment: the
   egress, secrets and confinement grades a run under it can get, and which rows can cap a run and which cap nothing.
-<!-- pending merge: ASK6D -->
+- Setup status names, for admins, the defaults an upgrade changed that reach this deployment's own configuration
+  ("Defaults changed by this upgrade"), each with what to set for the old behaviour. wardynd records each release it
+  boots (migration `0190_deployment_versions`).
+- Setup status warns admins when `self_host_runner` is restricted, runners people own are claimed and no permission names it, so
+  only admins can mint runner tokens; it gives the grant to write.
 
 ### Changed
 

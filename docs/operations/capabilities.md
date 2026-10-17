@@ -48,7 +48,7 @@ the ADMIN pre-authorized.
 1. **admin, admin token, and local mode are exempt.** A capability bounds a member; the admin tier is the one writing the grants.
 2. Any matching **deny** ⇒ refused.
 3. Any matching **allow** ⇒ permitted.
-4. The kind is **not enforced** ⇒ permitted.
+4. The kind is **not enforced** ⇒ permitted. A restricted value counts as enforced, so this step never opens it (see "Available to" below).
 5. Otherwise ⇒ refused.
 
 - There is no user-over-group precedence: a deny anywhere wins, because "Bob's user allow overrode the group deny" is a breach report.
@@ -201,7 +201,9 @@ the ADMIN pre-authorized.
 
 - **"Available to" (0.8).**
 - `workspace`, `image`, `agent` and `workspace_provider` values can each be restricted one at a time (migration `0081_capability_restrictions`).
-- A restricted value counts as enforced whatever its kind's switch says, and only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
+- **A restricted value is closed whatever its kind's enforcement switch says.** Its kind counts as enforced for that value (`capRead.enforced` is true when the switch is on or the value is restricted), so the "not enforced ⇒ permitted" step never applies to it. An unenforced `feature` kind does not open `service_attach` or `self_host_runner`.
+- Only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
+- `GET /permissions` does not show which values are restricted; [`GET /permissions/explain`](#get-permissionsexplain) does (`restricted: true`), with each subject's resulting state.
 - So the "Only…" list is the allow rows for that value, written through `POST /permissions/grants` for a person, a group or a user type.
 - Security admins are bound like anyone; only the admin tier is exempt.
 - On `image`, the one widening kind, the restriction also switches that one image on for the people listed while the kind stays off for every other image.
@@ -254,8 +256,10 @@ the ADMIN pre-authorized.
 
 - Off for everyone: migration `0178_self_host_runner_restriction` restricts the value, so a `*` allow grants nobody.
   - An allow that names it admits its subject; one for subject `all` admits everyone, and is the way to keep the 0.9.0 behaviour.
-  - An estate where someone registered and claimed a runner for themselves keeps self-hosting open: the migration adds that `all` allow. A deny still wins, a `*` feature deny included.
-  - An estate with none starts closed, admin-minted runners included; add the grant after upgrading.
+  - An estate upgrading from before 0.9.1 with a claimed runner keeps self-hosting open, whoever minted the runner's token: the migration adds that `all` allow. A deny still wins, a `*` feature deny included.
+  - An estate with no claimed runner starts closed; add the grant after upgrading. So does a database that took 0.9.1's migration while it counted only runners their owners minted: the migration does not run again.
+  - The grant for everyone is `POST /api/v1/permissions/grants` with `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}`. Name a `user`, `group` or `user_type` subject instead to open it to fewer people.
+  - While the value is restricted, runners people own are claimed and no grant row names the value, setup status shows a "Self-hosted runner tokens" warning for admins with that body. A deny row naming the value also clears it: that is a choice to keep it closed.
 - Asked at `POST /me/runners/tokens` only (reason `capability_feature`, target `me.runners.tokens`). Existing runners, claims and the admin mint are never asked.
 - Admins are never asked, even with `WARDYN_GOVERN_ADMIN_RUNS` on: the admin mint lets them name themself.
 
