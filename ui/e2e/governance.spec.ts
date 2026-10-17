@@ -341,6 +341,12 @@ test.describe("governance — the security admin's authoring walk", () => {
     await editor.getByRole("button", { name: GOV.SAVE, exact: true }).click();
     await expect(editor).toHaveCount(0);
 
+    // The write's advisory names what the rubric can see on this deployment, before anyone launches.
+    await expect(page.getByText(GOV.OMISSION_TITLE)).toBeVisible();
+    await expect(
+      page.getByText(/^on this deployment a run under this profile.* grades egress .*; secrets .*; and confinement .* — so (only .* can cap it, and .* cap nothing here|every rubric row can cap it)$/),
+    ).toBeVisible();
+
     // The profiles list chip: the strictest cap, on the chip face itself.
     const row = profilesTable(page).getByRole("row", { name: new RegExp(RUBRIC_NAME) });
     await expect(row.getByText(LIMITS_CHIP.AUTONOMY(AUTONOMY_META.L1.label))).toBeVisible();
