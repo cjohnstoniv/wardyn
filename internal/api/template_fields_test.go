@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -579,6 +580,7 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"needs setup for a present field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"agent"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
 		{"needs setup for an unknown field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"nope"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
 		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"11111111-1111-1111-1111-111111111111","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
+		{"shape check shared with the run: a malformed pool id", `{` + head + `"coverage":"partial","intent":{"runner_pool_id":"x"}}`, string(runnerpool.ReasonInvalid) + "@intent"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
 		{"unavailable: built-in azure_devops component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"azure_devops","org":"acme"}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
