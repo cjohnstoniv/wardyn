@@ -159,7 +159,7 @@ func TestPG_ARunWaitingForARevokedRunnerIsEndedOnce(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Go(func() { e.srv.endQueuedRunsOfRevokedRunners(ctx) })
+		wg.Go(func() { _ = e.srv.endQueuedRunsOfRevokedRunners(ctx) })
 	}
 	wg.Go(func() { _, _ = e.srv.endQueuedRunsPinnedTo(ctx, e.personP, a) })
 	wg.Wait()

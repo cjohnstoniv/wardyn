@@ -198,7 +198,7 @@ func (s *Server) kickQueue() {
 	}
 	s.goBackground(func() {
 		for {
-			s.promoteWaitingPools(s.cfg.BaseCtx)
+			_ = s.promoteWaitingPools(s.cfg.BaseCtx) // logged there; the leader sweep reports it to sweep health
 			if !s.queue.kick.again() {
 				return
 			}
@@ -207,47 +207,50 @@ func (s *Server) kickQueue() {
 }
 
 // promoteWaitingPools runs one promotion pass for every pool that has waiting runs.
-func (s *Server) promoteWaitingPools(ctx context.Context) {
+func (s *Server) promoteWaitingPools(ctx context.Context) error {
 	qs, ok := s.queueStore()
 	if !ok {
-		return
+		return nil
 	}
 	pools, err := qs.QueuePoolIDs(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list pools with waiting runs", slog.Any("err", err))
-		return
+		return fmt.Errorf("list pools with waiting runs: %w", err)
 	}
 	for _, id := range pools {
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		s.promoteQueue(ctx, id, queueSweepBound)
 	}
+	return nil
 }
 
 // SweepRunQueue is one tick of the leader's queue sweep: end the waiting runs whose deadline passed and
 // the ones whose named runner is revoked, fail the promoted runs whose start died, and promote for every
 // pool that has waiting runs (a slot may have freed with no commit this replica saw). Every write is a
-// CAS under the pool lock, so a second leader for a moment is harmless.
+// CAS under the pool lock, so a second leader for a moment is harmless. A list read that fails is
+// returned (joined), so the sweeper's health shows it; a failed write on one row stays a log line.
 func (s *Server) SweepRunQueue(ctx context.Context) error {
 	if _, ok := s.queueStore(); !ok {
 		return nil
 	}
-	s.expireQueued(ctx)
-	s.endQueuedRunsOfRevokedRunners(ctx)
-	s.failStalePromoted(ctx)
-	s.promoteWaitingPools(ctx)
-	return nil
+	return errors.Join(
+		s.expireQueued(ctx),
+		s.endQueuedRunsOfRevokedRunners(ctx),
+		s.failStalePromoted(ctx),
+		s.promoteWaitingPools(ctx),
+	)
 }
 
 // expireQueued ends each waiting run past its deadline: FAILED queue_timeout, with run.queue.expire.
-func (s *Server) expireQueued(ctx context.Context) {
+func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()
 	expired, err := qs.ExpiredQueueEntries(ctx, now, 200)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list expired queue entries", slog.Any("err", err))
-		return
+		return fmt.Errorf("list expired queue entries: %w", err)
 	}
 	for _, e := range expired {
 		reason := types.RunEndQueueTimeout
@@ -259,6 +262,7 @@ func (s *Server) expireQueued(ctx context.Context) {
 		s.recordAudit(ctx, s.auditEvent(&e.RunID, types.ActorSystem, "wardynd", "run.queue.expire", e.RunID.String(), "success",
 			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID})))
 	}
+	return nil
 }
 
 // queueLeaseStale is how long a promoted run's start may go without touching its lease before the
@@ -268,12 +272,12 @@ const queueLeaseStale = watcherLeaseStaleAfter
 // failStalePromoted fails each promoted run (PENDING, no sandbox, admitted_at set) whose start stopped
 // touching its lease, revoking any identity it was given, so its slot frees within a tick. A plain
 // PENDING run in its image build is never listed: only promotion writes admitted_at.
-func (s *Server) failStalePromoted(ctx context.Context) {
+func (s *Server) failStalePromoted(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	runs, err := qs.StalePromotedRuns(ctx, queueLeaseStale)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list stale promoted runs", slog.Any("err", err))
-		return
+		return fmt.Errorf("list stale promoted runs: %w", err)
 	}
 	for _, run := range runs {
 		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
@@ -282,6 +286,7 @@ func (s *Server) failStalePromoted(ctx context.Context) {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}
+	return nil
 }
 
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.
