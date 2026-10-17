@@ -67,12 +67,29 @@ var tenantReads = []string{"subscriptions", "providers", "tenants"}
 
 // methodOverride reports whether a header name is a spelling of "act as this
 // method instead": X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override,
-// X-Ms-Http-Method, in any case and with hyphens or underscores. Whether
+// X-Ms-Http-Method, X-Method, in any case and with hyphens or underscores. Whether
 // Resource Manager honours one is not documented, so a request that carries
 // one is refused: the method Azure would act on is not knowable.
 func methodOverride(header string) bool {
-	name := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
-	return strings.Contains(name, "httpmethod") || strings.Contains(name, "methodoverride")
+	return strings.Contains(normalizedHeader(header), "method")
+}
+
+// pathOverride reports whether a header name asks a front end to act on another
+// path than the request line's: X-Original-URL, X-Original-URI, X-Rewrite-URL,
+// X-Forwarded-Prefix, in any case and with hyphens or underscores. Refused for the
+// same reason as methodOverride: the path Azure would act on is not knowable.
+func pathOverride(header string) bool {
+	name := normalizedHeader(header)
+	for _, part := range []string{"originalurl", "originaluri", "rewriteurl", "forwardedprefix"} {
+		if strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedHeader(header string) string {
+	return strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
 }
 
 // Subscription is id as this package compares it: a GUID in lowercase. ok is
@@ -128,7 +145,7 @@ func (s Scope) Admit(method, rawPath string, h http.Header) error {
 // DELETE write, and anything else is refused.
 func readMethod(method string, h http.Header) (bool, error) {
 	for k := range h {
-		if methodOverride(k) {
+		if methodOverride(k) || pathOverride(k) {
 			return false, fmt.Errorf("%w: it carries %s", ErrUnreadable, k)
 		}
 	}

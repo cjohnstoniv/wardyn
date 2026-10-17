@@ -120,7 +120,7 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		}
 	}
 	// Headers the CLI really sends are not overrides.
-	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Access-Control-Request-Method": {"GET"}, "Accept": {"application/json"}}
+	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Parametersetname": {"--name"}, "Accept": {"application/json"}}
 	if err := scope(false).Admit(http.MethodGet, base, sent); err != nil {
 		t.Errorf("ordinary headers = %v, want admitted", err)
 	}
@@ -167,6 +167,24 @@ func TestARMScope_SemicolonTable(t *testing.T) {
 				t.Errorf("write=%v GET %s = %v, want ErrUnreadable", write, path, err)
 			}
 		}
+	}
+}
+
+// A header that asks a front end to act on another path or method is refused rather than stripped, as the
+// method overrides always were; the headers the CLI really sends are still admitted.
+func TestAdmit_RefusesPathAndMethodOverrideHeaders(t *testing.T) {
+	base := "/subscriptions/" + pinned
+	for _, name := range []string{
+		"X-Original-URL", "X-Original-Uri", "X-Rewrite-URL", "X-Forwarded-Prefix", "x_original_url", "X_REWRITE_URL",
+		"X-Method", "X-Http-Method", "X-Custom-Method-Hint",
+	} {
+		if err := scope(false).Admit(http.MethodGet, base, http.Header{name: {"/subscriptions/" + other}}); !errors.Is(err, ErrUnreadable) {
+			t.Errorf("%s = %v, want ErrUnreadable", name, err)
+		}
+	}
+	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Parametersetname": {"--name"}, "Accept": {"application/json"}}
+	if err := scope(false).Admit(http.MethodGet, base, sent); err != nil {
+		t.Errorf("ordinary CLI headers = %v, want admitted", err)
 	}
 }
 
