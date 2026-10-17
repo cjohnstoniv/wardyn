@@ -194,7 +194,7 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 }
 
 // failedAction answers an action whose substrate call failed. A containment held pending is held for
-// this run only (§8 P2): a plain error would fail Pending on every fresh session and keep the whole
+// this run only: a plain error would fail Pending on every fresh session and keep the whole
 // runner from READY. The deferred receipt keeps the obligation; CheckLapses retries until completion
 // evidence. m.mu is held.
 func (m *Manager) failedAction(a runnerwire.PendingAction, err error) (runnerwire.ActionResult, error) {

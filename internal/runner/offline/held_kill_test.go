@@ -18,7 +18,7 @@ import (
 
 // TestHeldKillDefersNotFailsSession: a queued kill whose teardown is held (a pod on a NotReady node,
 // termination unknown) holds that run as containment pending with a deferred receipt; it never fails
-// Pending, so a restarted runner still reaches READY (§8 P2).
+// Pending, so a restarted runner still reaches READY: one run's unproven containment never takes the runner offline.
 func TestHeldKillDefersNotFailsSession(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)

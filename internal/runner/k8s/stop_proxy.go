@@ -92,7 +92,7 @@ func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 // pendingOr classifies a run whose proxy has no completion evidence: the typed
 // ContainmentPendingError (agent_only, or pending_delete once both delete bounds passed), or else a
 // plain error from plainFormat (run ID, cause) while the bounds still run. Shared by StopProxy and
-// runner-mode teardown so a held kill is held for its run, never a refused session (§8 P2).
+// runner-mode teardown so a held kill is held for its run, never a refused session.
 func (d *Driver) pendingOr(runID uuid.UUID, agentDone bool, cause error, plainFormat string) error {
 	var kind string
 	ev, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
