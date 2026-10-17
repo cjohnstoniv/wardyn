@@ -82,7 +82,16 @@ func SetAsidePrevious(ctx context.Context, stateDir string, runnerID uuid.UUID, 
 	}
 	// The offline state goes last: until it moves, the next start finds it and tries again.
 	for _, name := range []string{"spools", "output", "offline"} {
-		if err := os.Rename(filepath.Join(stateDir, name), filepath.Join(dest, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		src := filepath.Join(stateDir, name)
+		err := os.Rename(src, filepath.Join(dest, name))
+		if errors.Is(err, os.ErrExist) {
+			// An older set-aside of the same registration already fills it (state an operator
+			// restored): the rest goes into a fresh sibling, and nothing is overwritten.
+			if dest, err = os.MkdirTemp(filepath.Dir(dest), old.RunnerID.String()+"-"); err == nil {
+				err = os.Rename(src, filepath.Join(dest, name))
+			}
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("move the earlier registration's %s into %s: %w", name, dest, err)
 		}
 	}

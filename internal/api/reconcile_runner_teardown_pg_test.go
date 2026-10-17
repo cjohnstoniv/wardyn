@@ -15,12 +15,12 @@ import (
 
 // A terminal run whose queued end the runner refused (a record it keeps only for containment takes
 // no end) is not sent the same end at every control-plane boot: the next boot queues a kill, which
-// such a record takes and which stops its agent. A kill the runner applied clears the ref; a kill it
-// refused is not queued again.
+// such a record takes and which stops its agent. An end or a kill the runner applied clears the ref;
+// a kill it refused is not queued again.
 func TestPG_OrphanSweep_RefusedEndBecomesAKillNotAnotherEnd(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
 	f.offline(t)
-	stopped, refused := f.terminalRunnerRun(t), f.terminalRunnerRun(t)
+	stopped, refused, ended := f.terminalRunnerRun(t), f.terminalRunnerRun(t), f.terminalRunnerRun(t)
 	sweep := func() {
 		t.Helper()
 		if err := f.srv.reconcileOrphanedSandbox(f.ctx); err != nil {
@@ -32,8 +32,13 @@ func TestPG_OrphanSweep_RefusedEndBecomesAKillNotAnotherEnd(t *testing.T) {
 	for _, run := range []types.AgentRun{stopped, refused} {
 		f.answer(t, run, types.RunnerActionEnd, types.RunnerActionRefused)
 	}
+	f.answer(t, ended, types.RunnerActionEnd, types.RunnerActionSuccess)
 	sweep()
 	sweep() // the kill is still open: nothing new is queued
+	f.teardowns(t, ended, 1, 0)
+	if got := f.sandboxRef(t, ended); got != "" {
+		t.Fatalf("a run whose end the runner applied keeps its ref %q", got)
+	}
 	for _, run := range []types.AgentRun{stopped, refused} {
 		f.teardowns(t, run, 1, 1)
 	}

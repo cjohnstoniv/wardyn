@@ -139,6 +139,41 @@ func TestReRegistrationRetryKeepsOneDirectory(t *testing.T) {
 	}
 }
 
+// TestReRegistrationBesideAFullerOlderSetAside restores a complete older set-aside of the same
+// earlier registration: the state moves into a fresh sibling, and the older one is left as it was.
+func TestReRegistrationBesideAFullerOlderSetAside(t *testing.T) {
+	sub, dir, live, earlier, registered := earlierRegistration(t)
+	older := filepath.Join(dir, "previous", earlier.String())
+	for _, name := range []string{"spools", "output", "offline"} {
+		if err := os.MkdirAll(filepath.Join(older, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(older, name, "older"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetAsidePrevious(t.Context(), dir, registered, sub, uuid.UUID.String); err != nil {
+		t.Fatalf("a restored older set-aside blocks the start: %v", err)
+	}
+	for _, name := range []string{"spools", "output", "offline"} {
+		if _, err := os.Stat(filepath.Join(older, name, "older")); err != nil {
+			t.Errorf("the older set-aside's %s changed: %v", name, err)
+		}
+	}
+	fresh, _ := filepath.Glob(filepath.Join(dir, "previous", earlier.String()+"-*"))
+	if len(fresh) != 1 {
+		t.Fatalf("fresh siblings %v", fresh)
+	}
+	for _, name := range []string{"offline/state.json", "spools/" + live.String(), "output/" + live.String()} {
+		if _, err := os.Stat(filepath.Join(fresh[0], name)); err != nil {
+			t.Errorf("%s was not set aside into the sibling: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "offline")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the earlier registration's offline state stayed in place: %v", err)
+	}
+}
+
 // TestReRegistrationLeavesAnUnprovenContainerAlone sets aside a run whose container the substrate
 // cannot prove the earlier registration created: its proxy is not stopped, and the state still moves.
 func TestReRegistrationLeavesAnUnprovenContainerAlone(t *testing.T) {
