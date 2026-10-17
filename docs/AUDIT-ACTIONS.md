@@ -820,6 +820,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - A handle no key carries reads `[erased]`, as a destroyed one does.
 - The list is closed, per action and per JSON path, never by leaf name ([`internal/audit/sealkeys.go`](../internal/audit/sealkeys.go)).
   It was finalised by reading every audit emit site against the candidate names `task`, `prompt`, `message`, `reason`, `comment`, `note`, `email`, `display_name`, `query` and `command`.
+  The names `sub`, `target` and `secret_owner` were added later, for the four rows below whose `target` column names the same person.
 - It only ever grows: a row sealed under an entry stays readable.
 
 | Action | Sealed field | Whose key |
@@ -827,6 +828,10 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 | `person.create` | `email` | the person created (the row's `target`) |
 | `approval.decide` | `reason` | the decider (the row's `actor`), when the actor is a person; a decision by the admin token names no person and stays clear |
 | `governance.change.reject` | `reason` | the rejecting admin (the row's `actor`), when the actor is a person; a rejection by the admin token names no person and stays clear |
+| `session.revoke` | `sub` | the person whose sessions were revoked (the row's `target`); a revocation of everyone writes no `sub` |
+| `person.token.create` | `target` | the person the mint was asked for (the row's `target`) |
+| `secret.list` | `secret_owner` | the namespace owner listed (the row's `target`) |
+| `person.attach` | `sub` | the person signing in (the row's `actor`), whose identity provider sub it is |
 
 **Retained in the clear, and why.**
 
@@ -835,6 +840,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - `task` on `run.record.start` and `workspace.record` is the import step's own task key, not a prompt.
 - `email` on `site_config.write` is a field *name* inside `policy_help_fields`, never a value.
 - No emit site writes `prompt`, `message`, `comment`, `display_name`, `query` or `command`.
+- `secret_owner` on the other `secret.*` and `credential.*` rows, and `sub` or `target` on any row not in the table, are not sealed.
 - Also never sealed:
   - the `actor` and `source_ip` columns (the adopter decides whether `source_ip` is personal; `actor` is stored as a subject only by `full`, below),
   - federated device rows (their hash binds the device's own claim),
