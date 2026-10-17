@@ -350,16 +350,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// it is AUTHORED after both. A failed site-config read decides nothing — no
 	// row, no lane — and says so for a run on an Azure DevOps Services host. A
 	// decline is announced (run.ado_lane.skip and the sandbox env), never refused.
-	var adoRun adoEntraRun
-	var adoDecline adoLaneDecline
-	switch {
-	case siteCfgErr == nil:
-		adoRun, adoDecline = resolveADOEntraLane(siteCfg, policy.WorkspaceRepos, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run))
-	case namesADOServicesRepo(policy.WorkspaceRepos, p.ADOLaneRepo):
-		adoDecline = adoDeclineSiteConfigUnreadable
-	}
+	adoRun := s.decideADOLane(ctx, run, siteCfg, siteCfgErr, policy.WorkspaceRepos, p.ADOLaneRepo, sandboxEnv)
 	adoInject := adoRun.rowID != ""
-	s.announceADODecline(ctx, run, adoDecline, sandboxEnv)
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {

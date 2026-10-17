@@ -167,10 +167,8 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
 	demand := s.placementDemand(ctx, f)
 	demand.holdRunnerCapacity = !capped && !f.promoted
-	demand.requireRecording = org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired
-	if demand.requireRecording && s.cfg.RecordingStore == nil {
-		reason, msg := recordingRefusal(true, row.Pool.Name)
-		return runPlacement{}, runError(reason.Status(), string(reason), msg)
+	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
+		return runPlacement{}, refusal
 	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
@@ -204,6 +202,17 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// poolRecordingDemand reports whether the organisation or the pool requires recording, refusing the
+// run outright when it does and this deployment has no recording store.
+func (s *Server) poolRecordingDemand(org types.RunnerPoolDefaults, pool types.RunnerPool) (bool, *runRefusal) {
+	required := org.Recording == types.RecordingRequired || pool.Recording == types.RecordingRequired
+	if required && s.cfg.RecordingStore == nil {
+		reason, msg := recordingRefusal(true, pool.Name)
+		return true, runError(reason.Status(), string(reason), msg)
+	}
+	return required, nil
 }
 
 // anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.

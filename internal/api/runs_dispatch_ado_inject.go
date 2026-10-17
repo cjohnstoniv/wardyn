@@ -928,6 +928,23 @@ func adoDeclineAuditEvent(runID uuid.UUID, why adoLaneDecline, now time.Time) ty
 	}
 }
 
+// decideADOLane is dispatch's per-person Azure DevOps lane decision: resolved from
+// site config when it read, a site_config_unreadable decline for a run on an
+// Azure DevOps Services host when it did not, and announced either way.
+func (s *Server) decideADOLane(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	ws []types.WorkspaceRepo, repo string, sandboxEnv map[string]string) adoEntraRun {
+	var adoRun adoEntraRun
+	var adoDecline adoLaneDecline
+	switch {
+	case siteCfgErr == nil:
+		adoRun, adoDecline = resolveADOEntraLane(siteCfg, ws, repo, adoLaneOwnerOfRun(ctx, run))
+	case namesADOServicesRepo(ws, repo):
+		adoDecline = adoDeclineSiteConfigUnreadable
+	}
+	s.announceADODecline(ctx, run, adoDecline, sandboxEnv)
+	return adoRun
+}
+
 // announceADODecline makes dispatch's decline visible: one run.ado_lane.skip
 // row and the sandbox env code. A no-op for no decline.
 func (s *Server) announceADODecline(ctx context.Context, run types.AgentRun, why adoLaneDecline, sandboxEnv map[string]string) {
