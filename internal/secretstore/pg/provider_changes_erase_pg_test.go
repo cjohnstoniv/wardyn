@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -457,5 +458,66 @@ func TestPG_ProviderPurgeLeavesTheHistoryOfAnOwnerItDidNotLock(t *testing.T) {
 	}
 	if n := historyRows(t, s, b); n != 1 {
 		t.Fatalf("the unlocked owner has %d history rows after the purge, want the 1 that landed", n)
+	}
+}
+
+// DeleteProviderChanges removes the history of its own owner and no one else's.
+func TestPG_DeleteProviderChangesLeavesAnotherOwnersHistory(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	mine, theirs := "gen-del-mine-"+uuid.NewString(), "gen-del-theirs-"+uuid.NewString()
+	for _, owner := range []string{mine, theirs} {
+		if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+			VALUES ($1, 'prov-shared', 'uid-1', 'destination_changed', now(), 'https://new.example.test')`, owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.For(mine).(*Store).DeleteProviderChanges(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := historyRows(t, s, mine); n != 0 {
+		t.Fatalf("the owner kept %d history rows after DeleteProviderChanges, want 0", n)
+	}
+	if n := historyRows(t, s, theirs); n != 1 {
+		t.Fatalf("another owner has %d history rows after this owner's DeleteProviderChanges, want the 1 it had", n)
+	}
+}
+
+// A purge locks the owners it affects in name order: held back at the later owner's counter row, it
+// already holds the earlier owner's, which is what lets an erase of either owner meet the purge's
+// locks in the same order it takes its own.
+func TestPG_ProviderPurgeLocksOwnersInNameOrder(t *testing.T) {
+	s, _, _ := newPGStore(t)
+	id := uuid.NewString()
+	first, second := "gen-order-a-"+id, "gen-order-b-"+id
+	oldUID := uuid.NewString()
+	putProviderKey(t, s, first, oldUID)
+	putProviderKey(t, s, second, oldUID)
+	// The earlier owner's counter row exists before the purge, so the probe below sees it.
+	if _, err := s.For(first).(*Store).AdvanceGeneration(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, release := holdCounter(t, s, second)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(editOf(oldUID, "uid-2")), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("the purge did not wait for the later owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	probe, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = probe.Rollback(context.WithoutCancel(t.Context())) }()
+	_, err = probe.Exec(t.Context(), `SELECT 1 FROM secret_owner_generations WHERE owned_by=$1 FOR UPDATE NOWAIT`, first)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("waiting at the later owner, the purge does not hold the earlier owner's counter row (probe err %v)", err)
 	}
 }
