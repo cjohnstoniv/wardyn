@@ -404,6 +404,9 @@ export const MY_POOLS = {
   DEFAULT_GONE: "Your default pool is no longer available. Choose a pool to continue.",
   CREATE: "Create a pool",
   UNAVAILABLE: "This server does not manage runner pools yet.",
+  /** FUG-L404: the card's one-line summary, beside its title, when My runner is not on the page. */
+  SUMMARY_NONE: "No pools",
+  SUMMARY_COUNT: (n: number) => (n === 1 ? "1 pool" : `${n} pools`),
 } as const;
 
 export const PICKER = {

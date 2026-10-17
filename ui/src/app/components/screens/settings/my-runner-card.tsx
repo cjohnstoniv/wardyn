@@ -249,7 +249,7 @@ function TokenBlock({ token, expired, onDone }: { token: RunnerRegistrationToken
   );
 }
 
-export function MyRunnerCard() {
+export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void } = {}) {
   const me = usePrincipal();
   const location = useLocation();
   const sectionRef = React.useRef<HTMLElement | null>(null);
@@ -267,6 +267,9 @@ export function MyRunnerCard() {
   const [limitsFor, setLimitsFor] = React.useState<RunnerView | null>(null);
   const idsAtMint = React.useRef(new Set<string>());
   const seq = React.useRef(0);
+  // Read through a ref: `read` is built once, and the parent may pass a new function each render.
+  const hiddenRef = React.useRef(onHidden);
+  hiddenRef.current = onHidden;
 
   const read = React.useCallback((silent: boolean) => {
     const mine = ++seq.current;
@@ -279,8 +282,10 @@ export function MyRunnerCard() {
       })
       .catch((e) => {
         if (mine !== seq.current) return;
-        if (e instanceof HttpError && e.status === 403 && NO_CARD_REASONS.includes(e.reason)) setStatus("hidden");
-        else if (!silent) setStatus("error");
+        if (e instanceof HttpError && e.status === 403 && NO_CARD_REASONS.includes(e.reason)) {
+          setStatus("hidden");
+          hiddenRef.current?.(e.reason);
+        } else if (!silent) setStatus("error");
       });
   }, []);
   // A read that was in flight when the card went away must not set state.
