@@ -281,3 +281,69 @@ func TestPG_CredentialGrants_DeliveryRoundTripAndCheck(t *testing.T) {
 		t.Fatalf("legacy grant delivery = %q, %v", d, err)
 	}
 }
+
+// A purge clears the person as the revoker of a runner and as the minter of a token made for someone
+// else, and leaves a self-minted token (minted_by = owner) and another admin's marks alone.
+func TestPG_Runners_EraseAttributionOfClearsRevokerAndMinterOnly(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	leaver, other := "leaver-"+uuid.NewString(), "admin-"+uuid.NewString()
+	byLeaver, byOther := claimed(t, st, ctx, "alice@example.com"), claimed(t, st, ctx, "bob@example.com")
+	var tokens []uuid.UUID
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id = ANY($1)`, []uuid.UUID{byLeaver.ID, byOther.ID})
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id = ANY($1)`, tokens)
+	})
+	now := time.Now().UTC()
+	if _, err := st.RevokeRunner(ctx, byLeaver.ID, now, leaver, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RevokeRunner(ctx, byOther.ID, now, other, ""); err != nil {
+		t.Fatal(err)
+	}
+	mint := func(owner, mintedBy string) uuid.UUID {
+		id := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO runner_registration_tokens (id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, 'org', $5::timestamptz, $5::timestamptz + interval '1 hour')`, id, owner, mintedBy, id.String(), now); err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, id)
+		return id
+	}
+	forSomeone, forSelf, byAdmin := mint("carol@example.com", leaver), mint(leaver, leaver), mint("dave@example.com", other)
+
+	n, err := st.EraseRunnerAttributionOf(ctx, leaver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("rows changed = %d, want the revoked runner and the token made for someone else", n)
+	}
+	revokedBy := func(id uuid.UUID) (by string) {
+		if err := pool.QueryRow(ctx, `SELECT revoked_by FROM runners WHERE id = $1`, id).Scan(&by); err != nil {
+			t.Fatal(err)
+		}
+		return by
+	}
+	mintedBy := func(id uuid.UUID) (by string) {
+		if err := pool.QueryRow(ctx, `SELECT minted_by FROM runner_registration_tokens WHERE id = $1`, id).Scan(&by); err != nil {
+			t.Fatal(err)
+		}
+		return by
+	}
+	for _, c := range []struct{ name, got, want string }{
+		{"runner the leaver revoked", revokedBy(byLeaver.ID), ""},
+		{"runner another admin revoked", revokedBy(byOther.ID), other},
+		{"token the leaver minted for someone", mintedBy(forSomeone), ""},
+		{"token the leaver minted for themselves", mintedBy(forSelf), leaver},
+		{"token another admin minted", mintedBy(byAdmin), other},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: attribution = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	if again, err := st.EraseRunnerAttributionOf(ctx, leaver); err != nil || again != 0 {
+		t.Errorf("a second erase = %d, %v; want nothing left to change", again, err)
+	}
+}

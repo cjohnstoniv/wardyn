@@ -222,9 +222,10 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 
 // revokeLeaverRunners revokes every runner the owners hold through the runner revoke path, as DELETE
 // /runners/{id} does, and every registration token still redeemable for them, as DELETE
-// /runners/tokens/{id} does. A store without runners holds none.
+// /runners/tokens/{id} does, then clears the owners as the revoker of any runner and the minter of any
+// token for someone else. A store without runners holds none.
 func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[string]int, error) {
-	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0}
+	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0, "runner_attribution_cleared": 0}
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return detail, nil
@@ -263,6 +264,11 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
 			detail["runner_tokens_revoked"]++
 		}
+		cleared, err := st.EraseRunnerAttributionOf(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		detail["runner_attribution_cleared"] += cleared
 	}
 	return detail, nil
 }
