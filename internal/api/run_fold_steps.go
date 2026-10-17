@@ -220,6 +220,12 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 		f.reqEvents = append(f.reqEvents, events...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
+	// The mount map was read before this fold, which can narrow a mount to read-only: show the final one.
+	for i, a := range f.attachments {
+		if j := slices.IndexFunc(f.spec.WorkspaceMounts, func(m types.WorkspaceMount) bool { return a.Kind == attachmentFolder && m.Target == a.Target }); j >= 0 {
+			f.attachments[i].ReadOnly = f.spec.WorkspaceMounts[j].ReadOnlyOrDefault()
+		}
+	}
 	return true
 }
 
