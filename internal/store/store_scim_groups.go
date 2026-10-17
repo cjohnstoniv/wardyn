@@ -257,15 +257,17 @@ func (s PG) PendingGroupRemovals(ctx context.Context, idleFor time.Duration, lim
 	})
 }
 
-// GroupRemovalFailures is ListDeprovisionFailures for the pendingGroupRemovalWhere rows with a recorded
-// error: one row per identity and step, with the error of the target touched last.
+// GroupRemovalFailures is ListDeprovisionFailures for the pendingGroupRemovalWhere rows, and every owed
+// refusal row of a group removal even once the person is a member again, with a recorded error: one row per
+// identity and step, with the error of the target touched last.
 func (s PG) GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error) {
 	return collect(ctx, s.Pool, "list", "group removal failures", `
 		SELECT j.identity_id, j.kind, j.step, (array_agg(j.last_error ORDER BY j.updated_at DESC))[1]
 		  FROM deprovision_jobs j
-		 WHERE `+pendingGroupRemovalWhere+` AND j.last_error <> ''
+		 WHERE (`+pendingGroupRemovalWhere+`
+		        OR (j.kind = 'group_remove' AND j.state = 'pending' AND starts_with(j.step, $2))) AND j.last_error <> ''
 		 GROUP BY j.identity_id, j.kind, j.step
-		 ORDER BY min(j.created_at), j.identity_id, j.step LIMIT $1`, []any{limit}, func(r pgx.Row) (DeprovisionFailure, error) {
+		 ORDER BY min(j.created_at), j.identity_id, j.step LIMIT $1`, []any{limit, JobStepRefusalAudit}, func(r pgx.Row) (DeprovisionFailure, error) {
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})

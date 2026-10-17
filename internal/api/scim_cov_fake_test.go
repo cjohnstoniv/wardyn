@@ -481,7 +481,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 	}
 	if res.WasActive {
 		s.jobs = slices.DeleteFunc(s.jobs, func(j *store.DeprovisionJob) bool {
-			return j.IdentityID == p.IdentityID && j.Kind == store.JobKindSuspend
+			return j.IdentityID == p.IdentityID && j.Kind == store.JobKindSuspend && !strings.HasPrefix(j.Step, store.JobStepRefusalAudit)
 		})
 	}
 	cutoff := store.JobKey{Step: store.JobStepCutoff}
@@ -658,6 +658,11 @@ func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.Due
 	return out, nil
 }
 
+// PendingRefusalAudits: no fake test owes a refusal row past a request, so the sweeper finds none.
+func (s *scimCovStore) PendingRefusalAudits(context.Context, time.Duration, int) ([]store.PendingRefusalAudit, error) {
+	return nil, nil
+}
+
 func (s *scimCovStore) PendingLeavers(_ context.Context, idleFor time.Duration, limit int) ([]store.PendingLeaver, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -821,7 +826,9 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 	}
 	existing := slices.IndexFunc(s.jobs, has) >= 0
 	if wasMember && existing {
-		s.jobs = slices.DeleteFunc(s.jobs, has)
+		s.jobs = slices.DeleteFunc(s.jobs, func(j *store.DeprovisionJob) bool {
+			return has(j) && !strings.HasPrefix(j.Step, store.JobStepRefusalAudit)
+		})
 		existing = false
 	}
 	if !existing {

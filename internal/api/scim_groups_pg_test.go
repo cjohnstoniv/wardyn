@@ -931,3 +931,26 @@ func TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges(t *testing.
 		t.Errorf("person.deprovision reasons = %v, want %v", got, want)
 	}
 }
+
+// An owed refusal row of a member added back to the group before it was written is still written by the
+// sweeper, and /scim/status lists it until then.
+func TestSCIMSweeperWritesAnOwedRefusalRowAfterTheMemberIsAddedBack(t *testing.T) {
+	e, id, g, patch := newAmbiguousGroupMember(t)
+	e.a.audit.fail("person.deprovision", true)
+	if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+		t.Fatalf("the removal = %d %s, want 5xx while the owner is ambiguous", r.Code, r.Body.String())
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add back = %d %s", r.Code, r.Body.String())
+	}
+	fails, err := e.st.GroupRemovalFailures(context.Background(), 10)
+	if err != nil || !slices.ContainsFunc(fails, func(f store.DeprovisionFailure) bool { return strings.HasPrefix(f.Step, store.JobStepRefusalAudit) }) {
+		t.Errorf("group removal failures = %+v (%v), want the owed refusal row listed", fails, err)
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.sweepAs(e.a, id)
+	e.sweepAs(e.a, id)
+	if got := refusalReasons(t, e, e.a, e.b); !maps.Equal(got, map[string]int{reasonOwnerAmbiguous: 1}) {
+		t.Errorf("person.deprovision reasons = %v, want the owed %s row once", got, reasonOwnerAmbiguous)
+	}
+}

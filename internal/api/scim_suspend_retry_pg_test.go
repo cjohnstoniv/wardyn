@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -339,4 +340,62 @@ func (e *scimEnv) ledger(id string) []store.DeprovisionJob {
 		e.t.Fatal(err)
 	}
 	return jobs
+}
+
+// An owed refusal row of a person reactivated before it was written is still written by the sweeper, and
+// /scim/status lists it until then.
+func TestSCIMSweeperWritesAnOwedRefusalRowAfterReactivation(t *testing.T) {
+	e, id, _ := ambiguousLeaver(t)
+	if w := e.patch(e.a, id, patchOf("true")); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d %s", w.Code, w.Body.String())
+	}
+	fails, err := e.st.ListDeprovisionFailures(context.Background(), 10)
+	if err != nil || !slices.ContainsFunc(fails, func(f store.DeprovisionFailure) bool { return strings.HasPrefix(f.Step, store.JobStepRefusalAudit) }) {
+		t.Errorf("failures = %+v (%v), want the owed refusal row listed", fails, err)
+	}
+	e.a.audit.fail("person.deprovision", false)
+	e.b.audit.fail("person.deprovision", false)
+	e.sweepAs(e.b, id)
+	e.sweepAs(e.b, id)
+	if got := refusalReasons(t, e, e.a, e.b); !maps.Equal(got, map[string]int{reasonOwnerAmbiguous: 1}) {
+		t.Errorf("person.deprovision reasons = %v, want the owed %s row once", got, reasonOwnerAmbiguous)
+	}
+}
+
+// failOwedLedger fails every ledger write of an owed refusal row, as a ledger the drain cannot update.
+type failOwedLedger struct{ store.PG }
+
+func (s *failOwedLedger) FinishDeprovisionJob(ctx context.Context, id uuid.UUID, kind string, k store.JobKey, detail map[string]int) error {
+	if strings.HasPrefix(k.Step, store.JobStepRefusalAudit) {
+		return errors.New("ledger write failed")
+	}
+	return s.PG.FinishDeprovisionJob(ctx, id, kind, k, detail)
+}
+
+func (s *failOwedLedger) FailDeprovisionJob(ctx context.Context, id uuid.UUID, kind string, k store.JobKey, cause error) error {
+	if strings.HasPrefix(k.Step, store.JobStepRefusalAudit) {
+		return errors.New("ledger write failed")
+	}
+	return s.PG.FailDeprovisionJob(ctx, id, kind, k, cause)
+}
+
+// A drain that cannot finish never holds the cut: once the emails resolve, the suspension cuts and finishes its
+// steps while the audit path and the owed row's ledger both fail, and the row stays owed.
+func TestSCIMSuspensionCutsWhileItsOwedRefusalRowCannotBeDrained(t *testing.T) {
+	e, id, twin := ambiguousLeaver(t)
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE id = $1`, twin); err != nil {
+		t.Fatal(err)
+	}
+	n := e.node(func(c *Config) { c.Store = &failOwedLedger{PG: e.st} })
+	n.audit.fail("person.deprovision", true)
+	e.sweepAs(n, id)
+	jobs := e.ledger(id)
+	if j, ok := jobByKey(jobs, store.JobStepCutoff, ""); !ok || !j.Done {
+		t.Errorf("cutoff = %+v, want the cut done though the owed row could not be drained", j)
+	}
+	if !slices.ContainsFunc(jobs, func(j store.DeprovisionJob) bool {
+		return strings.HasPrefix(j.Step, store.JobStepRefusalAudit) && !j.Done
+	}) {
+		t.Errorf("ledger = %+v, want the refusal row still owed", jobs)
+	}
 }

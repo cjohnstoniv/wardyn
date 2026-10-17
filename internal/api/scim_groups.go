@@ -324,8 +324,9 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		}
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
 	}
+	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the removal.
 	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindGroupRemove, jobs); err != nil {
-		return err
+		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", identityID.String()), slog.Any("err", err))
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
 	if forms.refusal != "" {

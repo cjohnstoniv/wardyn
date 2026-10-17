@@ -114,6 +114,7 @@ type LeaverStore interface {
 	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
 	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
+	PendingRefusalAudits(ctx context.Context, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)
 	ListDeactivatedIdentities(ctx context.Context, limit int) ([]PrincipalIdentity, error)

@@ -250,6 +250,8 @@ func oweRefusalAudit(ctx context.Context, st scimStore, id uuid.UUID, kind strin
 // drainRefusalAudits writes the refusal rows jobs (one kind's ledger, or one group removal's) still owe,
 // before the step goes on to cut or complete anything. A row durably accepted marks its ledger row done; one
 // that is not stays owed. A purge's owed row is keyed by the unproved form it stopped on.
+// Delivery is at least once: nothing claims the row, so two replicas draining it at once both write it,
+// and an owe that reopens a row a concurrent drain just finished writes it again.
 func (s *Server) drainRefusalAudits(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string, jobs []store.DeprovisionJob) error {
 	var errs []error
 	for _, j := range jobs {
@@ -341,8 +343,9 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 		}
 		return ident, forms, nil, errors.Join(err, jobsErr)
 	}
+	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the cut.
 	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindSuspend, jobs); err != nil {
-		return ident, forms, nil, err
+		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", id.String()), slog.Any("err", err))
 	}
 	cutoff, ok := jobByKey(jobs, store.JobStepCutoff, "")
 	stepOne := ident.DeactivatedAt == nil || !ok || !cutoff.Done
