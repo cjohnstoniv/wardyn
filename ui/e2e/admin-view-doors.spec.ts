@@ -32,5 +32,5 @@ test("a real member is refused the admin writes, and the same session may still 
   // The run was this test's own: end it so the shared backend keeps no stray run.
   const { id } = JSON.parse(own.text) as { id: string };
   const killed = await consoleAPI(page, "POST", `/api/v1/runs/${id}/kill`, {});
-  expect(killed.status, killed.text).toBeLessThan(500);
+  expect(killed.status, killed.text).toBe(202);
 });
