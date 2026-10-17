@@ -27,12 +27,14 @@ import (
 // Manager contains only local containment and evidence state. It cannot mint
 // credentials or grant authority, and never chooses a run's terminal state.
 type Manager struct {
-	actionMu      sync.Mutex
-	lock          *os.File
-	closed        bool
-	replayMu      sync.Mutex
-	mu            sync.Mutex
-	runnerID      uuid.UUID
+	actionMu sync.Mutex
+	lock     *os.File
+	closed   bool
+	replayMu sync.Mutex
+	mu       sync.Mutex
+	runnerID uuid.UUID
+	// pendingLogged is when each held run's containment-pending warning was last logged.
+	pendingLogged map[uuid.UUID]time.Time
 	dir           string
 	root          *os.Root
 	sub           substrate.Substrate
@@ -409,7 +411,9 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 				if perr := m.holdPending(id, pending); perr != nil {
 					errs = append(errs, perr)
 				}
-				slog.WarnContext(ctx, "runner containment pending", "run_id", id, "kind", pending.Kind, "error", pending.Err)
+				if m.pendingLogDue(id) {
+					slog.WarnContext(ctx, "runner containment pending", "run_id", id, "kind", pending.Kind, "error", pending.Err)
+				}
 				continue
 			}
 			errs = append(errs, fmt.Errorf("contain run %s: %w", id, err))
@@ -423,6 +427,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			continue
 		}
 		r = current
+		delete(m.pendingLogged, id)
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
 			at := m.now().UTC()
@@ -639,6 +644,11 @@ func (m *Manager) ProxyExited(runID uuid.UUID, evidence string) error {
 func (m *Manager) holdPending(id uuid.UUID, p *runner.ContainmentPendingError) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.holdPendingLocked(id, p)
+}
+
+// holdPendingLocked records a run as containment pending. m.mu is held.
+func (m *Manager) holdPendingLocked(id uuid.UUID, p *runner.ContainmentPendingError) error {
 	r, ok := m.state.Runs[id]
 	if !ok {
 		return nil
@@ -653,6 +663,25 @@ func (m *Manager) holdPending(id uuid.UUID, p *runner.ContainmentPendingError) e
 	r.ContainmentPending = next
 	m.state.Runs[id] = r
 	return m.save()
+}
+
+// pendingLogEvery bounds the containment-pending warning, which CheckLapses would otherwise repeat
+// every tick, to one per run per interval.
+const pendingLogEvery = time.Minute
+
+// pendingLogDue reports whether run id's containment-pending warning is due, and if so marks it.
+func (m *Manager) pendingLogDue(id uuid.UUID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	if last, ok := m.pendingLogged[id]; ok && now.Sub(last) < pendingLogEvery {
+		return false
+	}
+	if m.pendingLogged == nil {
+		m.pendingLogged = map[uuid.UUID]time.Time{}
+	}
+	m.pendingLogged[id] = now
+	return true
 }
 
 // LoadEvidence returns a run's substrate evidence record (nil when none).

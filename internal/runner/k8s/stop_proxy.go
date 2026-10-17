@@ -86,6 +86,14 @@ func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 	if cause == nil {
 		cause = errTerminationUnknown
 	}
+	return d.pendingOr(runID, agentDone, cause, "k8s: stop proxy of run %s: %w")
+}
+
+// pendingOr classifies a run whose proxy has no completion evidence: the typed
+// ContainmentPendingError (agent_only, or pending_delete once both delete bounds passed), or else a
+// plain error from plainFormat (run ID, cause) while the bounds still run. Shared by StopProxy and
+// runner-mode teardown so a held kill is held for its run, never a refused session (§8 P2).
+func (d *Driver) pendingOr(runID uuid.UUID, agentDone bool, cause error, plainFormat string) error {
 	var kind string
 	ev, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 		now := d.now()
@@ -115,7 +123,7 @@ func (d *Driver) StopProxy(ctx context.Context, ref string) error {
 		return errors.Join(cause, err)
 	}
 	if kind == "" {
-		return fmt.Errorf("k8s: stop proxy of run %s: %w", runID, cause)
+		return fmt.Errorf(plainFormat, runID, cause)
 	}
 	return &runner.ContainmentPendingError{Kind: kind, NameReused: len(ev.Reuse) > 0, NoCausalAssociation: ev.noCausalAssociation(), Tuple: ev.tuple(runID), Err: cause}
 }
@@ -506,7 +514,12 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 		if cause == nil {
 			cause = errTerminationUnknown
 		}
-		return fmt.Errorf("k8s: teardown of run %s held, NetworkPolicies kept: %w", runID, cause)
+		const held = "k8s: teardown of run %s held, NetworkPolicies kept: %w"
+		err := d.pendingOr(runID, agentDone, cause, held)
+		if errors.As(err, new(*runner.ContainmentPendingError)) {
+			return fmt.Errorf(held, runID, err) // still typed: the manager holds the run, not the session
+		}
+		return err
 	}
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID}
