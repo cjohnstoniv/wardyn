@@ -14,7 +14,7 @@ import (
 // finished purge's runners and service_identities steps, and nothing else: not its other steps, a
 // pending step, or a suspend job's step of the same name.
 func TestMigrate_PurgeAttributionBackfillReopensOnlyTheTwoDoneSteps(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	var identity uuid.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (issuer, email_lower) VALUES ('https://dex.example', $1) RETURNING id`,
@@ -58,7 +58,7 @@ func TestMigrate_PurgeAttributionBackfillReopensOnlyTheTwoDoneSteps(t *testing.T
 // back-fill adds the three as pending, once: not for a person whose purge never finished or who was
 // never purged, and not over a row the person already has.
 func TestMigrate_PurgeAttributionBackfillGivesAnEarlierPurgeTheNewSteps(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	seed := func(purged bool, steps ...[2]string) uuid.UUID {
 		t.Helper()

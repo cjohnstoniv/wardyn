@@ -28,9 +28,9 @@ func (s *Substrate) handleRelay(st *runnerwire.Stream, o runnerwire.Open) error 
 // relayConn is one relay stream as a net.Conn, for the org's internal relay
 // listener. A read deadline is the stream's own: a Read waiting past it fails
 // with os.ErrDeadlineExceeded and the stream stays usable. A stream has no
-// write timer, so a write deadline is kept here: when it passes, the stream is
-// reset, which unblocks the Write waiting on it with os.ErrDeadlineExceeded and
-// ends the relay. A relay whose peer stalls with no write deadline ends with its
+// write timer, so a write deadline is kept here: when it passes with a Write waiting,
+// the stream is reset, which unblocks the Write with os.ErrDeadlineExceeded and
+// ends the relay; with none waiting, the next Write fails and the stream is untouched. A relay whose peer stalls with no write deadline ends with its
 // runner's session (every stream is reset then), and runnerwire.MaxStreams
 // bounds how many one session holds.
 type relayConn struct {
@@ -43,7 +43,8 @@ type relayConn struct {
 type writeDeadline struct {
 	mu      sync.Mutex
 	timer   *time.Timer
-	expired atomic.Bool
+	expired atomic.Bool  // the stream was reset because a Write was waiting past the deadline
+	passed  atomic.Bool  // the deadline passed with no Write waiting: the next Write fails, the stream is untouched
 	writing atomic.Int32 // Writes in flight
 }
 
@@ -51,10 +52,14 @@ func newRelayConn(st *runnerwire.Stream, runner string) relayConn {
 	return relayConn{Stream: st, runner: runner, wd: &writeDeadline{}}
 }
 
-// armWrite replaces the write timer with one that resets the stream at t; a zero t clears it.
+// armWrite replaces the write deadline with t; a zero t clears it. When t passes, a Write waiting at
+// that moment is released by resetting the stream; with none waiting, the stream is left alone and the
+// next Write fails, because a deadline in the past is how tls.Conn.Close sends its alert without
+// blocking, and the Close that follows must still be able to finish the answer the org just wrote.
 func (c relayConn) armWrite(t time.Time) {
 	c.wd.mu.Lock()
 	defer c.wd.mu.Unlock()
+	c.wd.passed.Store(false)
 	if c.wd.timer != nil {
 		c.wd.timer.Stop()
 		c.wd.timer = nil
@@ -69,8 +74,13 @@ func (c relayConn) armWrite(t time.Time) {
 	c.expire()
 }
 
-// expire resets a stream still open, and marks its write timed out.
+// expire is the write deadline passing: it marks the next Write timed out, and resets a stream still
+// open when a Write is waiting on it.
 func (c relayConn) expire() {
+	c.wd.passed.Store(true)
+	if c.wd.writing.Load() == 0 {
+		return
+	}
 	select {
 	case <-c.Done():
 	default:
@@ -82,6 +92,9 @@ func (c relayConn) expire() {
 func (c relayConn) Write(b []byte) (int, error) {
 	c.wd.writing.Add(1)
 	defer c.wd.writing.Add(-1)
+	if c.wd.passed.Load() {
+		return 0, os.ErrDeadlineExceeded
+	}
 	n, err := c.Stream.Write(b)
 	if err != nil && c.wd.expired.Load() {
 		err = os.ErrDeadlineExceeded

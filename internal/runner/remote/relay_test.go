@@ -5,8 +5,14 @@ package remote_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"testing"
@@ -203,16 +209,82 @@ func TestRelayConn_RunnerSessionEndUnblocksAStalledWrite(t *testing.T) {
 	}
 }
 
-// TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote: the org's server writes its answer and closes the
-// connection at once (an error answer that ends the exchange). The runner reads the answer to its end;
-// closing the org's end must not reset the stream under bytes the runner has not read yet.
+func selfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"relay"}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
+}
+
+// streamConn is the runner's end of a relay as the net.Conn tls.Client needs.
+type streamConn struct{ *runnerwire.Stream }
+
+func (streamConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (streamConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c streamConn) SetDeadline(t time.Time) error  { return c.SetReadDeadline(t) }
+func (streamConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote: the org's listener is TLS over the relay. Its server
+// writes an answer and closes the connection at once (an error answer that ends the exchange); tls.Conn.Close
+// sets a write deadline of now before it closes. The runner reads the answer to its end: neither the
+// deadline nor the close may reset the stream under bytes the runner has not read yet.
 func TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	const answer = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\nfailed"
+	cert := selfSignedCert(t)
+	srv := relayRunner(t, func(_ string, c net.Conn) error {
+		go func() {
+			tc := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{cert}})
+			if err := tc.Handshake(); err != nil {
+				return
+			}
+			_, _ = tc.Write([]byte(answer))
+			_ = tc.Close()
+		}()
+		return nil
+	})
+	st, err := srv.Peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc := tls.Client(streamConn{st}, &tls.Config{InsecureSkipVerify: true, ServerName: "relay"})
+	if err := cc.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond) // the answer and the close both arrived before the first read
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(cc); err != nil || string(b) != answer {
+		t.Fatalf("runner read %q, %v; want the whole answer then EOF, not a reset", b, err)
+	}
+	_ = st.CloseWrite()
+	select {
+	case <-st.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream did not finish once the runner closed its end too")
+	}
+}
+
+// TestRelayConn_ADeadlineOfNowBeforeCloseKeepsTheResponse: the same without TLS, the two calls
+// tls.Conn.Close makes: a write deadline of now, then Close. A later Write fails but the stream is not reset.
+func TestRelayConn_ADeadlineOfNowBeforeCloseKeepsTheResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const answer = "answer"
+	late := make(chan error, 1)
 	srv := relayRunner(t, func(_ string, c net.Conn) error {
 		go func() {
 			_, _ = c.Write([]byte(answer))
+			_ = c.SetWriteDeadline(time.Now())
+			_, err := c.Write([]byte("late"))
+			late <- err
 			_ = c.Close()
 		}()
 		return nil
@@ -221,16 +293,13 @@ func TestRelayConn_CloseKeepsTheResponseTheOrgJustWrote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond) // the answer and the close both arrived before the first read
+	if err := waitErr(t, late, "a write after the deadline passed"); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a write after the deadline = %v, want os.ErrDeadlineExceeded", err)
+	}
+	time.Sleep(200 * time.Millisecond)
 	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if b, err := io.ReadAll(st); err != nil || string(b) != answer {
-		t.Fatalf("runner read %q, %v; want the whole answer then EOF, not a reset", b, err)
-	}
-	_ = st.CloseWrite()
-	select {
-	case <-st.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("the stream did not finish once the runner closed its end too")
+		t.Fatalf("runner read %q, %v; want the answer then EOF", b, err)
 	}
 }
 
