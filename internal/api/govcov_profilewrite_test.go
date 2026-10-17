@@ -4,8 +4,11 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -448,4 +451,23 @@ func TestGovCovProfileDeleteDoor(t *testing.T) {
 			t.Errorf("= %d %q, deleted %v", w.Code, errorReason(w), st.deleted)
 		}
 	})
+}
+
+func TestWarnUnresolvableProfilesNamesOnlyTheOnesThatNoLongerCompose(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	both := govCovStandalone(govCovTop, "top", "pypi.org")
+	both.Ceiling.AllowedMethods = []string{"GET"}
+	post := []string{"POST"}
+	stranded := types.GovernanceProfile{ID: govCovMid, Name: "stranded-child", BaseProfileID: &both.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	healthy := govCovComposedOn(govCovPID, "healthy-child", both.ID, "pypi.org")
+	s, _ := govCovServer(t, &govCovStore{profiles: []types.GovernanceProfile{both, stranded, healthy}})
+	s.WarnUnresolvableProfiles(context.Background())
+	out := logs.String()
+	if !strings.Contains(out, "stranded-child") || strings.Contains(out, "healthy-child") || strings.Contains(out, `profile=top`) {
+		t.Errorf("log = %q, want only stranded-child named", out)
+	}
 }
