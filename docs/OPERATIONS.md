@@ -1236,6 +1236,8 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+- An email address another identity also holds is never used to match, because it cannot prove whose a record is.
+  A record found only by that address keeps it.
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 

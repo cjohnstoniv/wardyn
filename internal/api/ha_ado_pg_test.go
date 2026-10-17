@@ -223,7 +223,7 @@ func TestHALivePG_ErasureDeletesRunTokenAndChunkRowsAndNoLateWriteRecreatesThem(
 	writeExecOutput(t, w, "printed before the erasure\n")
 	haWait(t, 5*time.Second, "the chunks", func() bool { return l.storedChunks(run.ID) != "" })
 
-	if _, err := b.srv.eraseMaskCopies(ctx, maskOwner); err != nil {
+	if _, err := b.srv.eraseMaskCopies(ctx, maskOwner, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.srv.eraseRunOutputsOf(ctx, maskOwner); err != nil {
