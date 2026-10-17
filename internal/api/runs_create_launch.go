@@ -82,7 +82,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	}
 }
 
-// DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
+// The run's failure_hint when the detached launch
 // PANICS. The caller already holds a 201, so the run itself has to carry the
 // reason. Names the class and where the detail is, since a panic's own text is
 // a stack trace nobody should read off a console banner.

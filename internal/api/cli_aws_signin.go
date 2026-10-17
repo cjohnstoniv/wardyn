@@ -24,7 +24,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (canon pending).
 const (
 	cliSignInNotAWS        = "this component is not an AWS CLI, so there is nothing to sign in to"
 	cliSignInPreview       = "Exit the user view to sign in — the capture would land on your own identity."

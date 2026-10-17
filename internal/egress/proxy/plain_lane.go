@@ -24,7 +24,6 @@ const (
 	ruleSourceRequireTLS = "policy:require-tls"
 	// injectRequireTLSBody is the 403 body, with the host substituted.
 	//
-	// DRAFT (M2 canon pending).
 	injectRequireTLSBody = "credential injection for %s requires TLS: " +
 		"this rule sets require_tls and the request was plain HTTP"
 )

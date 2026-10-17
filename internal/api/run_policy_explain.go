@@ -30,7 +30,7 @@ const (
 	causeOverlay       = "overlay"
 	causeProfile       = "profile"
 	causeOrgDisk       = "org_disk"
-	causePoolDisk      = "pool_disk" // DRAFT (M2 canon pending): the console heading is policy-tab-copy.ts pool_disk
+	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
 	causeLimits        = "limits"
 	causeLaunch        = "launch"

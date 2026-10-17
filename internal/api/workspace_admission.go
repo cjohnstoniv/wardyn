@@ -47,7 +47,7 @@ import (
 // upgraded deployment answers byte-for-byte what it answered before this
 // file existed.
 
-// The ADMIT.* strings — DRAFT (M2 canon pending). Frozen in
+// The ADMIT.* strings — Frozen in
 // docs/design/workspace-providers-prompt.md §7.1/§7.4; the tests assert THROUGH
 // these constants so the M2 swap is a one-file diff.
 //

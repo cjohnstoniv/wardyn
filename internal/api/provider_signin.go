@@ -29,7 +29,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending).
 const (
 	mpsNoBlock     = "this install has no model providers yet — ask your admin to add one under Settings → Model providers"
 	mpsTyped       = "%q is connected with your own key or token, not by signing in"

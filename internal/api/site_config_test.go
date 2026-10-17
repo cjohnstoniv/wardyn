@@ -154,7 +154,7 @@ func TestValidateSiteConfig(t *testing.T) {
 }
 
 // TestValidateSiteConfig_DuplicateFromMessage asserts THROUGH the
-// egressRedirectDuplicateFromRefusal DRAFT constant (F3-F5, server half).
+// egressRedirectDuplicateFromRefusal constant (F3-F5, server half).
 func TestValidateSiteConfig_DuplicateFromMessage(t *testing.T) {
 	err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
@@ -572,7 +572,7 @@ func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.
 		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 	if want := fmt.Sprintf(legacyArtifactOverridesUnknownEcosystemRefusal, "rubygems"); !strings.Contains(w.Body.String(), want) {
-		t.Errorf("body = %s, want it to contain the DRAFT constant %q", w.Body.String(), want)
+		t.Errorf("body = %s, want it to contain the constant %q", w.Body.String(), want)
 	}
 	// Not the empty-From message a fold that emitted the key would 400 with.
 	if strings.Contains(w.Body.String(), `invalid from ""`) {
