@@ -14,6 +14,7 @@ docs/operations/monitoring.md=2138 share=13
 # docs/operations/monitoring.md=2029 adds 28 (0.9 Q-b): the run_queue sweep row.
 # docs/operations/run-lifetime.md 2026 adds 19 over 2007: revive refusals name the Azure CLI case and say a refused live run keeps its access, measured.
 # docs/operations/run-lifetime.md 2044 adds 18 (0.9.3 F-R24), measured: a pool's Interactive idle stop bounds auto_stop_after_sec.
-docs/operations/run-lifetime.md=2044 share=21
+# docs/operations/run-lifetime.md 2077 adds 33 over 2044 (0.9.3 FIN-E), measured: the pool idle-stop default and maximum.
+docs/operations/run-lifetime.md=2077 share=21
 docs/operations/kubernetes-known-gaps.md=2060 share=15
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.
