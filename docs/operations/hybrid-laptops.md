@@ -124,11 +124,13 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Session recordings
 
+**Recording defaults to `preferred`: a runner that does not record (started with `--recording-store off`, or older than 0.9.3) still takes runs, and they run unrecorded.** To refuse those runs instead, an admin sets `"recording": "required"` on the organisation's defaults (`PUT /api/v1/runner-pool-defaults`) or on a pool (`PUT /api/v1/runner-pools/{id}`).
+
 - `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
 - The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
 - `wardyn-runnerd serve --recording-store off` is the runner's ceiling: it never records a run's terminal session. Otherwise the runner records the runs its organisation asks it to; a runner older than 0.9.3 records by its own setting, and counts as not recording.
 - The organisation, not the runner, records console and SSH sessions opened through it, even on a run marked not recorded, while it has a recording store.
-- An organisation or pool can set `recording: required` (default `preferred`). A run only a non-recording runner could take is then refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. A defaults write that leaves `recording` out keeps it.
+- Under `required`, a run only a non-recording runner could take is refused `runner_recording_off`, and with the store off every run is refused `recording_store_off`, as is saving `required`. A defaults write that leaves `recording` out keeps it.
 - Under `preferred` the page says `runner_declined`. A cast from a recording runner older than 0.9.3 clears it; any other runner's upload is refused `409` `recording_off`.
 - An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).
 
@@ -236,6 +238,29 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - Switching runners off, and revoking a runner, close the live session on the replica that served the request.
 - A revoked runner's session on another replica closes within one 15-second ping interval. A session another replica holds after a switch-off stays open until the runner reconnects, but every sandbox create re-reads the switch, so it gets no new work.
 - Revoking a runner whose session already dropped succeeds (`200`, state `revoked`).
+
+## Reset a runner's local state
+
+Do this when a runner's runs keep failing after an upgrade or after its Docker engine was reset. It ends every run in progress on the runner and keeps its identity, so it needs no new registration or claim.
+
+1. Stop the service: `launchctl bootout gui/$(id -u)/com.wardyn.runnerd` on macOS, `systemctl --user stop wardyn-runnerd` on Linux.
+2. List what the runner left on its engine. Every container and network a runner creates carries `wardyn.managed=true` and a `wardyn.runner-id` label:
+
+   ```sh
+   docker ps -a --filter label=wardyn.managed=true --filter label=wardyn.runner-id --format '{{.Names}}  {{.Label "wardyn.component"}}  {{.Status}}'
+   ```
+
+   These are the runs' `wardyn-agent-<run>` and `wardyn-proxy-<run>` containers, and any check container a stopped `serve` left. If a second runner identity uses this engine, add `--filter label=wardyn.runner-id=<id>`, with the `runner_id` from this runner's `runner.json`.
+3. Remove them, and the runs' networks:
+
+   ```sh
+   docker rm -f $(docker ps -aq --filter label=wardyn.managed=true --filter label=wardyn.runner-id)
+   docker network rm $(docker network ls -q --filter label=wardyn.managed=true --filter label=wardyn.runner-id)
+   ```
+
+   Leave volumes alone: a drive's volume holds its files. The shared `wardyn-internal` network carries no runner label and stays.
+4. Keep the state directory as it is (`~/Library/Application Support/wardyn/runner` on macOS, `~/.config/wardyn/runner` on Linux). `runner.json` is the runner's identity, and `spools/` and `offline/` hold audit records not yet delivered and what the runner still owes for its runs. Keep the CA file you gave setup: `serve` copies it into the state directory at every start.
+5. Start the service: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wardyn.runnerd.plist` on macOS, `systemctl --user start wardyn-runnerd` on Linux. At start `serve` checks that the Docker engine sees the state directory, and exits naming the directory when it does not.
 
 ## Behind a shared ingress
 

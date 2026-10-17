@@ -55,6 +55,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `wardyn-rec` forwards SIGTERM and SIGHUP to the recorder, so a terminated recording is still delivered.
 - A refused sandbox create no longer leaves its output sink registered, and an adopted run registers its sink before
   the runner is asked for its output.
+- A laptop runner's proxy can no longer start with its audit spool configured but not mounted, which answered every
+  request `503` with `audit_spool_unavailable`: the proxy refuses at boot a spool directory wardyn-runnerd did not
+  prepare, `serve` refuses to start when the Docker engine does not see its state directory, and each refusal names
+  the directory (`openat <dir>/state.json`). macOS runners get their state directory as `--state-dir` in the
+  LaunchAgent, as Linux units always have.
+- A runner whose organisation link stalls no longer waits in silence: a stream dial that is never answered fails after
+  30 seconds, as does a Docker engine that never answers `serve` at start or a resumed session's containment, and a
+  runner with no session logs `runner still offline, retrying` at most once a minute.
 
 ## [0.9.3-rc.2] — 2026-10-17
 
