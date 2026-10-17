@@ -36,6 +36,8 @@ type memberDriveStore struct {
 	now     time.Time
 	// starting is the owners with a run in STARTING (MemberDriveOwnerStarting).
 	starting map[string]bool
+	// begins counts tombstone writes (BeginMemberDriveDelete, either route).
+	begins int
 }
 
 func newMemberDriveStore() *memberDriveStore {
@@ -95,6 +97,7 @@ func (s *memberDriveStore) GetMemberDriveOf(_ context.Context, owner string, id 
 }
 
 func (s *memberDriveStore) BeginMemberDriveDelete(_ context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error) {
+	s.begins++
 	d, ok := s.drives[id]
 	if !ok || d.OwnerSubject == "" || owner != "" && d.OwnerSubject != owner {
 		return types.UserDrive{}, time.Time{}, store.ErrNotFound
