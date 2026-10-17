@@ -23,7 +23,8 @@ import { createRenderer, type RendererControl, type RendererPref, type RendererS
 import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
-import { entryErrorMessage } from "../lib/run-entry";
+import { HttpError } from "../lib/api/core";
+import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
@@ -350,11 +351,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
+      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows), true);
     };
 
-    const openSocket = (url: string) => {
+    const openSocket = (url: string, direct = false) => {
       if (disposed) return;
+      let opened = false;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -389,6 +391,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       };
 
       ws.onopen = () => {
+        opened = true;
         clearConnectTimer();
         // #216 — was `term.writeln([reconnected])`; the open dot below says so.
         reconnectAttempts = 0; // a successful attach resets the budget
@@ -458,6 +461,37 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         }
       };
 
+      // Unexpected drop: re-attach to the persistent tmux session with backoff.
+      const retry = () => {
+        if (disposed) return;
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          // Drop the stale attach mode, exactly as the taken-over branch does.
+          // Whether we come back as writer or observer is the SERVER's call,
+          // announced by the next attach-mode frame — carrying the old answer
+          // across the gap asserts "you are driving" for a whole round trip on
+          // a socket that currently holds nothing. That is inferring mode from
+          // silence, which this protocol exists to avoid.
+          setMode(null);
+          reconnectAttempts += 1;
+          const delay = Math.min(
+            RECONNECT_MAX_DELAY_MS,
+            RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1),
+          );
+          setConnState("reconnecting");
+          // #216 — was a writeln; TerminalConnectionStatus below the grid
+          // renders the same count, outside the buffer.
+          setReconnectAttempt(reconnectAttempts);
+          reconnectTimer = setTimeout(connect, delay);
+          return;
+        }
+        // Budget exhausted: give up and surface the closed state.
+        // #216 — was a writeln; TerminalConnectionStatus below now carries it,
+        // with Reconnect, instead of scrolling out of view.
+        setReconnectExhausted(true);
+        setConnState("closed");
+        onCloseRef.current?.();
+      };
+
       ws.onclose = (ev) => {
         clearConnectTimer();
         writerWs = null;
@@ -494,33 +528,23 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           onCloseRef.current?.();
           return;
         }
-        // Unexpected drop: re-attach to the persistent tmux session with backoff.
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-          // Drop the stale attach mode, exactly as the taken-over branch does.
-          // Whether we come back as writer or observer is the SERVER's call,
-          // announced by the next attach-mode frame — carrying the old answer
-          // across the gap asserts "you are driving" for a whole round trip on
-          // a socket that currently holds nothing. That is inferring mode from
-          // silence, which this protocol exists to avoid.
-          setMode(null);
-          reconnectAttempts += 1;
-          const delay = Math.min(
-            RECONNECT_MAX_DELAY_MS,
-            RECONNECT_BASE_DELAY_MS * 2 ** (reconnectAttempts - 1),
-          );
-          setConnState("reconnecting");
-          // #216 — was a writeln; TerminalConnectionStatus below the grid
-          // renders the same count, outside the buffer.
-          setReconnectAttempt(reconnectAttempts);
-          reconnectTimer = setTimeout(connect, delay);
+        // A socket opened without a ticket shows a browser no status or body when its handshake is refused, so the
+        // run's session cap would read as a bare failure. The ticket mint answers it with its reason (attach_ticket.go).
+        if (direct && !opened) {
+          runs.attachTicket(runId).then(retry, (e: unknown) => {
+            if (disposed) return;
+            if (e instanceof HttpError && e.reason === ATTACH_CAP_REASON) {
+              setMode(null);
+              setConnState("error");
+              setErrorMsg(e.message);
+              onCloseRef.current?.();
+              return;
+            }
+            retry();
+          });
           return;
         }
-        // Budget exhausted: give up and surface the closed state.
-        // #216 — was a writeln; TerminalConnectionStatus below now carries it,
-        // with Reconnect, instead of scrolling out of view.
-        setReconnectExhausted(true);
-        setConnState("closed");
-        onCloseRef.current?.();
+        retry();
       };
 
       ws.onerror = () => {

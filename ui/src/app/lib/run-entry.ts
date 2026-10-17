@@ -40,6 +40,9 @@ export function mayEnterRunOrUnknown(
 /** The server's refusal reason for interactive entry to a run the caller does not own. */
 export const RUN_OWNER_ONLY_REASON = "run_owner_only";
 
+/** The server's refusal reason when a run already has the most live terminal sessions it allows. */
+export const ATTACH_CAP_REASON = "attach_session_cap_reached";
+
 /** What the console says for a refused entry, whatever surface it surfaces on. */
 export const RUN_OWNER_ONLY = "Only the person who started this run can open it interactively.";
 

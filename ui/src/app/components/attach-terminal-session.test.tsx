@@ -67,7 +67,7 @@ vi.mock("../lib/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api/core")>()),
   getToken: () => null,
 }));
-vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
+vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(async () => "ticket"), takeoverAttach: vi.fn() } }));
 
 // Fake WebSocket — same shape as attach-terminal.test.tsx's own (that file has
 // no exports; see the file doc above for why this isn't a shared import).
@@ -105,6 +105,9 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { RUN_COCKPIT } from "./wardyn/copy";
+import { HttpError } from "../lib/api/core";
+import { runs } from "../lib/api/runs";
+import { ATTACH_CAP_REASON } from "../lib/run-entry";
 import { aheadByHours } from "../lib/test-clock";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on every
@@ -313,6 +316,36 @@ describe("AttachTerminal — close codes", () => {
     expect(screen.queryByText(RUN_COCKPIT.driving)).toBeNull();
 
     await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("AttachTerminal — a handshake refused on the direct lane", () => {
+  beforeEach(() => {
+    stubTerminalEnv();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const CAP = "too many open terminal sessions for this run (max 8) — close one and retry";
+
+  it("says the run is at its session cap, in the server's sentence, and does not keep retrying", async () => {
+    vi.mocked(runs.attachTicket).mockRejectedValueOnce(new HttpError(503, CAP, ATTACH_CAP_REASON));
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].drop(1006, ""));
+    await act(() => vi.advanceTimersByTimeAsync(30000));
+    expect(screen.getByText(CAP)).toBeInTheDocument();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("retries as before when the ticket mint finds no cap", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].drop(1006, ""));
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.queryByText(CAP)).toBeNull();
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
   });
 });
