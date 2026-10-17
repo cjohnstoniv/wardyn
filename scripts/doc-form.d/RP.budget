@@ -9,4 +9,5 @@
 # docs/operations/runner-pools.md 1926 adds 27 over 1899, measured (FIN-A2b): a pool's limits are edited, never removed, and empty blocks bound nothing.
 # docs/operations/runner-pools.md 1951, measured at the FIN-A2b merge into the final train (both sides' sentences).
 # docs/operations/runner-pools.md 1920 = 1899 + 21, measured: the BARRIERS and refused-runner notes.
-docs/operations/runner-pools.md=1951 share=35
+# docs/operations/runner-pools.md 1972 = 1951 + 21, measured: at the FIN-C2 merge into the final train (both sides' sentences).
+docs/operations/runner-pools.md=1972 share=35
