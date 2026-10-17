@@ -22,6 +22,7 @@ import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
 import { statusDetailSentence } from "../run-status-detail";
+import { placeInLine } from "../new-run-flow/launch/launched-model";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
 export type RowAction = "review" | "sign-in" | "revive" | null;
@@ -141,6 +142,16 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
         hue: "blue",
         word: RUNS_ROW_WORD.QUEUED,
         subword: statusDetailSentence(run.status_detail, run.status_reason) || undefined,
+        action: null,
+        needsYou: false,
+      };
+    case "QUEUED":
+      // Waiting for a slot in a capped pool: the same word the run page's badge says, and the place in line the
+      // Launched screen tells the person.
+      return {
+        hue: "blue",
+        word: RUNS_ROW_WORD.QUEUED,
+        subword: run.queue ? placeInLine(run.queue) : undefined,
         action: null,
         needsYou: false,
       };

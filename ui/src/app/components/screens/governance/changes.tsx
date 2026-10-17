@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { CHANGES } from "../../../lib/governance-copy";
+import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -203,6 +203,18 @@ export function ChangeDrawer({
             </SheetHeader>
 
             <div className="space-y-4 p-5">
+              {/* R1-0098: the notes a direct save would have shown, for the person approving. Same amber note and
+                  heading the profile screen puts them under after a save. */}
+              {change.diff.notes && change.diff.notes.length > 0 && (
+                <Note tone="amber">
+                  <b className="font-semibold">{GOVERNANCE.OMISSION_TITLE}</b>
+                  {change.diff.notes.map((n) => (
+                    <Mono key={n} className="text-inherit">
+                      {n}
+                    </Mono>
+                  ))}
+                </Note>
+              )}
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">

@@ -119,7 +119,9 @@
 # docs/sdk.md 17914 = 17898 + 16 (Fo), measured at the wave-A merge.
 # docs/sdk.md 17904 adds 235 over 17669 (0.9.3 RV5), measured: the four pool refusal reasons, the import size note, the access-block harnesses fact, runner_not_found and approval-body limits.
 # docs/sdk.md 18149 = 17914 + 235 (RV5), measured at the wave-A merge.
-docs/sdk.md=18149 share=21
+# 0.9.3 UIb: docs/sdk.md 17675 adds 6 over 17669 for the credential_delivery_stale reason on PUT /governance/credential-delivery.
+# docs/sdk.md 18155 = 18149 + 6 (UIb), measured at the wave-A merge.
+docs/sdk.md=18155 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

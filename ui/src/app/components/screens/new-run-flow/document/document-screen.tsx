@@ -39,6 +39,12 @@ const EDITOR_ID = "run-document";
 const STATUS_ID = `${EDITOR_ID}-status`;
 const NO_HARNESS_ID = `${EDITOR_ID}-no-harness`;
 
+/** Drops a file read in flight and returns the next, empty one: the text it holds is about a choice made before whatever came after. */
+function cancelRead(r: { id: number; reader?: FileReader }): { id: number } {
+  r.reader?.abort();
+  return { id: r.id + 1 };
+}
+
 export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRunScreenProps & { copy?: typeof NR_DOCUMENT; deps?: Partial<DocumentDeps> }) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
@@ -58,6 +64,8 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const [harness, setHarness] = React.useState<string | null | undefined>(undefined);
   const check = React.useRef<{ id: number; abort?: AbortController }>({ id: 0 });
   const fileInput = React.useRef<HTMLInputElement>(null);
+  // The file being read, if any. Its text is about a choice made earlier than whatever came after.
+  const read = React.useRef<{ id: number; reader?: FileReader }>({ id: 0 });
 
   React.useEffect(() => {
     let off = false;
@@ -68,6 +76,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     return () => { off = true; };
   }, [loadHarnesses]);
   React.useEffect(() => () => check.current.abort?.abort(), []);
+  React.useEffect(() => () => void (read.current = cancelRead(read.current)), []);
 
   /** Drops any check in flight: its answer is about text that is no longer there. */
   const supersede = () => {
@@ -82,6 +91,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const buffer = (next: string, as: DocumentFormat, rest: Pick<DocBuffer, "diagnostics" | "validated">): DocBuffer | undefined =>
     next === runDocumentText(latest.current.intent, as) ? undefined : { format: as, text: next, ...rest };
   const setSource = (next: string, as: DocumentFormat) => {
+    read.current = cancelRead(read.current);
     supersede();
     dispatch({ type: "doc", doc: buffer(next, as, { diagnostics: [], validated: false }) });
     if (as !== format) go({ screen: "document", format: as }, { replace: true });
@@ -146,13 +156,16 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
 
   const importFile = (file: File | undefined) => {
     if (!file) return;
+    read.current = cancelRead(read.current);
     if (file.size > MAX_DOCUMENT_BYTES) {
       supersede();
       return refuse(check.current.id, [MISSING_COPY.TOO_LARGE]);
     }
     const reader = new FileReader();
-    reader.onload = () => setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
-    reader.onerror = () => refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
+    const mine = { id: read.current.id, reader };
+    read.current = mine;
+    reader.onload = () => mine.id === read.current.id && setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
+    reader.onerror = () => mine.id === read.current.id && refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
     reader.readAsText(file);
   };
 
