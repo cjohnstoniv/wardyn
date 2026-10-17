@@ -65,7 +65,9 @@
 ### `allowed_domains`
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
-- An exact host covers only itself: to wall off GitHub, deny `api.github.com` or `*.github.com` as well as `github.com`.
+- An exact host covers only itself, so a deny names every host a vendor answers on.
+- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
+- To wall off Azure DevOps, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; a deny on `dev.azure.com` alone leaves `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` service hosts reachable with the person's credential.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
 - A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.

@@ -852,6 +852,18 @@ func TestWorkspaceProvidersPutRefusals(t *testing.T) {
 		t.Errorf("412 body = %s, want reason \"site_config_stale\"", w.Body.String())
 	}
 
+	// DR-0034: a Save composed under another person is refused before any write.
+	before := fake.putSeen
+	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
+		`{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"]}]}`,
+		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
+	if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
+		t.Fatalf("expected-principal mismatch = %d, want 412 with the expected-principal sentence; body=%s", w.Code, w.Body.String())
+	}
+	if fake.putSeen != before {
+		t.Error("a refused Save reached the store")
+	}
+
 	// And the ETag the GET handed out DOES satisfy the write.
 	etag := do(t, srv, http.MethodGet, "/api/v1/workspace-providers", adminToken, "").Header().Get("ETag")
 	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
