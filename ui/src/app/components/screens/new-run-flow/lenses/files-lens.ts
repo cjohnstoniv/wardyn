@@ -36,11 +36,15 @@ export function detachWorkspace(intent: RunIntent, workspaceId: string): RunInte
 export const setStartsHere = (intent: RunIntent, attachment: string, repo?: string): RunIntent =>
   withKeys(intent, { start_folder: { kind: "attachment", attachment, ...(repo ? { repo } : {}) } });
 
-/** Whether this repository holds the starting folder; a workspace folder with no repo named is its only repository. */
-export function startsAt(intent: RunIntent, workspaceId: string, repo: string, repoCount: number): boolean {
+/**
+ * Whether this repository holds the starting folder. A workspace start that names a repository is that one;
+ * with none named the server opens the first mounted target, so `firstMounted` (this is the first repository
+ * the run clones from the workspace, no folder coming before it) decides.
+ */
+export function startsAt(intent: RunIntent, workspaceId: string, repo: string, firstMounted: boolean): boolean {
   const f = intent.start_folder;
   if (f?.kind !== "attachment" || f.attachment !== workspaceId) return false;
-  return f.repo ? f.repo === repo : repoCount === 1;
+  return f.repo ? f.repo === repo : firstMounted;
 }
 
 const replaceEntry = (intent: RunIntent, entry: WorkspaceEntry): RunIntent =>
@@ -77,7 +81,8 @@ export function excludeRepo(intent: RunIntent, workspaceId: string, repo: string
   if (!entry) return intent;
   const rest = picksOf(entry, all).filter((r) => r.repo !== repo);
   if (!rest.length) return detachWorkspace(intent, workspaceId);
-  const startsThere = startsAt(intent, workspaceId, repo, all.length);
+  // An unnamed start follows the first repository still cloned, so only a start that names this one is cleared.
+  const startsThere = startsAt(intent, workspaceId, repo, false);
   return withKeys(replaceEntry(intent, { ...entry, repos: rest }), { start_folder: startsThere ? undefined : intent.start_folder });
 }
 

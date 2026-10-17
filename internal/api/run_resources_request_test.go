@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -174,5 +175,78 @@ func TestResourcesDeploymentDefaultAbovePlatform(t *testing.T) {
 	checkCPU(t, f, 0, 4000, false, types.LimitSourceDeployment)
 	if m := f.place.applied.MemoryMiB; m.Applied != 8192 {
 		t.Errorf("memory = %+v, want the deployment's 8192", m)
+	}
+}
+
+// DR-0263: a PIDs cut says so beside CPU and memory, with the same shared warning. The profile's own
+// PIDs limit cuts a stored policy's larger ask; the pools fold no PIDs limit, so the source is governance.
+func TestResourcesPidsCutIsReportedWithTheGovernanceSource(t *testing.T) {
+	id := uuid.New()
+	st := &memberBoundStore{
+		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "tight",
+			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+				Resources: &types.ResourceLimits{PidsLimit: 256}}},
+		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+			Resources: &types.ResourceLimits{PidsLimit: 4096}}},
+	}
+	f := resourceFold(t, resourceServer(t, st), sizeMemberCtx(), createRunRequest{Agent: "claude-code", PolicyID: &id})
+	want := client.AppliedAmount{Requested: 4096, Applied: 256, Capped: true, Source: types.LimitSourceGovernance, SourceName: "tight"}
+	if got := f.place.applied.PidsLimit; got == nil || *got != want {
+		t.Errorf("pids_limit = %+v, want %+v", got, want)
+	}
+	if f.place.applied.CPUMillis.Capped || f.place.applied.MemoryMiB.Capped {
+		t.Errorf("cpu/memory capped with only PIDs cut: %+v", f.place.applied)
+	}
+	if !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
+		t.Errorf("a PIDs cut lost the shared cap warning: %v", f.policyWarns)
+	}
+}
+
+// DR-0263: the console sends its policy as a policy_overlay, so a launch with no policy_id starts from the
+// profile (which asks nothing of its own) and the ask is the overlay's. The cut still reads capped.
+func TestResourcesPidsOverlayAskIsReportedAsCut(t *testing.T) {
+	st := &memberBoundStore{
+		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "tight",
+			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+				Resources: &types.ResourceLimits{PidsLimit: 256}}},
+	}
+	f := resourceFold(t, resourceServer(t, st), sizeMemberCtx(), createRunRequest{Agent: "claude-code",
+		PolicyOverlay: json.RawMessage(`{"resources":{"pids_limit":4096}}`)})
+	want := client.AppliedAmount{Requested: 4096, Applied: 256, Capped: true, Source: types.LimitSourceGovernance, SourceName: "tight"}
+	if got := f.place.applied.PidsLimit; got == nil || *got != want {
+		t.Errorf("pids_limit = %+v, want %+v", got, want)
+	}
+	if !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
+		t.Errorf("a PIDs cut lost the shared cap warning: %v", f.policyWarns)
+	}
+}
+
+// A profile that sets no PIDs limit inherits the deployment's, so the cut it makes is the deployment's.
+func TestResourcesPidsCutUnderAProfileWithNoLimitIsTheDeployments(t *testing.T) {
+	id := uuid.New()
+	st := &memberBoundStore{
+		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "noPids",
+			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}},
+		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+			Resources: &types.ResourceLimits{PidsLimit: 1 << 20}}},
+	}
+	f := resourceFold(t, resourceServer(t, st), sizeMemberCtx(), createRunRequest{Agent: "claude-code", PolicyID: &id})
+	if got := f.place.applied.PidsLimit; got == nil || !got.Capped || got.Source != types.LimitSourceDeployment || got.SourceName != "" {
+		t.Errorf("pids_limit = %+v, want a deployment cut with no source name", got)
+	}
+}
+
+// A PIDs ask inside the limit is not a cut; an unassigned member has no profile, so a cut there is the deployment's.
+func TestResourcesPidsWithinTheLimitIsNotCapped(t *testing.T) {
+	inline := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+		Resources: &types.ResourceLimits{PidsLimit: 64}}
+	f := resourceFold(t, resourceServer(t, &memberBoundStore{}), sizeMemberCtx(), createRunRequest{Agent: "claude-code", InlinePolicy: &inline})
+	if got := f.place.applied.PidsLimit; got == nil || got.Capped || got.Applied != 64 || got.Requested != 64 {
+		t.Errorf("pids_limit = %+v, want 64 asked and applied, not capped", got)
+	}
+	inline.Resources.PidsLimit = 1 << 20
+	f = resourceFold(t, resourceServer(t, &memberBoundStore{}), sizeMemberCtx(), createRunRequest{Agent: "claude-code", InlinePolicy: &inline})
+	if got := f.place.applied.PidsLimit; got == nil || !got.Capped || got.Source != types.LimitSourceDeployment || got.SourceName != "" {
+		t.Errorf("pids_limit = %+v, want a deployment cut", got)
 	}
 }

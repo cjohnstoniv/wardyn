@@ -86,6 +86,12 @@ describe("pickIntent", () => {
 describe("leaveOutOwnDrives", () => {
   const intent = { drives: [{ drive_id: "mine" }, { drive_id: "team" }], experience: "background" } as unknown as RunIntent;
 
+  it("with the catalogue unknown, removes every drive and the drive start folder", () => {
+    const got = leaveOutOwnDrives({ ...intent, start_folder: { kind: "attachment", drive_id: "team" } } as unknown as RunIntent, undefined);
+    expect(got.leftOut).toBe(true);
+    expect(got.intent).toEqual({ experience: "background" });
+  });
+
   it("removes the saver's own drives and says it did", () => {
     const got = leaveOutOwnDrives(intent, new Set(["mine"]));
     expect(got.leftOut).toBe(true);
@@ -95,6 +101,16 @@ describe("leaveOutOwnDrives", () => {
   it("drops the key when every drive was the saver's own", () => {
     const got = leaveOutOwnDrives({ drives: [{ drive_id: "mine" }] } as unknown as RunIntent, new Set(["mine"]));
     expect(got).toEqual({ intent: {}, leftOut: true });
+  });
+
+  it("clears a start folder on an own drive with it, and keeps one on another drive", () => {
+    const start = (drive_id: string) => ({ drives: [{ drive_id: "mine" }, { drive_id: "team" }], start_folder: { kind: "attachment", drive_id } }) as unknown as RunIntent;
+    const got = leaveOutOwnDrives(start("mine"), new Set(["mine"]));
+    expect(got.leftOut).toBe(true);
+    expect(got.intent).toEqual({ drives: [{ drive_id: "team" }] });
+    expect(leaveOutOwnDrives(start("team"), new Set(["mine"])).intent).toEqual({ drives: [{ drive_id: "team" }], start_folder: { kind: "attachment", drive_id: "team" } });
+    // A start on an own drive that the drives list no longer names still goes.
+    expect(leaveOutOwnDrives({ start_folder: { kind: "attachment", drive_id: "mine" } } as unknown as RunIntent, new Set(["mine"])).intent).toEqual({});
   });
 
   it("leaves a draft with no own drive untouched", () => {
