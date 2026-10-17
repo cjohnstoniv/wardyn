@@ -132,6 +132,40 @@ function expectCreateEqualsLastCheck(bodies: Bodies) {
   return create;
 }
 
+test.describe("New Run, Start and Run: the shared pieces", () => {
+  test("the AI path is Coming soon in words, and is not announced as a disabled control (FR-0124)", async ({ page }) => {
+    await stubFlow(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    const card = page.getByRole("article", { name: NR_START.AI_TITLE });
+    await expect(card).toContainText(NR_SHARED.COMING_SOON);
+    // aria-disabled is not allowed on the article role; the words carry it.
+    await expect(card).not.toHaveAttribute("aria-disabled", /.*/);
+    await expect(card.getByRole("button")).toHaveCount(0);
+  });
+
+  test("a barrier's info tip opens on click and closes on Esc; a caveat is text, not only a hover title (FR-0119, FR-0123)", async ({ page }) => {
+    await stubFlow(page);
+    await openGuided(page);
+    await press(page, NR_SHAPE.AGENT_TITLE);
+    const table = page.getByRole("table");
+    const caveat = table.locator('[aria-label="Yes, with caveat"]').first();
+    const risk = await caveat.getAttribute("title");
+    expect(risk).toBeTruthy();
+    // The residual risk is in the cell's text, which a screen reader reads, as well as in its title.
+    await expect(caveat).toHaveText(risk!);
+
+    const tip = table.getByRole("button", { name: /^About / }).first();
+    await tip.click();
+    const bubble = page.getByText(NR_RUN.PROTECTS_HEAD);
+    await expect(bubble).toBeVisible();
+    await expect(page.getByText(NR_RUN.NOT_PROTECTS_HEAD)).toBeVisible();
+    await expect(page.getByText(NR_RUN.HOW_HEAD)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(bubble).toHaveCount(0);
+  });
+});
+
 test.describe("New Run, Guided setup: each workload end to end", () => {
   test("Agent task, Interactive: a harness starts with the run", async ({ page }) => {
     const bodies = await stubFlow(page);

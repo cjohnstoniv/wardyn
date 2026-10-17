@@ -114,7 +114,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     check.current = mine;
     setBusy(true);
     try {
-      if (tooLarge(source)) return void refuse(mine.id, [MISSING_COPY.TOO_LARGE]);
+      if (tooLarge(source)) return void refuse(mine.id, [copy.TOO_LARGE]);
       // A document that does not parse is refused here, without a request.
       if (!parsePolicySource(source, as).ok) return void refuse(mine.id, [as === "json" ? copy.JSON_INVALID : copy.YAML_INVALID]);
       const answer = await importDocument(as, source, mine.abort.signal);
@@ -148,11 +148,11 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     if (!file) return;
     if (file.size > MAX_DOCUMENT_BYTES) {
       supersede();
-      return refuse(check.current.id, [MISSING_COPY.TOO_LARGE]);
+      return refuse(check.current.id, [copy.TOO_LARGE]);
     }
     const reader = new FileReader();
     reader.onload = () => setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
-    reader.onerror = () => refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
+    reader.onerror = () => refuse(check.current.id, [copy.FILE_UNREADABLE]);
     reader.readAsText(file);
   };
 

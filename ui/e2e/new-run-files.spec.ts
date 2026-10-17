@@ -356,6 +356,17 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     expect(last(sent).drives).toBeUndefined();
   });
 
+  test("a kind that is not available yet is hatched, disabled and still fully legible (FR-0094)", async ({ page }) => {
+    await stub(page, {});
+    await toFiles(page, "application");
+    await press(page, NR_FILES.ADD_ARIA);
+    const computer = dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.COMPUTER_TITLE}`) });
+    await expect(computer).toBeDisabled();
+    await expect(computer).toContainText(NR_FILES.COMPUTER_SOON);
+    // The reason line is the explanation, so the tile must not also be dimmed under it.
+    await expect(computer).toHaveCSS("opacity", "1");
+  });
+
   test("a drive the profile refuses is one sentence where the drives would be", async ({ page }) => {
     await stub(page, { deniedBy: "Contractors" });
     await toFiles(page, "application");

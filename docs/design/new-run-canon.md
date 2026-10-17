@@ -518,6 +518,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
 | `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
+| `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
 | `DELIVERY_ENV_OPTION` | pending (W-39) | Environment variable |
@@ -633,6 +634,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ANNOUNCE_VALID` | mock | Document valid. |
 | `JSON_INVALID` | mock | This JSON document isn't valid. Check the highlighted structure. |
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
+| `TOO_LARGE` | deviation (owner approved 2026-10-17, FR-0098) | This file is over 1 MiB, the most the editor reads. |
+| `FILE_UNREADABLE` | deviation (owner approved 2026-10-17, FR-0098) | The browser could not read this file. |
 | `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon (it owns the sentence) |
 | `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon (it owns the sentence) |
 | `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon (it owns the sentence) |
@@ -862,6 +865,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `RENAME` | mock | Rename |
 | `DELETE` | mock | Delete |
 | `PUBLISH` | pending (W-24) | Publish to organisation |
+| `PUBLISH_TITLE(name)` | deviation (owner approved 2026-10-17, FR-0120) | Publish {name} to your organisation? |
+| `PUBLISHED(name)` | deviation (owner approved 2026-10-17, FR-0120) | {name} published to your organisation. |
 | `WHY_ORG` | mock | Published by your organisation. Only organisation admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
 | `EMPTY_TITLE` | mock | No templates yet |

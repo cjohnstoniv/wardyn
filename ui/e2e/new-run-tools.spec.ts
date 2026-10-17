@@ -103,6 +103,41 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await expect(launch(page)).toBeEnabled();
   });
 
+  test("the all-clear is held back while the answer for a changed draft is out, then returns (FUG-L445)", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/runs/policy-preview", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await press(page, NR_TOOLS.HOST_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.HOST_CARD_TITLE });
+    await dialog.getByLabel(NR_TOOLS.HOST_LABEL).fill("pypi.org");
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    await expect(dialog).toHaveCount(0);
+    // The earlier answer was about a different draft: it must not still read as "everything is set up".
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toHaveCount(0);
+    release();
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
+  });
+
+  test("Add a secret with no saved secrets says so, and adds nothing (FR-0110)", async ({ page }) => {
+    await stub(page, false);
+    await page.route("**/api/v1/secrets", (route) => route.fulfill({ json: { names: [], mine: [] } }));
+    await openTools(page);
+    await press(page, NR_TOOLS.SECRET_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.SECRET_CARD_TITLE });
+    await expect(dialog.getByText(NR_TOOLS.SECRET_NONE)).toBeVisible();
+    await expect(dialog.getByLabel(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    // Nothing was added: the dialog is still the one asking.
+    await expect(dialog).toBeVisible();
+  });
+
   test("the policy preview, the preflight and the create send one body", async ({ page }) => {
     const bodies = await stub(page, false);
     await openTools(page);

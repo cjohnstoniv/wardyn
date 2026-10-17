@@ -89,9 +89,10 @@ export function AddSecretDialog({ names, hosts, residentAllowed, mayDefine, resi
       onClose={onClose}
     >
       <ToolField id={fieldId("secret")} label={NR_TOOLS.SECRET_LABEL}>
-        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setSecret(e.target.value)}>
+        <select id={fieldId("secret")} className={SELECT_CLASS} value={secret} disabled={names.length === 0} aria-describedby={`${fieldId("secret")}-help`} onChange={(e) => setSecret(e.target.value)}>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
+        {names.length === 0 && <p className="text-sm text-foreground">{NR_TOOLS.SECRET_NONE}</p>}
         <p id={`${fieldId("secret")}-help`} className="text-sm text-muted-foreground">{NR_TOOLS.SECRET_HELP}</p>
       </ToolField>
       <fieldset className="flex flex-col gap-2">

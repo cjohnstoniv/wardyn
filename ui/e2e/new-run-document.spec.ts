@@ -62,6 +62,21 @@ test.describe("New Run, the run document", () => {
     expect(asked).toBe(false);
   });
 
+  test("a file over 1 MiB is refused in words, before it is read or sent (FR-0098)", async ({ page }) => {
+    let asked = false;
+    await page.route("**/api/v1/templates/import", (route) => {
+      asked = true;
+      return route.fallback();
+    });
+    await openDocument(page);
+    const before = await editor(page).inputValue();
+    await page.getByTestId("document-file").setInputFiles({ name: "big.yaml", mimeType: "text/yaml", buffer: Buffer.alloc(1024 * 1024 + 1, "a") });
+    await expect(panel(page)).toHaveAttribute("data-status", "issues");
+    await expect(panel(page).getByText(NR_DOCUMENT.TOO_LARGE)).toBeVisible();
+    await expect(editor(page)).toHaveValue(before);
+    expect(asked).toBe(false);
+  });
+
   test("the server's own diagnostics are counted and shown beside the text, and nothing continues", async ({ page }) => {
     const message = "shape must be agent_task, environment or application";
     await page.route("**/api/v1/templates/import", (route) =>

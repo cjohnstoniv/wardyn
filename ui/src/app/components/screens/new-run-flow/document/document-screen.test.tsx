@@ -135,6 +135,24 @@ describe("run document editor", () => {
     await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "issues"));
     expect(editor().value).toBe(before);
     expect(importDocument).not.toHaveBeenCalled();
+    expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.TOO_LARGE);
+  });
+
+  it("Import file says so when the browser cannot read the file (FR-0098)", async () => {
+    open();
+    await screen.findByRole("textbox");
+    const real = globalThis.FileReader;
+    class Unreadable {
+      onerror: (() => void) | null = null;
+      readAsText() { queueMicrotask(() => this.onerror?.()); }
+    }
+    vi.stubGlobal("FileReader", Unreadable);
+    try {
+      upload(file("run.yaml", "a: 1"));
+      await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.FILE_UNREADABLE));
+    } finally {
+      vi.stubGlobal("FileReader", real);
+    }
   });
 
   it("Import file loads a .json file as JSON and moves the URL to it", async () => {
@@ -158,7 +176,7 @@ describe("run document editor", () => {
   it("holds Load example when no harness is enabled", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }] });
     await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
-    // The canon has no reason text yet (MISSING_COPY), so none is rendered.
+    // The canon has no no-harness text yet (MISSING_COPY), so none is rendered.
     expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
   });
 
@@ -285,7 +303,8 @@ describe("run document editor", () => {
   });
 
   it("the words the canon lacks are an empty seam, not text on any normal path", () => {
-    expect(Object.values(MISSING_COPY)).toEqual(["", "", ""]);
+    expect(Object.values(MISSING_COPY)).toEqual([""]);
+    expect([C.TOO_LARGE, C.FILE_UNREADABLE]).toEqual(["This file is over 1 MiB, the most the editor reads.", "The browser could not read this file."]);
   });
 
   it("starts from the draft's intent written as a kind Run document", async () => {

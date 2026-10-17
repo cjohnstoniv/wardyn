@@ -218,6 +218,15 @@ describe("Add a secret", () => {
     });
   });
 
+  it("says there is nothing to add when the person has no saved secrets, and adds nothing (FR-0110)", async () => {
+    h.names.mockResolvedValue([]);
+    const dialog = await open();
+    expect(dialog.getByText(NR_TOOLS.SECRET_NONE)).toBeTruthy();
+    expect(dialog.getByLabelText(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(JSON.stringify(draft().overrides ?? {})).not.toContain("add_secrets");
+  });
+
   it("does not add a host the run already reaches", async () => {
     const dialog = await open();
     const reached = BASE.hosts[0].host;
@@ -234,7 +243,7 @@ describe("Add a secret", () => {
     setField(dialog.getByLabelText(NR_TOOLS.SECRET_VARIABLE_LABEL), "LINEAR_TOKEN");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components).toEqual([{ name: "linear-token", inline: { hosts: [], secrets: [{ secret_name: "linear-token", delivery: { mode: "env", var: "LINEAR_TOKEN" } }] } }]);
-    expect(draft().overrides).toBeUndefined();
+    expect(JSON.stringify(draft().overrides ?? {})).not.toContain("add_secrets");
 
     dialog = await (async () => {
       await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SECRET_CARD_BUTTON }));

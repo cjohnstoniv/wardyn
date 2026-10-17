@@ -74,7 +74,7 @@ const MODE_FRAMES: FixtureBody[] = [
   },
   {
     route: "v19/harness-rules",
-    note: "Tool rules and a default effect per harness, never run-wide. A default effect only narrows (hold or deny); the server refuses allow as override_refused, and refuses more than one included tool here.",
+    note: "Tool rules and a default effect per harness, never run-wide. A default effect only narrows (hold or deny); the server refuses allow as override_refused. It builds a multi-harness set (run_harness_set.go), so two included tools are accepted here.",
     preview: preview(),
     contract: withMode({
       experience: "interactive",
@@ -84,7 +84,6 @@ const MODE_FRAMES: FixtureBody[] = [
       ],
       noRepositoriesOrDrives: true,
     }),
-    refusal: unavailable("tools: more than one included tool"),
   },
   {
     route: "v16/starting-folder",

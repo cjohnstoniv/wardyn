@@ -128,9 +128,11 @@ describe("New Run fixtures", () => {
     // A starting folder inside an attachment is honoured; what the server cannot
     // honour yet is drawn as the refusal it answers.
     expect(newRunFixture("v16/starting-folder").refusal).toBeUndefined();
-    for (const route of ["v16/interactive-empty", "v16/interactive-multiple", "v19/harness-rules"]) {
+    for (const route of ["v16/interactive-empty", "v16/interactive-multiple"]) {
       expect(newRunFixture(route).refusal?.reason, route).toBe(NEW_RUN_REASON.REQUEST_FIELD_UNAVAILABLE);
     }
+    // R2-0094: the server builds a multi-harness set (run_harness_set.go), so two tools with rules are not refused.
+    expect(newRunFixture("v19/harness-rules").refusal).toBeUndefined();
     expect(newRunFixture("v16/mode-unset").tab).toBe("runner");
     expect(newRunFixture("v16/background-agent").tab).toBe("tools_image");
     expect(newRunFixture("v16/starting-folder").tab).toBe("repositories_drives");

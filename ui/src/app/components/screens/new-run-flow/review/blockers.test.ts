@@ -41,9 +41,13 @@ describe("Review blockers", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
   });
 
+  it("says a missing command in the canon's words (FR-0099)", () => {
+    expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "command_required", focus: "nr-command" }] })[0].text).toBe(NR_RUN.COMMAND_HELP);
+  });
+
   it("falls back to the screen's name for a local issue the canon has no sentence for, and links a refusal to nowhere when it is not known", () => {
-    const out = buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "command_required", focus: "nr-command" }], refusal: { text: "Refused.", reason: "something_new" } });
-    expect(out[0].text).toBe(NR_SHARED.STEP_RUN);
+    const out = buildBlockers({ ...NOTHING, issues: [{ home: "shape", code: "shape_required", focus: "nr-workload" }], refusal: { text: "Refused.", reason: "something_new" } });
+    expect(out[0].text).toBe(NR_SHARED.STEP_SHAPE);
     expect(out[1].to).toBeUndefined();
   });
 

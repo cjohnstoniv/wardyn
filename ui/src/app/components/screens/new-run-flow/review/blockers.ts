@@ -46,13 +46,14 @@ const HOME_LABEL: Record<FieldHome, string> = {
   tools: NR_SHARED.STEP_TOOLS, document: NR_DOCUMENT.TITLE, review: "", excluded: "",
 };
 
-// TODO(E1d follow-up): the canon has no sentence for the remaining "" codes. Such a blocker links under the name of the
+// TODO(E1d follow-up): the canon has no sentence for the remaining "" codes (FR-0099 reused the NR_RUN help strings
+// for the two that have one). Such a blocker links under the name of the
 // screen that fixes it, which is canon text, until the sentences land.
 const ISSUE_TEXT: Record<StepIssueCode, string> = {
   shape_required: "",
   harness_required: "",
   task_required: NR_HARNESSES.TASK_ERROR,
-  command_required: "",
+  command_required: NR_RUN.COMMAND_HELP,
   pool_required: NR_RUN.POOL_HELP,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,

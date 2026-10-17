@@ -35,4 +35,8 @@ export const NR_DOCUMENT = {
   JSON_INVALID: "This JSON document isn't valid. Check the highlighted structure.",
   /** pending W-19: the recommended text until the owner answers. */
   YAML_INVALID: "This YAML document isn't valid. Check the highlighted structure.",
+  /** Owner-approved 2026-10-17 (FR-0098): a file or document over MAX_DOCUMENT_BYTES (1 MiB) is refused unread. */
+  TOO_LARGE: "This file is over 1 MiB, the most the editor reads.",
+  /** Owner-approved 2026-10-17 (FR-0098): the browser's FileReader failed. */
+  FILE_UNREADABLE: "The browser could not read this file.",
 } as const;
