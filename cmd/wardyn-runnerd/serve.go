@@ -60,6 +60,16 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
+		// The Docker client reads DOCKER_HOST itself; a profile's DockerHost outranks the environment.
+		applyManagedServe(cmd, &org, &opts)
+		if org == "" {
+			return errors.New(`required flag(s) "org" not set`)
+		}
+		if h := managedPref("DockerHost"); h != "" {
+			if err := os.Setenv("DOCKER_HOST", h); err != nil {
+				return err
+			}
+		}
 		if stateDir == "" {
 			var err error
 			stateDir, err = runneridentity.DefaultDir()
@@ -83,6 +93,12 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		// Two serves on one identity would fight over its connection; a second one stops here.
+		unlock, err := lockSingleInstance(stateDir)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		// A pinned image (the flag, whose default is the environment) outranks everything. Otherwise
 		// the organisation's answer at each connect wins; until the first connect, the image it named
 		// at registration, else this binary's release image, else an unmarked image an earlier setup left.
@@ -122,7 +138,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		}
 		return runRunnerServices(cmd.Context(), client.Run, runtime.run)
 	}
-	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration")
+	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", os.Getenv("WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
 	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", os.Getenv("WARDYN_RELAY_LISTEN"), "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
@@ -138,6 +154,21 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")
 	cmd.Flags().DurationVar(&opts.maxPodLifetime, "max-pod-lifetime", 0, "k8s: the most any run pod may live (activeDeadlineSeconds), e.g. 24h")
-	_ = cmd.MarkFlagRequired("org")
 	return cmd
+}
+
+// applyManagedServe lets the managed preferences (macOS configuration profile) replace the environment
+// defaults of the flags the command line left alone. Read here, not when the command is built, so only
+// serve pays for it.
+func applyManagedServe(cmd *cobra.Command, org *string, o *serveOptions) {
+	for _, f := range []struct {
+		flag, key string
+		dst       *string
+	}{{"org", "OrgURL", org}, {"proxy-image", "ProxyImage", &o.proxyImage}, {"relay-listen", "RelayListen", &o.relayListen},
+		{"relay-host-target", "RelayHostTarget", &o.relayHostTarget}, {"internal-network", "InternalNetwork", &o.network},
+		{"trusted-ca-file", "TrustedCAFile", &o.trustedCAFile}, {"recording-store", "RecordingStore", &o.recording}} {
+		if v := managedPref(f.key); v != "" && !cmd.Flags().Changed(f.flag) {
+			*f.dst = v
+		}
+	}
 }

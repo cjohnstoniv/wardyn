@@ -45,6 +45,13 @@ func newSetupCommand() *cobra.Command {
 	var o setupOptions
 	cmd := &cobra.Command{Use: "setup", Short: "Register this computer, install wardyn-runnerd as a login service and start it (or, with --no-service, only write its environment)", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		// On a Mac with the configuration profile, --org is optional.
+		if !cmd.Flags().Changed("org") {
+			o.org = cmp.Or(managedPref("OrgURL"), o.org)
+		}
+		if o.org == "" {
+			return errors.New(`required flag(s) "org" not set`)
+		}
 		host, err := osSetupHost()
 		if err != nil {
 			return err
@@ -52,7 +59,7 @@ func newSetupCommand() *cobra.Command {
 		return runSetup(cmd, host, o)
 	}
 	fl := cmd.Flags()
-	fl.StringVar(&o.org, "org", "", "organisation public HTTPS URL")
+	fl.StringVar(&o.org, "org", "", "organisation public HTTPS URL (default: the OrgURL managed preference)")
 	fl.StringVar(&o.tokenFile, "token-file", "", "file containing the single-use registration token (not needed once this computer is registered)")
 	fl.StringVar(&o.name, "name", "", "runner name (defaults to the host name)")
 	fl.StringVar(&o.proxyImage, "proxy-image", "", "Wardyn proxy image (defaults to the release image matching this binary; a development build needs it)")
@@ -65,7 +72,6 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
 	fl.BoolVar(&o.makeDefault, "default", false, "with --claim and --pool, also make that pool your default")
 	o.limits.register(cmd)
-	_ = cmd.MarkFlagRequired("org")
 	return cmd
 }
 

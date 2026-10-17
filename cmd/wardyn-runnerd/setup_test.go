@@ -860,6 +860,10 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	if !contains(f.commands, "launchctl bootstrap gui/501 "+p.plistFile) {
 		t.Errorf("agent not bootstrapped: %v", f.commands)
 	}
+	// The package's agent must be stopped before the setup agent starts, or two serves share one identity.
+	if i, j := slices.Index(f.commands, "launchctl bootout gui/501/com.wardyn.runnerd.managed"), slices.Index(f.commands, "launchctl bootstrap gui/501 "+p.plistFile); i < 0 || j < 0 || i > j {
+		t.Errorf("the managed agent was not booted out before bootstrap: %v", f.commands)
+	}
 	if !strings.Contains(out, `Docker engine "Docker Desktop" (docker-desktop): the run relay listens on 127.0.0.1 and a run's proxy reaches it at host-gateway`) {
 		t.Errorf("the engine and relay pair were not announced:\n%s", out)
 	}

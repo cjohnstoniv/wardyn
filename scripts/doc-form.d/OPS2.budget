@@ -44,4 +44,7 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1973 adds 50 (0.9.3 C2), measured: org-side console and SSH recording, uploads a declining runner's run refuses, a defaults write keeps recording.
 # docs/operations/hybrid-laptops.md 1992 = C + SPOOL + C2, measured at the rc.2 merge.
 # docs/operations/hybrid-laptops.md 2945 = 2874 + 71 (SPOOL + C2), measured at the rc.2 into final merge.
-docs/operations/hybrid-laptops.md=2945 share=35
+# docs/operations/hybrid-laptops.md 2141 adds 380 over 1761 (0.9.3 PKG), measured: the macOS package and MDM section and its managed-preferences key table.
+# docs/operations/hybrid-laptops.md 2255 adds 114 over 2141 (0.9.3 PKG round 2), measured: Open Anyway and MDM-agent install wording, the single-instance lock, the per-user profile path.
+# docs/operations/hybrid-laptops.md 3439 = 2945 + 494 (PKG), measured at the wave-B merge.
+docs/operations/hybrid-laptops.md=3439 share=35

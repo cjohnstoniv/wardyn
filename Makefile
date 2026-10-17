@@ -676,6 +676,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-runner-units.sh
+	./scripts/test-runner-pkg.sh
 	./scripts/test-runner-limits.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
