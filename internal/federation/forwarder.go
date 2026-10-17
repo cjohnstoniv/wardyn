@@ -257,7 +257,8 @@ func (p pushSink) Deliver(ctx context.Context, rows []types.FederatedAuditEvent)
 // 401/410 revoke; 429 waits per Retry-After or backs off if it's unusable;
 // any other 4xx is definitive and not retried (halts pushing, keeps
 // heart-beating so revocation is still noticed, reports on status until a
-// restart); everything else backs off and retries.
+// restart or until another replica takes over delivery); everything else
+// backs off and retries.
 func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool) {
 	var se *StatusError
 	if !errors.As(err, &se) {

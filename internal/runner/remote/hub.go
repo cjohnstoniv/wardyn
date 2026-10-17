@@ -58,8 +58,9 @@ type HubConfig struct {
 	Verified func(context.Context, uuid.UUID) error
 	// Inactive, when set, says a claimed runner may hold no session now (its
 	// owner is deactivated), without revoking it. Such a connection is sent
-	// GOAWAY before admission, and the stored-row recheck ends a live session
-	// the same way, so a connection after reactivation is admitted again.
+	// GOAWAY (runner_owner_inactive) before admission, and the stored-row
+	// recheck ends a live session with GOAWAY (fresh_session_required), so a
+	// connection after reactivation is admitted again.
 	Inactive func(context.Context, types.Runner) (bool, error)
 }
 

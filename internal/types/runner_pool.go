@@ -37,10 +37,11 @@ func (s RunnerPoolScope) Valid() bool {
 	return s == RunnerPoolOrganization || s == RunnerPoolUser
 }
 
-// Placement is the run placement a pool of this scope serves today: an
+// Placement is the run placement a pool of this scope serves by default: an
 // organization pool places on its remote-hosted runners, a user pool on its
-// owner's own self-hosted runners (a user pool's remote-hosted members are
-// listed but not yet candidates). Empty for a value outside the set.
+// owner's own self-hosted runners (placement also offers a user pool's
+// remote-hosted members, which this mapping does not say). Empty for a value
+// outside the set.
 func (s RunnerPoolScope) Placement() Placement {
 	switch s {
 	case RunnerPoolOrganization:
