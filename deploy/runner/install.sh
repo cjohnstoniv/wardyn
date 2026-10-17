@@ -51,7 +51,8 @@ uninstall() {
       data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
       identity_dir="$HOME/.config/wardyn/runner"
       systemctl --user disable --now "$UNIT" 2>/dev/null || true
-      rm -f "$HOME/.config/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env"
+      # Setup puts the unit where the user manager looks, which can be a custom XDG_CONFIG_HOME.
+      rm -f "$HOME/.config/systemd/user/$UNIT" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env"
       systemctl --user daemon-reload 2>/dev/null || true
       ;;
     Darwin)
