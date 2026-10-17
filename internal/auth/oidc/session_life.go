@@ -68,8 +68,9 @@ func (a *Authenticator) idleExpired(sess Session, now time.Time) bool {
 //
 // The idle clock is re-stamped at most once a tenth of the timeout, so the cookie is not rewritten on
 // every write; a session can therefore end up to a tenth of the timeout early. The member-mode view
-// fields are re-minted as the request carried them: a re-mint racing a view exit can restore the
-// view, which only ever lowers the effective role, and the next switch corrects it.
+// fields are re-minted as the request carried them: a re-mint racing a view switch can restore the
+// view (or, racing an entry, the person's own tier), which never raises the effective role above the
+// person's role, and the next switch corrects it.
 func (a *Authenticator) touchSession(w http.ResponseWriter, r *http.Request, sess Session) Session {
 	if (a.cfg.SessionIdleTimeout <= 0 && a.cfg.SessionRenewCap <= 0) || !sessionActivity(r) {
 		return sess

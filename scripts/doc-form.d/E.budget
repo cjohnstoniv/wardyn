@@ -44,4 +44,5 @@
 # docs/ENV.md 37064 adds 32 over 37032 (0.9.1 L9): the WARDYN_RELAY_HOST_TARGET row, which the env-doc guard requires; measured.
 # docs/ENV.md 37119 adds 55 over 37064 (0.9.1 L12 W1), measured: the `@arch` entries on WARDYN_AGENT_IMAGES and the WARDYN_PROXY_IMAGE_AMD64/_ARM64 rows, which the env-doc guard requires.
 # docs/ENV.md 37655 adds 536 over 37119 (0.9.3 LIFE): the five session-lifetime rows and details sections, which the env-doc guard requires; measured.
-docs/ENV.md=37655 share=5
+# docs/ENV.md 37693 adds 38 over 37655 (0.9.3 LIFE review): the idle-timeout turn-on and rollout-stamp sentences; measured.
+docs/ENV.md=37693 share=5

@@ -1562,7 +1562,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The server refuses the idle session as expired (`auth.fail` reason `expired_session`), so the person signs in again.
 - It bounds a browser left unattended, not a copied cookie, which its holder can keep active up to the session's end.
 - A person who only reads, or only types in a terminal, meets it; a session can end up to a tenth of it early.
-- During a mixed-version rollout an older replica neither renews nor enforces it.
+- Turning it on ends, at their next request, sessions signed in more than the timeout ago with no write since: their cookies carry no activity stamp.
+- During a mixed-version rollout an older replica neither renews nor enforces it, and a cookie it re-signs (a view switch) loses its activity stamp.
 
 ### `WARDYN_OIDC_SILENT_REAUTH`
 
