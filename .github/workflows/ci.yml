@@ -1791,6 +1791,18 @@ jobs:
       TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
+  trivy-wardyn-runnerd:
+    name: trivy (wardyn-runnerd)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      TRIVY_IMAGE: wardyn-runnerd
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.runnerd
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
   trivy-agent-base:
     name: trivy (agent-base)
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
@@ -2153,6 +2165,7 @@ jobs:
       - trivy-wardynd
       - trivy-wardynd-fips
       - trivy-wardyn-proxy
+      - trivy-wardyn-runnerd
       - trivy-agent-base
       - trivy-agent-codex-cli
       - trivy-agent-aws-sso

@@ -5,6 +5,7 @@ package offline
 
 import (
 	"errors"
+	"reflect"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/google/uuid"
@@ -28,6 +29,9 @@ func samePendingAction(a, b runnerwire.PendingAction) bool {
 		return false
 	}
 	if (a.Quarantine == nil) != (b.Quarantine == nil) || (a.Quarantine != nil && *a.Quarantine != *b.Quarantine) {
+		return false
+	}
+	if !reflect.DeepEqual(a.NodeRecord, b.NodeRecord) {
 		return false
 	}
 	if a.Recovery == nil || b.Recovery == nil {

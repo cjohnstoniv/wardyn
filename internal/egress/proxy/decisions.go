@@ -31,6 +31,7 @@ import (
 type decisionSink struct {
 	writerLock   *os.File
 	local        *runnerspool.Spool
+	remote       *remoteSink // k8s runners: runnerd's sink, the only spool writer
 	reservations map[uuid.UUID]spoolReservation
 	heldBytes    int64 // the sum of the reservations' bytes
 	activityDir  string
@@ -71,6 +72,10 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
+	if s.remote != nil {
+		s.remote.emit(log)
+		return
+	}
 	if s.local != nil {
 		s.emitLocal(log)
 		return
@@ -243,6 +248,10 @@ func (s *decisionSink) close(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
+	if s.remote != nil {
+		s.mu.Unlock()
+		return s.remote.close(ctx)
+	}
 	if s.local != nil {
 		err := errors.Join(s.local.Close(), s.writerLock.Close())
 		s.mu.Unlock()

@@ -12,7 +12,7 @@
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
-  - the eight image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
+  - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
@@ -483,20 +483,20 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)",
-    "trivy (wardynd-fips)", "runner-units"
+    "trivy (wardynd-fips)", "runner-units", "trivy (wardyn-runnerd)"
   ]
 }
 JSON
 ```
 
 - The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
-- The last two, **`trivy (wardynd-fips)` and `runner-units`**, are not required today.
+- The last three, **`trivy (wardynd-fips)`, `runner-units` and `trivy (wardyn-runnerd)`**, are not required today.
 - Their jobs report on every pull request, but a red one blocks no merge until the owner runs this PATCH.
-- Run as written, the command drops nothing that is required now and adds those two contexts.
+- Run as written, the command drops nothing that is required now and adds those three contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
 - Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
-- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the eight images a release publishes.
+- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the nine images a release publishes.
 - Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
 - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
   apart.
@@ -581,7 +581,7 @@ JSON
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardynd-fips wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
+  for img in wardynd wardynd-fips wardyn-proxy wardyn-runnerd agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

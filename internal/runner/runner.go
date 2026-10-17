@@ -9,6 +9,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -628,4 +629,128 @@ var ErrDriveLifecycleUnavailable = errors.New("runner: this substrate cannot del
 // wraps ErrDriveLifecycleUnavailable.
 type DriveLifecycleChecker interface {
 	CanManageDrives(ctx context.Context) error
+}
+
+// Containment-pending kinds (a k8s runner, design K1 §3.1 Q2): StopProxy could not prove the proxy
+// stopped, and the run's other pod is either proven stopped (agent_only) or also past its delete
+// bound (pending_delete). Never plain containment: the run stays held until completion evidence.
+const (
+	ContainmentAgentOnly     = "agent_only"
+	ContainmentPendingDelete = "pending_delete"
+)
+
+// ContainmentPendingError is StopProxy's typed answer while a k8s runner's proxy is not yet proven
+// stopped and the run is held as containment pending. The manager counts the run as contained for
+// READY only: it stamps no ProxyStoppedAt, writes no receipt, and keeps retrying each tick.
+type ContainmentPendingError struct {
+	Kind string
+	// NameReused: a Node name the run used was seen on another machine; only the two-person "node
+	// powered off" record releases it.
+	NameReused bool
+	// NoCausalAssociation: some pod of the run has no causal node UID, so an operator record needs
+	// two humans whatever the org setting.
+	NoCausalAssociation bool
+	// Tuple is what an operator record must name to release the run.
+	Tuple *NodeTuple
+	Err   error
+}
+
+func (e *ContainmentPendingError) Error() string {
+	return fmt.Sprintf("containment pending (%s): %v", e.Kind, e.Err)
+}
+
+func (e *ContainmentPendingError) Unwrap() error { return e.Err }
+
+// NodeSample is one observation of the Node holding a name: its UID and the machine identity it
+// published. InternalIP is carried for display and the tier-2 host check; it is never part of a
+// reuse comparison.
+type NodeSample struct {
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
+	MachineID  string `json:"machine_id"`
+	SystemUUID string `json:"system_uuid"`
+	InternalIP string `json:"internal_ip,omitempty"`
+}
+
+// NodeTuplePod is one pod's part of a NodeTuple.
+type NodeTuplePod struct {
+	Component string `json:"component"`
+	UID       string `json:"uid"`
+	NodeName  string `json:"node_name,omitempty"`
+	// CausalUID is set only on a causal association; PostBind only when the after-list showed a
+	// holder. An absent value is stored as absent, never filled in.
+	CausalUID        string      `json:"causal_uid,omitempty"`
+	PostBind         *NodeSample `json:"post_bind,omitempty"`
+	BeforeHolderUID  string      `json:"before_holder_uid,omitempty"`
+	ClosingHolderUID string      `json:"closing_holder_uid,omitempty"`
+}
+
+// NodeTuple binds an operator's node record to one run's recorded machine facts (Codex R9-L1). The
+// runner accepts a record only while its own record still equals the tuple both approvers saw.
+type NodeTuple struct {
+	RunID  uuid.UUID      `json:"run_id"`
+	Pods   []NodeTuplePod `json:"pods"`
+	Reuses []NodeSample   `json:"reuses,omitempty"`
+}
+
+// ProxyObservation is what the k8s runner's periodic pod list saw of one run's proxy pod.
+type ProxyObservation string
+
+const (
+	ProxyRunning   ProxyObservation = "running"
+	ProxyPending   ProxyObservation = "pending"
+	ProxyFailed    ProxyObservation = "failed"
+	ProxySucceeded ProxyObservation = "succeeded"
+	ProxyNotFound  ProxyObservation = "not_found"
+	// ProxyPendingPastStart is a proxy still Pending past the substrate's start timeout.
+	ProxyPendingPastStart ProxyObservation = "pending_past_start"
+)
+
+// Exited reports an observation that is evidence the proxy will not serve again: a terminal phase or
+// a missing pod (design K1 §6.2 P1). NotFound records the obligation but is never completion evidence.
+func (o ProxyObservation) Exited() bool {
+	return o == ProxyFailed || o == ProxySucceeded || o == ProxyNotFound
+}
+
+// ProxyObserver is an OPTIONAL capability of a substrate whose proxy self-lapses: one call lists
+// every run's proxy pod (the k8s runner's 30 s pod list).
+type ProxyObserver interface {
+	ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uuid.UUID]ProxyObservation, error)
+}
+
+// NodeRecordAcceptor is an OPTIONAL capability: check an operator's node record against the run's
+// own record and accept it as an infrastructure fence, or refuse it with the reason.
+type NodeRecordAcceptor interface {
+	AcceptNodeRecord(ctx context.Context, ref string, rec NodeRecord) error
+}
+
+// Node-record attestations (design K1 §3.1 (b)).
+const (
+	AttestNodePoweredOff = "node_powered_off"
+	AttestNoPriorHolder  = "no_prior_holder"
+)
+
+// NodeRecordApprover is one approver of a node record as the org recorded it.
+type NodeRecordApprover struct {
+	Principal string `json:"principal"`
+	Email     string `json:"email,omitempty"`
+	// Human is false for an admin token, which can never make the record.
+	Human bool `json:"human"`
+}
+
+// ErrNodeRecordRefused marks a node record the runner refused for good: its reason is final for
+// that record, which a new record (with fresh approvals) can replace.
+var ErrNodeRecordRefused = errors.New("node record refused")
+
+// NodeRecord is a security operator's audited record that the machines which may have run a run's
+// pods are powered off, or that no other machine held the name.
+type NodeRecord struct {
+	ID          uuid.UUID            `json:"id"`
+	Attestation string               `json:"attestation"`
+	Tuple       NodeTuple            `json:"tuple"`
+	Approvers   []NodeRecordApprover `json:"approvers"`
+	// FourEyes is the org's four-eyes setting for security-operator writes when the record was made.
+	FourEyes bool   `json:"four_eyes"`
+	Source   string `json:"source"`
+	SourceID string `json:"source_id"`
 }

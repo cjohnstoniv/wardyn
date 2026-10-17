@@ -192,6 +192,27 @@ func TestRegisterSendsTheEngineArch(t *testing.T) {
 	}
 }
 
+// A k8s runner reports its --arch (or WARDYN_RUNNERD_ARCH) at registration, never the engine's, and
+// refuses to register without one before anything is sent. A Docker runner refuses --arch.
+func TestRegisterK8sSendsItsArch(t *testing.T) {
+	k8s := []string{"--substrate=k8s", "--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}
+	if sent, _, _, err := registerWith(t, append(k8s, "--arch=amd64")...); err != nil || sent.Arch != "amd64" {
+		t.Fatalf("arch sent = %q, %v; want the flag's amd64, not the engine's arm64", sent.Arch, err)
+	}
+	for _, bad := range []struct{ name, want string }{{"", "want amd64 or arm64"}, {"x86_64", "want amd64 or arm64"}} {
+		if _, called, _, err := registerWith(t, append(k8s, "--arch="+bad.name)...); err == nil || called || !strings.Contains(err.Error(), bad.want) {
+			t.Fatalf("--arch=%q: called=%v err=%v, want a refusal before any request", bad.name, called, err)
+		}
+	}
+	if _, called, _, err := registerWith(t, "--arch=amd64"); err == nil || called || !strings.Contains(err.Error(), "applies only to --substrate=k8s") {
+		t.Fatalf("docker --arch: called=%v err=%v, want a refusal", called, err)
+	}
+	t.Setenv(archEnv, "arm64")
+	if sent, _, _, err := registerWith(t, k8s...); err != nil || sent.Arch != "arm64" {
+		t.Fatalf("arch sent from %s = %q, %v; want arm64", archEnv, sent.Arch, err)
+	}
+}
+
 // registerWith runs register with args against a server that records the request and answers it.
 func registerWith(t *testing.T, args ...string) (types.RunnerRegisterRequest, bool, string, error) {
 	t.Helper()

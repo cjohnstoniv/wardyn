@@ -28,6 +28,10 @@ WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"
 fails=0
+# The derived list must still name every product image; one dropped from release.yml is a failure, not a shorter check.
+for need in wardynd wardyn-proxy wardyn-runnerd; do
+  grep -qx "$need" <<<"$IMAGES" || { echo "FAIL $need: release.yml publishes no such image"; fails=$((fails+1)); }
+done
 # The EXACT identity of the release workflow run for the requested tag: an image or checksum file signed
 # by any other tag's run is refused. (A promotion adds its own signature at the target tag: RELEASING.md.)
 ID="https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/$TAG"

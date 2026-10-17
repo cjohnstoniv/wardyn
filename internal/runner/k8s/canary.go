@@ -114,7 +114,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	podName := "wardyn-egress-canary-" + suffix
 	// labelRun carries this invocation's own unique suffix so two wardynd instances booting concurrently
 	// don't share a selector — instance A's phase-B deny-all netpol must never match instance B's phase-A pod.
-	labels := wardynLabels(runID, componentCanary, nil)
+	labels := d.stampRunner(wardynLabels(runID, componentCanary, nil)) // a runner's own, not foreign (§3.4 item 3)
 
 	if denyAll {
 		netpolName := "wardyn-egress-canary-netpol-" + suffix
@@ -155,6 +155,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 	}
 	// Same placement as the run pods: the canary must prove enforcement on the nodes runs use.
 	d.placement.apply(pod, runID, componentCanary, nil)
+	pod.Labels = d.stampRunner(pod.Labels)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return canaryPhaseResult{err: fmt.Errorf("%s: create canary pod: %w", phaseName, err)}
 	}
@@ -199,7 +200,7 @@ func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reache
 	if pollErr != nil {
 		// Name the remedy on timeout — "timed out" alone gives an operator nothing to act on.
 		if errors.Is(pollErr, context.DeadlineExceeded) {
-			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations): %w",
+			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations), or a node selector or required node affinity that no node satisfies (a runner pins kubernetes.io/arch to its --arch; an affinity naming the other arch leaves every pod Pending): %w",
 				canaryWaitTimeout, reachedRunning, pollErr)
 		}
 		return reachedRunning, 0, pollErr

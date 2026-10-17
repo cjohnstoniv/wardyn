@@ -735,6 +735,11 @@ jobs:
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
             stage: "true"
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
+            build-args: |
+              RELEASE_BUILD=true
+            stage: "true"
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""

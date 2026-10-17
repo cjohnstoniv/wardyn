@@ -1,0 +1,208 @@
+{{- include "runnerd.validate" . -}}
+{{- $fullname := include "runnerd.fullname" . -}}
+{{- $tag := include "runnerd.tag" . -}}
+{{- $stateDir := "/var/lib/wardyn-runnerd" -}}
+{{- $placement := dict -}}
+{{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
+{{- with index $.Values.k8s.sandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
+{{- end -}}
+{{- range $key := list "podAnnotations" "podLabels" -}}
+{{- if hasKey $placement $key -}}
+{{- $strs := dict -}}
+{{- range $k, $v := get $placement $key }}{{- $_ := set $strs $k (toString $v) -}}{{- end -}}
+{{- $_ := set $placement $key $strs -}}
+{{- end -}}
+{{- end -}}
+{{- $rtc := list -}}
+{{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end -}}
+{{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+spec:
+  # One writer: Recreate plus daemon.lock on the volume. Never raise replicas.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "runnerd.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "runnerd.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $fullname }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        - name: register
+          image: "{{ .Values.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - register
+            - --substrate=k8s
+            - --if-unregistered
+            - {{ printf "--org=%s" .Values.org | quote }}
+            - --token-file=/etc/wardyn/registration/token
+            - --state-dir={{ $stateDir }}
+            - --name={{ $fullname }}
+            - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
+            {{- range $flag, $key := dict "max-runs" "maxRuns" "total-cpu" "totalCPU" "total-memory" "totalMemory" "total-disk" "totalDisk" "per-run-cpu" "perRunCPU" "per-run-memory" "perRunMemory" "per-run-disk" "perRunDisk" }}
+            {{- with index $.Values.limits $key }}
+            - {{ printf "--%s=%v" $flag . | quote }}
+            {{- end }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: state
+              mountPath: {{ $stateDir }}
+            - name: registration
+              mountPath: /etc/wardyn/registration
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: runnerd
+          image: "{{ .Values.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --substrate=k8s
+            - {{ printf "--org=%s" .Values.org | quote }}
+            - --state-dir={{ $stateDir }}
+            - {{ printf "--runs-namespace=%s" .Values.runsNamespace | quote }}
+            - {{ printf "--relay-service=%s.%s.svc.%s" $fullname .Release.Namespace .Values.clusterDomain | quote }}
+            - --relay-listen=$(POD_IP)
+            - {{ printf "--proxy-image=%s:%s" .Values.proxyImage.repository $tag | quote }}
+            - {{ printf "--recording-store=%s" .Values.recording | quote }}
+            - {{ printf "--max-pod-lifetime=%s" .Values.sandbox.maxPodLifetime | quote }}
+            {{- if .Values.trustedCA.configMap }}
+            - --trusted-ca-file=/etc/wardyn/trusted-ca/ca.pem
+            {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Settings runnerd reads from its environment (cmd/wardyn-runnerd/k8s_env.go); it refuses an
+            # unknown WARDYN_RUNNERD_* name, and TestChartSetsOnlyWhatRunnerdReads holds this list to its.
+            # Pinned as every run pod's kubernetes.io/arch node selector; one release per arch.
+            - name: WARDYN_RUNNERD_ARCH
+              value: {{ .Values.sandbox.arch | quote }}
+            - name: WARDYN_RUNNERD_POD_SELECTOR
+              value: {{ include "runnerd.selectorLabels" . | fromYaml | toJson | quote }}
+            - name: WARDYN_RUNNERD_RELAY_PORT
+              value: {{ .Values.relay.targetPort | quote }}
+            - name: WARDYN_RUNNERD_RELAY_SERVICE_PORT
+              value: {{ .Values.relay.servicePort | quote }}
+            - name: WARDYN_RUNNERD_SINK_PORT
+              value: {{ .Values.sink.port | quote }}
+            - name: WARDYN_RUNNERD_CLUSTER_DOMAIN
+              value: {{ .Values.clusterDomain | quote }}
+            {{- with .Values.apiServer.peers }}
+            - name: WARDYN_RUNNERD_APISERVER_PEERS
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.egress.hardDenyCIDRs }}
+            - name: WARDYN_RUNNERD_HARD_DENY_CIDRS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            # The kubelet-floor check reads the node list the ClusterRole always grants.
+            - name: WARDYN_K8S_READ_NODES
+              value: "true"
+            {{- with .Values.k8s.imagePullSecret }}
+            - name: WARDYN_K8S_IMAGE_PULL_SECRET
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $placement }}
+            - name: WARDYN_K8S_SANDBOX_PLACEMENT
+              value: {{ toJson $placement | quote }}
+            {{- end }}
+            {{- if $rtc }}
+            - name: WARDYN_CONFINEMENT_MAP
+              value: {{ join ";" $rtc | quote }}
+            {{- end }}
+          ports:
+            - name: relay
+              containerPort: {{ .Values.relay.targetPort }}
+              protocol: TCP
+            - name: sink
+              containerPort: {{ .Values.sink.port }}
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: {{ $stateDir }}
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.trustedCA.configMap }}
+            - name: trusted-ca
+              mountPath: /etc/wardyn/trusted-ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}
+        - name: registration
+          secret:
+            secretName: {{ .Values.registration.existingSecret }}
+            optional: true
+            items:
+              - key: token
+                path: token
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.trustedCA.configMap }}
+        - name: trusted-ca
+          configMap:
+            name: {{ . }}
+            items:
+              - key: ca.pem
+                path: ca.pem
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

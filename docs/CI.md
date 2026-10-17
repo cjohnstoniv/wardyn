@@ -367,6 +367,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `trivy-agent-aws-sso` (check `trivy (agent-aws-sso)`) | 52 | 1.3 | 1.8 | 40 |
 | `gates (gitleaks)` | 60 | 0.8 | 1.0 | 15 |
 | `trivy-wardyn-proxy` (check `trivy (wardyn-proxy)`) | 53 | 0.9 | 1.2 | 40 |
+| `trivy-wardyn-runnerd` (check `trivy (wardyn-runnerd)`) | – | pending | pending | 40 |
 | `gates (govulncheck)` | 60 | 0.7 | 1.0 | 15 |
 | `diagrams` | 60 | 0.6 | 0.9 | 10 |
 | `compose` | 60 | 0.3 | 0.5 | 10 |
@@ -443,7 +444,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
    | `code` | any ui or backend path | `ui-e2e`, `helm-install-test` |
    | `backend` | any backend path (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
-   | `images` | a `backend` path other than a Go `*_test.go` file | the eight `trivy (<image>)` jobs |
+   | `images` | a `backend` path other than a Go `*_test.go` file | the nine `trivy (<image>)` jobs |
    | `notices` | `images`, [`ui/package.json`](../ui/package.json), [`ui/pnpm-lock.yaml`](../ui/pnpm-lock.yaml), `THIRD-PARTY-NOTICES.md` | `notices` |
 
    - A path that matches no earlier rule counts as backend, so a new directory runs everything until someone classifies it.
@@ -496,12 +497,12 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
   - A required job with a **matrix** never skips at the job level.
     - GitHub does not expand a skipped matrix: it reports one check with the name unexpanded (`gates (${{ matrix.gate }})`, the same row [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) documents for the nightly),
       - so `gates (gitleaks)` would never report and the pull request would wait on it forever.
-    - This is why the image scans are eight jobs (`trivy-wardynd` … `trivy-agent-novnc`, reporting as `trivy (<image>)`) and not a matrix:
+    - This is why the nine image scans are separate jobs, not a matrix:
       - their steps are written once and shared through a YAML anchor, and each job skips on `images == 'false'`.
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the eight `trivy (<image>)` jobs on `images == 'false'`.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
 - `build` needs every `go` leg and runs with `if: !cancelled()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
@@ -557,7 +558,7 @@ So:
 
 - A change to Go still asks for 35 runners.
 - Branch protection requires 24 contexts and a change to Go can affect every one of them,
-  - so that count moves only if contexts are merged (the eight image scans into one or two jobs, the five `gates` into one), which is a branch-protection change.
+  - so that count moves only if contexts are merged (the image scans into one or two jobs, the five `gates` into one), which is a branch-protection change.
 - What changed for it is the wall time: `test-pg` and `ui-e2e` are split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran 341 (547 s).
 - A console-only change is held at 10.5 minutes by the whole vitest suite in `ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two more jobs.
 - A run of everything (a push to `main`, a `train/*` pull request) runs that same `ui` job, so `ui` is its longest job as well.

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -145,6 +146,10 @@ type PendingAction struct {
 	Kind       types.RunnerActionKind       `json:"kind"`
 	RunID      uuid.UUID                    `json:"run_id"`
 	Ref        string                       `json:"ref"`
+	// NodeRecord, on a stop_proxy action, is a security operator's "node powered off" or "no prior
+	// holder" record for a k8s runner's held run (design K1 §3.1 (b)). The runner checks it against
+	// its own record and its acceptance list, and refuses it with the reason otherwise.
+	NodeRecord *runner.NodeRecord `json:"node_record,omitempty"`
 }
 
 // MaxActionResultBytes bounds one encoded action_result body; the org refuses
@@ -183,6 +188,22 @@ type RunState struct {
 	SpoolDepth     int        `json:"spool_depth"`
 	SpoolDrops     int        `json:"spool_drops"`
 	ResidentGrants []string   `json:"resident_grants,omitempty"`
+	// ContainmentPending is set while a k8s runner holds the run without completion evidence for its
+	// proxy (design K1 §3.1 Q2). It is never plain containment: ProxyStoppedAt stays unset.
+	ContainmentPending *ContainmentPending `json:"containment_pending,omitempty"`
+}
+
+// ContainmentPending is RunState's containment-pending report.
+type ContainmentPending struct {
+	Kind  string    `json:"kind"` // runner.ContainmentAgentOnly | runner.ContainmentPendingDelete
+	Since time.Time `json:"since"`
+	// NameReused: run detail shows "node name reused" and only a two-person "node powered off"
+	// record releases the run.
+	NameReused bool `json:"name_reused,omitempty"`
+	// NoCausalAssociation: run detail shows "no causal association"; a record needs two humans.
+	NoCausalAssociation bool `json:"no_causal_association,omitempty"`
+	// Tuple is what both approvers of a node record are shown and what the record must name.
+	Tuple *runner.NodeTuple `json:"tuple,omitempty"`
 }
 
 // Byte-stream kinds carried by OPEN.

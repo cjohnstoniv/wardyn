@@ -123,6 +123,8 @@
 # docs/sdk.md 18155 = 18149 + 6 (UIb), measured at the wave-A merge.
 # docs/sdk.md 17713 adds 44 over 17669 (0.9.3 RV3D): 37 for runner_capabilities_unavailable at the three pool doors when a remote-hosted runner cannot report, 7 for the runner revoke in the lock_unavailable row; measured.
 # docs/sdk.md 18199 = 18155 + 44 (RV3D), measured at the wave-A merge.
+# docs/sdk.md 17760 adds 91 over 17669 (0.9.3 C): runner_recording_off, recording_store_off and recording_off, measured.
+# docs/sdk.md 18199 = 18199 + 0 (K2), measured at the wave-A merge.
 docs/sdk.md=18199 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

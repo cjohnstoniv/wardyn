@@ -124,7 +124,7 @@ done
 # org.opencontainers.image.licenses must be present AND must not be a bare
 # "Apache-2.0" on an image that also conveys GPL or vendor-licensed content;
 # enterprise registries key off that field, so a wrong value is worse than none.
-# Only the two distroless product images are legitimately Apache-2.0 alone.
+# Only the three distroless product images are legitimately Apache-2.0 alone.
 # DERIVED from release.yml's matrix, never hand-listed: a second copy of "which
 # images do we publish" is a second thing to forget. If the workflow is absent
 # (this gate runs against a throwaway tree in test-image-pins.sh) there are no
@@ -138,7 +138,7 @@ if [ -f "$RELEASE_WF" ]; then
     fail=1
   fi
 fi
-APACHE_ONLY_OK="deploy/compose/Dockerfile.wardynd deploy/compose/Dockerfile.proxy"
+APACHE_ONLY_OK="deploy/compose/Dockerfile.wardynd deploy/compose/Dockerfile.proxy deploy/compose/Dockerfile.runnerd"
 
 for df in "${PUBLISHED_DOCKERFILES[@]}"; do
   [ -f "$df" ] || { echo "FAIL: $df is listed as producing a published image but does not exist." >&2; fail=1; continue; }

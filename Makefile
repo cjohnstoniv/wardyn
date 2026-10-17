@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -638,6 +638,7 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-workflow-artifacts.sh
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
+	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -779,9 +780,10 @@ licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.tx
 # No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
 # which would trade a network-free gate for a flaky one and break the pinning
 # discipline scripts/check-image-pins.sh exists to enforce.
-helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
+helm-lint: ## Lint + template-render both Helm charts (default + all-on values + the refusals; runnerd RBAC parity)
 	@echo "Linting + rendering the Helm chart..."
 	./scripts/check-helm-templates.sh
+	./scripts/test-helm-runnerd.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
@@ -1765,6 +1767,9 @@ compose-build: ## Build compose images (wardynd -tags docker + proxy)
 	@echo "Building compose images..."
 	docker compose -f $(COMPOSE_FILE) build
 	docker compose -f $(COMPOSE_FILE) --profile build-only build proxy-image
+
+runnerd-image: ## Build the wardyn-runnerd image (deploy/compose/Dockerfile.runnerd); stamps the revision label scripts/gpl-source-offer.sh reads for its pre-publication note
+	docker build $(DOCKER_BUILD_ARGS) --build-arg RELEASE_BUILD=true -f deploy/compose/Dockerfile.runnerd -t wardyn/wardyn-runnerd:local .
 
 compose-up: ## Start the docker-compose stack (postgres + dex + wardynd)
 	@echo "Starting docker-compose stack..."

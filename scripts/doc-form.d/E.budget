@@ -60,4 +60,7 @@
 # docs/ENV.md 37619 = 37620 + -1 (RV4e), measured at the wave-A merge.
 # docs/ENV.md 37389 adds 59 (0.9.3 M-6/R19): the air-gapped default of the drive probe image.
 # docs/ENV.md 37679 = 37619 + 60 (M2), measured at the wave-A merge.
-docs/ENV.md=37679 share=5
+# docs/ENV.md 37476 adds 146 over 37330 (0.9.3 K2), measured: the seven WARDYN_RUNNERD_* rows a Kubernetes runner reads, which the env-doc guard requires.
+# docs/ENV.md 37518 adds 42 over 37476 (0.9.3 K8), measured: the WARDYN_RUNNERD_ARCH row, which the env-doc guard requires.
+# docs/ENV.md 37868 = 37679 + 189 (K2), measured at the wave-A merge.
+docs/ENV.md=37868 share=5
