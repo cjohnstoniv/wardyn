@@ -1063,3 +1063,28 @@ func TestAzureARM_DeadSignInHoldsThenResumes(t *testing.T) {
 		t.Errorf("a boot resolve raised %d request(s), want none", n)
 	}
 }
+
+// The door is decided once, where the withheld lane is closed: with its credential gone it returns no
+// grant and takes back the hosts it opened, and with the credential present it returns the grant and
+// leaves the allowlist alone.
+func TestAzureCLIPlanCloseWithheldReturnsTheDoorItDecided(t *testing.T) {
+	gate := &proxy.AzureARMGrant{TenantID: "tenant"}
+	plan := azureCLIPlan{gate: gate, opened: []string{armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	keep := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: armscope.Host}}}
+
+	policy := types.RunPolicySpec{AllowedDomains: []string{"example.com", armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	if got := plan.closeWithheld(&policy, nil); got != nil {
+		t.Errorf("a withheld credential kept the door: %+v", got)
+	}
+	if !slices.Equal(policy.AllowedDomains, []string{"example.com"}) {
+		t.Errorf("allowed domains after closing = %v, want only the run's own", policy.AllowedDomains)
+	}
+
+	policy = types.RunPolicySpec{AllowedDomains: []string{"example.com", armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	if got := plan.closeWithheld(&policy, keep); got != gate {
+		t.Errorf("a present credential returned %+v, want the plan's door", got)
+	}
+	if len(policy.AllowedDomains) != 3 {
+		t.Errorf("an open door lost allowlist entries: %v", policy.AllowedDomains)
+	}
+}

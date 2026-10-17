@@ -186,7 +186,12 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 
 	// (4) NEGATIVE CONTROL — the heal still heals. A decision made AFTER the last
 	// edit is genuinely the operator's newest action, and it is re-applied.
-	time.Sleep(25 * time.Millisecond)
+	// The edit is moved a minute into the past instead of waiting: the decision's stamp is translated onto the
+	// database clock earlier by however long the app took to read its own clock (tens of milliseconds under
+	// load, by design), so a short sleep is not an ordering.
+	if _, err := pool.Exec(ctx, `UPDATE workspaces SET egress_edited_at = egress_edited_at - interval '1 minute' WHERE id=$1`, ws.ID); err != nil {
+		t.Fatalf("age the operator's edit: %v", err)
+	}
 	decideAlways(t, kept)
 	if _, err := srv.ReconcileWorkspaceEgressDecisions(ctx); err != nil {
 		t.Fatalf("ReconcileWorkspaceEgressDecisions (the newer decision): %v", err)

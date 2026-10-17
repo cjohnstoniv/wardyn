@@ -447,6 +447,7 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"default without pool":                   {setupOptions{claim: true, makeDefault: true}, nil, "--default needs --pool"},
 		"pool without claim":                     {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
 		"unsafe setting":                         {setupOptions{network: "net work"}, nil, "unsupported characters"},
+		"unsafe docker host":                     {setupOptions{}, func(f *setupFixture) { f.host.dockerHost = "unix:///run/docker.sock\nEnvironment=X=1" }, "unsupported characters"},
 		"docker unusable":                        {setupOptions{}, func(f *setupFixture) { f.engineErr = os.ErrPermission }, "permission denied"},
 		"relay probe unusable":                   {setupOptions{}, func(f *setupFixture) { f.relayErr = os.ErrPermission }, "No token was spent"},
 		"relay address another computer reaches": {setupOptions{relayListen: "192.168.1.20"}, nil, "never an address another computer can reach"},

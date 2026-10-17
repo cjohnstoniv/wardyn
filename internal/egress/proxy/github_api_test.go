@@ -267,3 +267,21 @@ func TestGitHubAPI_OtherPortTunnelRefused(t *testing.T) {
 	p.handleConnect(rec, req)
 	ghRefused(t, rec)
 }
+
+// A deny on the door's host wins over the door: a revive whose owner's profile now denies
+// api.github.com keeps the stored door, and the CONNECT that would reach it is denied, so the proxy
+// neither fails to start nor serves the host.
+func TestGitHubAPI_DeniedHostIsNotServedByTheDoor(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxySpec(t, up, types.RunPolicySpec{AllowedDomains: []string{"api.github.com:443"}, DeniedDomains: []string{"api.github.com"}})
+	req := httptest.NewRequest(http.MethodConnect, "api.github.com:443", nil)
+	req.Host = "api.github.com:443"
+	rec := httptest.NewRecorder()
+	p.handleConnect(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d body %s, want 403", rec.Code, rec.Body)
+	}
+	if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+		t.Fatalf("a denied host reached upstream: mints %d seen %q", mints, seen)
+	}
+}

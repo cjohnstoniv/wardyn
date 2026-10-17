@@ -253,13 +253,19 @@ func (pl azureCLIPlan) gateFor(injections []runner.InjectionGrant) *proxy.AzureA
 // only behind the door: without it the proxy would treat the Entra sign-in
 // host as an ordinary allowed host the run's own policy never listed. An entry
 // the policy carried on its own is not the lane's and stays.
-func (pl azureCLIPlan) closeWithheld(policy *types.RunPolicySpec, injections []runner.InjectionGrant) {
-	if pl.gate == nil || pl.gateFor(injections) != nil {
-		return
+//
+// It returns the door the run keeps, decided here once from the same injections:
+// the caller hands the proxy this grant, not a second reading of a list a later
+// phase (the MCP servers' header credentials) may have added to.
+func (pl azureCLIPlan) closeWithheld(policy *types.RunPolicySpec, injections []runner.InjectionGrant) *proxy.AzureARMGrant {
+	gate := pl.gateFor(injections)
+	if pl.gate == nil || gate != nil {
+		return gate
 	}
 	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(entry string) bool {
 		return slices.Contains(pl.opened, entry)
 	})
+	return nil
 }
 
 // azureCLIReviveRefusal refuses the revive of a run that has the door once its

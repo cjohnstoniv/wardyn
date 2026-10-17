@@ -146,6 +146,9 @@ func newCredentialWalk(t *testing.T) *credentialWalk {
 		}
 		w.invitations[c.name] = rec.ID
 	}
+	// The walk's identities are written a few milliseconds before their tokens are minted; a mint inside the
+	// anchor's stall allowance of its sponsorship is refused, and the walk would find nothing to present.
+	ageSponsorships(t, w.pool)
 	w.server = httptest.NewServer(panicFails(t, w.h.srv.Handler()))
 	t.Cleanup(w.server.Close)
 	return w
