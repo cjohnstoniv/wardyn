@@ -160,7 +160,7 @@
 # docs/AUDIT-ACTIONS.md 47250 = 47229 + 21 (UIM), measured at the wave-B merge.
 # docs/AUDIT-ACTIONS.md 46470 adds 81 over 46389, measured: the direct deletes record what they removed and the go checksum opt-out on site_config.write.
 # docs/AUDIT-ACTIONS.md 46485 adds 15 over 46470, measured: the per-principal attach cap on operator-owned and service identity runs.
-# docs/AUDIT-ACTIONS.md 47362 = 47250 + 112 (RV4f), measured at the wave-B merge.
+# docs/AUDIT-ACTIONS.md 47362 = 47250 + 112 (RV4f), measured at the wave-C merge.
 # docs/AUDIT-ACTIONS.md 46579 adds 21 over 46558, measured (0.9.3 RV6 merge of UIM into batch/093): the run.create pids_limit wording UIa added joins the recording-off reasons C added.
 # docs/AUDIT-ACTIONS.md 47362 = 47362 + 0 (RV6), measured at the wave-C merge.
 docs/AUDIT-ACTIONS.md=47362 share=8

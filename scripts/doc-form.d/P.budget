@@ -18,7 +18,7 @@
 # docs/POLICIES.md 18228 adds 38 over 18190 (DOCS3): the exact GitHub and Azure DevOps deny-host lists in allowed_domains.
 # docs/POLICIES.md 18258 = 18207 + 51 (DOCS3), measured at the wave-B merge.
 # docs/POLICIES.md 18237 adds 47 over 18190, measured: requirement-row egress safety rests on write-side authorization and provenance, not a fold-time clamp.
-# docs/POLICIES.md 18311 = 18258 + 53 (RV4f), measured at the wave-B merge.
+# docs/POLICIES.md 18311 = 18258 + 53 (RV4f), measured at the wave-C merge.
 docs/POLICIES.md=18311 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
