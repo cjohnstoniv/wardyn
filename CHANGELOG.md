@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.3-rc.1] — 2026-10-16
+
 Laptop runners in a locked-down enterprise: a corporate CA, errors an SDK can read, disk on VM engines, and images for
 both architectures.
 
