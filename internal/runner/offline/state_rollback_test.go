@@ -20,7 +20,7 @@ func TestStateALaterRunnerWroteStillLoads(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(m.dir, "state.json")
+	path := filepath.Join(m.dir, "offline", "state.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
