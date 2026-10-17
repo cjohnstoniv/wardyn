@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -321,10 +322,11 @@ func scanVars(t *testing.T, root string, readersOnly bool) map[string]bool {
 			t.Fatalf("walk %s: %v", sub, err)
 		}
 	}
+	globs := []string{"*.service", "*.plist", "*.env.example"}
 	if readersOnly {
-		return seen
+		globs = globs[:2] // an env example only writes; the unit and plist read through ${WARDYN_...}
 	}
-	for _, glob := range []string{"*.service", "*.plist", "*.env.example"} {
+	for _, glob := range globs {
 		files, err := filepath.Glob(filepath.Join(root, "deploy", "runner", glob))
 		if err != nil || len(files) == 0 {
 			t.Fatalf("deploy/runner/%s matched no file (err %v) — the runner's templates moved", glob, err)
@@ -334,12 +336,37 @@ func scanVars(t *testing.T, root string, readersOnly bool) map[string]bool {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range wardynVarLit.FindAllString(string(b), -1) {
+			for _, name := range templateVars(string(b), readersOnly) {
 				add(name)
 			}
 		}
 	}
 	return seen
+}
+
+// templateVars is the WARDYN_* names a deploy/runner template names: every one for the forward
+// ratchet, only the ones it expands (${WARDYN_X}) for the reverse ratchet's readers.
+func templateVars(text string, readersOnly bool) []string {
+	if !readersOnly {
+		return wardynVarLit.FindAllString(text, -1)
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		out = append(out, lineVars(line, true)...)
+	}
+	return out
+}
+
+// TestEnvDoc_ReaderScanCountsRunnerTemplateExpansions pins that a variable only a runner template
+// expands (a unit's ExecStart) is a reader, while one it merely mentions in a comment is not.
+func TestEnvDoc_ReaderScanCountsRunnerTemplateExpansions(t *testing.T) {
+	unit := "# WARDYN_RUNNER_MENTIONED is only named here\nExecStart=__WARDYN_RUNNERD__ serve --state-dir ${WARDYN_RUNNER_STATE_DIR}\n"
+	if got := templateVars(unit, true); !reflect.DeepEqual(got, []string{"WARDYN_RUNNER_STATE_DIR"}) {
+		t.Errorf("readers in the unit = %v, want only WARDYN_RUNNER_STATE_DIR", got)
+	}
+	if got := templateVars(unit, false); !slices.Contains(got, "WARDYN_RUNNER_MENTIONED") {
+		t.Errorf("the forward scan lost a name the unit mentions: %v", got)
+	}
 }
 
 // TestEnvDoc_ReaderScanCountsOnlyReads pins what the reverse ratchet counts as a reader: a Go
