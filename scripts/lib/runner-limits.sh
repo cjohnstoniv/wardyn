@@ -152,6 +152,12 @@ _rl_set() {
     # not these.
     if _rl_still="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null 2>/dev/null)" &&
       ! printf '%s\n' "${_rl_still}" | grep -qx -- "$1"; then
+      # Gone from the no-limits list is not yet "someone set limits": the runner may have been removed.
+      if _rl_every="$(wardyn runner remote list --ids </dev/null 2>/dev/null)" &&
+        ! printf '%s\n' "${_rl_every}" | grep -qx -- "$1"; then
+        _rl_say "$1: it was removed from the server meanwhile; nothing was set"
+        return 0
+      fi
       _rl_say "$1: limits were set meanwhile by someone else; they are kept and these were not applied"
       return 0
     fi
