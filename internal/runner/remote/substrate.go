@@ -467,9 +467,13 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
 		adopted.mu.Lock()
 		adopted.offset = res.Gap
-		adopted.pending = false
+		adopted.pending, adopted.recovering = false, true
 		adopted.mu.Unlock()
-		return s.receiveOutput(id, adopted, st, res.Gap)
+		err = s.receiveOutput(id, adopted, st, res.Gap)
+		adopted.mu.Lock()
+		adopted.recovering = false // a dead recovery must not leave the runner retrying
+		adopted.mu.Unlock()
+		return err
 	}
 	defer st.Close()
 	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this

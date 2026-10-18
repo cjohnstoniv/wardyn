@@ -22,9 +22,10 @@ type outputSink struct {
 	offset int64
 	end    func(error)
 	ended  bool
-	// pending: an adopted sink before RecoverOutput has set its offset and gap; HandleOpen turns
-	// the runner's OPEN away with a capacity reset until then, so no writer starts it early.
-	pending bool
+	// pending: an adopted sink before RecoverOutput has set its offset and gap; recovering: while its
+	// recovery stream catches up. HandleOpen turns the runner's OPEN away with a capacity reset while
+	// pending, and while recovering from an offset the sink has not reached, so the runner retries.
+	pending, recovering bool
 }
 
 func (s *outputSink) accept(offset int64, data []byte) (int64, error) {
@@ -89,9 +90,9 @@ func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
 		return ErrUnsupportedStream
 	}
 	sink.mu.Lock()
-	pending := sink.pending
+	wait := sink.pending || (sink.recovering && o.Offset > sink.offset)
 	sink.mu.Unlock()
-	if pending {
+	if wait {
 		return runnerwire.ErrOpenCapacity // the runner retries a capacity reset
 	}
 	go func() { _ = s.receiveOutput(id, sink, st, o.Offset) }()
