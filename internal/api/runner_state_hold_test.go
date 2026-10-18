@@ -17,7 +17,7 @@ import (
 // begins and again once an hour, not on every reconnect, and one runner's rows never space another's.
 func TestRecordRunnerInventoryHoldIsSpacedPerRunner(t *testing.T) {
 	h := newHarness(t)
-	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	h.srv.cfg.Now = func() time.Time { return now }
 	held := func(id uuid.UUID) int {
 		n := 0
