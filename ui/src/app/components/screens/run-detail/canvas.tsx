@@ -178,6 +178,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // A row is one twelfth of the visible pane, so a preset that adds up to
   // GRID_ROWS fills the cockpit exactly and nothing scrolls. Floors keep the
   // arithmetic sane before the first measurement (and under jsdom).
+  // Floored at 480: below that the right column scrolls sideways inside the pane (#2909). Stacking the tiles is 0.10.
   const gridWidth = Math.max(width, 480);
   const rowHeight = Math.max(
     28,
@@ -251,7 +252,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}
-          className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden"
+          className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-auto"
           style={editing ? DOT_GRID : undefined}
         >
           <GridLayout
