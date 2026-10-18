@@ -21,7 +21,7 @@ import { Inbox } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -128,7 +128,7 @@ export function ChangesTab({
                     <Mono className="text-foreground">{changeTarget(c)}</Mono>
                   </TableCell>
                   <TableCell>{c.proposed_by}</TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={c.proposed_at}>
+                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                     {relativeTime(c.proposed_at)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground" title={c.expires_at}>

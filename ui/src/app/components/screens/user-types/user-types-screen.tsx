@@ -17,7 +17,7 @@ import { AlertTriangle, Loader2, UsersRound } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import { governance as governanceApi, type GovernanceSnapshot } from "../../../lib/api/governance";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { USER_TYPES as UT } from "../../../lib/user-types-copy";
 import type { UserType } from "../../../lib/types";
 import {
@@ -189,7 +189,7 @@ export function UserTypesScreen() {
                         {t.description}
                       </TableCell>
                       <TableCell>{t.priority}</TableCell>
-                      <TableCell className="whitespace-nowrap text-muted-foreground" title={t.updated_at}>
+                      <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(t.updated_at)}>
                         {relativeTime(t.updated_at)}
                       </TableCell>
                       <TableCell>

@@ -147,6 +147,21 @@ describe("AddWorkspaceDialog — Branch only where it's wired", () => {
   });
 });
 
+describe("AddWorkspaceDialog — the Empty explanation follows the mount path", () => {
+  it("names the path the workspace is created at, not a fixed literal", async () => {
+    renderDialog(true, null);
+    await userEvent.click(screen.getByRole("button", { name: /^empty/i }));
+    expect(screen.getByText(/empty scratch directory at/i)).toHaveTextContent("/home/agent/work");
+    await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
+    const mount = screen.getByLabelText("Mount path");
+    await userEvent.clear(mount);
+    await userEvent.type(mount, "/workspace");
+    const body = screen.getByText(/empty scratch directory at/i);
+    expect(body).toHaveTextContent("/workspace");
+    expect(body).not.toHaveTextContent("/home/agent/work");
+  });
+});
+
 // F5-F6: picking "devcontainer.json" would store {kind:"recommended"}, which
 // workspaceImage() collapses back into the absent case with no profile yet
 // (the dialog runs no scan) — an honest chip would then contradict the pick

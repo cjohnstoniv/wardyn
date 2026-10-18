@@ -22,7 +22,7 @@ import {
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
 import { LIST_LIMIT } from "../../lib/api/core";
-import { getErrorMessage, relativeTime } from "../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -280,7 +280,7 @@ export function PoliciesScreen() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm text-muted-foreground" title={p.updated_at}>
+                      <span className="text-sm text-muted-foreground" title={absoluteTime(p.updated_at)}>
                         {relativeTime(p.updated_at)}
                       </span>
                     </TableCell>

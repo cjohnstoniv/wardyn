@@ -190,7 +190,7 @@ function HostCard({
             status.age_key?.durable ? (
               "Enabled"
             ) : (
-              <span className="text-warn">
+              <span className="text-warning">
                 Ephemeral — recordings are lost on restart
               </span>
             )

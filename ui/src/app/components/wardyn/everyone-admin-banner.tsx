@@ -29,10 +29,6 @@ function ssoRBACWarnRow(status: SetupStatus | null) {
   return status?.checks?.find((c) => c.id === "sso_rbac" && c.status === "warn") ?? null;
 }
 
-export function everyoneIsAdmin(status: SetupStatus | null): boolean {
-  return ssoRBACWarnRow(status) !== null;
-}
-
 export function EveryoneAdminBanner() {
   const { status } = useShellSetupStatus();
   const operator = useOperator();

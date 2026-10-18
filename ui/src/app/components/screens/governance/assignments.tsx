@@ -35,7 +35,7 @@ import {
   type GovernanceProfile,
   type GovernanceSnapshot,
 } from "../../../lib/api/governance";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
@@ -166,7 +166,7 @@ export function AssignmentsBlock({
                     <TableCell>{profileName(a.profile_id)}</TableCell>
                     {/* Priority is meaningful only inside the group tier. */}
                     <TableCell>{a.subject_type === "group" ? a.priority : GOV.PRIORITY_NA}</TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground" title={a.created_at}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(a.created_at)}>
                       {relativeTime(a.created_at)}
                     </TableCell>
                     <TableCell>

@@ -20,7 +20,7 @@ import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
-import { fmtBytes, relativeTime } from "../../lib/format";
+import { absoluteTime, fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -480,7 +480,7 @@ function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} />
         <Mono>{fmtBytes(bytes)}</Mono>
-        <span className="text-xs text-muted-foreground" title={run.created_at}>
+        <span className="text-xs text-muted-foreground" title={absoluteTime(run.created_at)}>
           {relativeTime(run.created_at)}
         </span>
         <Link
