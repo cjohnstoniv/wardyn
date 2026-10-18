@@ -466,8 +466,11 @@ test.describe("New Run, Files: the person's drive (public)", () => {
 // #2107: Review says a typed branch is not checked until the run starts; a picked one says nothing new.
 test.describe("New Run, Review: a typed branch", () => {
   async function toReview(page: Page) {
-    // Continue is held while nothing is attached (it then points at Add and goes nowhere), so wait for the card first.
+    // Continue is held while nothing is attached, and the run is not complete until the main drive's size is
+    // stored: wait for the card, then enter the size as a person would (the field only shows the pool's default).
     await expect(cards(page).filter({ hasText: "web" })).toBeVisible();
+    await sizeInput(page).fill("10");
+    await sizeInput(page).blur();
     await continueNewRun(page, NR_TOOLS.TITLE);
     await continueNewRun(page, NR_REVIEW.TITLE);
   }
