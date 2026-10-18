@@ -8,6 +8,8 @@ package api
 // subject a later rebind could hand to someone else. Guarded by WARDYN_TEST_PG.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -49,15 +51,21 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 			VALUES ($1, $2, 'egress_domain', $3, 'APPROVED', now(), $4, $5)`, id, run.ID, `{"host":"`+id.String()+`.example"}`, by, "ok per "+by+"'s ticket")
 	}
 
-	// Token history: a revoked and an expired token of alice's, a revoked one of bob's.
-	past := time.Now().UTC().Add(-time.Hour)
+	// Token history: a revoked and an expired token of alice's, a revoked one of bob's, and a token of
+	// alice's still live because Azure DevOps could not be asked to revoke it (the sweep retries it).
+	a.srv.cfg.ADOEntra = func(context.Context) (ADOEntraConfig, bool, error) { return ADOEntraConfig{}, false, nil }
+	a.srv.cfg.ADOEntraByRow = func(context.Context, string) (ADOEntraConfig, bool, error) {
+		return ADOEntraConfig{}, false, errors.New("injected: the sign-in configuration is unreadable")
+	}
+	past, ahead := time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Hour)
 	pats := map[string]uuid.UUID{}
 	for _, p := range []struct {
 		key, owner string
 		revoked    bool
-	}{{"alice-revoked", alice, true}, {"alice-expired", alice, false}, {"bob-revoked", bob, true}} {
+		validTo    time.Time
+	}{{"alice-revoked", alice, true, past}, {"alice-expired", alice, false, past}, {"bob-revoked", bob, true, past}, {"alice-live", alice, false, ahead}} {
 		pat := store.RunPAT{RunID: uuid.New(), AuthorizationID: uuid.New(), Owner: p.owner, ProviderRowID: "row", Org: "contoso",
-			Scope: "vso.code", ValidTo: past}
+			Scope: "vso.code", ValidTo: p.validTo}
 		if err := pg.InsertRunPAT(ctx, pat); err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +109,7 @@ func TestPG_PersonErasure_ReachesApprovalsTokenHistoryAndTheAuditSubject(t *test
 	if n := count(`SELECT count(*) FROM approvals WHERE id = $1 AND decided_by = $2 AND reason <> ''`, bobAp, bob); n != 1 {
 		t.Error("bob's decision was touched by alice's erasure")
 	}
-	for key, want := range map[string]int{"alice-revoked": 0, "alice-expired": 0, "bob-revoked": 1} {
+	for key, want := range map[string]int{"alice-revoked": 0, "alice-expired": 0, "bob-revoked": 1, "alice-live": 1} {
 		if n := count(`SELECT count(*) FROM ado_run_pats WHERE authorization_id = $1`, pats[key]); n != want {
 			t.Errorf("token row %s: %d left, want %d", key, n, want)
 		}
