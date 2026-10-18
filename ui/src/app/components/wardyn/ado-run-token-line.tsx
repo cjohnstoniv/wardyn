@@ -12,7 +12,8 @@
 import { Loader2 } from "lucide-react";
 import { ADO } from "../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../lib/ado-pat-copy";
-import { newRunTokenCaps, type PatRefusalNote } from "../../lib/ado-pat-display";
+import { joinOrgs, newRunTokenCaps, type PatRefusalNote } from "../../lib/ado-pat-display";
+import { ownTokenOrgsNeedingToken } from "../../lib/scm-access-display";
 import type { SCMAccessPAT } from "../../lib/types/ado-pat";
 import { Button } from "../ui/button";
 
@@ -87,5 +88,21 @@ export function AdoLaunchNote({
         </p>
       )}
     </div>
+  );
+}
+
+/** With own-token rows for several organisations (#2146): the organisations a launch needs a token added for.
+ *  None with one organisation (its page is unchanged) or when every token is in place. */
+export function ownTokenNoteOrgs(rows: readonly SCMAccessPAT[] | undefined): string[] {
+  return rows && rows.length >= 2 ? ownTokenOrgsNeedingToken(rows) : [];
+}
+
+export function AdoOwnTokenNote({ rows }: { rows: readonly SCMAccessPAT[] | undefined }) {
+  const orgs = ownTokenNoteOrgs(rows);
+  if (orgs.length === 0) return null;
+  return (
+    <p role="status" className="text-sm" data-testid="ado-own-token-note">
+      {ADO_PAT.OWN_ORGS_ADD_FIRST(joinOrgs(orgs))}
+    </p>
   );
 }

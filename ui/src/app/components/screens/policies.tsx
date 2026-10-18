@@ -75,6 +75,8 @@ import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { ADOAccessSummary } from "../wardyn/ado-access-summary";
 import { setup as setupApi } from "../../lib/api/setup";
+import { scmAccess as scmAccessApi } from "../../lib/api/scm-access";
+import { orgCeilings, unionCeiling, type OrgCeiling } from "../../lib/ado-ceilings";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
 // template — one const, no hand-maintained twin to drift.
@@ -508,15 +510,19 @@ function PolicyEditor({
   // The Azure DevOps row's ceiling, so the editor locks what a run could never
   // be granted. Unknown (no row, unreachable) locks nothing.
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>();
+  // With several organisations (#2146) each carries its own ceiling: a capability locks only when none allows it.
+  const [adoOrgCeilings, setAdoOrgCeilings] = React.useState<OrgCeiling[] | undefined>();
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>();
   React.useEffect(() => {
     if (!editor) return;
     let alive = true;
+    let severalOrgs = false;
     void setupApi
       .getSetupStatus()
       .then((st) => {
         if (!alive) return;
-        setAdoCeiling(st.scm_access?.capability_ceiling);
+        // The first row's ceiling, unless the person's several rows (below) already answered.
+        if (!severalOrgs) setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
@@ -526,6 +532,17 @@ function PolicyEditor({
           setSpecText((prev) => (prev === was ? seeded : prev));
           initial.current = { ...initial.current, specText: seeded };
         }
+      })
+      .catch(() => {});
+    // With several organisations (#2146) every row names its own ceiling; unreadable leaves the first row's.
+    void scmAccessApi
+      .getMine()
+      .then((rows) => {
+        const perOrg = orgCeilings(Array.isArray(rows) ? rows : []);
+        if (!alive || perOrg.length < 2) return;
+        severalOrgs = true;
+        setAdoCeiling(unionCeiling(perOrg));
+        setAdoOrgCeilings(perOrg);
       })
       .catch(() => {});
     return () => {
@@ -621,6 +638,7 @@ function PolicyEditor({
             format={format}
             onFormatChange={setFormat}
             adoCeiling={adoCeiling}
+            adoOrgCeilings={adoOrgCeilings}
             modelProviders={modelProviders}
             serverError={error}
           />

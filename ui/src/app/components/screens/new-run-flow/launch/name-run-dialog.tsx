@@ -24,7 +24,8 @@ import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { AdoLaunchNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
+import { AdoLaunchNote, AdoOwnTokenNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
+import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
@@ -115,6 +116,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
     wasAdoBusy.current = adoBusy;
   }, [adoBusy, check]);
   const { status } = useShellSetupStatus();
+  const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
 
   const refused = (e: unknown) => {
@@ -210,6 +212,8 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
           </p>
         )}
         {/* A launch the run's Azure DevOps token refused: the organisation blocks it, or the person connects again. */}
+        {/* Several organisations each take their own token: say which ones a refused launch is missing one for. */}
+        {sentence && !adoNote && <AdoOwnTokenNote rows={ownRows} />}
         {adoNote && (
           <div id={refusalIsAdoNote ? "name-run-sentence" : undefined} className={refusalIsAdoNote ? "text-danger" : undefined}>
             <AdoLaunchNote

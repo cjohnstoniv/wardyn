@@ -156,3 +156,25 @@ test("the pre-split read id is refused at the policy door", async ({ request }) 
   expect(res.status()).toBe(400);
   expect(((await res.json()) as { reason: string }).reason).toBe("ado_capability_unknown");
 });
+
+// #2146: with several organisations a capability locks only when none allows it, and one only some allow is
+// hinted with the organisations that refuse it.
+test("a capability one organisation allows stays open and names who does not allow it", async ({ page }) => {
+  await mockCeiling(page);
+  const row = (org: string, capability_ceiling: string[]) => ({ state: "live", source: "org", org: `https://dev.azure.com/${org}`, kind: "azure_devops", capability_ceiling });
+  await page.route("**/api/v1/me/scm-access", (route) =>
+    route.fulfill({ json: [row("acme", CEILING), row("beta", CEILING.filter((c) => c !== "policy_admin"))] }),
+  );
+  await gotoConsole(page, "admin");
+  await navTo(page, "Policies");
+  await page.getByRole("button", { name: "New policy" }).first().click();
+  const dialog = editorDialog(page, "New policy");
+  await expect(dialog).toBeVisible();
+
+  await expect(capBox(dialog, "Edit branch policies")).toBeEnabled();
+  await expect(dialog.getByTestId("ado-cap-hint-policy_admin")).toHaveText(ADO_ACCESS.NOT_ALLOWED_FOR("beta"));
+  // No organisation allows it: locked, and no hint.
+  await expect(capBox(dialog, "Manage service connections")).toBeDisabled();
+  await expect(dialog.getByTestId("ado-cap-hint-serviceendpoint_admin")).toHaveCount(0);
+  await expect(dialog.getByTitle(ADO_ACCESS.LOCKED)).toHaveCount(28 - CEILING.length);
+});

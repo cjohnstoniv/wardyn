@@ -18,6 +18,8 @@
 import type { RunPolicySpec } from "../../lib/types";
 import { ADO_CAPABILITIES, ADO_CAPABILITY_GROUPS, type ADOCapabilityInfo } from "../../lib/ado-capabilities";
 import { ADO_ACCESS, adoCapName, adoGroupName } from "../../lib/ado-access-copy";
+import { refusedBy, type OrgCeiling } from "../../lib/ado-ceilings";
+import { joinOrgs } from "../../lib/ado-pat-display";
 import { Checkbox } from "../ui/checkbox";
 // clsx, not cn: tailwind-merge doesn't know the text-meta/text-body size
 // tokens, so clsx() drops them whenever a text colour class is merged in.
@@ -43,11 +45,14 @@ function CapabilityRow({
   info,
   checked,
   locked,
+  refusedByOrgs,
   onToggle,
 }: {
   info: ADOCapabilityInfo;
   checked: boolean;
   locked: boolean;
+  /** Organisations that refuse a capability others allow: not locked, only hinted. */
+  refusedByOrgs: readonly string[];
   onToggle: (on: boolean) => void;
 }) {
   const id = `ado-cap-${info.cap}`;
@@ -103,6 +108,11 @@ function CapabilityRow({
             <span className="sr-only">{ADO_ACCESS.LOCKED}</span>
           </>
         )}
+        {refusedByOrgs.length > 0 && (
+          <span className="mt-0.5 block text-xs text-muted-foreground" data-testid={`ado-cap-hint-${info.cap}`}>
+            {ADO_ACCESS.NOT_ALLOWED_FOR(joinOrgs(refusedByOrgs))}
+          </span>
+        )}
       </label>
     </li>
   );
@@ -112,11 +122,14 @@ export function ADOCapabilitiesSection({
   spec,
   onSpecChange,
   ceiling,
+  orgCeilings,
 }: {
   spec: RunPolicySpec;
   onSpecChange: (next: RunPolicySpec) => void;
   /** The Azure DevOps row's capability_ceiling; undefined = unknown, nothing locked. */
   ceiling?: readonly string[];
+  /** Every organisation's own ceiling when the person has several (#2146); `ceiling` is then their union. */
+  orgCeilings?: readonly OrgCeiling[];
 }) {
   const chosen = Array.isArray(spec.azure_devops_capabilities) ? spec.azure_devops_capabilities : [];
   return (
@@ -143,6 +156,7 @@ export function ADOCapabilitiesSection({
                     info={info}
                     checked={chosen.includes(info.cap)}
                     locked={ceiling !== undefined && !ceiling.includes(info.cap)}
+                    refusedByOrgs={orgCeilings ? refusedBy(orgCeilings, info.cap) : []}
                     onToggle={(on) => onSpecChange(withADOCapabilities(spec, info.cap, on))}
                   />
                 ))}

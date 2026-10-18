@@ -54,6 +54,12 @@ export function adoOrgLabel(address: string): string {
   }
 }
 
+/** Organisation names as a sentence's list: "acme", "acme and beta", "acme, beta and gamma". */
+export function joinOrgs(labels: readonly string[]): string {
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
 /** Azure DevOps' own page for a person's personal access tokens. https only:
  *  the address is stored data, and nothing else is ever linked. */
 export function adoTokensURL(address: string): string {

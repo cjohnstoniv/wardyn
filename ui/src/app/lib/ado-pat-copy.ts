@@ -156,6 +156,9 @@ export const ADO_PAT = {
 
   // ---- Own token ----
   OWN_ADD_CTA: "Add your personal access token",
+  // Several organisations each take their own token: a line per organisation says what that one holds.
+  OWN_NO_TOKEN: "No token yet",
+  OWN_ORGS_ADD_FIRST: (orgs: string) => `Add your Azure DevOps token for ${orgs} first.`,
   OWN_DIALOG_TITLE: "Add your personal access token",
   OWN_DIALOG_LEAD: (org: string, days: number) =>
     `In Azure DevOps, create a token for ${org} only, with these scopes and an expiry within ${days} days, then paste it here.`,
@@ -202,12 +205,15 @@ export const ADO_PAT = {
 // connection's name, so a person's own token reads in Settings' chip words after
 // it (the approved own-token chip packet). One helper over OWN_CHIP_* and
 // CHIP_CONNECTED: rewording a word there reaches both screens.
-export function gettingStartedOwnChip(kind: "connected" | "expiring" | "refused" | "expired", days = 0): string {
-  const word = {
+export function ownChipWord(kind: "connected" | "expiring" | "refused" | "expired", days = 0): string {
+  return {
     connected: ADO_PAT.CHIP_CONNECTED,
     expiring: ADO_PAT.OWN_CHIP_EXPIRING(days),
     refused: ADO_PAT.OWN_CHIP_REFUSED,
     expired: ADO_PAT.OWN_CHIP_EXPIRED,
   }[kind];
-  return `Azure DevOps · ${word}`;
+}
+
+export function gettingStartedOwnChip(kind: "connected" | "expiring" | "refused" | "expired", days = 0): string {
+  return `Azure DevOps · ${ownChipWord(kind, days)}`;
 }

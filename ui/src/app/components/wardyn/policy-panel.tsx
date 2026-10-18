@@ -28,6 +28,7 @@
 //
 // instance="policies" is consumed by policies.tsx's PolicyEditor; instance="run"
 // by new-run-screen.tsx's "Policy" SectionCard.
+import type { OrgCeiling } from "../../lib/ado-ceilings";
 import * as React from "react";
 import { Globe, Plus, ShieldCheck, Timer } from "lucide-react";
 import type { PolicySourceEditResult } from "../../lib/policy-document";
@@ -272,6 +273,9 @@ export interface PolicyPanelProps {
   /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
    *  capabilities off it render locked. Undefined = unknown, nothing locked. */
   adoCeiling?: readonly string[];
+  /** Each of the person's Azure DevOps organisations' ceilings, when there are several (#2146): a capability only
+   *  some allow stays open and is hinted with the ones that refuse it. */
+  adoOrgCeilings?: readonly OrgCeiling[];
   /** The editor's last save refusal; one naming an axis of a git_pat grant is
    *  shown on that field (policy-git-pat.tsx). */
   serverError?: string | null;
@@ -306,6 +310,7 @@ export function PolicyPanel({
   preflightDisabled,
   interactive,
   adoCeiling,
+  adoOrgCeilings,
   modelProviders,
   serverError,
   policyMode,
@@ -439,7 +444,7 @@ export function PolicyPanel({
                 </div>
               )}
               {parsed.ok && <PushRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
-              {parsed.ok && <ADOCapabilitiesSection spec={parsed.spec} ceiling={adoCeiling} onSpecChange={onSpecChange} />}
+              {parsed.ok && <ADOCapabilitiesSection spec={parsed.spec} ceiling={adoCeiling} orgCeilings={adoOrgCeilings} onSpecChange={onSpecChange} />}
               {/* git_pat narrowing (repos, access, api, forge): one block per
                   stored-token grant, with the honesty lines packet M7 fixes. */}
               {parsed.ok && <GitPATSection spec={parsed.spec} serverError={serverError} onSpecChange={onSpecChange} />}
