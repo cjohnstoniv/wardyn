@@ -285,7 +285,7 @@ describe("Add a person", () => {
     expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
     // #2904: the required field says so and says what a subject is; the other says it is optional.
     expect(within(dialog).getByLabelText("Sign-in subject")).toBeRequired();
-    expect(within(dialog).getByText("The sub or object id your identity provider sends, or the person's email.")).toBeInTheDocument();
+    expect(within(dialog).getByText("The subject (sub) your identity provider sends for this person, exactly as it sends it.")).toBeInTheDocument();
     expect(within(dialog).getByText("*")).toBeInTheDocument();
     setField(within(dialog).getByLabelText("Sign-in subject"), "sub-zed");
     setField(within(dialog).getByLabelText("Email (optional)"), "zed@example.com");
