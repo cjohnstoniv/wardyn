@@ -47,6 +47,12 @@ export const SCIM = {
     kill_run: "Stop runs",
     erase: "Erase credentials",
     workspaces: "Reassign workspaces",
+    audit_deactivate: "Record deactivation",
+    audit_deprovision: "Record deprovisioning",
+    grants: "Remove grants and assignments",
+    runners: "Revoke runners",
+    invitations: "Erase invitations",
+    service_identities: "Erase sponsored service identities",
     // A group removal's steps (internal/store store_scim_groups.go).
     sessions: "Group removal: cut sessions",
     tokens: "Group removal: revoke tokens",

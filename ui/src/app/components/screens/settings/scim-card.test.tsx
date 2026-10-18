@@ -91,6 +91,7 @@ describe("ScimCard", () => {
           { person: "ada@example.com", step: "kill_run", last_error: "runner: teardown timed out" },
           { person: "ada@example.com", step: "sweep", last_error: "store: busy" },
           { person: "bob@example.com", step: "audit_deprovision", last_error: "audit sink unavailable" },
+          { person: "bob@example.com", step: "refusal_audit/denied/owner_ambiguous", last_error: "audit sink unavailable" },
         ],
         drives: [{ person: "ada@example.com", drive: "Team share", purged_at: ago(DAY) }],
       }),
@@ -114,8 +115,9 @@ describe("ScimCard", () => {
     expect(within(tables[1]).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Person", "Step", "Last error"]);
     expect(within(tables[1]).getByText("Stop runs")).toBeInTheDocument();
     expect(within(tables[1]).getByText("Revoke tokens and SSH keys")).toBeInTheDocument();
+    expect(within(tables[1]).getByText("Record deprovisioning")).toBeInTheDocument();
     // A step the copy does not name shows as its own key.
-    expect(within(tables[1]).getByText("audit_deprovision")).toBeInTheDocument();
+    expect(within(tables[1]).getByText("refusal_audit/denied/owner_ambiguous")).toBeInTheDocument();
     expect(within(tables[1]).getByText("runner: teardown timed out")).toBeInTheDocument();
     expect(
       within(card).getByText(
