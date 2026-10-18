@@ -115,8 +115,8 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "read node records", err)
 		return
 	}
-	// A record's source id names infrastructure, as the tuple does: security operators only. So does
-	// the runner's refusal text, which can quote a Node's name; others read a fixed sentence.
+	// A record's source id and the runner's refusal text name infrastructure, as the tuple does:
+	// security operators only. Others read a fixed sentence for the reason.
 	if !s.isSecurityOperator(r.Context()) {
 		for i := range out.Records {
 			out.Records[i].SourceID = ""

@@ -13,10 +13,10 @@ import (
 const auditRunnerActionRefuse = "runner.action.refuse"
 
 // withoutNodeRecordSource is evs as a reader below the security tier is served them, holding back
-// what the containment read holds back from the same reader: a node record's source_id, and the
-// runner's own reason for refusing a stop_proxy, which can quote a Node's name (that reader gets
-// nodeRecordReasonWithheld). The stored row, and what the security tier and the sinks read, keep
-// both. A row whose data does not decode is served without data rather than unread.
+// what the containment read holds back from the same reader: a node record's source_id and the
+// runner's own reason for refusing a stop_proxy name infrastructure, security operators only (that
+// reader gets nodeRecordReasonWithheld for the reason). The stored row, and what the security tier
+// and the sinks read, keep both. A row whose data does not decode is served without data rather than unread.
 func withoutNodeRecordSource(evs []types.AuditEvent) []types.AuditEvent {
 	for i, ev := range evs {
 		if (ev.Action != auditRunNodeRecord && ev.Action != auditRunnerActionRefuse) || len(ev.Data) == 0 {
