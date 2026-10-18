@@ -57,8 +57,7 @@ describe("TerminalPane — the finished run's Recording link", () => {
 describe("TerminalPane — always-dark token scope", () => {
   it("scopes the pane frame to the dark tokens", () => {
     pane("ready", false);
-    const frame = screen.getByText(RUN_COCKPIT.recordingMissing).closest(".bg-\\[\\#0d1117\\]");
-    expect(frame).not.toBeNull();
+    const frame = screen.getByTestId("run-pane-frame");
     expect(frame).toHaveClass("dark");
   });
 });

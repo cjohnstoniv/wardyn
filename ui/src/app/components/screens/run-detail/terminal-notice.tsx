@@ -202,7 +202,7 @@ function PaneFrame({
 }) {
   return (
     // `dark`: the pane is always near-black, so its tokens come from the dark block in both themes (#2910).
-    <div className="dark flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
+    <div data-testid="run-pane-frame" className="dark flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3">
         <SquareTerminal className="size-3.5 text-muted-foreground" aria-hidden />
         <span className="label-eyebrow">{title}</span>
