@@ -33,7 +33,8 @@ import (
 // scoped to operator-configured addresses (sandbox-named hosts survive); the
 // IP-literal pass is BLANKET, since once an address is inside an error string
 // the proxy can't tell vetted from internal, so it fails closed. The operator
-// keeps the full masked text on the sidecar's own log.
+// keeps the masked text, cut at maxLoggedErrBytes (4096), on the sidecar's own
+// log.
 func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
 	masked := truncateText(string(maskDecisionBytes([]byte(err.Error()))), maxLoggedErrBytes)
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", code, "err", masked)
