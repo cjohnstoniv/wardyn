@@ -1529,6 +1529,9 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# The OIDC client id is forwarded, and stays "wardyn" (Dex's) when unset.
+	docker compose --env-file /dev/null -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_CLIENT_ID: wardyn$$' || { echo "compose no longer defaults WARDYN_OIDC_CLIENT_ID to wardyn"; exit 1; }
+	WARDYN_OIDC_CLIENT_ID=app-1 docker compose --env-file /dev/null -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_CLIENT_ID: app-1$$' || { echo "compose does not forward WARDYN_OIDC_CLIENT_ID: an IdP other than Dex gets client_id=wardyn"; exit 1; }
 	@# A removed WARDYN_MEMBER_* name left in an m' envelope must still reach wardynd, whose boot
 	@# refusal (refuseRemovedEnv) is the only thing that stops a dropped deny list from widening
 	@# the writable set; compose forwards only the names its environment: list spells out.
