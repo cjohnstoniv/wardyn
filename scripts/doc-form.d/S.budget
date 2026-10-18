@@ -157,6 +157,7 @@
 # docs/sdk.md 19004 = 18992 + 12, measured: per-source meaning of incomplete on recording versus stdout
 # docs/sdk.md 19021 = 18992 + 29, measured: the revive_containment_recovering row.
 # docs/sdk.md 19033 = 18992 + 12 + 29, measured: both sides after the AF1 merge
+# 0.9.4 L6b +19: docs/sdk.md 19052 adds 19 over 19033 for the additive `cause` on the git_credential 422 row.
 docs/sdk.md=19052 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
@@ -190,4 +191,3 @@ docs/sdk.md=19052 share=21
 # Runner pools add 70 measured words for the five pool reasons the routes send: docs/sdk.md 12761.
 # docs/sdk.md 12817 adds 21 (0.9 F-1511-1510 r1): reserved_principal on the two erase routes.
 # R2-api-1: docs/sdk.md 13256 adds 38 over 13218 for the five local-placement refusal reasons the docs guard now derives.
-# 0.9.4 L6b +19: docs/sdk.md 19052 adds 19 over 19033 for the additive `cause` on the git_credential 422 row.
