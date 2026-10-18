@@ -829,15 +829,29 @@ func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 }
 
 // TestApprovalsListCmd_PrintsHostAndHoldHint pins the HOST and HOLD columns:
-// a live wait_for_review egress hold must show its requested host and a
-// "time left" hint; blank cells would leave the CLI decide loop unable to
-// tell a live 30s hold from an ordinary up-to-24h pendency.
+// the HOLD cell is the server's held/held_until projection, whatever the hold's
+// length or kind, so a 300s first-use hold is live at 45s and a tool_call hold
+// (no held_until) reads "held", while a row the server does not call held is
+// blank, however old it is.
 func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
-		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
-		State: types.ApprovalPending, RequestedAt: time.Now(),
-		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
-	}})
+	until := time.Now().Add(255 * time.Second)
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+			State: types.ApprovalPending, RequestedAt: time.Now().Add(-45 * time.Second),
+			RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
+			Held:           true, HeldUntil: &until,
+		},
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalToolCall,
+			State: types.ApprovalPending, RequestedAt: time.Now(), Held: true,
+		},
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+			State: types.ApprovalPending, RequestedAt: time.Now().Add(-time.Hour),
+			RequestedScope: json.RawMessage(`{"host":"cold.example.com"}`),
+		},
+	})
 	gotBuf := &strings.Builder{}
 	root := rootCmd()
 	root.SetArgs([]string{"approval", "list", "--url", srv.URL, "--token", "tok"})
@@ -850,8 +864,15 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	if !strings.Contains(got, "pkg.example.com") {
 		t.Errorf("output = %q, want it to contain the requested host", got)
 	}
-	if !strings.Contains(got, "left") {
-		t.Errorf("output = %q, want a live-hold time-left hint", got)
+	if !strings.Contains(got, "live hold, ~25") {
+		t.Errorf("output = %q, want the 300s hold's server-side time left (~25x s)", got)
+	}
+	if strings.Contains(got, "timed out") {
+		t.Errorf("output = %q, must not guess a timeout the server did not report", got)
+	}
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 4 || !strings.HasSuffix(strings.TrimSpace(lines[2]), "held") || strings.Contains(lines[3], "held") {
+		t.Errorf("output = %q, want tool_call row to end \"held\" and the unheld row to have an empty HOLD", got)
 	}
 }
 
@@ -1179,6 +1200,32 @@ func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
 	again, _ := tail.filter([]types.AuditEvent{e1, e2})
 	if len(again) != 0 {
 		t.Errorf("re-poll of the same page = %v, want nothing new", again)
+	}
+}
+
+// TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime: the server pages by
+// chain seq, and an event's time is stamped before it waits for the chain
+// lock, so seq order can run against time order. The earlier-time event that
+// follows must still be emitted, now and on a later poll.
+func TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime(t *testing.T) {
+	t0 := time.Now().UTC().Truncate(time.Second)
+	b := types.AuditEvent{ID: uuid.New(), Time: t0.Add(2 * time.Millisecond), Action: "credential.mint"}
+	a := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.deny"} // higher seq, earlier time
+
+	var tail logTail
+	got, tail := tail.filter([]types.AuditEvent{b, a})
+	if len(got) != 2 || got[1].ID != a.ID {
+		t.Fatalf("one page = %v, want both events with the earlier-time one kept", got)
+	}
+
+	// A late-draining event with an older time than the newest one seen.
+	late := types.AuditEvent{ID: uuid.New(), Time: t0.Add(-time.Second), Action: "run.dispatch"}
+	got, tail = tail.filter([]types.AuditEvent{b, a, late})
+	if len(got) != 1 || got[0].ID != late.ID {
+		t.Fatalf("later poll = %v, want just the late event", got)
+	}
+	if want := tail.since.Add(-logTailMargin); !tail.sinceFilter().Equal(want) {
+		t.Errorf("sinceFilter = %v, want %v (newest event time less the margin)", tail.sinceFilter(), want)
 	}
 }
 

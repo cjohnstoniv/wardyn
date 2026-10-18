@@ -535,38 +535,27 @@ func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) strin
 
 // approvalScopePeek extracts the fields common to the several
 // requested_scope JSON shapes (egressScope, apiKeyScope, gitPATScope,
-// sshKeyScope all carry "host"; only the egress_domain shape carries "mode")
-// without the CLI needing to know which kind it is decoding.
+// sshKeyScope all carry "host") without the CLI needing to know which kind it
+// is decoding.
 type approvalScopePeek struct {
 	Host string `json:"host,omitempty"`
-	Mode string `json:"mode,omitempty"`
 }
 
-// approvalHoldWindow mirrors internal/egress/proxy/approvals.go's
-// defaultHoldTimeout: a wait_for_review egress approval blocks the sandbox
-// for at most this long, so a still-PENDING row older than this has almost
-// certainly already timed out on the proxy side even though nobody decided
-// it yet.
-const approvalHoldWindow = 30 * time.Second
-
-// approvalHoldHint reports whether a is a live wait_for_review hold and, if
-// so, how much of its window is left — the CLI decide loop otherwise has no
-// way to tell a live 30s hold apart from an ordinary up-to-24h pendency.
+// approvalHoldHint renders the server's own hold projection (ApprovalRequest.Held
+// and HeldUntil, from approval.Hold), so the CLI agrees with the console and the
+// proxy for every hold kind and every first_use_hold_seconds, with no clock or
+// window of its own. Empty for a row that is not held.
 func approvalHoldHint(a types.ApprovalRequest) string {
-	// PENDING only: every terminal state (APPROVED/DENIED/EXPIRED/CANCELLED) has
-	// no live hold left to describe, so the hint is empty rather than a window
-	// counted from a decided row's requested_at.
-	if a.State != types.ApprovalPending {
+	if !a.Held {
 		return ""
 	}
-	var s approvalScopePeek
-	if json.Unmarshal(a.RequestedScope, &s) != nil || s.Mode != "wait_for_review" {
-		return ""
+	if a.HeldUntil == nil {
+		return "held"
 	}
-	if left := approvalHoldWindow - time.Since(a.RequestedAt); left > 0 {
+	if left := time.Until(*a.HeldUntil); left > 0 {
 		return fmt.Sprintf("live hold, ~%ds left", int(left.Seconds()))
 	}
-	return "hold likely timed out"
+	return "hold window ended"
 }
 
 // approvalHost extracts the "host" field from a's requested_scope, common to
@@ -612,8 +601,8 @@ func approvalCmd(client clientFn) *cobra.Command {
 			// the first N columns by position is unaffected. SCOPE prints "" for a
 			// still-PENDING row or a credential/tool_call approval — neither has a
 			// decision scope (DecisionScope's own doc: empty means nobody has
-			// decided yet). HOLD prints "" for anything that isn't a live
-			// wait_for_review egress hold — see approvalHoldHint.
+			// decided yet). HOLD prints "" for anything the server does
+			// not report as held — see approvalHoldHint.
 			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tHOST\tREQUESTED\tSCOPE\tHOLD")
 			for _, a := range aps {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -780,22 +769,35 @@ func parseDecisionUntil(s string) (time.Time, error) {
 	return t, nil
 }
 
+// logTailMargin backs the server-side Since filter off the newest event time.
+// The server pages by chain seq, not time, and an event's time is stamped
+// before it waits for the chain lock (up to db.AuditChainLockTimeout, 5s), so
+// a lower-seq event can carry a later time than a higher-seq one.
+const logTailMargin = 10 * time.Second
+
 // logTail dedupes a run's audit-event stream across repeated polls for
-// runLogsCmd. The server's Since filter is RFC3339 (second resolution, see
-// AuditFilter.Since), so re-polling with since=<last event's second> can
-// legitimately re-return every event from that same second — logTail tracks
-// which event IDs at the current boundary second were already emitted so
-// those are skipped, while a genuinely new event at (or after) that second
-// is not.
+// runLogsCmd. Progress is tracked by event ID, never by time: the Since filter
+// is only a coarse, margin-backed server-side bound, so each poll re-returns
+// recent events and the seen set drops the ones already printed.
+// ponytail: seen grows with the run's events (UUIDs only); prune by age if a
+// follow session ever runs long enough to matter.
 type logTail struct {
-	since time.Time
+	since time.Time // newest event time emitted
 	seen  map[uuid.UUID]bool
 }
 
-// filter returns the events in page (server-guaranteed time-ascending, i.e.
-// oldest-first) that are new since the last call, plus the tail's updated
-// state. A value receiver/return (not a pointer method) so a unit test can
-// assert the before/after state directly with no I/O.
+// sinceFilter is the Since value for the next poll; zero before any event.
+func (t logTail) sinceFilter() time.Time {
+	if t.since.IsZero() {
+		return t.since
+	}
+	return t.since.Add(-logTailMargin)
+}
+
+// filter returns the events in page that were not emitted by an earlier call,
+// plus the tail's updated state. A value receiver/return (not a pointer
+// method) so a unit test can assert the before/after state directly with no
+// I/O.
 func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 	next := t
 	if next.seen == nil {
@@ -803,17 +805,12 @@ func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 	}
 	var newEvents []types.AuditEvent
 	for _, e := range page {
-		if e.Time.Before(next.since) {
-			continue // stale event from a filter granularity mismatch; already emitted
+		if next.seen[e.ID] {
+			continue
 		}
-		if e.Time.Equal(next.since) {
-			if next.seen[e.ID] {
-				continue
-			}
-			next.seen[e.ID] = true
-		} else {
+		next.seen[e.ID] = true
+		if e.Time.After(next.since) {
 			next.since = e.Time
-			next.seen = map[uuid.UUID]bool{e.ID: true}
 		}
 		newEvents = append(newEvents, e)
 	}
@@ -875,8 +872,8 @@ only at the end.`,
 			drains := 0
 			for {
 				var f sdk.AuditFilter
-				if !tail.since.IsZero() {
-					f.Since = tail.since.UTC().Format(time.RFC3339)
+				if since := tail.sinceFilter(); !since.IsZero() {
+					f.Since = since.UTC().Format(time.RFC3339)
 				}
 				page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f)
 				if err != nil {

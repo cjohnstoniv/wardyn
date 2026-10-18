@@ -11,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -211,24 +212,117 @@ func TestSiteConfigSet_NotesFieldsAnOlderClientCannotName(t *testing.T) {
 	}
 }
 
-// TestSiteConfigSet_NotesOnlyFieldsTheFileOmits: a field the file DOES
-// mention — even as an explicit {} or [] — is not left-as-is (the server
-// clears it, on purpose), so naming it in the note would be a lie.
+// TestSiteConfigSet_NotesOnlyFieldsTheFileOmits: a block the file mentions as
+// {} IS sent (the server clears it), so the omitted note must not name it. An
+// empty LIST is a different case, covered by the --clear tests below.
 func TestSiteConfigSet_NotesOnlyFieldsTheFileOmits(t *testing.T) {
 	var got types.SiteConfig
 	srv := applyServer(t, &got)
 
-	_, stderr, err := runSiteConfigSet(t, srv.URL, `{"scm_hosts":["gitlab.corp"],"internal_hosts":[],"workspace_providers":{}}`)
+	_, stderr, err := runSiteConfigSet(t, srv.URL, `{"scm_hosts":["gitlab.corp"],"workspace_providers":{}}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if strings.Contains(stderr, "internal_hosts") || strings.Contains(stderr, "workspace_providers") {
+	if strings.Contains(stderr, "workspace_providers") {
 		t.Errorf("stderr = %q, want it to NOT name a field this file explicitly mentioned", stderr)
 	}
 	for _, want := range []string{"upstream_proxy_no_proxy", "agent_providers"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr = %q, want it to still name %q, which this file omits", stderr, want)
 		}
+	}
+}
+
+// rawBodyServer records the PUT body exactly as it crossed the wire.
+func rawBodyServer(t *testing.T, body *[]byte) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/site-config" {
+			*body, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func runSiteConfigSetArgs(t *testing.T, url, doc string, extra ...string) (string, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "doc.json")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatalf("write doc: %v", err)
+	}
+	root := rootCmd()
+	root.SetArgs(append([]string{"site-config", "set", path, "--url", url, "--token", "tok"}, extra...))
+	stderr := &strings.Builder{}
+	root.SetOut(&strings.Builder{})
+	root.SetErr(stderr)
+	err := root.Execute()
+	return stderr.String(), err
+}
+
+// TestSiteConfigSet_ClearNamesTheKeyOnTheWire: an empty list in the file never
+// reaches the wire (omitempty), so the server keeps the stored one; --clear is
+// the explicit form that names the key with its empty value.
+func TestSiteConfigSet_ClearNamesTheKeyOnTheWire(t *testing.T) {
+	var body []byte
+	srv := rawBodyServer(t, &body)
+
+	stderr, err := runSiteConfigSetArgs(t, srv.URL, `{"internal_hosts":[],"sign_in_help_text":"","scm_hosts":["gitlab.corp"]}`,
+		"--clear", "internal_hosts,sign_in_help_text,upstream_proxy_no_proxy")
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	for k, want := range map[string]string{"internal_hosts": "[]", "sign_in_help_text": `""`, "upstream_proxy_no_proxy": "[]"} {
+		if string(wire[k]) != want {
+			t.Errorf("wire[%s] = %q, want %s (body %s)", k, wire[k], want, body)
+		}
+	}
+	if _, ok := wire["sign_in_help_url"]; ok {
+		t.Errorf("sign_in_help_url was not cleared but is on the wire: %s", body)
+	}
+	if strings.Contains(stderr, "internal_hosts") {
+		t.Errorf("stderr = %q, want no note for a field --clear handled", stderr)
+	}
+}
+
+// TestSiteConfigSet_EmptyListWithoutClearStaysUnsentAndSaysSo pins the old
+// form unchanged (the key is still absent from the wire) and the new note.
+func TestSiteConfigSet_EmptyListWithoutClearStaysUnsentAndSaysSo(t *testing.T) {
+	var body []byte
+	srv := rawBodyServer(t, &body)
+
+	stderr, err := runSiteConfigSetArgs(t, srv.URL, `{"internal_hosts":[],"scm_hosts":["gitlab.corp"]}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if strings.Contains(string(body), "internal_hosts") {
+		t.Errorf("wire body = %s, want internal_hosts absent without --clear", body)
+	}
+	if !strings.Contains(stderr, "internal_hosts empty") || !strings.Contains(stderr, "--clear") {
+		t.Errorf("stderr = %q, want a note that the empty list was not sent and --clear clears it", stderr)
+	}
+}
+
+func TestSiteConfigSet_ClearRefusesUnknownFieldAndConflictingValue(t *testing.T) {
+	var body []byte
+	srv := rawBodyServer(t, &body)
+
+	if _, err := runSiteConfigSetArgs(t, srv.URL, `{}`, "--clear", "scm_hosts"); err == nil || !strings.Contains(err.Error(), "not a clearable field") {
+		t.Errorf("unknown --clear field err = %v, want not a clearable field", err)
+	}
+	if _, err := runSiteConfigSetArgs(t, srv.URL, `{"internal_hosts":[{"host_suffix":"corp.example"}]}`, "--clear", "internal_hosts"); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Errorf("conflicting --clear err = %v, want conflicts", err)
+	}
+	if body != nil {
+		t.Errorf("a refused invocation sent a request: %s", body)
 	}
 }
 
@@ -253,10 +347,12 @@ func TestSiteConfigSet_NotesANullBlockAsCarriedForward(t *testing.T) {
 			t.Errorf("stderr = %q, want it to name %q — a null block is carried forward, not cleared", stderr, want)
 		}
 	}
-	// …and the sibling written as [] is still a real mention, so it is still
-	// absent from the note: this change moved `null` only.
-	if strings.Contains(stderr, "internal_hosts") {
-		t.Errorf("stderr = %q, want it to NOT name a field the file mentions with a value", stderr)
+	// …and the sibling written as [] is not an omission: the omitted-fields
+	// note must not list it. (It earns the separate "empty, not sent" note.)
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "omits") && strings.Contains(line, "internal_hosts") {
+			t.Errorf("omitted-fields note %q names internal_hosts, which the file mentions", line)
+		}
 	}
 	if got.WorkspaceProviders != nil {
 		t.Errorf("wire carried workspace_providers = %#v, want it absent (omitempty on a nil pointer)", got.WorkspaceProviders)
