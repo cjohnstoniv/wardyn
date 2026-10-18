@@ -189,7 +189,7 @@ test.describe("Approvals screen", () => {
       page.getByText(/The run works through a short-lived, scoped credential/i),
     ).toBeVisible();
     await expect(
-      page.getByText(/The broker mints a short-lived, scoped credential bound to this run's identity/i),
+      page.getByText(/Wardyn mints a credential bound to this run's identity/i),
     ).toBeVisible();
   });
 

@@ -205,9 +205,9 @@ export const SECRETS_DEMOS: Demo[] = [
     title: "A PAT that only ever exists in a pipe",
     needsSecret: "wardyn-demo-pat",
     teaches:
-      "git-over-HTTPS is an opaque tunnel with no header to inject, so a PAT is minted on demand straight to STDOUT — never env, never disk, never argv — behind a caller-auth gate.",
+      "With WARDYN_GIT_PAT_BROKER=off, git-over-HTTPS is an opaque tunnel with no header to inject, so a PAT is minted on demand straight to STDOUT — never env, never disk, never argv — behind a caller-auth gate.",
     overview:
-      "Everything above kept the credential OUT of the sandbox because HTTP let the proxy attach it on the way past. git cannot be done that way: a clone is an end-to-end CONNECT tunnel the proxy cannot read into, so there is no request to stitch a header onto. Wardyn's answer is the next-narrowest thing — the PAT is minted only when git asks for it and written to STDOUT ONLY, into git's pipe, where nothing else can pick it up. And before it will emit anything the helper makes the caller prove it is the process the run provisioned. You will watch it refuse first. The stored secret here is fake; the mechanism is entirely real.",
+      "This card walks the in-sandbox helper lane, which exists only when the deployment sets WARDYN_GIT_PAT_BROKER=off. By default (since 0.7) a git_pat stays at the proxy: git is rewritten to a broker path, the proxy mints and sets the Basic auth on the outbound leg, and a raw mint of the grant is refused. The steps below need the switch off. Everything above kept the credential OUT of the sandbox because HTTP let the proxy attach it on the way past. git cannot be done that way: a clone is an end-to-end CONNECT tunnel the proxy cannot read into, so there is no request to stitch a header onto. Wardyn's answer is the next-narrowest thing — the PAT is minted only when git asks for it and written to STDOUT ONLY, into git's pipe, where nothing else can pick it up. And before it will emit anything the helper makes the caller prove it is the process the run provisioned. You will watch it refuse first. The stored secret here is fake; the mechanism is entirely real.",
     policy: {
       ...SHARED,
       allowed_domains: [],

@@ -254,7 +254,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
         };
       }
       return {
-        what: `The broker mints a short-lived, scoped credential bound to this run's identity${ttl}. The agent never sees your stored key.`,
+        what: `Wardyn mints a credential bound to this run's identity${ttl}. The grant's kind says whether it enters the sandbox.`,
         blast: `${CAPABILITY.brokerLine} The minted scope is exactly what's shown below — the broker can't widen it.`,
       };
     }
@@ -457,7 +457,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     <div className="mx-auto max-w-[880px] px-6 py-6">
       <PageHeader
         title="Approvals"
-        description="Decisions that gate what agents can do — nothing privileged happens without one. Approving a credential authorizes the broker to mint a short-lived, scoped token."
+        description="Requests an agent raised that need a person's decision. Each card says exactly what approving grants."
       />
 
       {/* The snapshot ceiling, said where it costs something: group membership

@@ -450,7 +450,7 @@ describe("GitTab", () => {
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(
-      screen.getByText(/Only the GitHub App lane keeps its token outside the sandbox/),
+      screen.getByText(/The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy/),
     ).toBeInTheDocument();
   });
 

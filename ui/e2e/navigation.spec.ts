@@ -41,7 +41,7 @@ import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 // all.
 const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Runs", heading: "Runs", blurb: /each confined behind its own barrier/i },
-  { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
+  { label: "Approvals", heading: "Approvals", blurb: /Each card says exactly what approving grants/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
   { label: "Governance", heading: "Governance", blurb: /Named ceilings, assigned to people and groups/i },
   { label: "Permissions", heading: "Permissions", blurb: /Each capability is enforced on its own/i },
