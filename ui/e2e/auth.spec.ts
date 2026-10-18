@@ -324,6 +324,63 @@ test.describe("SSO-only screen shape (#378/#379)", () => {
   });
 });
 
+// /healthz sso_provider: an Entra ID deployment's button reads "Sign in with
+// Microsoft" with a helper line, in Microsoft's documented button look. The
+// look is text and colour only: no logo or image ships.
+test.describe("Microsoft sign-in button (sso_provider)", () => {
+  const stubHealthz = async (page: Page, sso_provider: string) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", sso: true, sso_provider, token_login: true }),
+      }),
+    );
+    await clearTokenInit(page);
+  };
+
+  test("microsoft: text, helper line and the documented light look", async ({ page }) => {
+    await stubHealthz(page, "microsoft");
+    await page.addInitScript(() => localStorage.setItem("wardyn-theme", "light"));
+    await page.goto("/");
+
+    const button = page.getByRole("link", { name: SIGNIN.SSO_MICROSOFT, exact: true });
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAttribute("href", "/auth/login");
+    await expect(page.getByText(SIGNIN.SSO_MICROSOFT_HINT)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toHaveCount(0);
+    await expect(button.locator("img")).toHaveCount(0);
+    await expect(button).toHaveCSS("height", "41px");
+    // Both doors: the SSO button sits above the token form, as in the approved mock.
+    const [ssoBox, tokenBox] = await Promise.all([button.boundingBox(), signInToken(page).boundingBox()]);
+    expect(ssoBox!.y).toBeLessThan(tokenBox!.y);
+    await expect(button).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect(button).toHaveCSS("color", "rgb(94, 94, 94)");
+    await expect(button).toHaveCSS("border-top-color", "rgb(140, 140, 140)");
+    await expect(button).toHaveCSS("border-top-width", "1px");
+  });
+
+  test("microsoft: the documented dark look", async ({ page }) => {
+    await stubHealthz(page, "microsoft");
+    await page.addInitScript(() => localStorage.setItem("wardyn-theme", "dark"));
+    await page.goto("/");
+
+    const button = page.getByRole("link", { name: SIGNIN.SSO_MICROSOFT, exact: true });
+    await expect(button).toBeVisible();
+    await expect(button).toHaveCSS("background-color", "rgb(47, 47, 47)");
+    await expect(button).toHaveCSS("color", "rgb(255, 255, 255)");
+    await expect(button).toHaveCSS("border-top-width", "0px");
+  });
+
+  test("any other provider keeps the generic 'Sign in with SSO' button", async ({ page }) => {
+    await stubHealthz(page, "");
+    await page.goto("/");
+
+    await expect(page.getByRole("link", { name: "Sign in with SSO", exact: true })).toBeVisible();
+    await expect(page.getByText(SIGNIN.SSO_MICROSOFT_HINT)).toHaveCount(0);
+  });
+});
+
 // #212/#457 — a sign-in refusal must not advertise a working credential or
 // hand an unauthenticated reader an env var they cannot reach. These pin the
 // words the person actually reads, importing SIGNIN rather than duplicating
