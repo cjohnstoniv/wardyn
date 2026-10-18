@@ -45,6 +45,7 @@ import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { useCanMutate, useOperator, useRole } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
 
 // Icon + label for the three onboardable kinds. "ephemeral" is scratch space
 // discarded after the run, so it gets an hourglass rather than reusing the
@@ -111,6 +112,7 @@ function DeleteMenuItem({ ws, onPick }: { ws: Workspace; onPick: () => void }) {
 
 export function WorkspacesScreen() {
   const operator = useOperator();
+  const view = useConsoleMode();
   const role = useRole();
   const navigate = useNavigate();
   // #922: the shared shell status (already fetched for the app shell's own
@@ -175,8 +177,10 @@ export function WorkspacesScreen() {
             {/* The one door to /admin/drives from a nav-less screen (user-drives
                 §6). `outline`: the teal stays on Add workspace, and a drive is
                 allocated rather than onboarded. SUPER only — a member and a
-                security admin have nothing to act on there. */}
-            {operator && (
+                security admin have nothing to act on there — and only in the
+                Admin view: the door lands on /admin/drives, which would switch
+                the console view under a User-view reader (#2887). */}
+            {operator && view === "admin" && (
               <Button variant="outline" onClick={() => navigate("/admin/drives")}>
                 {DRIVES.TITLE}
               </Button>
