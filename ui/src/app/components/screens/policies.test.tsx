@@ -136,6 +136,17 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
     expect(screen.getByLabelText(/^spec/i)).toBeRequired();
   });
 
+  it("describes what a policy is for in the dialog, not how the server handles the spec", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+
+    expect(
+      screen.getByText("A named set of network, credential and lifetime rules a run can use. Wardyn checks the spec when you save."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/admin-gated|validated server-side/i)).not.toBeInTheDocument();
+  });
+
   it("announces a rejected save via role=alert and wires it to the Save button", async () => {
     createPolicyMock.mockRejectedValue(new Error("HTTP 400: invalid spec"));
     render(<PoliciesScreen />);

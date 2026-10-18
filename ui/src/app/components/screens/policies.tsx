@@ -64,6 +64,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
+import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { useOperator } from "../wardyn/operator-context";
 import {
   AvailabilityControl,
@@ -588,10 +589,7 @@ function PolicyEditor({
       >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
-          <DialogDescription>
-            Policies are admin-gated config. The spec is validated server-side before it is saved —
-            an invalid spec is rejected and shown here.
-          </DialogDescription>
+          <DialogDescription>{POLICY_DIALOG.LEDE}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">

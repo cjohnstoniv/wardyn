@@ -111,7 +111,7 @@ describe("RecordingScreen", () => {
       expect(screen.getByText(/couldn't load the list of runs/i)).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
-    expect(screen.queryByText(/none of your runs have a recording yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no run has a recording yet/i)).not.toBeInTheDocument();
     expect(getRecordingMock).not.toHaveBeenCalled();
   });
 
@@ -149,7 +149,11 @@ describe("RecordingScreen", () => {
     listRunsMock.mockResolvedValue(page([run("run_1"), run("run_2")]));
     renderScreen();
 
-    await screen.findByText(/none of your runs have a recording yet/i);
+    await screen.findByText(/no run has a recording yet/i);
+    // What the user gets, not how it is captured or fetched.
+    expect(screen.getByText("A run is recorded when its agent runs in a terminal.")).toBeInTheDocument();
+    expect(screen.getByText("Replays of the terminal sessions recorded during runs.")).toBeInTheDocument();
+    expect(screen.queryByText(/PTY|wardyn-rec|byte-for-byte|cast is fetched/i)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /go to runs/i })).toBeInTheDocument();
     expect(getRecordingMock).not.toHaveBeenCalled();
   });

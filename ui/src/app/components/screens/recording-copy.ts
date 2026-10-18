@@ -29,9 +29,15 @@ export const RECORDINGS_FILTER_SCOPE = (n: number): string =>
 
 // #459 — visible reasons, not title tooltips. EMPTY_TITLE/EMPTY_BODY is the
 // screen's own "nothing has ever run" empty state (runs.length === 0), never
-// the "None of your runs have a recording yet" state below it — that one has
+// the "No run has a recording yet" state below it — that one has
 // its own e2e pin (ui/e2e/recording.spec.ts) and stays untouched.
 export const RECORDINGS = {
+  // Page lede and the "runs exist, none recorded" state, in what the user gets
+  // rather than how the console builds it. View-neutral: an admin sees every
+  // run's recordings, a member their own.
+  LEDE: "Replays of the terminal sessions recorded during runs.",
+  NONE_TITLE: "No run has a recording yet",
+  NONE_BODY: "A run is recorded when its agent runs in a terminal.",
   EMPTY_TITLE: "No recordings yet",
   EMPTY_BODY: "Recordings appear once a run's terminal session is captured.",
   SEARCH_DISABLED_HINT:

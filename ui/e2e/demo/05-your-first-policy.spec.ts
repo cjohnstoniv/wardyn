@@ -265,8 +265,8 @@ test("A1 — the panel and its templates", async () => {
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
   // The modal's own body text is the most interesting thing on screen — ring
-  // the "admin-gated config" description while the two intro lines land.
-  await spotlight(page, dlg.getByText(/admin-gated config/));
+  // the dialog's description while the two intro lines land.
+  await spotlight(page, dlg.getByText(/A named set of network, credential and lifetime rules/));
   await caption(page, "A policy is a spec — a run's rules, saved once with a name so runs can reuse it.");
   await beat(page, PACE.read);
   await caption(

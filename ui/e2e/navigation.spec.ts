@@ -48,7 +48,7 @@ const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
   { label: "Workspaces", heading: "Workspaces", blurb: /a run can attach\. runs can only attach what's listed here/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
-  { label: "Recordings", heading: "Recordings", blurb: /Captured terminal sessions, replayed byte-for-byte/i },
+  { label: "Recordings", heading: "Recordings", blurb: /Replays of the terminal sessions recorded during runs/i },
 ];
 
 // The set of sidebar links that must remain mounted on every screen — proves

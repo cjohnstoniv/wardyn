@@ -219,7 +219,7 @@ export function RecordingScreen() {
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
         title="Recordings"
-        description="Captured terminal sessions, replayed byte-for-byte. Built from the run list alone — a run's own cast is fetched only when you press play."
+        description={RECORDINGS.LEDE}
         actions={
           <Button variant="outline" size="sm" onClick={load}>
             <RotateCw className="size-3.5" /> Refresh
@@ -256,11 +256,11 @@ export function RecordingScreen() {
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
-            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
+            title={recordingDisabled ? RECORDING_DISABLED_TITLE : RECORDINGS.NONE_TITLE}
             description={
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
-                : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
+                : RECORDINGS.NONE_BODY
             }
             action={
               recordingDisabled ? undefined : (
