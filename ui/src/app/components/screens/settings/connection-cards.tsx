@@ -115,7 +115,7 @@ export function Lane({
           <span className="flex items-center gap-1.5">
             <span className="text-sm font-medium text-foreground">{title}</span>
             {connected && (
-              <span className="inline-flex items-center gap-0.5 rounded-md border border-ok/25 bg-ok-subtle px-1.5 py-px text-meta font-medium text-ok">
+              <span className="inline-flex items-center gap-0.5 rounded-md border border-success/25 bg-success-subtle px-1.5 py-px text-meta font-medium text-success">
                 <Check className="size-2.5" />
                 Connected
               </span>

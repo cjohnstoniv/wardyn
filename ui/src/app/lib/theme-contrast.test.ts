@@ -468,6 +468,22 @@ describe("light-theme WCAG AA contrast", () => {
       `raw palette text color — use the guarded semantic token:\n${offenders.join("\n")}`,
     ).toHaveLength(0);
   });
+
+  // theme.css defines no --ok or --warn colour (the tokens are success/warning),
+  // and Tailwind emits nothing for an undefined colour, so a class naming them
+  // renders unstyled with no error.
+  it("no colour utility names the undefined ok/warn tokens in src/app", () => {
+    const undefinedToken = /\b(?:text|bg|border|ring|fill|stroke)-(?:ok|warn)(?:-subtle)?\b/;
+    const offenders: string[] = [];
+    for (const f of walkTsx("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (undefinedToken.test(ln)) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(offenders, `undefined colour token — use success/warning:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
 });
 
 // F7-F5 — vestibular-motion safety (WCAG 2.3.3 / prefers-reduced-motion): 82
