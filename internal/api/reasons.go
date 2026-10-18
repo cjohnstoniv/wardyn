@@ -547,5 +547,5 @@ const (
 	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
 	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
 	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
-	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
