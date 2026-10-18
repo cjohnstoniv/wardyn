@@ -239,7 +239,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	}
 	// One bounded promotion attempt for this pool: a free slot starts the run now. On the bound it rolls
 	// back, the run stays QUEUED, and the sweep retries.
-	s.promoteQueue(ctx, *created.RunnerPoolID, queueEnqueueBound)
+	_ = s.promoteQueue(ctx, *created.RunnerPoolID, queueEnqueueBound) // logged there; the sweep retries and reports it
 	warnings := q.warnings(s, r, created, waitWarn)
 	if got, gerr := s.cfg.Store.GetRun(ctx, created.ID); gerr == nil {
 		created = got
@@ -350,7 +350,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 // the create answers is true.
 func (s *Server) abortQueuedRun(ctx context.Context, runID uuid.UUID, hint string) {
 	ctx = context.WithoutCancel(ctx)
-	if s.exitQueued(ctx, runID, types.RunFailed, "", hint) {
+	if applied, _ := s.exitQueued(ctx, runID, types.RunFailed, "", hint); applied {
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
@@ -364,22 +364,23 @@ func (s *Server) abortQueuedRun(ctx context.Context, runID uuid.UUID, hint strin
 
 // exitQueued ends a run that is still QUEUED: the state, its queue row and the reason in one statement
 // (store.ExitQueuedRun), then the counters and the live-event feed casRunState keeps for every other
-// transition. false means another exit (a kill, a promotion) won first.
-func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunState, detail, hint string) bool {
+// transition. false with a nil error means another exit (a kill, a promotion) won first; an error is a
+// write that failed, so the run still waits.
+func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunState, detail, hint string) (bool, error) {
 	qs, ok := s.queueStore()
 	if !ok {
-		return false
+		return false, nil
 	}
 	applied, err := qs.ExitQueuedRun(ctx, runID, to, detail, hint)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: end queued run", slog.String("run_id", runID.String()), slog.Any("err", err))
-		return false
+		return false, fmt.Errorf("end queued run %s: %w", runID, err)
 	}
 	if applied {
 		s.metrics.runTerminal(to)
 		s.runEvents.moved(runID, types.RunQueued, to)
 	}
-	return applied
+	return applied, nil
 }
 
 // killQueuedTail is the kill's tail for a run that was still QUEUED: nothing was minted, built or
