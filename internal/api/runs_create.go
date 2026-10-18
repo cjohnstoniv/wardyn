@@ -658,10 +658,19 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		if !ok {
 			return "", true
 		}
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID)); ok {
-			image = built
-		}
+		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
 		endBuild()
+		if res.OK {
+			image = res.Image
+		} else if res.BaseErr != nil {
+			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
+			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
+			// run.build failure row, so only the run is failed here.
+			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
+			defer cancel()
+			s.failAndRevoke(failCtx, runID, types.RunPending, "the run's sandbox image could not be built: "+res.BaseErr.Error())
+			return "", true
+		}
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write
