@@ -80,8 +80,9 @@ export function runEntryRefusalLine(run: RunEntryFacts): string {
  * sentence for `run_owner_only` never reaches the screen: it is mapped from the
  * reason, not matched on text.
  */
-export function entryErrorMessage(e: unknown, fallback: (e: unknown) => string): string {
+export function entryErrorMessage(e: unknown, fallback: (e: unknown) => string, run?: RunEntryFacts): string {
   if (e instanceof HttpError && e.reason === RUN_OWNER_ONLY_REASON) return RUN_OWNER_ONLY;
-  if (e instanceof HttpError && e.status === 404 && e.reason === RUN_NOT_FOUND_REASON) return SERVICE_ATTACH_LINE;
+  // Only a service run has a sponsor arm to refuse; for any other run a 404 is just a missing run.
+  if (run && isServiceRun(run) && e instanceof HttpError && e.status === 404 && e.reason === RUN_NOT_FOUND_REASON) return SERVICE_ATTACH_LINE;
   return fallback(e);
 }

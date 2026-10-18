@@ -344,6 +344,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     operatorResolved,
     mayEnter,
     refusal,
+    createdBy,
     tokenOnlyMode,
     containerRef,
     panelRef,
@@ -428,7 +429,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         reclaimRef.current();
         return;
       }
-      setTakeoverErr(entryErrorMessage(e, getErrorMessage));
+      setTakeoverErr(entryErrorMessage(e, getErrorMessage, { created_by: createdBy }));
       return;
     }
     setTakenOverBy(null);

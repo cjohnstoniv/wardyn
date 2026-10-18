@@ -68,8 +68,11 @@ describe("a service identity's run", () => {
 
   it("maps the sponsor arm's 404 to the service_attach line, not the raw text", () => {
     const wire = new HttpError(404, "run not found", "run_not_found");
-    expect(entryErrorMessage(wire, () => "fallback")).toBe(SERVICE_ATTACH_LINE);
-    expect(entryErrorMessage(new HttpError(404, "run not found"), () => "fallback")).toBe("fallback");
+    expect(entryErrorMessage(wire, () => "fallback", svc)).toBe(SERVICE_ATTACH_LINE);
+    expect(entryErrorMessage(new HttpError(404, "run not found"), () => "fallback", svc)).toBe("fallback");
+    // A person's run has no sponsor arm: the same 404 is a missing run, not a feature to ask an admin for.
+    expect(entryErrorMessage(wire, () => "fallback", { created_by: "priya@acme.io" })).toBe("fallback");
+    expect(entryErrorMessage(wire, () => "fallback")).toBe("fallback");
   });
 });
 

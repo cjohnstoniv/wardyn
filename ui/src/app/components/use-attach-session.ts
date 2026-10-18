@@ -115,6 +115,8 @@ export interface UseAttachSessionArgs {
   mayEnter: boolean;
   /** What to say when it is false. */
   refusal: string;
+  /** Who created the run: a service run's sponsor arm is the one that answers a 404 run_not_found. */
+  createdBy?: string;
   tokenOnlyMode: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
   panelRef: React.RefObject<HTMLDivElement | null>;
@@ -157,6 +159,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     operatorResolved,
     mayEnter,
     refusal,
+    createdBy,
     tokenOnlyMode,
     containerRef,
     panelRef,
@@ -392,7 +395,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
             }
             setConnState("error");
             setErrorMsg(
-              entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`),
+              entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`, { created_by: createdBy }),
             );
             onCloseRef.current?.();
           });
@@ -825,7 +828,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // terminal down. operator, operatorResolved and signedOut are read
     // through refs; signedOut acts through suspendRef below.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller)
-  }, [runId, tokenOnlyMode, refit, mayEnter, refusal]);
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, createdBy]);
 
   // Declared after the effect above, so on mount it finds suspendRef already
   // set to the state that effect started in, and does nothing.

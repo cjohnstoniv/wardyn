@@ -204,7 +204,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
       }
     } catch (err) {
-      setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e))) });
+      setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run) });
     } finally {
       setOpeningApp(null);
     }
