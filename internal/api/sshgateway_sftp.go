@@ -33,9 +33,10 @@ func (s *Server) execSFTPServer(ctx context.Context, run types.AgentRun, args ..
 	switch {
 	case errors.Is(err, runner.ErrExecStreamUnsupported):
 	case errors.Is(err, runner.ErrRunnerOffline):
-		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects (" + err.Error() + ")"
+		// The sentence already says what the runner error says; repeating it reads twice.
+		reason = "sftp unavailable: the runner for this sandbox is offline; retry when it reconnects"
 	case errors.Is(err, runner.ErrSandboxGone):
-		reason = "sftp unavailable: the sandbox is gone (" + err.Error() + ")"
+		reason = "sftp unavailable: the sandbox is gone"
 	default:
 		reason = "sftp unavailable: the sandbox image has no " + sftpServerPath + " (" + err.Error() + ")"
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,9 +53,35 @@ func (h *capacityOutputHandler) HandleOpen(st *runnerwire.Stream, o runnerwire.O
 	return h.sub.HandleOpen(st, o)
 }
 
+// lateWriterDir is t.TempDir for a server whose output goroutines can still be saving a cursor when
+// the test ends: the plain cleanup loses "directory not empty" to that last write, so retry the
+// removal until the writers have stopped.
+func lateWriterDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "runnerio-output-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("remove %s: %v", dir, err)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return dir
+}
+
 func testOutputReplay(t *testing.T, mode string) {
 	fake := runnertest.NewFake()
-	server, err := New(fake, "laptop", t.TempDir())
+	server, err := New(fake, "laptop", lateWriterDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

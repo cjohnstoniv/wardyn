@@ -40,6 +40,7 @@ export const policies = {
   async createPolicy(name: string, spec: RunPolicySpec): Promise<PolicySaved> {
     const res = await wfetch("/policies", {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({ name, spec }),
     });
     return asJson<PolicySaved>(res);
@@ -49,6 +50,7 @@ export const policies = {
   async updatePolicy(id: string, name: string, spec: RunPolicySpec): Promise<PolicySaved> {
     const res = await wfetch(`/policies/${encodeURIComponent(id)}`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify({ name, spec }),
     });
     return asJson<PolicySaved>(res);

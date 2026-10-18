@@ -43,9 +43,6 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	if err := federation.CheckOrgURL(orgURL); err != nil {
 		return Auth{}, err
 	}
-	if row.ClaimExpired(time.Now()) {
-		return Auth{}, ErrAuth
-	}
 	ctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	var nonce [nonceLen]byte
@@ -54,7 +51,7 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	}
 	hash := federation.OrgURLSHA256(orgURL)
 	if row.OrgURLSHA256 != hash {
-		return Auth{}, ErrAuth
+		return Auth{}, fmt.Errorf("%w: the runner was registered with another organisation URL", ErrAuth)
 	}
 	hello := Hello{Versions: []int{ProtocolVersion}, Nonce: nonce[:], ServerTime: time.Now().UTC(), OrgURLSHA256: hash}
 	if err := WriteControl(ctx, conn, TypeHello, hello); err != nil {
@@ -67,11 +64,16 @@ func AuthenticateRunner(ctx context.Context, conn Conn, row types.Runner, orgURL
 	var auth Auth
 	if f.Type != TypeAuth || Unmarshal(f.Payload, &auth) != nil || auth.Version != ProtocolVersion ||
 		auth.RunnerID != row.ID.String() || !VerifyAuth(row.PublicKey, nonce[:], auth.RunnerID, hash, auth.Sig) {
-		return Auth{}, ErrAuth
+		return Auth{}, fmt.Errorf("%w: the runner's proof did not verify against its registered key", ErrAuth)
 	}
 	if row.State == types.RunnerRevoked {
 		_ = WriteControl(ctx, conn, TypeRevoked, Reason{Reason: "runner_revoked"})
 		return Auth{}, ErrRevoked
+	}
+	// Said only to a peer that proved the key: a stranger learns nothing about which ids are registered.
+	if row.ClaimExpired(time.Now()) {
+		_ = WriteControl(ctx, conn, TypeGoaway, Reason{Reason: ReasonRegistrationLapsed})
+		return Auth{}, fmt.Errorf("%w: the runner's claim has lapsed", ErrAuth)
 	}
 	return auth, nil
 }
@@ -131,13 +133,27 @@ func authenticateOrg(ctx context.Context, conn Conn, runnerID, orgURL string, ke
 	}
 }
 
+// ReasonRegistrationLapsed is the GOAWAY reason for a runner whose registration lapsed before it was
+// claimed, or changed while it connected.
+const ReasonRegistrationLapsed = "registration_lapsed"
+
 // goaway returns ErrGoaway carrying the org's stated reason, when it gave one.
 func goaway(payload []byte) error {
 	var r Reason
 	if Unmarshal(payload, &r) != nil || r.Reason == "" {
 		return ErrGoaway
 	}
+	if say, ok := goawaySentences[r.Reason]; ok {
+		return fmt.Errorf("%w: %s (%s)", ErrGoaway, say, r.Reason)
+	}
 	return fmt.Errorf("%w: %s", ErrGoaway, r.Reason)
+}
+
+// goawaySentences say what the org's GOAWAY reasons mean to the person reading the runner's log.
+var goawaySentences = map[string]string{
+	ReasonRegistrationLapsed: "this runner's unclaimed registration lapsed, or its registration changed (register it again with a new token)",
+	"runner_unclaimed":       "this runner is waiting for its owner to claim it (run `wardyn runner claim`)",
+	"runner_owner_inactive":  "this runner's owner is deactivated, so the organisation will not admit it",
 }
 
 func checkAuthOK(payload []byte, resume *Resume) (AuthOK, error) {

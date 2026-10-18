@@ -15,6 +15,7 @@
 import { test, expect, ADMIN_TOKEN, gotoConsole, sql } from "./fixtures";
 import type { Page, Route } from "@playwright/test";
 import { runsViewSaved } from "../src/app/components/wardyn/copy/runs-landing";
+import { OLDER_LIMITS_CHIP, RESTART_PROGRESS, RESTART_WITH_CURRENT_LIMITS } from "../src/app/components/wardyn/copy/run-lifetime";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
 
@@ -281,6 +282,44 @@ test.describe("Entry to another person's run (#1476)", () => {
     await expect(page.getByText(/can open this run's terminal, apps and SSH/)).toHaveCount(0);
     const ticket = await page.request.post(`/api/v1/runs/${id}/attach/ticket`, { headers: auth });
     expect(ticket.status()).toBe(200);
+  });
+});
+
+// FR-0163: the older-limits card's bulk restart is minutes long. The proxy window and the restart are spliced
+// (the seeded backend has no run on an older proxy), and the second batch is held to look at the first.
+test.describe("Admin runs: the older-limits restart", () => {
+  test("shows it is running, and each batch's results as they land", async ({ page }) => {
+    const ids = ["a1", "a2", "a3", "a4", "a5", "b1"].map((n) => `${n}000000-0000-4000-8000-000000000000`);
+    await page.route("**/api/v1/admin/runs/proxy-window", (route) =>
+      route.fulfill({
+        json: { release: "0.9.3", window: ["0.9"], outside: ids.map((run_id) => ({ run_id, created_by: "e2e", state: "RUNNING", proxy_release: "0.6" })) },
+      }),
+    );
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let posts = 0;
+    await page.route("**/api/v1/admin/runs/restart", async (route) => {
+      const { run_ids } = route.request().postDataJSON() as { run_ids: string[] };
+      posts++;
+      if (posts === 2) await held;
+      await route.fulfill({ json: { results: run_ids.map((run_id) => ({ run_id, ok: true })) } });
+    });
+
+    await gotoConsole(page, "admin");
+    await page.goto("/admin/runs");
+    await expect(page.getByText(`${OLDER_LIMITS_CHIP} · 6`)).toBeVisible();
+    const button = page.getByRole("button", { name: RESTART_WITH_CURRENT_LIMITS });
+    await button.click();
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeDisabled();
+    // The first five are answered while the sixth is still out.
+    const card = page.getByTestId("admin-older-limits-card");
+    await expect(card.getByText(/: Restarted$/)).toHaveCount(5);
+    await expect(card.getByText(RESTART_PROGRESS(5, 6))).toBeVisible();
+    await expect(card.locator("ul")).toHaveAttribute("aria-live", "polite");
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    release();
+    await expect(card.getByText(/: Restarted$/)).toHaveCount(6);
   });
 });
 

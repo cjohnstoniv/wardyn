@@ -13,7 +13,7 @@
 # 127.0.0.1 for the harness's port-forwards. The CA reaches every client
 # through the one production path, the chart's trustedCA
 # (WARDYN_TRUSTED_CA_FILE): wardynd's own portal calls, each run's proxy
-# upstream dials, and each sandbox's CA trust (installSandboxTrustedCA); the
+# upstream dials, and each sandbox's CA trust (runner.InstallSandboxTrustedCA); the
 # harness trusts it through NODE_EXTRA_CA_CERTS and curl --cacert.
 #
 # Reads the walk's EVIDENCE_DIR, FAKE_HOST, FAKE_BEDROCK_HOST, FAKE_SVC, NAMESPACE and CONTEXT;

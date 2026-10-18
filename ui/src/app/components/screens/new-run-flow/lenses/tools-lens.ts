@@ -10,7 +10,7 @@
 import type { AccessHost, AccessRow } from "../../../../lib/types/new-run-access";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { RunIntent } from "../draft/run-intent";
-import { harnessIds, withKeys } from "./lens-keys";
+import { withKeys } from "./lens-keys";
 import type { StepValidator } from "./step-issues";
 
 export function addAllowedHost(intent: RunIntent, host: string): RunIntent {
@@ -41,9 +41,14 @@ export function hostBadge(host: Pick<AccessHost, "verdict">, answered: boolean):
   return KNOWN_VERDICTS.includes(host.verdict) ? (host.verdict as HostBadge) : "requested";
 }
 
-/** The harness that starts with the run: the startup tool, else the first harness. */
+/**
+ * The harness that starts with the run, as the server reads it (startsHarness): an interactive harness
+ * startup's tool, or a background agent task's agent. No startup, or a command one, starts none.
+ */
 export const startsWithRun = (intent: RunIntent, harness: string): boolean =>
-  (intent.startup?.kind === "harness" ? intent.startup.tool : harnessIds(intent)[0]) === harness;
+  intent.startup?.kind === "harness"
+    ? intent.startup.tool === harness
+    : intent.workload?.kind === "agent_task" && intent.workload.agent === harness;
 
 export type SetupDoor = "sign_in" | "choose" | "add" | "connect";
 

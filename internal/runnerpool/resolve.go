@@ -11,11 +11,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Choice is what a request itself says: an explicit pool, and the placement
-// when the person asked for one, which narrows the pool's runners to one kind.
+// Choice is what a request itself says: an explicit pool. The placement a
+// request asks for narrows the resolved pool's runners afterwards (the api's
+// kindTargets), so it plays no part here.
 type Choice struct {
-	PoolID    *uuid.UUID
-	Placement types.Placement
+	PoolID *uuid.UUID
 }
 
 // Refusal is a pool selection that cannot proceed, and the sentence to show.
@@ -71,6 +71,8 @@ func (r *Refusal) Message() string {
 		return NoEligibleMemberMsg(r.Name)
 	case ReasonPoolsUnavailable:
 		return UnavailableServerMsg()
+	case ReasonRunTypeMissing:
+		return RunTypeMissingMsg()
 	case ReasonRunTypeNotAllowed:
 		return RunTypeNotAllowedMsg(r.Name, r.RunType)
 	case ReasonBarrierNotAllowed:
@@ -90,13 +92,8 @@ func (r *Refusal) Message() string {
 //
 // An explicit pool wins, then the person's own default pool, then the
 // organisation's. A default that is gone or switched off is refused, never
-// replaced by another default or another pool: the person must choose. A
-// placement the request asks for narrows the pool to that kind of runner, and a
-// pool with no runner of that kind is refused.
+// replaced by another default or another pool: the person must choose.
 func Resolve(permitted []types.RunnerPool, c Choice, personal, org types.RunnerPoolDefaults) (types.ResolvedRunnerPool, *Refusal) {
-	if c.Placement != "" && !c.Placement.Valid() {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonInvalid}
-	}
 	if c.PoolID != nil {
 		return resolveExplicit(permitted, c)
 	}
@@ -111,9 +108,6 @@ func Resolve(permitted []types.RunnerPool, c Choice, personal, org types.RunnerP
 	if !ok || pool.State != types.RunnerPoolActive {
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonDefaultUnavailable, Source: source}
 	}
-	if c.Placement != "" && c.Placement != pool.Scope.Placement() {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope}
-	}
 	return resolved(pool, source), nil
 }
 
@@ -122,10 +116,7 @@ func resolveExplicit(permitted []types.RunnerPool, c Choice) (types.ResolvedRunn
 	if !ok {
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonNotFound}
 	}
-	switch {
-	case c.Placement != "" && c.Placement != pool.Scope.Placement():
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope}
-	case pool.State != types.RunnerPoolActive:
+	if pool.State != types.RunnerPoolActive {
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonUnavailable, Name: pool.Name}
 	}
 	return resolved(pool, types.RunnerPoolSelectedExplicit), nil

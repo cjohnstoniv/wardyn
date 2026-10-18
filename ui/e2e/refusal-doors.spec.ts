@@ -16,13 +16,16 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
+import { test, expect, gotoConsole, layoutSettled, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR, REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, RUN_FACTS } from "../src/app/components/wardyn/copy/door";
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+
+// Keep the first attempt's trace: the click-loss flake fails only there, and the config records a trace on retry only.
+test.use({ trace: "retain-on-first-failure" });
 
 const VIEWER = "bob@acme.example";
 const FAILED_TASK = "e2e fixture 6";
@@ -209,6 +212,7 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(button).toHaveText(c.label);
       await statusRefreshed;
       const dialog = page.getByRole("dialog", { name: c.dialog });
+      await layoutSettled(button);
       await button.click();
       await expect(dialog).toBeVisible({ timeout: 20_000 });
       if (c.p.kind === "bedrock_sso" || c.p.kind === "anthropic_subscription") {

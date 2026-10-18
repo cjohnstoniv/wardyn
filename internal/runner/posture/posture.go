@@ -34,11 +34,33 @@ func Read() types.RunnerPosture { return read(mdmFile, 0) }
 func read(path string, owner uint32) types.RunnerPosture {
 	p := types.RunnerPosture{OS: runtime.GOOS, OSVersion: osVersion(), Evidence: types.PostureEvidenceOSProbe, DiskEncrypted: diskEncrypted()}
 	if f, err := fromMDMFile(path, owner); err == nil {
+		warnIgnored("", nil) // a usable file: the same break later is news again
 		p.MDMManaged, p.DiskEncrypted, p.Evidence = f.MDMManaged, f.DiskEncrypted, types.PostureEvidenceMDMFile
 	} else if !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("runner posture: the MDM posture file is ignored", "path", path, "error", err)
+		warnIgnored(path, err)
 	}
 	return p
+}
+
+// lastIgnored is the reason last logged for an unusable MDM file. The runner reads posture at every
+// connect and every 15 minutes, so the same reason is logged once, and again when it changes.
+var lastIgnored struct {
+	sync.Mutex
+	reason string
+}
+
+func warnIgnored(path string, err error) {
+	reason := ""
+	if err != nil {
+		reason = path + ": " + err.Error()
+	}
+	lastIgnored.Lock()
+	repeat := reason != "" && lastIgnored.reason == reason
+	lastIgnored.reason = reason
+	lastIgnored.Unlock()
+	if err != nil && !repeat {
+		slog.Warn("runner posture: the MDM posture file is ignored", "path", path, "error", err)
+	}
 }
 
 // mdmPosture is the file's closed shape.
@@ -51,7 +73,14 @@ type mdmPosture struct {
 // that nobody else can write.
 func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 	var out mdmPosture
-	fi, err := os.Lstat(path)
+	// One open file for the checks and the read, so the file judged is the file read; a link is not followed.
+	// O_NONBLOCK: a FIFO opens at once (and is then refused as not a regular file) instead of waiting for a writer.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return out, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return out, err
 	}
@@ -66,7 +95,7 @@ func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 	case fi.Size() > maxMDMFile:
 		return out, errors.New("too large")
 	}
-	b, err := os.ReadFile(path)
+	b, err := io.ReadAll(io.LimitReader(f, maxMDMFile+1))
 	if err != nil {
 		return out, err
 	}

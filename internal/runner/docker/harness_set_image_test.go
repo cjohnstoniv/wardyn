@@ -19,14 +19,19 @@ const agentRunSetPath = "../../../deploy/images/common/agent-run-set"
 
 // TestAttachBashrc_StartsTheStartHarness — on the set image the first-attach
 // auto-start launches the CLI of WARDYN_START_HARNESS, not the first one found
-// (which is claude). An unset or unknown value keeps the fixed list.
+// (which is claude). An unset or unknown value keeps the fixed list; a set but empty one (Your own
+// tools) starts no CLI.
 func TestAttachBashrc_StartsTheStartHarness(t *testing.T) {
-	for _, tc := range []struct{ start, want string }{
-		{"codex-cli", "codex"},
-		{"claude-code", "claude"},
-		{"", "claude"},
+	for _, tc := range []struct {
+		name, start, want string
+		unset             bool
+	}{
+		{"start=codex-cli", "codex-cli", "codex", false},
+		{"start=claude-code", "claude-code", "claude", false},
+		{"unset", "", "claude", true},
+		{"empty", "", "", false},
 	} {
-		t.Run("start="+tc.start, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			home, binDir := newAttachHome(t)
 			for _, cli := range []string{"claude", "codex"} {
 				fake := "#!/bin/sh\necho " + cli + " >> \"$HOME/calls.log\"\n"
@@ -34,13 +39,21 @@ func TestAttachBashrc_StartsTheStartHarness(t *testing.T) {
 					t.Fatalf("write fake %s: %v", cli, err)
 				}
 			}
-			runAttachShell(t, home, binDir, "WARDYN_INTERACTIVE_START=agent", "WARDYN_START_HARNESS="+tc.start)
+			env := []string{"WARDYN_INTERACTIVE_START=agent"}
+			if !tc.unset {
+				env = append(env, "WARDYN_START_HARNESS="+tc.start)
+			}
+			runAttachShell(t, home, binDir, env...)
 			var started []string
 			if b, err := os.ReadFile(filepath.Join(home, "calls.log")); err == nil {
 				started = strings.Fields(string(b))
 			}
-			if len(started) != 1 || started[0] != tc.want {
-				t.Fatalf("WARDYN_START_HARNESS=%q started %v, want exactly [%s]", tc.start, started, tc.want)
+			want := []string{}
+			if tc.want != "" {
+				want = []string{tc.want}
+			}
+			if len(started) != len(want) || (len(want) == 1 && started[0] != want[0]) {
+				t.Fatalf("WARDYN_START_HARNESS=%q (unset %v) started %v, want exactly %v", tc.start, tc.unset, started, want)
 			}
 		})
 	}
@@ -154,5 +167,19 @@ func TestHarnessSetImage_IdlePreparesEveryHarness(t *testing.T) {
 	if calls := ccRead(t, filepath.Join(home, "calls.log")); !strings.Contains(calls, "codex") ||
 		!strings.Contains(calls, "say hello in five words") || strings.Contains(calls, "claude") {
 		t.Errorf("the boot seed must run in codex alone, calls:\n%s", calls)
+	}
+}
+
+// TestHarnessSetImage_IdleWithNoStartHarness — a run that starts no CLI (Your own tools: the start
+// harness is set but empty) is not refused as "start harness ” is not one of this run's harnesses":
+// --idle holds the container open and every harness is prepared.
+func TestHarnessSetImage_IdleWithNoStartHarness(t *testing.T) {
+	set, home, binDir, tmuxLog := setImageLayout(t)
+	code, out := runSet(t, set, home, binDir, tmuxLog, "3s", []string{"--idle"}, "WARDYN_START_HARNESS=", ccSeedEnv)
+	if code != 124 {
+		t.Fatalf("agent-run --idle with an empty start harness exited %d (output: %s), want 124", code, out)
+	}
+	if got := ccRead(t, filepath.Join(home, ".codex", "config.toml")); !strings.Contains(got, "openai_base_url") {
+		t.Errorf("codex was not prepared when no harness starts\noutput:\n%s", out)
 	}
 }

@@ -89,7 +89,7 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 
 // RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
-// (runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity).
+// (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off).
 type RunQueue struct {
 	PoolID     uuid.UUID `json:"pool_id"`
 	QueuedAt   time.Time `json:"queued_at"`
@@ -162,6 +162,9 @@ type AgentRun struct {
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
+	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
+	// the run's life; empty when the run is recorded (or predates the field).
+	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a

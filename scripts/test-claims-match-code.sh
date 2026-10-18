@@ -178,11 +178,13 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
   hazard=no
   while read -r tbl; do
     [ -n "${tbl}" ] || continue
-    printf '%s\n' "${old_tables}" | grep -qx "${tbl}" && hazard=yes
+    grep -qx "${tbl}" <<<"${old_tables}" && hazard=yes
   done <<< "$(grep -ioE '^[[:space:]]*ALTER TABLE [a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
   # A pg_temp.* helper lives only in the migrator's own session, so it never
   # replaces a function an earlier release created — no ownership needed.
-  grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
+  # Capture, then match (C8h's reason below): no `grep | grep -q` under pipefail.
+  _fns="$(grep -i 'CREATE OR REPLACE FUNCTION' "${f}" || true)"
+  [ -n "${_fns}" ] && grep -viq 'FUNCTION pg_temp\.' <<<"${_fns}" && hazard=yes
   [ "${hazard}" = yes ] || continue
   grep -qF "\`${num}\`" <<<"${ops_para}" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
@@ -196,10 +198,12 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # hand, and the CHANGELOG's split-role bullet is that list. Twice it missed
 # tables, and wardynd then failed at boot or on the first write. Derived: every
 # table a migration numbered UNRELEASED_FROM or later creates is named in the
-# newest CHANGELOG section that carries a "Split-role installs" bullet. When a
-# release is cut, set UNRELEASED_FROM to the first migration after it; the next
-# release's tables then go in a new bullet under its own heading.
-UNRELEASED_FROM=0179 # v0.9.1 ships migrations up to 0178
+# newest CHANGELOG section that carries a "Split-role installs" bullet. It is the
+# first migration the last FINAL release does not ship: an upgrade from that
+# release needs every grant since, whichever release candidates came between.
+# When a final release is cut, set it to the first migration after that release
+# (RELEASING.md, step 1); the next release's tables then go in a new bullet.
+UNRELEASED_FROM=0191 # v0.9.3, the last final release, ships migrations up to 0190
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }
@@ -207,6 +211,11 @@ split_note="$(awk '
   on { print }
 ' "${ROOT}/CHANGELOG.md")"
 [ -n "${split_note}" ] || fail "CHANGELOG.md carries no \"Split-role installs\" bullet — re-anchor this guard (C8h)"
+newest="$(basename "$(ls "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql | tail -1)" | cut -c1-4)"
+# Right after a release cut UNRELEASED_FROM is the next number and nothing is checked, which is correct; set any
+# higher it skips migrations that exist (or will be taken by the next lane), so the check would prove nothing.
+[ "$((10#${UNRELEASED_FROM}))" -le "$((10#${newest} + 1))" ] \
+  || fail "UNRELEASED_FROM ${UNRELEASED_FROM} is above the next migration number $((10#${newest} + 1)) (newest is ${newest}): the split-role check reads no migration it should (C8h). Set it to the first migration after the last release"
 checked=0
 for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
   num="$(basename "${f}" | cut -c1-4)"

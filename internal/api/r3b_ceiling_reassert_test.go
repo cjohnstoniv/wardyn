@@ -22,6 +22,13 @@ import (
 // resolved dispatchCeiling, which is how every lane delivers one.
 func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEvent, uuid.UUID) {
 	t.Helper()
+	return r3bWalledRunWithPolicy(t, profile, deny, types.RunPolicySpec{})
+}
+
+// r3bWalledRunWithPolicy is r3bWalledRun for a run whose own policy is given,
+// so a test can start a run that already carries the profile's denies.
+func r3bWalledRunWithPolicy(t *testing.T, profile string, deny []string, policy types.RunPolicySpec) ([]types.AuditEvent, uuid.UUID) {
+	t.Helper()
 	fr := &fakeRunner{}
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st}
@@ -32,7 +39,7 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 		gc.Profile = &ResolvedProfile{Name: profile}
 	}
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
 	})
 	return audit.events, run.ID
 }

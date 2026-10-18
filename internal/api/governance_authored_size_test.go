@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // A resolved ceiling inherits the deployment's size where its profile sets none; the AUTHORED size the
@@ -41,5 +42,24 @@ func TestResolvedProfileCarriesTheAuthoredSize(t *testing.T) {
 		if p.AuthoredResources != tc.authored || p.Ceiling.Resources == nil || p.Ceiling.Resources.CPUMillis != tc.inherited || p.Ceiling.Resources.MemoryMiB != 2048 {
 			t.Errorf("%s: authored %+v ceiling %+v, want authored %+v and ceiling cpu %d / 2048 MiB", tc.name, p.AuthoredResources, p.Ceiling.Resources, tc.authored, tc.inherited)
 		}
+	}
+}
+
+// A composed profile on the deployment's root that narrows the PIDs limit authored that limit, so a cut at it
+// is the profile's, not the deployment's: its overlay is what stands between the ask and the deployment.
+func TestComposedProfileAuthorsItsPidsLimit(t *testing.T) {
+	srv := &Server{cfg: Config{DefaultPolicy: types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}}}}
+	pids := 256
+	overlaid := types.GovernanceProfile{ID: uuid.New(), Name: "overlaid",
+		Overlay: &types.CeilingOverlay{Resources: &types.ResourcesOverlay{PidsLimit: &pids}}}
+	res, err := srv.composeChain([]types.GovernanceProfile{overlaid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := policySourceRecord{Kind: policyKindStored, Spec: types.RunPolicySpec{Resources: &types.ResourceLimits{PidsLimit: 4096}}}
+	got := appliedPids(source, governanceCeiling{Profile: res}, pids)
+	want := client.AppliedAmount{Requested: 4096, Applied: pids, Capped: true, Source: types.LimitSourceGovernance, SourceName: "overlaid"}
+	if *got != want {
+		t.Errorf("pids_limit = %+v, want %+v", *got, want)
 	}
 }

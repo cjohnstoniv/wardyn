@@ -353,24 +353,29 @@ func TestDispatch_CredentialHostCollisionCoversEveryAuthor(t *testing.T) {
 	component := componentRule("portal.sso.us-east-1.amazonaws.com")
 	portal := runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "portal.sso.us-east-1.amazonaws.com", Header: "x-amz-sso_bearer_token"}}
 	api := uuid.New()
+	door := &proxy.GitHubAPIGrant{Grants: map[string]uuid.UUID{"acme": uuid.New(), "zeta": uuid.New()}}
 	for _, tc := range []struct {
 		name       string
 		injections []runner.InjectionGrant
 		pat        map[string]proxy.PATGrant
+		door       *proxy.GitHubAPIGrant
 		collide    bool
 	}{
-		{"nothing", nil, nil, false},
-		{"distinct hosts", []runner.InjectionGrant{componentRule("a.example"), componentRule("b.example"), componentRule("a.example.org")}, nil, false},
-		{"a component header on the access-portal host of a Bedrock sign-in", []runner.InjectionGrant{portal, component}, nil, true},
-		{"a redirect's token on a policy credential's host", []runner.InjectionGrant{componentRule("mirror.corp"), componentRule("mirror.corp")}, nil, true},
+		{"nothing", nil, nil, nil, false},
+		{"distinct hosts", []runner.InjectionGrant{componentRule("a.example"), componentRule("b.example"), componentRule("a.example.org")}, nil, nil, false},
+		{"a component header on the access-portal host of a Bedrock sign-in", []runner.InjectionGrant{portal, component}, nil, nil, true},
+		{"a redirect's token on a policy credential's host", []runner.InjectionGrant{componentRule("mirror.corp"), componentRule("mirror.corp")}, nil, nil, true},
 		{"a header on a forge whose API door carries the PAT", []runner.InjectionGrant{componentRule("gitlab.corp")},
-			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, true},
+			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, nil, true},
 		{"a header on a forge whose PAT stays on the git route", []runner.InjectionGrant{componentRule("gitlab.corp")},
-			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api}}, false},
-		{"hosts that do not parse are compared as written", []runner.InjectionGrant{componentRule("bad host"), componentRule("BAD HOST")}, nil, true},
+			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api}}, nil, false},
+		{"hosts that do not parse are compared as written", []runner.InjectionGrant{componentRule("bad host"), componentRule("BAD HOST")}, nil, nil, true},
+		{"the GitHub CLI door alone, over two owners", nil, nil, door, false},
+		{"the GitHub CLI door beside a rule on another host", []runner.InjectionGrant{componentRule("api.example")}, nil, door, false},
+		{"a rule on the GitHub CLI door's host", []runner.InjectionGrant{componentRule("api.github.com")}, nil, door, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			grants, found := credentialHostCollision(tc.injections, tc.pat)
+			grants, found := credentialHostCollision(tc.injections, tc.pat, tc.door)
 			if found != tc.collide {
 				t.Fatalf("collision = %v (%v), want %v", found, grants, tc.collide)
 			}
@@ -385,9 +390,14 @@ func TestDispatch_CredentialHostCollisionCoversEveryAuthor(t *testing.T) {
 type siteDispatchStore struct {
 	*dispatchTestStore
 	site types.SiteConfig
+	// siteErr, when set, is every read's answer: the config is unreadable.
+	siteErr error
 }
 
 func (s *siteDispatchStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	if s.siteErr != nil {
+		return types.SiteConfig{}, s.siteErr
+	}
 	return s.site, nil
 }
 
@@ -455,7 +465,7 @@ func TestDispatch_ComponentHostCollisionReusesTheGatesSet(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := types.RunPolicySpec{EligibleGrants: tc.grants}
-			_, found := componentHostCollision(componentDispatch{HeaderHosts: tc.headers}, tc.site, policy, "sub-owner", nil)
+			_, found := componentHostCollision(componentDispatch{HeaderHosts: tc.headers}, tc.site, policy, "", "sub-owner", nil)
 			if found != tc.collide {
 				t.Fatalf("collision = %v, want %v", found, tc.collide)
 			}
@@ -529,7 +539,7 @@ func TestDispatch_ALaneRunLeavesARedirectOntoALaneHostWithoutItsToken(t *testing
 	if len(onFeed) != 1 || onFeed[0].SecretName != types.ADOEntraAccessTokenSecret || !onFeed[0].RequireTLS {
 		t.Fatalf("rules for %s = %+v, want exactly the lane's", feedHost, onFeed)
 	}
-	if _, found := credentialHostCollision(pc.Injection, pc.PATGrants); found {
+	if _, found := credentialHostCollision(pc.Injection, pc.PATGrants, pc.GitHubAPI); found {
 		t.Error("the composed proxy config still carries two credentials for one host")
 	}
 	for _, g := range ls.written {
@@ -543,10 +553,10 @@ func TestDispatch_ALaneRunLeavesARedirectOntoALaneHostWithoutItsToken(t *testing
 		!slices.ContainsFunc(pc.Policy.AllowedDomains, func(d string) bool { return hostEqual(egressEntryHost(d), feedHost) }) {
 		t.Errorf("allowed domains = %v, want the public registry swapped for the feed host", pc.Policy.AllowedDomains)
 	}
-	ev := findAudit(events, run.ID, "run.artifact.redirect", "warn")
+	ev := findAudit(events, run.ID, "run.artifact.redirect", "denied")
 	if ev == nil || !strings.Contains(string(ev.Data), "the per-person Azure DevOps lane carries this host's credential") ||
 		!strings.Contains(string(ev.Data), "redirect applied without token injection") {
-		t.Errorf("run.artifact.redirect warn = %v, want the row that says the lane carries the host", ev)
+		t.Errorf("run.artifact.redirect denied = %v, want the row that says the lane carries the host", ev)
 	}
 	if ok := findAudit(events, run.ID, "run.artifact.redirect", "success"); ok != nil {
 		t.Errorf("a token injection was audited for the redirect: %s", ok.Data)
@@ -567,7 +577,7 @@ func TestDispatch_ARunOffTheLaneKeepsTheRedirectsToken(t *testing.T) {
 	if len(pc.MITMHosts) != 1 || componentMITMHost(pc.MITMHosts[0]) != "pkgs.dev.azure.com" {
 		t.Errorf("MITMHosts = %v, want the feed host", pc.MITMHosts)
 	}
-	if findAudit(events, run.ID, "run.artifact.redirect", "success") == nil || findAudit(events, run.ID, "run.artifact.redirect", "warn") != nil {
+	if findAudit(events, run.ID, "run.artifact.redirect", "success") == nil || findAudit(events, run.ID, "run.artifact.redirect", "denied") != nil {
 		t.Error("want the redirect's token injection audited as a success, and no lane row")
 	}
 }

@@ -150,7 +150,13 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	return pgHarnessOnPool(t, r, pool), pool
+}
 
+// pgHarnessOnPool is pgHarnessWithRunner over a pool the caller opened, for a test that must not share
+// the singleton site config and run catalogue of the DSN's database (see throwawayBarePGPool).
+func pgHarnessOnPool(t *testing.T, r runner.Runner, pool *pgxpool.Pool) *Server {
+	t.Helper()
 	audit := &recRecorder{}
 	idp, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), audit)
 	if err != nil {
@@ -175,7 +181,7 @@ func pgHarnessWithRunner(t *testing.T, r runner.Runner) (*Server, *pgxpool.Pool)
 		ControlPlaneURL: "http://wardynd:8080",
 	})
 	seedRunPool(t, pool)
-	return srv, pool
+	return srv
 }
 
 // TestCreateRun_Interactive_SkipsExec is the PIECE 2 contract test: an

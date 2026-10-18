@@ -7,11 +7,11 @@ shipped with none. This document is not a mock round: nothing here is proposed, 
 `ui/src/` changes to produce it. It records what the shipped code already does, so the next visual
 change to these four surfaces has something to check itself against.
 
-Every string cited below carries a `// DRAFT (M2 canon pending)` comment at its declaration site
-in the shipped code (`workspace-providers-prompt.md` §7.6's own round notes name this pending
-sitting as "M2"). This document **is** that sitting, for the four surfaces §3–§6 cover. Freezing a
+Every string cited below carried a `// DRAFT (M2 canon pending)` comment at its declaration site
+in the shipped code until the markers were removed (`workspace-providers-prompt.md` §7.6's own round
+notes name that pending sitting as "M2"). This document **is** that sitting, for the four surfaces §3–§6 cover. Freezing a
 row here does not change its text — the frozen value is the shipped value, byte for byte — it only
-removes the "pending" from the comment the next time a maintainer edits that file.
+removed the "pending" from the comment.
 
 Citations below name **symbols**, never line numbers (the convention `CONSOLE-RULES.md` and the
 `cmd/wardynd` citation guards already enforce) — a line number is stale the moment anything above
@@ -284,7 +284,7 @@ control, reused, never retyped, across the strip, the rail and this block.
 
 ## 7. Out of scope — model-access strings this document does not freeze
 
-Two further groups of shipped, `DRAFT (M2 canon pending)`-marked strings live beside the four
+Two further groups of shipped strings, once `DRAFT (M2 canon pending)`-marked, live beside the four
 surfaces above but render on surfaces outside them. Recorded here as open items rather than silently
 folded in, per this lane's own instruction not to widen into a redesign:
 
@@ -294,7 +294,7 @@ folded in, per this lane's own instruction not to widen into a redesign:
   `lib/reauth-waiting-copy.ts#waitingReauth`. These render on the run cockpit
   (`components/wardyn/live-approvals.tsx`), the `/approvals` card
   (`components/screens/approvals.tsx`), and the runs board card — none of which is one of the four
-  surfaces this lane names. They remain `DRAFT (M2 canon pending)` in the shipped code; a future
+  surfaces this lane names. They ship as they are, with the marker removed; a future
   canon round should cover the cockpit/approvals/board surface as its own unit rather than as a
   subsection of this one.
 - **`AGENTS_EXTRA` and `PROVIDERS_EXTRA`** (`lib/workspace-providers-copy.ts`) — new strings

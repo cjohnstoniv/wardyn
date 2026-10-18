@@ -61,8 +61,13 @@ func TestRunnerPoolSuccessText(t *testing.T) {
 // The list is ID NAME TYPE AVAILABILITY; a pool the caller may only manage is left out, and --all brings
 // every row back with its owner.
 func TestRunnerPoolListColumns(t *testing.T) {
+	barriers := []sdk.BarrierOption{{Class: types.CC1, Available: true}, {Class: types.CC2, Available: true, Default: true}, {Class: types.CC3, ReasonCode: "not_offered", ReasonDetail: "kvm_missing"}}
 	row := func(name string, scope sdk.RunnerPoolScope, owner, availability string, reason sdk.RunnerPoolReason) sdk.RunnerPoolCatalogueEntry {
-		return sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.MustParse("7c1e9b34-5d2a-4f08-9a61-0b3e2d4c8a10"), Name: name, Scope: scope, Availability: availability, Reason: reason}, Owner: owner}
+		e := sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.MustParse("7c1e9b34-5d2a-4f08-9a61-0b3e2d4c8a10"), Name: name, Scope: scope, Availability: availability, Reason: reason}, Owner: owner}
+		if name == "General" {
+			e.BarrierOptions = barriers
+		}
+		return e
 	}
 	srv := newCmdServer(t, http.StatusOK, sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
 		row("General", sdk.RunnerPoolOrganization, "", sdk.RunnerPoolAvailable, ""),
@@ -71,11 +76,11 @@ func TestRunnerPoolListColumns(t *testing.T) {
 	}})
 	id := "7c1e9b34-5d2a-4f08-9a61-0b3e2d4c8a10"
 	out, err := execCmdCapture(t, "runner", "pool", "list", "--url", srv.URL, "--token", "t")
-	if want := "ID|NAME|TYPE|AVAILABILITY\n" + id + "|General|organization|available\n" + id + "|Laptop|user|available"; err != nil || squeeze(out) != want {
+	if want := "ID|NAME|TYPE|AVAILABILITY|BARRIERS\n" + id + "|General|organization|available|CC1 CC2* CC3 (not_offered: kvm_missing)\n" + id + "|Laptop|user|available|-"; err != nil || squeeze(out) != want {
 		t.Fatalf("list = %v\n%s\nwant\n%s", err, squeeze(out), want)
 	}
 	out, err = execCmdCapture(t, "runner", "pool", "list", "--all", "--url", srv.URL, "--token", "t")
-	if err != nil || !strings.HasPrefix(squeeze(out), "ID|NAME|TYPE|OWNER|AVAILABILITY\n") || !strings.Contains(squeeze(out), "General|organization|available") ||
+	if err != nil || !strings.HasPrefix(squeeze(out), "ID|NAME|TYPE|OWNER|AVAILABILITY|BARRIERS\n") || !strings.Contains(squeeze(out), "General|organization|available") ||
 		!strings.Contains(squeeze(out), "Theirs|user|alice@example.com|unavailable (runner_pool_not_found)") {
 		t.Fatalf("list --all = %v\n%s", err, squeeze(out))
 	}
@@ -193,6 +198,60 @@ func TestRunnerPoolAddKnowsWhatIsAlreadyThere(t *testing.T) {
 	}
 	if !strings.Contains(put, id.String()) || !strings.Contains(put, "CC2") {
 		t.Errorf("default sent %q, want the pool and the kept barrier", put)
+	}
+}
+
+// A removal says only what is now true, with no kind in brackets (an add to a user pool names each
+// kind). With several runners, each one the server refuses gets its own line after the ones that
+// went through, and the command exits non-zero, so a partial failure is never read as done.
+func TestRunnerPoolAddAndRemoveReportEachRunner(t *testing.T) {
+	id, mine := uuid.New(), uuid.New()
+	pool := sdk.RunnerPool{ID: id, Name: "Laptop", Scope: sdk.RunnerPoolUser, Revision: 1}
+	own := "/api/v1/me/runner-pools/" + id.String()
+	routes := func(members []sdk.RunnerPoolMemberView) poolRoutes {
+		return newPoolRoutes(t, map[string]any{
+			"GET /api/v1/runner-pools/" + id.String():              pool,
+			"GET /api/v1/runner-pools/" + id.String() + "/members": members,
+			"GET /api/v1/me/runners":                               []sdk.RunnerView{{ID: mine, Name: "laptop-7", State: types.RunnerClaimed}},
+			"GET /api/v1/me/remote-runners":                        []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "eu", Name: "eu-cluster"}}},
+			"PUT " + own + "/runners/" + mine.String():             sdk.RunnerPoolMember{PoolID: id},
+			"DELETE " + own + "/runners/" + mine.String():          nil,
+		})
+	}
+	run := func(srv poolRoutes, verb string, args ...string) (string, error) {
+		return execCmdCapture(t, append(append([]string{"runner", "pool", verb, id.String()}, args...), "--url", srv.URL, "--token", "t")...)
+	}
+	out, err := run(routes(nil), "add", "laptop-7", "eu-cluster")
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 runners failed") ||
+		!strings.HasPrefix(out, "laptop-7 (self-hosted) added to Laptop\neu-cluster was not added to Laptop: ") {
+		t.Errorf("add with one refused = %v\n%q", err, out)
+	}
+	both := []sdk.RunnerPoolMemberView{
+		{Kind: sdk.RunnerKindSelfHosted, ID: mine.String(), Name: "laptop-7"},
+		{Kind: sdk.RunnerKindRemoteHosted, ID: "docker", Name: "shared-docker"}}
+	out, err = run(routes(both), "remove", "laptop-7", "shared-docker")
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 runners failed") ||
+		!strings.HasPrefix(out, "laptop-7 is no longer in Laptop\nshared-docker was not taken out of Laptop: ") {
+		t.Errorf("remove with one refused = %v\n%q", err, out)
+	}
+	srv := newPoolRoutes(t, map[string]any{
+		"GET /api/v1/runner-pools/" + id.String():              pool,
+		"GET /api/v1/runner-pools/" + id.String() + "/members": both[1:],
+		"DELETE *": nil,
+	})
+	out, err = run(srv, "remove", "shared-docker")
+	if err != nil || out != "shared-docker is no longer in Laptop\n" {
+		t.Errorf("remove of a remote-hosted runner = %v\n%q, want no kind suffix", err, out)
+	}
+}
+
+// org-default get prints the wire document, so its pool key is pool_id and not the design's older name.
+func TestRunnerPoolOrgDefaultGetPrintsThePoolIDKey(t *testing.T) {
+	id := uuid.New()
+	srv := newPoolRoutes(t, map[string]any{"GET /api/v1/runner-pool-defaults": sdk.RunnerPoolDefaults{PoolID: &id}})
+	out, err := execCmdCapture(t, "runner", "pool", "org-default", "get", "--url", srv.URL, "--token", "t")
+	if err != nil || !strings.Contains(out, `"pool_id": "`+id.String()+`"`) || strings.Contains(out, "organization_pool") {
+		t.Errorf("org-default get = %v\n%s", err, out)
 	}
 }
 

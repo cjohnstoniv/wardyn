@@ -29,7 +29,11 @@
 # docs/operations/denials.md=4636 is "Every denial that isn't a 404" — the `| reason |` table
 # authz_denied_doc_test.go and docs_r3_guard_test.go read.
 # docs/operations/who-gets-in.md 1454 adds 1 over 1453 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
-docs/operations/who-gets-in.md=1454 share=35
+# docs/operations/who-gets-in.md 1507 adds 53 over 1454 (0.9.3 RV5), measured: reserved-subject bullet and user type wording.
+# docs/operations/who-gets-in.md 1752 adds 245 over 1507, measured: the "How long a console session lasts" section comparing the three session shapes (0.9.3 console session lifetime).
+# docs/operations/who-gets-in.md 1757 adds 5 over 1752, counted from the diff: a renewal sets the expiry to the original length from the request (0.9.3 console session lifetime, review).
+# docs/operations/who-gets-in.md 1789 = 1757 + 32, measured: same session-renewal limit in the sliding-session list
+docs/operations/who-gets-in.md=1789 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
@@ -41,27 +45,55 @@ docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3416 adds 57 over 3359 (0.9 member drives): the admin list and delete of people's drives; measured at merge.
 # docs/operations/admin-only-writes.md 3418 adds 2 over 3416 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/operations/admin-only-writes.md 3444 adds 26 over 3418 (0.9 release text for the fix sets merged at release); measured.
-docs/operations/admin-only-writes.md=3444 share=35
+# docs/operations/admin-only-writes.md 3463 adds 19 over 3444 (0.9.3 RV5), measured: serving-replica revoke scope, template 501 wording, user-type delete blocker.
+# docs/operations/admin-only-writes.md 3471 adds 27 over 3444 (0.9.3 RV4b R2-0057): the /governance/egress-baseline tier row; measured.
+# docs/operations/admin-only-writes.md 3490 = 3463 + 27 (RV4b), measured at the wave-A merge.
+# docs/operations/admin-only-writes.md 3541 = 3490 + 51 (RV4c), measured at the wave-A merge.
+# docs/operations/admin-only-writes.md 3509 adds 65 over 3444, measured (0.9.3 K3a): the org runner mint and claim row and the trust write row.
+# docs/operations/admin-only-writes.md 3533 adds 24 over 3509, measured (0.9.3 K3-rest): the org runner limits row.
+# docs/operations/admin-only-writes.md 3630 = 3541 + 89 (K3a), measured at the wave-A merge.
+# K4 (0.9.3): docs/operations/admin-only-writes.md 3548 measured after merging K3-rest, +15 for organization runners in one pool on the /runner-pools writes row.
+# docs/operations/admin-only-writes.md 3645 = 3630 + 15 (K4), measured at the wave-B merge.
+# docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
+docs/operations/admin-only-writes.md=3698 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
-docs/operations/three-roles.md=4173 share=35
+# docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
+# docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
+# docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
+# docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
+docs/operations/three-roles.md=4650 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
-docs/operations/governance-writes.md=3086 share=35
+# docs/operations/governance-writes.md 3132 adds 46 over 3086 (0.9.3 FIN-E), measured: the runner trust row and held remote-hosted runner changes.
+docs/operations/governance-writes.md=3132 share=35
 docs/operations/member-runs.md=1044 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
-docs/operations/user-drives.md=4818 share=35
-docs/operations/capabilities.md=4141 share=35
-docs/operations/custom-components.md=1184 share=35
+# docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
+# docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
+docs/operations/user-drives.md=4823 share=35
+# docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
+# docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
+# docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
+docs/operations/capabilities.md=4383 share=35
+# docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
+# docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
+docs/operations/custom-components.md=1269 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/api-tokens.md 4053 adds 51: on Entra ID a portal-issued token exchanges only for a person who signed in here once or was set up by object id.
 # docs/operations/api-tokens.md 5527 measured after merging the batch into R1-identity-1 (52 over 5475: the same portal-token sentence).
-docs/operations/api-tokens.md=5527 share=35
+# docs/operations/api-tokens.md 5529 adds 2 over 5527, measured: expired rows are also left out of the token move list.
+# docs/operations/api-tokens.md 5531 adds 2 over 5529, measured: the toggle is now named "Also show revoked and expired tokens".
+# docs/operations/api-tokens.md 5569 adds 40 over 5529, measured (FIN-A2b): an expired or retired-identity token needs a decision, and the target's own token may list invitations.
+# docs/operations/api-tokens.md 5571, measured at the FIN-A2b merge into the final train (both sides' sentences).
+# docs/operations/api-tokens.md 5540 adds 11 over 5529 (0.9.3 FIN-E), measured: the unbind refusals for a sponsor or a pending invitation.
+# docs/operations/api-tokens.md 5582, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/operations/api-tokens.md=5582 share=35
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.
@@ -73,7 +105,11 @@ docs/operations/api-tokens.md=5527 share=35
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
 # docs/operations/denials.md 4948 adds 17 over 4931 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/operations/denials.md 4963 adds 15 over 4948 (0.9.1 L8), measured: the me.runners.tokens target of capability_feature.
-docs/operations/denials.md=4963 share=35
+# docs/operations/denials.md 4973 adds 10 over 4963, measured (FIN-A2b): the claim and sponsor doors' capability_feature targets.
+# docs/operations/denials.md 5001 adds 38: the sponsor_not_entitled denial row (0.9.3 FIN-B2).
+# docs/operations/denials.md 5179 adds 168, measured: the node-loss containment reasons.
+# docs/operations/denials.md 5186 adds 7 over 5179, measured: the node-loss containment wording after merging the runner sweep.
+docs/operations/denials.md=5186 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
@@ -96,6 +132,7 @@ docs/operations/denials.md=4963 share=35
 # docs/operations/capabilities.md 4106 adds 107 over 3999, measured: the self_host_runner value (0.9.1), its table cell and the operator exemption.
 # docs/operations/capabilities.md 4133 adds 27 over 4106, measured: an estate with a self-minted claimed runner at upgrade keeps self-hosting open (migration 0178).
 # docs/operations/capabilities.md 4141 adds 8 over 4133, measured: an admin-minted estate starts closed; the grant follows the upgrade.
+# docs/operations/capabilities.md 4169 adds 28 over 4141, measured: an allow of an unknown feature name is stored inert (0.9.3 staging).
 # docs/operations/three-roles.md 4113 adds 50 over 4063, measured: emptying ui_apps is not a narrowing, and an overlay that leaves none is refused.
 # docs/operations/governance-writes.md 3012 adds 34 over 2978, measured: an added inspection naming a detector sidecar is held for a second approver.
 # docs/operations/three-roles.md 4123 adds 10 over 4113, measured: ui_apps named as an unsatisfiable cause.
@@ -104,3 +141,6 @@ docs/operations/denials.md=4963 share=35
 # docs/operations/governance-writes.md 3047 adds 35 over 3012, measured: a rename that can move an equal-priority group tie is held.
 # docs/operations/governance-writes.md 3076 adds 29 over 3047, measured: a held role mapping carries the effect its proposer acknowledged.
 # three-roles.md 4173 (+49) and governance-writes.md 3086 (+10), measured: a maximum where no size is set can raise the member cap.
+# docs/operations/admin-only-writes.md 3495 adds 51 over 3444, measured: the two security-tier rows for GET and PUT /governance/credential-delivery (the tier table covered neither).
+# docs/operations/three-roles.md 4578 adds 360 over 4218, measured: the baseline the rubric grades against (built-in set, the operator's baseline hosts) and the profile-write posture advisory.
+# docs/operations/three-roles.md 4630 adds 52 over 4578, measured: the graded Bedrock host is its base URL's host when set, and the advisory's secrets reach counts every launchable harness.

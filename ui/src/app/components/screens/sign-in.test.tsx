@@ -165,6 +165,66 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
+// /healthz sso_provider: "microsoft" (an Entra ID issuer) words the SSO button
+// "Sign in with Microsoft" with a helper line; every other IdP keeps the generic
+// button. No logo: the icon is a generic aria-hidden glyph.
+describe("SignIn — SSO button wording by provider", () => {
+  it("microsoft: the button reads 'Sign in with Microsoft' with the helper line under it", async () => {
+    healthMock.mockReset();
+    healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: "microsoft" });
+    renderSignIn();
+    const link = await screen.findByRole("link", { name: SIGNIN.SSO_MICROSOFT });
+    expect(link).toHaveAttribute("href", "/auth/login");
+    expect(link.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(link.querySelector("img")).toBeNull();
+    expect(link.className).toContain("h-[41px]");
+    expect(screen.getByText("Use your work or school account")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
+  });
+
+  it("both doors: SSO button, helper line, 'or' divider, then the token form (the approved mock's order)", async () => {
+    healthMock.mockReset();
+    healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: "microsoft", token_login: true });
+    renderSignIn();
+    const link = await screen.findByRole("link", { name: SIGNIN.SSO_MICROSOFT });
+    const hint = screen.getByText(SIGNIN.SSO_MICROSOFT_HINT);
+    const divider = screen.getByText("or");
+    const field = screen.getByLabelText(/admin token/i);
+    const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(link, hint)).toBe(true);
+    expect(before(hint, divider)).toBe(true);
+    expect(before(divider, field)).toBe(true);
+  });
+
+  it("any other provider keeps 'Sign in with SSO' and no helper line", async () => {
+    healthMock.mockReset();
+    healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: "" });
+    renderSignIn();
+    await screen.findByRole("link", { name: "Sign in with SSO" });
+    expect(screen.queryByText(SIGNIN.SSO_MICROSOFT_HINT)).not.toBeInTheDocument();
+  });
+
+  it("an outage keeps the last known provider", async () => {
+    vi.useFakeTimers();
+    try {
+      healthMock.mockReset();
+      healthMock
+        .mockResolvedValueOnce({ status: "ok", sso: true, sso_provider: "microsoft" })
+        .mockResolvedValue({});
+      renderSignIn();
+      await vi.waitFor(() =>
+        expect(screen.getByRole("link", { name: SIGNIN.SSO_MICROSOFT })).toBeInTheDocument(),
+      );
+      await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+      expect(healthMock.mock.calls.length).toBeGreaterThan(1);
+      expect(screen.getByRole("link", { name: SIGNIN.SSO_MICROSOFT })).toBeInTheDocument();
+      expect(screen.getByText(SIGNIN.SSO_MICROSOFT_HINT)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // #378/#379: the sign-in screen reads /healthz's new token_login/sso_only bits
 // and renders only what can work, in every combination the posture can report.
 describe("SignIn — renders only what the posture says can work (#378/#379)", () => {

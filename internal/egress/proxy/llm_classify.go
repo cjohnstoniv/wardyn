@@ -18,6 +18,9 @@ const (
 	scanOpaque          // prompt-bearing but no extractor yet (…/batches): honest skip
 )
 
+// channelSharedGateway is channelForHost's channel for a gateway host both vendors share.
+const channelSharedGateway contentscan.Channel = "shared-gateway"
+
 // classifyLLM dispatches to the per-provider endpoint classifier.
 func classifyLLM(channel contentscan.Channel, method, rest string) int {
 	switch channel {
@@ -25,6 +28,11 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 		return classifyAnthropicLLM(method, rest)
 	case contentscan.ChannelOpenAIChat:
 		return classifyOpenAILLM(method, rest)
+	case channelSharedGateway:
+		if bodyBearingMethod(method) {
+			return scanOpaque
+		}
+		return scanNone
 	default:
 		return scanNone
 	}
@@ -77,11 +85,11 @@ func classifyOpenAILLM(method, rest string) int {
 // isLLMHost reports whether host is a recognised model-API upstream (for honest opaque-tunnel coverage on
 // CONNECT traffic). A method, not a free function, so a configured internal gateway's host counts too.
 func (p *Proxy) isLLMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
-	if _, ok := p.gatewayVendor[h]; ok {
+	if _, ok := p.gatewayVendorOf(h); ok {
 		return true
 	}
 	if _, ok := p.channelHosts[h]; ok {

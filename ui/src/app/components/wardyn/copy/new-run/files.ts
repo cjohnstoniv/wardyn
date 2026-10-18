@@ -14,16 +14,18 @@ export const NR_FILES = {
   MAIN_TITLE: "Main drive",
   MAIN_BODY: "The sandbox's own disk: system, tools and /home/agent. Every run has one.",
   SIZE_LABEL: "Size",
-  UP_TO: (cap: string | number) => `Up to ${cap} GiB in this pool`,
-  CLAMP_POOL: (cap: string | number, pool: string | number) => `Clamped to ${cap} GiB by the ${pool} pool.`,
+  /** `size` carries its unit: "4 GiB" or "1000 MiB". */
+  UP_TO: (size: string | number) => `Up to ${size} in this pool`,
+  CLAMP_POOL: (size: string | number, pool: string | number) => `Clamped to ${size} by the ${pool} pool.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_PROFILE: (cap: string | number, profile: string | number) => `Clamped to ${cap} GiB by ${profile}.`,
+  CLAMP_PROFILE: (size: string | number, profile: string | number) => `Clamped to ${size} by ${profile}.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_SERVER: (cap: string | number) => `Clamped to ${cap} GiB by this server.`,
+  CLAMP_SERVER: (size: string | number) => `Clamped to ${size} by this server.`,
+  CLAMP_POLICY: (size: string | number) => `Clamped to ${size} by this run's policy.`,
   /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_POLICY: (cap: string | number) => `Clamped to ${cap} GiB by this run's policy.`,
-  /** pending W-11: the recommended text until the owner answers. */
-  CLAMP_ORG: (cap: string | number) => `Clamped to ${cap} GiB by your organisation's limits.`,
+  CLAMP_ORG: (size: string | number) => `Clamped to ${size} by your organisation's limits.`,
+  /** Shown whenever the field's text is not the exact stored size. */
+  SIZE_EXACT: (mib: string | number) => `Exactly ${mib} MiB`,
   SIZE_ERROR: "Set a size for the main drive.",
   ENFORCED: "Enforced",
   ENFORCED_TIP: "Writes past this size fail.",
@@ -112,14 +114,16 @@ export const NR_FILES = {
   /** pending W-12: the recommended text until the owner answers. */
   NO_EXTRA_KEPT: (grace: string | number) =>
     `Only the main drive. It is deleted ${grace} after the run's end time.`,
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run with no folder marked as where it starts. */
+  STARTS_HERE_REQUIRED: "Choose the folder the run starts in.",
   CHOOSE_FILES: "Add what it needs, or choose No extra files.",
   MOUNT_TITLE: "Mount map",
   MOUNT_BODY: "Read-only view of where files appear in the sandbox.",
-  MOUNT_MAIN: (n: string | number) => `Main drive · ${n} GiB`,
+  MOUNT_MAIN: (size: string | number) => `Main drive · ${size}`,
   MOUNT_ITEM: (name: string | number) => `← ${name}`,
   MOUNT_STARTS: "(Starts here)",
   MOUNT_READ_ONLY: "(read-only)",
-  SUMMARY_MAIN: (n: string | number) => `Main drive ${n} GiB`,
+  SUMMARY_MAIN: (size: string | number) => `Main drive ${size}`,
   SUMMARY_STARTS: (name: string | number) => `starts in ${name}`,
   SUMMARY_KEPT_ONE: (names: string | number) => `${names} is kept`,
   SUMMARY_KEPT_MANY: (names: string | number) => `${names} are kept`,
@@ -128,8 +132,8 @@ export const NR_FILES = {
   SUMMARY_KEPT: (grace: string | number) => `the main drive is kept ${grace} after its end time`,
   /** pending W-12: the recommended text until the owner answers. */
   SUMMARY_NO_END: "the main drive is kept until you end the run",
-  SUMMARY_NO_EXTRA: (n: string | number, life: string | number) =>
-    `Main drive ${n} GiB · no extra files · ${life}.`,
+  SUMMARY_NO_EXTRA: (size: string | number, life: string | number) =>
+    `Main drive ${size} · no extra files · ${life}.`,
   // Owner-approved Files prototype (2026-10-13): one list of cards, the Add / Edit dialog and the starting folder.
   ATTACH_TITLE: "Repositories, drives and folders",
   ATTACH_BODY: "Each one appears in the sandbox at its mount path.",

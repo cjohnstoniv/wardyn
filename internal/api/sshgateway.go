@@ -57,6 +57,56 @@ func setSSHHandshakeTimeout(d time.Duration) (prev time.Duration) {
 	return time.Duration(sshHandshakeTimeoutNS.Swap(int64(d)))
 }
 
+// sshKeepaliveNS is how often the gateway asks an established connection's client to answer, and
+// how long it waits for the answer. Like sshHandshakeTimeoutNS an atomic only so a test can shrink it.
+// The web terminal's sockets are probed on this cadence (attachPingInterval); an SSH shell never was,
+// so a dead peer held one of its run's attach slots until TCP noticed.
+var sshKeepaliveNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(attachPingInterval))
+	return &v
+}()
+
+func sshKeepaliveEvery() time.Duration { return time.Duration(sshKeepaliveNS.Load()) }
+
+func setSSHKeepaliveEvery(d time.Duration) (prev time.Duration) {
+	return time.Duration(sshKeepaliveNS.Swap(int64(d)))
+}
+
+// sshProbeConn closes conn when its client stops answering. A global "keepalive@openssh.com" request
+// wants a reply, and any reply (OpenSSH answers an unknown request with failure) proves the peer is
+// there; an error, or no answer within one interval, ends the connection, which ends every channel and
+// frees the attach slots they hold. It returns when ctx ends.
+func sshProbeConn(ctx context.Context, conn ssh.Conn) {
+	every := sshKeepaliveEvery()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		answered := make(chan error, 1)
+		sshGo(func() {
+			_, _, err := conn.SendRequest("keepalive@openssh.com", true, nil)
+			answered <- err
+		})
+		select {
+		case <-ctx.Done():
+			return
+		case err := <-answered:
+			if err != nil {
+				_ = conn.Close()
+				return
+			}
+		case <-time.After(every):
+			_ = conn.Close()
+			return
+		}
+	}
+}
+
 const (
 	// sshMaxAuthTries bounds per-connection auth attempts. Set explicitly
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
@@ -486,6 +536,7 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	sshGo(func() { sshProbeConn(connCtx, sconn) })
 
 	for newCh := range chans {
 		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {

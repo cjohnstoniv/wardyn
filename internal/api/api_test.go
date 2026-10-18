@@ -14,10 +14,13 @@ import (
 	"testing"
 	"time"
 
+	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
@@ -673,6 +676,48 @@ func TestHealthz_TokenLoginAndSSOOnly(t *testing.T) {
 			}
 			if got := body["sso_only"]; got != tc.wantSSOOnly {
 				t.Errorf("sso_only = %v, want %v", got, tc.wantSSOOnly)
+			}
+		})
+	}
+}
+
+// TestHealthz_SSOProvider pins sso_provider: "microsoft" only for an OIDC
+// authenticator whose issuer is Entra ID, "" for no OIDC and for any other IdP.
+func TestHealthz_SSOProvider(t *testing.T) {
+	const tenant = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+	prefix := "/" + tenant + "/v2.0"
+	issuer := "https://login.microsoftonline.com" + prefix
+	idp := &gooidctest.Server{}
+	idp.SetIssuer(issuer)
+	mux := http.NewServeMux()
+	mux.Handle(prefix+"/", http.StripPrefix(prefix, idp))
+	fake := httptest.NewTLSServer(mux)
+	t.Cleanup(fake.Close)
+	entra, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, fake.Client()), oidc.Config{
+		IssuerURL: issuer, InternalIssuerURL: fake.URL + prefix,
+		ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
+		DefaultRole: oidc.RoleUser,
+	}, accessTestHMACKey)
+	if err != nil {
+		t.Fatalf("oidc.New against the Entra-issuer fake: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		oidc *oidc.Authenticator
+		want string
+	}{
+		{"entra issuer", entra, "microsoft"},
+		{"other issuer", &oidc.Authenticator{}, ""},
+		{"no oidc", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := do(t, New(Config{OIDC: tc.oidc}), http.MethodGet, "/healthz", "", "")
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got, ok := body["sso_provider"]; !ok || got != tc.want {
+				t.Errorf("sso_provider = %v (present %v), want %q", got, ok, tc.want)
 			}
 		})
 	}

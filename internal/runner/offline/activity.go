@@ -6,6 +6,7 @@ package offline
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
@@ -19,9 +20,17 @@ func (m *Manager) activityDir(id uuid.UUID) string {
 // Called under mu. Activity is best effort; a missing epoch conservatively
 // loses a keepalive, never reuses authority from the prior connection.
 func (m *Manager) publishActivity() {
-	for id := range m.state.Runs {
+	for id, r := range m.state.Runs {
+		if r.Retired {
+			continue
+		}
 		_ = runneractivity.Publish(m.activityDir(id), m.activityEpoch)
 	}
+}
+
+// liveRunIDs is runIDs without the retired runs, which have no activity and would only be scanned every second.
+func (m *Manager) liveRunIDs() []uuid.UUID {
+	return slices.DeleteFunc(m.runIDs(), func(id uuid.UUID) bool { return m.state.Runs[id].Retired })
 }
 
 func (m *Manager) activityLoop(ctx context.Context) {
@@ -34,7 +43,7 @@ func (m *Manager) activityLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 		m.mu.Lock()
-		ids := m.runIDs()
+		ids := m.liveRunIDs()
 		m.mu.Unlock()
 		for _, id := range ids {
 			marker, err := runneractivity.Read(m.activityDir(id))

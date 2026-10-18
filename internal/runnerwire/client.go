@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -41,6 +42,8 @@ type RunnerHooks struct {
 	Revoked     func(context.Context) error
 	Offline     func(context.Context)
 	Online      func(*Peer, bool)
+	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
+	ProxyImage func(string)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 }
@@ -63,6 +66,51 @@ type Client struct {
 	session string
 	ended   time.Time
 	ready   bool
+	link    linkState
+}
+
+// offlineLogEvery is how often a runner with no session up says it is still offline, whatever its
+// connection attempt is doing: a dial, handshake or hook that is waiting is never silent for longer.
+var offlineLogEvery = time.Minute
+
+// linkState is what the offline log reads: whether a session is up, since when it has not been, and
+// why the last attempt ended.
+type linkState struct {
+	mu     sync.Mutex
+	up     bool
+	since  time.Time
+	reason string
+}
+
+func (l *linkState) set(up bool, reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.up && !up {
+		l.since = time.Now()
+	}
+	l.up = up
+	if reason != "" {
+		l.reason = reason
+	}
+}
+
+// logWhileOffline warns every offlineLogEvery, until ctx ends, while no session is up.
+func (l *linkState) logWhileOffline(ctx context.Context) {
+	tick := time.NewTicker(offlineLogEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		l.mu.Lock()
+		up, since, reason := l.up, l.since, l.reason
+		l.mu.Unlock()
+		if !up {
+			slog.WarnContext(ctx, "runner still offline, retrying", slog.Duration("offline_for", time.Since(since).Round(time.Second)), slog.String("last_error", reason))
+		}
+	}
 }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
@@ -85,9 +133,18 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 func (c *Client) Run(ctx context.Context) error {
 	attempt := 0
 	var failures connectLog
+	c.link.mu.Lock()
+	c.link.up, c.link.since = false, time.Now()
+	c.link.mu.Unlock()
+	watch, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go c.link.logWhileOffline(watch)
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.Connect(ctx)
+		if err != nil {
+			c.link.set(false, err.Error())
+		}
 		if errors.Is(err, ErrRevoked) {
 			return errors.Join(err, c.cfg.Hooks.Revoked(ctx))
 		}
@@ -156,6 +213,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	if !ok.Resumed {
 		cfg = PeerConfig{}
 	}
+	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
+		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
+	}
 	c.session, c.ready = ok.SessionID, false
 	return c.serve(ctx, conn, cfg, ok)
 }
@@ -182,6 +242,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
 	defer func() {
+		c.link.set(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
 		if c.cfg.Hooks.StreamOffline != nil {
@@ -205,6 +266,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		}
 	}
 	slog.InfoContext(ctx, "runner connected to the organisation", slog.Bool("resumed", ok.Resumed))
+	c.link.set(true, "")
 	if c.cfg.Hooks.Online != nil {
 		c.cfg.Hooks.Online(peer, ok.Resumed)
 	}

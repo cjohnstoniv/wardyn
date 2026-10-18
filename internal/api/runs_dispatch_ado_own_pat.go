@@ -40,8 +40,6 @@ import (
 // The resolve's own refusal bodies, beside the Entra arm's. Machine-facing
 // first (the proxy fails its boot closed on any of them), and each names what
 // the run's owner can do.
-//
-// DRAFT (M2 canon pending)
 const (
 	adoOwnPATNotAddedRefusal = "The person who launched this run has no Azure DevOps token available in Wardyn — add it under Settings, then relaunch"
 	adoOwnPATExpiredRefusal  = "The Azure DevOps token behind this run has reached the expiry its owner entered — add a new token under Settings, then relaunch"

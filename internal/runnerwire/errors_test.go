@@ -23,6 +23,7 @@ func TestErrorCodeToSentinelMap(t *testing.T) {
 		"revive_unsupported": runner.ErrReviveUnsupported,
 		"never_started":      runner.ErrExecNeverStarted,
 		"image_arch":         runner.ErrImageArch,
+		"relay_ip_fenced":    runner.ErrRelayIPFenced,
 	}
 	if len(codeSentinels) != len(want) {
 		t.Fatalf("%d sentinel-mapped codes, design lists %d", len(codeSentinels), len(want))

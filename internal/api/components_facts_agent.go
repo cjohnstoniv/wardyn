@@ -63,7 +63,7 @@ func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 		spec, harnessRules := applyHarnessToolRules(f.spec, req.Tools, toolLaneDefault(req))
 		attended := dispatchParams{Interactive: interactive, Policy: spec, HarnessToolRules: harnessRules}.attendedToolRules()
 		if doc, err := agentPolicyDocument(req.Agent, f.autonomy.Level, f.harnesses, hold, locked, attended); err == nil && doc.ok {
-			a.ManagedSettings = &client.ManagedSettingsFact{Path: doc.path, Document: string(doc.content), Locked: doc.locked}
+			a.ManagedSettings = &client.ManagedSettingsFact{Path: doc.path, Document: string(doc.content), Harness: doc.harness, Locked: doc.locked}
 			if a.ManagedSettings.Locked {
 				a.ManagedSettings.LockedBy, a.ManagedSettings.Profile = "profile", f.ceiling.Profile.Name
 			}

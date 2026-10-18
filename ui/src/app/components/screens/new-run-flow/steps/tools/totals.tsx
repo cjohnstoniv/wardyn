@@ -41,7 +41,7 @@ export const deliveryLabel = (delivery: string): string | undefined => DELIVERY[
  * they show the row they are for and their delivery.
  */
 export const credentialLabel = (c: AccessCredential, harness: string | undefined, providers?: ReadonlyMap<string, string>): string | undefined =>
-  c.kind === "model_provider" ? (harness && providers?.get(harness)) || NR_TOOLS.PROVIDER_LABEL : undefined;
+  c.kind === "model_provider" ? (harness && providers?.get(harness)) || NR_TOOLS.PROVIDER_LABEL : c.label || undefined;
 
 /** "Anything else" for the clamped, effective spec, then whether the organisation's limits have been checked. */
 export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[] {

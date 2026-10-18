@@ -9,7 +9,7 @@
 // server answers every route 501 runner_pools_unavailable while it has no pool storage, and the console
 // shows that sentence, never an empty list. A covered write a second person must approve answers 202,
 // which asJson throws as PendingChangeError.
-import { asJson, asNoContent, throwIfPending, wfetch } from "./core";
+import { asJson, asNoContent, throwIfPending, type WfetchInit, wfetch } from "./core";
 import type {
   CreateMyRunnerPoolRequest,
   RemoteRunner,
@@ -20,6 +20,7 @@ import type {
   RunnerPoolList,
   RunnerPoolMember,
   RunnerPoolMemberView,
+  RunnerPoolRunType,
   RunnerPoolSubject,
   RunnerPoolUsePolicy,
   UpdateRemoteRunnerRequest,
@@ -29,13 +30,13 @@ import type {
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const seg = encodeURIComponent;
 
-async function send<T>(path: string, init: RequestInit): Promise<T> {
+async function send<T>(path: string, init: WfetchInit): Promise<T> {
   return asJson<T>(await wfetch(path, init));
 }
 
 const get = <T>(path: string) => send<T>(path, { method: "GET" });
 const put = <T>(path: string, body?: unknown) =>
-  send<T>(path, body === undefined ? { method: "PUT" } : { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(body) });
+  send<T>(path, body === undefined ? { method: "PUT", asPerson: true } : { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify(body) });
 
 async function sendNoBody(path: string, method: string): Promise<void> {
   return asNoContent(await wfetch(path, { method }));
@@ -55,7 +56,9 @@ const remoteMemberPath = (poolId: string, rid: string) => `${myPool(poolId)}/rem
 const remote = (rid: string) => `/remote-runners/${seg(rid)}`;
 
 export const runnerPools = {
-  list: () => get<RunnerPoolList>("/runner-pools"),
+  /** The pools the caller may use; a run type asks for the limits and barriers of that type alone. */
+  list: (runType?: RunnerPoolRunType, signal?: AbortSignal) =>
+    send<RunnerPoolList>(`/runner-pools${runType ? `?run_type=${runType}` : ""}`, { method: "GET", signal }),
   /** The pools the caller may use: for an administrator, without the oversight rows of other people's user pools. */
   listMine: () => get<RunnerPoolList>("/me/runner-pools"),
   get: (id: string) => get<RunnerPool>(pool(id)),
@@ -68,7 +71,7 @@ export const runnerPools = {
   setUsePolicy: (id: string, revision: number, subjects: RunnerPoolSubject[]) => put<RunnerPoolUsePolicy>(`${pool(id)}/use-policy`, { revision, subjects }),
   clearUsePolicy: (id: string) => clearCovered(`${pool(id)}/use-policy`),
   /** A person's own user pools. */
-  createMine: (req: CreateMyRunnerPoolRequest) => send<RunnerPool>("/me/runner-pools", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(req) }),
+  createMine: (req: CreateMyRunnerPoolRequest) => send<RunnerPool>("/me/runner-pools", { method: "POST", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify(req) }),
   updateMine: (id: string, req: UpdateRunnerPoolRequest) => put<RunnerPool>(myPool(id), req),
   removeMine: (id: string) => sendNoBody(myPool(id), "DELETE"),
   /** Puts the caller's own claimed runner into one of their user pools; nobody adds another person's. */

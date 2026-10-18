@@ -105,6 +105,19 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 			})
 		}
 	}
+	// The reason a classification row carries is the one its refusal publishes.
+	for _, f := range parse("../placement/classify.go") {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if kv, ok := n.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Reason" {
+					if val, ok := kv.Value.(*ast.Ident); ok {
+						note(val.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
 	var out []placement.Reason
 	for reason := range used {
 		if !placementAuditOnlyReasons[reason] {
@@ -118,10 +131,14 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 }
 
 // runnerPoolWireReasons lists the runner pool reasons published by HTTP handlers
-// today. Keep their values in runnerpool; the two left out (required, default
-// unavailable) join this list when the run-create fold sends them, and must be documented in the same change.
+// today. Keep their values in runnerpool. ReasonRunTypeMissing and the queue pair (ReasonQueueFull,
+// ReasonFull) are left out: they are described in prose, not in the table's reason column.
 var runnerPoolWireReasons = []runnerpool.Reason{
 	runnerpool.ReasonInvalid,
+	runnerpool.ReasonRequired,
+	runnerpool.ReasonDefaultUnavailable,
+	runnerpool.ReasonRunTypeNotAllowed,
+	runnerpool.ReasonBarrierNotAllowed,
 	runnerpool.ReasonNotFound,
 	runnerpool.ReasonUnavailable,
 	runnerpool.ReasonStale,

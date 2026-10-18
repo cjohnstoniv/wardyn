@@ -4,11 +4,13 @@
 package runneridentity
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
@@ -38,6 +40,41 @@ func Generate(stateDir string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// PendingKey returns the key a registration that never completed left behind (runner.key with no
+// runner.json), so a retry submits that key again instead of failing on the existing file. It returns
+// nil, nil when there is no key, and an error when an identity was already saved.
+func PendingKey(stateDir string) (ed25519.PrivateKey, error) {
+	info, err := os.Lstat(stateDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("runner state must be a private directory with mode 0700")
+	}
+	root, err := os.OpenRoot(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if _, err := root.Lstat("runner.json"); !errors.Is(err, fs.ErrNotExist) {
+		return nil, errors.New("runner state already holds a registered identity")
+	}
+	if _, err := root.Lstat("runner.key"); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	key, err := privateFile(root, "runner.key", ed25519.PrivateKeySize)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != ed25519.PrivateKeySize || !bytes.Equal(key, ed25519.NewKeyFromSeed(key[:ed25519.SeedSize])) {
+		return nil, errors.New("runner key is not an Ed25519 private key")
+	}
+	return ed25519.PrivateKey(key), nil
 }
 
 // Save records the server's registration while preserving the generated key.

@@ -47,8 +47,10 @@ func serviceOfRun(run types.AgentRun) (string, bool) {
 // sponsoredService is the service identity a session that passed the entry gate on run entered as the sponsor of,
 // or "": a service identity's run is entered only through the sponsor arm (mayEnterRunOrSponsor).
 func sponsoredService(run types.AgentRun) string {
-	name, _ := serviceOfRun(run)
-	return name
+	if name, ok := serviceOfRun(run); ok {
+		return name
+	}
+	return ""
 }
 
 // sponsorEntryData is the data a sponsor's entry rows add to their own: the service identity and
@@ -257,7 +259,7 @@ func (s *Server) refuseAttachTicket(w http.ResponseWriter, r *http.Request, runI
 		if s.authFailedAllowed() {
 			s.auditAttachDenied(r, runID, "unknown", "invalid, expired, or already-used attach ticket")
 		}
-	} else if s.authFailedLimiter.allow(s.cfg.Now()) {
+	} else if s.authFailedAllowed() {
 		s.auditAttachRefused(r, runID, ta.principal, "ticket", string(v), ta.via)
 	}
 	refuseTicketResponse(w, v)
@@ -268,7 +270,7 @@ func (s *Server) refuseUITicket(w http.ResponseWriter, runID uuid.UUID, app stri
 	switch {
 	case v == verdictInvalid:
 		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "invalid, expired, or already-used ticket"})
-	case s.authFailedLimiter.allow(s.cfg.Now()):
+	case s.authFailedAllowed():
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": string(v)}))
 	}

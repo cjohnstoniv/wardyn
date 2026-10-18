@@ -40,8 +40,36 @@ export function removeToolRule(intent: RunIntent, toolId: string, tool: string):
 /** A component entry as step 5 writes it: the harnesses its MCP server is turned on for. Absent leaves the server's own default. */
 export type McpComponentRef = ComponentRef & { mcp_harnesses?: string[] };
 
-export function setMcpHarnesses(intent: RunIntent, componentId: string, harnesses: string[]): RunIntent {
-  const components = ((intent.components ?? []) as McpComponentRef[]).map((c) => (c.id === componentId ? { ...c, mcp_harnesses: harnesses } : c));
+/** The same component, whatever MCP harnesses the person has since toggled on it (that edit makes a new object). */
+const sameComponent = (a: McpComponentRef, b: McpComponentRef): boolean =>
+  JSON.stringify({ ...a, mcp_harnesses: undefined }) === JSON.stringify({ ...b, mcp_harnesses: undefined });
+
+/**
+ * The draft's component an MCP row stands for: a stored one by its id, an inline one by the ordinal the
+ * server numbered it with (`inline:<n>`, its place in the components the server answered, `answeredFor`).
+ * An inline row stands for that very component if the draft still holds it, else it is stale and stands for
+ * none, however the draft's components have shifted since. With no answered list the position is read in the
+ * draft and the component there must still carry the row's name.
+ */
+export function mcpComponentIndex(intent: RunIntent, componentId: string, name: string, answeredFor?: readonly ComponentRef[]): number {
+  const refs = (intent.components ?? []) as McpComponentRef[];
+  const inline = /^inline:(\d+)$/.exec(componentId);
+  if (!inline) return refs.findIndex((c) => c.id === componentId);
+  const at = Number(inline[1]);
+  if (answeredFor) {
+    const entry = answeredFor[at];
+    if (!entry) return -1;
+    return refs[at] && sameComponent(refs[at], entry) ? at : refs.findIndex((c) => sameComponent(c, entry));
+  }
+  const ref = refs[at];
+  return ref && !ref.id && !ref.builtin && ref.inline && ref.name === name ? at : -1;
+}
+
+/** Turns an MCP server on for exactly `harnesses`. A row that stands for no component of the draft changes nothing. */
+export function setMcpHarnesses(intent: RunIntent, componentId: string, name: string, harnesses: string[], answeredFor?: readonly ComponentRef[]): RunIntent {
+  const at = mcpComponentIndex(intent, componentId, name, answeredFor);
+  if (at < 0) return intent;
+  const components = ((intent.components ?? []) as McpComponentRef[]).map((c, i) => (i === at ? { ...c, mcp_harnesses: harnesses } : c));
   return withKeys(intent, { components });
 }
 

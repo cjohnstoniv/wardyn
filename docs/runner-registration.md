@@ -16,7 +16,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Other VM-backed engines (Colima, Podman machine, OrbStack, rootless Docker) | Work when the startup reachability check passes; not verified by us. `--relay-host-target` is the knob when it does not. |
 | Podman on Linux (docker-compat API) | Unsupported and not verified in 0.9.1: the startup check is expected to refuse it. |
 | Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
-| `DOCKER_HOST` | `runnerd` reads `DOCKER_HOST` and never a docker context. Point it at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
+| `DOCKER_HOST` | `runnerd` follows `DOCKER_HOST`, else a selected docker context that is a local unix socket; a tcp, ssh or TLS context is refused. Point `DOCKER_HOST` at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
 | An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
 | A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
@@ -31,12 +31,12 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 
 ### The startup reachability check
 
-`serve` and `setup` prove the relay address before they use it: on this engine, a throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address (up to three tries per address pair, 0, 2 and 4 s apart). `setup` runs the check before it spends the token or installs the service; `serve` runs it before it shows Online.
+`serve` and `setup` prove the relay address before they use it: on this engine, a throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address (up to three tries per address pair, 0, 2 and 4 s apart). `setup` runs it before it spends the token when it already knows an image the engine has; otherwise (a development build without `--proxy-image`, or a release image this engine cannot pull) it runs after registering, with the image the organisation names. `serve` runs it before it shows Online.
 
 | If the check | Then |
 |---|---|
 | Passes | `setup` prints the listen address and the target a proxy reaches it at, and pins both in the service settings (`WARDYN_RELAY_LISTEN` and `WARDYN_RELAY_HOST_TARGET`, even when the target is `host-gateway`) on a VM-backed engine. `serve` checks that one pair. |
-| Fails | It exits with the engine's name, each address pair it tried and why it failed. `setup` adds that no token was spent. Nothing is installed. |
+| Fails | It exits with the engine's name, each address pair it tried and why it failed. Before registering, `setup` adds that no token was spent; after, that no new token is needed. The service is not installed. |
 
 - `--relay-listen` / `WARDYN_RELAY_LISTEN` fixes where the relay listens, and `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` fixes the address a proxy dials: `host-gateway` or an IP address. A value you give is checked as given and never replaced by a guess.
 - On a native engine with a firewall that drops container-to-host traffic (`firewalld`, `ufw`), the check fails; allow the bridge to reach the relay port.
@@ -84,7 +84,7 @@ Migration `0152_runner_pools` adds the runner pool catalogue: pools, their membe
 | `runners.enabled` true | Identity and route authorization checks still apply. |
 | Generic `PUT /site-config` | Retains stored runner settings; cannot enable or disable runners. |
 
-An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` (and the control-plane URL) is HTTPS; `http` is accepted only for localhost. Turning off is never refused. Off stops new registrations, claims and stream connections and ends every live runner session the replica that served the request holds. A session another replica holds stays open until the runner reconnects, but every sandbox create on a runner re-reads the switch first, so it gets no new work. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
+An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` is HTTPS (`http` is accepted only for localhost) and `WARDYN_CONTROL_PLANE_URL` is HTTPS with no localhost exception, because the relay serves only on the internal TLS listener. Turning off is never refused. Off stops new registrations, claims and stream connections and ends every live runner session the replica that served the request holds. A session another replica holds stays open until the runner reconnects, but every sandbox create on a runner re-reads the switch first, so it gets no new work. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
 
 ## Runner inventory and unused tokens
 
@@ -101,7 +101,9 @@ An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1
 
 Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed runner older than 24 hours is not listed, and the periodic sweep deletes it, freeing its key to register again. On a person's own list `minted_by_email` names the minter when someone else minted the token and an email is held. A runner another person revoked stays on its owner's list for seven days, with `revoked_by_email`; the owner's own revoke and older ones are hidden. Every view carries `machine_name`, the host name the runner reported at registration and again on each connect, the latest kept. It is runner-reported, never verified and never an identity; a name over 253 bytes or with a control character is refused at registration and not stored from a connect. `wardyn runner list` shows it as MACHINE. A view also carries `arch` (`amd64` or `arm64`), the CPU architecture of the runner's Docker engine, reported the same way and omitted until the runner reports one or when its engine could not be asked; `wardyn runner list` shows it as ARCH, and a value other than those two is refused at registration. A claimed runner's view carries `capacity`, `classes` and `allowed_roots` from its last `caps` event, and omits them until it has connected to the replica that answers. The mint answers (`POST /api/v1/runners/tokens`, `POST /api/v1/me/runners/tokens`) carry `org_url`, the URL `wardyn-runnerd register --org` must match, and `proxy_image`, the control plane's `WARDYN_PROXY_IMAGE` (omitted when unset), which a runner set up from that token should use; a token list never carries either. The runner views report what a runner said about itself as reported, never as verified.
 
-`wardyn runner list` (`--all` for every person's runners; `--no-limits` for those with none declared) and `wardyn runner tokens list [--owner]|revoke` use these routes.
+`wardyn runner list` (shows ID, MACHINE, ARCH, LAST SEEN and FINGERPRINT beside name, kind, state and runs; `--all` for every person's runners; `--no-limits` for those with none declared), `wardyn runner revoke <runner>` (your own runner, by id or name) and `wardyn runner tokens list [--owner]|revoke` use these routes.
+
+For an organization's runner a security operator runs `wardyn runner org-token mint --name <label>`, `wardyn runner claim-org <id> --fingerprint <fp>` and `wardyn runner trust <id> <class> --reason <why>`.
 
 ## Runner limits
 
@@ -112,7 +114,7 @@ Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a se
 | Who | Can |
 |---|---|
 | The owner | Change them with `wardyn runner set <runner> [--max-runs N] [--total-cpu N --total-memory GB --total-disk GB] [--per-run-cpu N --per-run-memory GB --per-run-disk GB]` or `PUT /api/v1/me/runners/{id}` with the whole `limits` set; audited as `runner.update` with the set before and after. A total past the CPUs or memory the runner last reported is refused. |
-| An administrator | Read them on `/runners`. No route changes another person's runner, since the machine is theirs. |
+| An administrator | Read them on `/runners`. No route changes another person's runner, since the machine is theirs. A security operator sets an organization's runner's limits with `PUT /api/v1/runners/{id}`, also audited as `runner.update`. |
 
 - Every runner view carries `kind`, `limits` (`null` until set) and `usage`. `usage.in_use` counts the runs holding a sandbox on the runner and adds up what they reserve: the CPU and memory each was given and its main drive. `usage.available` is the total less that, and nothing while the runner is offline. `usage.reported` is what the runner last said it has; `usage.disk_capped` is false where its disk limits are counted, not enforced.
 - Placement offers a run only to a runner whose per-run limit holds the run's size, and holds every run to the runner's Runs at once and totals. A create, a queue promotion, a queued run's start and a revive that starts an agent each count under the runner's row lock.
@@ -121,6 +123,13 @@ Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a se
 - Each sandbox create carries Runs at once, and the runner refuses one past the runs it still holds itself. This backstop only catches a count the control plane got wrong.
 
 Migration `0144_runner_minted_by` records on each runner who minted the registration token it redeemed, so the owner's list can tell a token they made from one an administrator made for them.
+
+## Runner and organisation versions
+
+- The runner and the organisation speak one wire protocol version, and a session is refused outright when they differ. No release so far has changed it, so a release does not by itself end a session.
+- A newer feature is negotiated: the runner states what it serves in its `caps` event, and the organisation sends it only what the runner said. An older runner therefore keeps working with fewer features; for example it keeps every run's output, because `caps.retire` is absent and the organisation queues no `retire_run` for it.
+- The organisation ignores a field in `caps` it does not know, but it refuses an event kind it does not know. A runner newer than its organisation can therefore be refused when it sends a kind the organisation lacks, and a new runner's proxy settings may not suit an older proxy image. Upgrade the organisation first, then its runners.
+- After a runner is downgraded to a release without `caps.retire`, a `retire_run` that was already deferred for it stays idle until the runner is upgraded again. The run's output and spool are kept meanwhile.
 
 ## Serving
 
@@ -140,10 +149,11 @@ The console prints the same command from the token mint answer, with its `proxy_
 | `--proxy-image` / `WARDYN_PROXY_IMAGE` | The flag, then the variable, then the image the register answer named for this runner's architecture (kept in `runner.json`), then, on a release binary, `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`. A development build with none of these must pass it. |
 | `--relay-listen` / `WARDYN_RELAY_LISTEN` | Where the run relay listens, instead of the engine's default; any engine, loopback included. See [the startup check](#the-startup-reachability-check). |
 | `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` | The address a run's proxy dials to reach the relay: `host-gateway` or an IP address. `setup` pins the one it proved on a VM-backed engine. |
+| `--trusted-ca-file` / `WARDYN_TRUSTED_CA_FILE` | Extra roots for every run's proxy and sandbox, 64 KiB at most; `SSL_CERT_FILE` and `SSL_CERT_DIR` are not read. See [A corporate CA on a laptop runner](operations/hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner). |
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
-Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. Revocation stops reconnects while local containment continues until the daemon exits.
+Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. The first revive of such a run queues its recovery on the runner and asks you to revive it again once the runner has reconnected ([offline runner recovery](runner-offline.md)). Revocation stops reconnects while local containment continues until the daemon exits.
 
 ## Set up a runner
 
@@ -162,9 +172,10 @@ The service is per user, not a root service: the runner identity sits in the per
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
-- Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)), always and before spending the single-use token; a refusal leaves it usable.
-- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
-- A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`; a development build refuses unless `--proxy-image` is given.
+- Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)). With no image the engine has yet, that proof waits for the organisation's answer, after the token is spent; a refusal then needs no new token.
+- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
+- A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` without pinning it, so replacing the binary moves the proxy too. A named image is pinned and kept by a rerun. Installs from before 0.9.3 pinned the release image: run setup once after replacing the binary. A development build without `--proxy-image` uses the organisation's answer and refuses when there is none.
+- Rolling a runner back to 0.9.2 after it ran anything under 0.9.3 needs its state directory cleared (0.9.3 records a captured-output flag for an ordinary run, which 0.9.2 refuses to read), so it registers and is claimed again; rolling back from a later release to 0.9.3 keeps its identity and run state, but let the runner reconnect until its audit spool is empty first: a spooled decision written by a later release may fail 0.9.3's integrity check.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.
 - `deploy/runner/install.sh` is a thin wrapper: it finds a binary (`--binary`, beside the script, or on `PATH`), runs a private executable copy and passes every other argument to `setup`. It ships in `wardyn-runner-units.tar.gz`.
 

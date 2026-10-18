@@ -21,12 +21,16 @@ import (
 // same defect one lane over (unionADOEntraLane); this is the same fix.
 //
 // WHICH VALUE: POWERFUL, by the rubric's existing rule rather than a new one.
-// autonomySecrets grades an api_key to a host outside
-// composer.safeBaselineDomains powerful, and every Bedrock lane's credential is
-// for bedrock-runtime.<region>.amazonaws.com (the captured-SSO lane's grant is
-// to portal.sso.<region>.amazonaws.com), neither of which is in that set. The
-// baseline set's model hosts are the vendor APIs a coding agent's own key
-// reaches; an AWS credential is an identity in the operator's cloud account.
+// autonomySecrets grades an api_key to a host outside the egress baseline
+// (composer.safeBaselineDomains plus the hosts the operator declared,
+// egress_baseline.go) powerful, and every Bedrock lane's credential is for
+// bedrock-runtime.<region>.amazonaws.com or its provider's base URL host (the
+// captured-SSO lane's grant is to portal.sso.<region>.amazonaws.com), none of
+// which is in the built-in set. The built-in set's model hosts are the vendor
+// APIs a coding agent's own key reaches; an AWS credential is an identity in
+// the operator's cloud account. An operator who declares its own model host
+// baseline lowers the grade of every api_key to that host, this one included:
+// the same rule, never a Bedrock exception.
 //
 // RESIDENCY DOES NOT MOVE IT. The rubric has no residency input: every api_key
 // grant is proxy-injected and never resident, and an api_key to a non-baseline

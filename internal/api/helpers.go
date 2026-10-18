@@ -745,6 +745,7 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 // Projecting the wrapper and shipping the scan result intact would have made the
 // whole redaction cosmetic.
 func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Workspace {
+	ws = redactWorkspaceRepoURLs(ws) // every tier
 	if tier == workspaceReadFull {
 		return ws
 	}

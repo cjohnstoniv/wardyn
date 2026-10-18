@@ -7,8 +7,10 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -178,4 +180,56 @@ func TestPG_CountPendingApprovalsByRunCreator(t *testing.T) {
 	if gotOther != 1 {
 		t.Fatalf("CountPendingApprovalsByRunCreator(%q) = %d, want 1 (the foreign run's own PENDING row)", other, gotOther)
 	}
+}
+
+// TestPG_ListExpiredPendingApprovals: the sweep's page holds only PENDING rows that are old enough or
+// past their run's own end, in id order from afterID, at most limit of them.
+func TestPG_ListExpiredPendingApprovals(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC()
+
+	ended := now.Add(-time.Minute)
+	endedRun := newRun(types.RunRunning)
+	endedRun.EndsAt = &ended
+	endedRunID := persistRun(t, ctx, pool, endedRun).ID
+	liveRunID := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+
+	mk := func(runID uuid.UUID, at time.Time) uuid.UUID {
+		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: json.RawMessage(`{"host":"h` + uuid.New().String() + `"}`),
+			State:          types.ApprovalPending, RequestedAt: at,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ap.ID
+	}
+	old1, old2 := mk(liveRunID, now.Add(-3*time.Hour)), mk(liveRunID, now.Add(-3*time.Hour))
+	runBound := mk(endedRunID, now)
+	fresh := mk(liveRunID, now)
+
+	want := []uuid.UUID{old1, old2, runBound}
+	slices.SortFunc(want, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	got, err := pg.ListExpiredPendingApprovals(ctx, now, now.Add(-time.Hour), uuid.Nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := idsOf(got); !slices.Equal(ids, want) {
+		t.Fatalf("page = %v, want the two old rows and the ended run's, in id order, not %s", ids, fresh)
+	}
+	page, err := pg.ListExpiredPendingApprovals(ctx, now, now.Add(-time.Hour), want[0], 1)
+	if err != nil || len(page) != 1 || page[0].ID != want[1] {
+		t.Fatalf("keyset page after %s = %v, %v; want only %s", want[0], idsOf(page), err, want[1])
+	}
+}
+
+func idsOf(aps []types.ApprovalRequest) []uuid.UUID {
+	out := make([]uuid.UUID, len(aps))
+	for i, a := range aps {
+		out[i] = a.ID
+	}
+	return out
 }

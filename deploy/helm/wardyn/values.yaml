@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.9.2 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.9.3 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -115,7 +115,10 @@ ingress:
   # ingress-nginx's default proxy-read-timeout is 60s, so without an override
   # the console gets a 504 instead of the verdict, e.g.:
   #   nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
-  # (use your controller's equivalent).
+  # (use your controller's equivalent). The admin bulk restart (POST
+  # /api/v1/admin/runs/restart) answers once, after it has restarted every run it
+  # was sent, one at a time, up to 3.5 minutes each: a batch slower than 60 s
+  # gets the same 504, so give it a timeout that covers your largest batch.
   annotations: {}
   hosts: []
   # hosts:
@@ -248,7 +251,7 @@ secrets:
 # (OpenBao is a supported endpoint), and Postgres keeps only a pointer row.
 # wardynd keeps no credential value under the age key: with backend vaultkv the
 # age-key refusal above does not apply. It still needs an age identity or a key
-# service (kek.provider transit or azurekv) to wrap the per-person keys that
+# service (kek.provider transit, azurekv or awskms) to wrap the per-person keys that
 # seal run masking copies; with a key service, WARDYN_AGE_KEY is needed only
 # until `wardynd -migrate-secrets -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
 # wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
@@ -260,7 +263,7 @@ secrets:
 secretStore:
   # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
   # mode). Store mode still needs an age identity or a key service (kek.provider
-  # transit or azurekv) to wrap the per-person keys that seal run masking
+  # transit, azurekv or awskms) to wrap the per-person keys that seal run masking
   # copies; the render refuses with neither.
   backend: pg
   vault:
@@ -334,12 +337,13 @@ secretStore:
     purge: auto
 
 # The key that wraps each stored credential's data key when secretStore.backend
-# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit" and
-# "Key service: Azure Key Vault"). "local": derived from the age key.
+# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit",
+# "Key service: Azure Key Vault" and "Key service: AWS KMS"). "local": derived from the age key.
 # "transit": your Vault's Transit key, over the secretStore.vault client (addr,
 # auth, role and TLS above). "azurekv": two Azure Key Vault keys, as the
 # secretStore.azure identity (auth, tenantId, clientId, authorityHost above;
-# vaultUrl is not needed). Either way the key never leaves the service, and
+# vaultUrl is not needed). "awskms": one AWS KMS key, as the pod's AWS identity
+# (kek.awskms below). Whichever, the key never leaves the service, and
 # once `wardynd -rewrap` reports no row left under the age key, the age key
 # can be removed. One key service at a time.
 kek:
@@ -415,7 +419,9 @@ kek:
     # AWS SDK's default credential chain: on EKS, IRSA (the
     # eks.amazonaws.com/role-arn annotation under serviceAccount.annotations) or
     # an EKS Pod Identity association, allowed kms:Encrypt and kms:Decrypt on
-    # this key only. No platform key and no key domains with it yet.
+    # this key only. The default NetworkPolicy denies wardynd's egress: add a rule for
+    # the KMS endpoint (kms.<region>.amazonaws.com, 443) to networkPolicy.egress.extra.
+    # No platform key and no key domains with it yet.
     key: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
@@ -434,6 +440,12 @@ env: {}
 # docs/ENV.md): exact across replicas and at every door that creates a run, 422 past
 # it. 0 (the default) is unlimited. The per-member cap stays a governance profile limit.
 maxConcurrentRuns: 0
+
+# Reverse proxies whose X-Forwarded-For names the client (WARDYN_TRUSTED_PROXIES): a
+# comma-separated CIDR list of your ingress addresses, "" (the default) trusts none.
+# Only list your own proxies; see docs/operations/hybrid-laptops.md, "Trusted proxies".
+# An env or extraEnv WARDYN_TRUSTED_PROXIES entry replaces it.
+trustedProxies: ""
 
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
 # must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):

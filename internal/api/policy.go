@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	neturl "net/url"
 	"os"
 	"regexp"
@@ -43,24 +44,50 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 	if err := dec.Decode(&spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
+	clampStoredFileSize(&spec, "the policy file "+path)
 	if err := validatePolicySpec(spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
 	}
 	return spec, nil
 }
 
+// clampStoredFileSize lowers a push_rules.max_file_size_mib saved before the write-time bound was
+// 32 MiB to that bound, with a log line, instead of refusing the policy: gitpack refuses every larger
+// object whatever the setting, so the lowered value enforces exactly what the old one did. It copies
+// push_rules before editing, so a caller holding the original is never surprised.
+func clampStoredFileSize(spec *types.RunPolicySpec, source string) {
+	pr := spec.PushRules
+	if pr == nil || pr.MaxFileSizeMiB <= maxPushRulesFileSizeMiB {
+		return
+	}
+	slog.Warn("wardynd: push_rules.max_file_size_mib is above the most a pack can carry; using the maximum",
+		slog.String("source", source), slog.Int("stored_mib", pr.MaxFileSizeMiB), slog.Int("used_mib", maxPushRulesFileSizeMiB))
+	cp := *pr
+	cp.MaxFileSizeMiB = maxPushRulesFileSizeMiB
+	spec.PushRules = &cp
+}
+
 // validatePolicySpec enforces the minimal structural invariants a policy must
 // satisfy before any run can be scheduled against it.
-func validatePolicySpec(spec types.RunPolicySpec) error { return validatePolicySpecMode(spec, true) }
+func validatePolicySpec(spec types.RunPolicySpec) error {
+	return validatePolicySpecMode(spec, true, true)
+}
+
+// validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount
+// source is judged by its spelling alone, and a symlink on the control plane is never followed. Grading uses it, so
+// an answer cannot tell a caller whether a path exists here or where a link points; the save door still resolves.
+func validatePolicySpecUnresolved(spec types.RunPolicySpec) error {
+	return validatePolicySpecMode(spec, true, false)
+}
 
 // validatePolicySpecLenient is validatePolicySpec for a spec built from stored
 // grant specs (record-mode synthesis): a git_pat scope is read leniently there,
 // as every read is, so a stored row with a stray key still loads.
 func validatePolicySpecLenient(spec types.RunPolicySpec) error {
-	return validatePolicySpecMode(spec, false)
+	return validatePolicySpecMode(spec, false, true)
 }
 
-func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
+func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool) error {
 	if spec.MinConfinementClass == "" {
 		return fmt.Errorf("min_confinement_class is required")
 	}
@@ -112,6 +139,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 			return fmt.Errorf("denied_domains[%d]: %w", i, err)
 		}
 	}
+	if err := validateAllowedMethods(spec.AllowedMethods); err != nil {
+		return err
+	}
 	for i, g := range spec.EligibleGrants {
 		if err := validateEligibleGrantMode(i, g, strict); err != nil {
 			return err
@@ -126,7 +156,7 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
 		return err
 	}
-	if err := validatePolicyWorkspaces(spec); err != nil {
+	if err := validatePolicyWorkspaces(spec, resolveMounts); err != nil {
 		return err
 	}
 	if err := validateToolRules(spec.ToolRules); err != nil {
@@ -183,13 +213,17 @@ func validateADOCapabilities(caps []adoscope.Capability) error {
 }
 
 // specRefusalReason is the wire reason for a validatePolicySpec failure: the
-// unknown-capability arm carries its own, every other arm the door's bucket.
+// unknown-capability, SSH-conflict and repository-userinfo arms carry their own,
+// every other arm the door's bucket.
 func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errADOCapabilityUnknown) {
 		return reasonADOCapabilityUnknown
 	}
 	if errors.Is(err, errPATNarrowingSSHConflict) {
 		return reasonGitPATNarrowingSSHConflict
+	}
+	if errors.Is(err, errRepoURLUserinfo) {
+		return reasonRepoURLCredentials
 	}
 	return bucket
 }
@@ -213,16 +247,13 @@ const (
 	maxFirstUseHoldSeconds = 600
 )
 
-// DRAFT (M2 canon pending)
-
 // The two bound refusals a policy author reads in a 400 body. They name the
 // accepted RANGE rather than the ceiling alone, because 0 is a meaningful third
 // value on both fields (keep the built-in default) and "may not exceed N" reads
 // as "lower it", which for 0 is the wrong instruction. Each echoes the value so
 // someone editing a pasted policy can see which field they are being told about.
 const (
-	maxHoldsRefusal = "max_holds must be between 0 (the built-in default) and %d, got %d"
-	// DRAFT (M2 canon pending)
+	maxHoldsRefusal            = "max_holds must be between 0 (the built-in default) and %d, got %d"
 	firstUseHoldSecondsRefusal = "first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d"
 )
 
@@ -396,13 +427,15 @@ func validateUIAppPath(p string) error {
 // bounded, and keeps a hand-authored policy from asking the broker's pack
 // inspector to read an unbounded pack. Clamp only ever LOWERS this
 // scalar (never a union), so it cannot suffer the same post-clamp overshoot.
+// maxPushRulesFileSizeMiB is gitpack's own per-object ceiling (maxObjectBytes, 32 MiB): it refuses
+// every larger object before the configured limit is read, so a larger setting could never take effect.
 // maxPushRulesHoldSeconds is the proxy's own hold ceiling (maxHoldTimeout in
 // internal/egress/proxy): a longer value would be clamped there anyway.
 const (
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
 	maxPushRulesHoldSeconds    = 600
-	maxPushRulesFileSizeMiB    = 1024
+	maxPushRulesFileSizeMiB    = 32
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
@@ -429,7 +462,10 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
 		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
 	}
-	if pr.MaxFileSizeMiB < 0 || pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+	if pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+		return fmt.Errorf("push_rules.max_file_size_mib is %d, but the most a pack can carry is %d MiB; use %d or less", pr.MaxFileSizeMiB, maxPushRulesFileSizeMiB, maxPushRulesFileSizeMiB)
+	}
+	if pr.MaxFileSizeMiB < 0 {
 		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
 	}
 	if pr.DenyNewExecutables {
@@ -734,10 +770,21 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 	return nil
 }
 
+// validateAllowedMethods refuses a blank entry: it reads as a method restriction
+// and names no method, so the list would be stored and enforce nothing.
+func validateAllowedMethods(methods []string) error {
+	for i, m := range methods {
+		if strings.TrimSpace(m) == "" {
+			return fmt.Errorf("allowed_methods[%d]: must not be blank", i)
+		}
+	}
+	return nil
+}
+
 // validatePolicyWorkspaces validates workspace_mounts/workspace_repos and the
 // LLM-inspection block (extracted from validatePolicySpec for the gocyclo
 // gate; behavior is identical).
-func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
+func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool) error {
 	// WorkspaceMounts are operator/policy-controlled host bind mounts. Validate
 	// each against the SAME deny-list the docker driver enforces (absolute,
 	// cleaned, non-dangerous Source; allowed-prefix Target) so a bad mount is
@@ -757,7 +804,11 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 	// PURE structural check (no store access).
 	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts)+len(spec.WorkspaceRepos))
 	for i, wm := range spec.WorkspaceMounts {
-		if err := runner.ValidateMountSource(wm.Source); err != nil {
+		validateSource := runner.ValidateMountSource
+		if !resolveMounts {
+			validateSource = runner.ValidateMountSourceLexical
+		}
+		if err := validateSource(wm.Source); err != nil {
 			return fmt.Errorf("workspace_mounts[%d]: %w", i, err)
 		}
 		// ValidateMount decomposed into its two halves so the TARGET half is the
@@ -786,6 +837,9 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 			if !repoFieldSafe(f.value) {
 				return fmt.Errorf("workspace_repos[%d]: "+repoField400Charset, i, f.name)
 			}
+		}
+		if repoURLHasUserinfo(wr.Repo) {
+			return fmt.Errorf("workspace_repos[%d].repo: %w", i, errRepoURLUserinfo)
 		}
 		if wr.Target == "" {
 			// No explicit dest: the default (~/work/<name> convention) is derived

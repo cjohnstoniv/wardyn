@@ -204,6 +204,9 @@ export type RunEndingKind =
   // run.create/failure stamped reason "sandbox_create": the runner could not
   // create the sandbox, so nothing ran.
   | "sandbox_create"
+  // run.create/failure stamped reason "relay_ip_fenced": a Kubernetes runner gave the run's proxy a pod
+  // IP it still fences for an earlier run whose termination is unknown, so it stopped this one first.
+  | "relay_ip_fenced"
   // run.exec/failure stamped reason "agent_start": the sandbox exists but the
   // agent process could not be started in it.
   | "agent_start"
@@ -231,8 +234,10 @@ export interface RunEnding {
   provider?: string;
   /**
    * For `killed`: what the trail proves about the kill (#1487). The LATEST
-   * run.kill row decides — success is `confirmed`, any other outcome is
-   * `partial` (a teardown step failed), and no row at all is `unknown`.
+   * run.kill row decides — success is `confirmed`, a success whose sandbox stop
+   * was queued for an offline runner (`data.sandbox_stop` "queued") is `queued`,
+   * any other outcome is `partial` (a teardown step failed), and no row at all
+   * is `unknown`.
    */
-  evidence?: "confirmed" | "partial" | "unknown";
+  evidence?: "confirmed" | "queued" | "partial" | "unknown";
 }

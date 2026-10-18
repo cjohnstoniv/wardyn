@@ -65,7 +65,8 @@ export function InvitationsCard() {
 
   const restoreFocus = () => {
     const opener = card.current?.querySelector<HTMLElement>(`[data-claim="${claiming?.id}"]`);
-    (opener ?? card.current?.querySelector<HTMLElement>("h3 button"))?.focus();
+    // The last waiting invitation was claimed: the card has gone, so focus goes to the page's main region.
+    (opener ?? card.current?.querySelector<HTMLElement>("h3 button") ?? document.getElementById("main-content"))?.focus();
   };
 
   return (

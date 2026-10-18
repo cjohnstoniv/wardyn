@@ -83,6 +83,39 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
     vi.useRealTimers();
   });
 
+  // DR-0270: the refusal names the organisation, so only that organisation's live sign-in finishes the connect.
+  it("a live own-token row for another organisation does not finish the sign-in the refusal asked for", async () => {
+    const popup = { closed: false, close: vi.fn(), opener: {} as unknown, location: { href: "" } };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    vi.useFakeTimers();
+    getMineMock.mockResolvedValue([
+      { state: "live", token_mode: "own_pat", org: "other", kind: "azure_devops" },
+      { state: "expired_signin", org: "contoso", kind: "azure_devops" },
+    ]);
+
+    const { result } = renderHook(() => useAdoLaunchDoor());
+    act(() => {
+      result.current.notifyLaunchError(new HttpError(422, "not connected", "git_credential", "contoso"));
+    });
+    act(() => {
+      result.current.dialog.onConfirm();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(result.current.dialog.open).toBe(true);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+
+    getMineMock.mockResolvedValue([{ state: "live", source: "separate", org: "contoso", kind: "azure_devops" }]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(result.current.dialog.open).toBe(false);
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   // Review regression finding 1 (PR #478): the F2 fix settled a superseded
   // poll with `false`, which settle() reads as "the person declined" and
   // closes the dialog — so on exactly the path this PR is about (a blocked
@@ -174,6 +207,28 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
 
   // #1428: the wire reasons a refused token creation carries (reasons.go) pick
   // the launch note; every other refusal picks none.
+  it("a successful connect clears the refusal note that asked for it (FUG-L412)", async () => {
+    const popup = { closed: false, close: vi.fn(), opener: {} as unknown, location: { href: "" } };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    vi.useFakeTimers();
+    getMineMock.mockResolvedValue([{ state: "live" }]);
+    try {
+      const { result } = renderHook(() => useAdoLaunchDoor());
+      act(() => result.current.notifyLaunchError(new HttpError(403, "refused", "ado_pat_consent_needed")));
+      expect(result.current.refusal).toBe("connect");
+      act(() => {
+        result.current.dialog.onConfirm();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(toastSuccessMock).toHaveBeenCalled();
+      expect(result.current.refusal).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads the token-creation reason off a refused launch, and clears it on the next refusal", () => {
     const { result } = renderHook(() => useAdoLaunchDoor());
     expect(result.current.refusal).toBeNull();

@@ -173,3 +173,22 @@ result for them is evidence only for the tip somebody actually ran it on.
   Resize/Write, every one of them listed in the K8S-gated bucket above.
 - `make test-conformance-k8s` — the containment conformance suite against a
   NetworkPolicy-enforcing CNI.
+
+### Live proofs that need hardware or access the project's CI does not have
+
+As of 0.9.3 these have not been run live. Each is tracked in its issue with the steps; the code paths they cover
+have unit, Postgres or kind coverage, but not on this hardware.
+
+- **Kata (CC3) on a KVM host** (#702): the confinement tier's runtime class on a node that can run Kata. Run
+  `make test-conformance-k8s` against a cluster with a Kata runtime class.
+- **macOS launchd** (#701): `wardyn-runnerd setup` writing and loading the LaunchAgent on a Mac, then
+  `launchctl print gui/$(id -u)/<label>` showing it running.
+- **Docker daemon restart under a live run** (#700): `scripts/survival-walk.sh` on a spare Docker host, including
+  an outage longer than an hour.
+- **Release-to-release upgrade from 0.7.12** (#690): `scripts/kind-upgrade-walk.sh` and its compose variant against
+  the published images, which needs registry credentials.
+- **Vault Agent secret files** (#720): a Helm install with `secretFiles.enabled=true` on a cluster running Vault
+  Agent.
+- **The proxy NetworkPolicy's cluster-DNS peer** (0.9.3): proven against the fake Kubernetes clientset only, not against a
+  network plugin that selects pods by identity (Cilium, Calico eBPF). On a kind cluster running Cilium, apply the
+  generated proxy NetworkPolicy and run `kubectl exec <proxy-pod> -- nslookup kubernetes.default`; it must resolve.

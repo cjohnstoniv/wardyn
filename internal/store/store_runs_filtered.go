@@ -126,8 +126,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	}
 	if f.NoEnd {
 		// A QUEUED run's ends_at is empty because it has not started, not because nothing will end it:
-		// its start writes the end. So "No end" holds only the runs that hold a slot.
-		clauses = append(clauses, "(ends_at IS NULL AND state = ANY("+bindArg(args, slotHoldingStateNames())+"))")
+		// its start writes the end. So "No end" holds only the runs that hold a slot, and not one whose
+		// lease already ended (lost_reason 'ended', as runLiveSQL reads it).
+		clauses = append(clauses, "(ends_at IS NULL AND state = ANY("+bindArg(args, slotHoldingStateNames())+") AND lost_reason IS DISTINCT FROM 'ended')")
 	}
 	if f.Workspace != "" {
 		clauses = append(clauses, "COALESCE(NULLIF(repo,''), workspace_path) = "+bindArg(args, f.Workspace))

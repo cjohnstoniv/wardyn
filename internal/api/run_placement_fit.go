@@ -6,7 +6,8 @@ package api
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -30,24 +31,37 @@ type runnerFit struct {
 }
 
 // runnerFits is every runner the caller's runs could be placed on, by target id: the caller's own
-// self-hosted runners and every remote-hosted runner. A store that cannot say, or a read that fails,
-// answers none, so every candidate is then refused as declaring no limits: a runner is never taken
-// as unlimited.
-func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
+// self-hosted runners, the organization's own runners and every remote-hosted runner. A store that
+// cannot say answers none, so every candidate is then refused as declaring no limits: a runner is never
+// taken as unlimited. A read that fails is an error, so the caller answers a retryable failure, not
+// advice to set limits.
+func (s *Server) runnerFits(ctx context.Context) (map[string]runnerFit, error) {
 	out := map[string]runnerFit{}
 	rs, ok := s.cfg.Store.(store.RunnerInventoryStore)
 	if !ok {
-		return out
+		return out, nil
 	}
 	var ids []uuid.UUID
 	if owner := poolOwner(ctx); owner != "" {
 		if own, ok := s.cfg.Store.(store.RunnerStore); ok {
 			runners, err := own.ListRunnersByOwner(ctx, owner)
 			if err != nil {
-				slog.WarnContext(ctx, "wardynd: read runner limits; no runner of yours is a candidate", slog.Any("err", err))
-				return map[string]runnerFit{}
+				return nil, fmt.Errorf("read runner limits: %w", err)
 			}
 			for _, r := range runners {
+				ids = append(ids, r.ID)
+				out[r.ID.String()] = runnerFit{limits: r.Limits}
+			}
+		}
+	}
+	// The organization's own runners, which an organization pool offers (orgRunnerTargets).
+	if rr, ok := s.cfg.Store.(store.RunnerStore); ok {
+		runners, err := rr.ListRunners(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read organization runner limits: %w", err)
+		}
+		for _, r := range runners {
+			if r.OwnerKind == types.RunnerOwnerOrg && r.State == types.RunnerClaimed {
 				ids = append(ids, r.ID)
 				out[r.ID.String()] = runnerFit{limits: r.Limits}
 			}
@@ -57,8 +71,7 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 	if rr, ok := s.cfg.Store.(store.RemoteRunnerStore); ok {
 		rows, err := rr.ListRemoteRunners(ctx)
 		if err != nil {
-			slog.WarnContext(ctx, "wardynd: read remote runner limits; no remote-hosted runner is a candidate", slog.Any("err", err))
-			return map[string]runnerFit{}
+			return nil, fmt.Errorf("read remote runner limits: %w", err)
 		}
 		for _, row := range rows {
 			remotes = append(remotes, row.Runner.ID)
@@ -69,14 +82,13 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 	// it reserves there, are this run's own, so they never count against it.
 	used, err := rs.RunnerUsage(ctx, ids, remotes, promotedRun(ctx))
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: read runner usage; no runner is a candidate", slog.Any("err", err))
-		return map[string]runnerFit{}
+		return nil, fmt.Errorf("read runner usage: %w", err)
 	}
 	for k, f := range out {
 		f.used = used[k]
 		out[k] = f
 	}
-	return out
+	return out, nil
 }
 
 // need is what the run reserves on its runner, as far as the fold knows it here.
@@ -116,11 +128,15 @@ func (d placementDemand) withFit(t poolTarget) poolTarget {
 // size that runner takes whole. A runner whose per-run limit holds everything the run asks for (ask; a
 // 0 is not asked) is preferred, so an ask one runner can take is never cut for another's sake; among
 // those, or among all when none does, the fold takes the largest by CPU, memory, then disk. Placement
-// then keeps only candidates whose per-run limit holds the applied size.
+// then keeps only candidates whose per-run limit holds the applied size. A runner with room now beats
+// a full one, so a run that names no size is not cut to a busy large runner while a smaller one idles.
 func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runnerpool.RunnerCapacity {
+	roomy := slices.ContainsFunc(fit, func(t poolTarget) bool {
+		return t.limits != nil && !t.full && (pin == "" || t.id == pin)
+	})
 	var all, whole []runnerpool.RunnerCapacity
 	for _, t := range fit {
-		if t.limits == nil || (pin != "" && t.id != pin) {
+		if t.limits == nil || (pin != "" && t.id != pin) || (roomy && t.full) {
 			continue
 		}
 		p := t.limits.PerRun

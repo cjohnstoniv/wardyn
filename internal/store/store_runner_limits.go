@@ -228,18 +228,27 @@ func lockRunnerRooms(ctx context.Context, q Querier, keys []string, except uuid.
 
 // admitOnFirstRunner locks the runners keys name and returns the first, in keys' order, that has room
 // for a run reserving need beside its slot-holders other than except; a RunnerAtCapacityError naming
-// the first when none has. q must be a pgx.Tx.
+// the first that still exists when none has room. q must be a pgx.Tx.
 func admitOnFirstRunner(ctx context.Context, q Querier, keys []string, need types.RunnerAmounts, except uuid.UUID) (string, error) {
 	rooms, err := lockRunnerRooms(ctx, q, keys, except)
 	if err != nil {
 		return "", err
 	}
+	first := keys[0]
+	named := false
 	for _, k := range keys {
-		if room, ok := rooms[k]; ok && room.fits(need) {
+		room, ok := rooms[k]
+		if !ok {
+			continue // deleted since the candidates were read
+		}
+		if room.fits(need) {
 			return k, nil
 		}
+		if !named {
+			first, named = k, true
+		}
 	}
-	return "", rooms[keys[0]].refusal(need)
+	return "", rooms[first].refusal(need)
 }
 
 // admitOnRunner locks one runner and refuses with a RunnerAtCapacityError when a run reserving need

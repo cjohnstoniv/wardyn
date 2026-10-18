@@ -21,7 +21,7 @@ export const modelProviderCredentials = {
   // available to the caller. The body's `error` names it verbatim.
   async putCredential(id: string, value: string): Promise<void> {
     const res = await wfetch(`/model-providers/${encodeURIComponent(id)}/credential`, {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify({ value }),
     });
     if (!res.ok) {

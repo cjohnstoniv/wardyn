@@ -21,7 +21,7 @@ export const userTypes = {
   // POST /api/v1/user-types -> 201 the saved row. A 409 names the id or name
   // that collided (handleCreateUserType).
   async createUserType(input: UserTypeInput): Promise<UserType> {
-    const res = await wfetch("/user-types", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/user-types", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     return asJson<UserType>(res);
   },
 
@@ -30,6 +30,7 @@ export const userTypes = {
   async updateUserType(id: string, input: UserTypeInput): Promise<UserType> {
     const res = await wfetch(`/user-types/${encodeURIComponent(id)}`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify(input),
     });
     return asJson<UserType>(res);

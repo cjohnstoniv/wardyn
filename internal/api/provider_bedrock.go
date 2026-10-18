@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending). The states and remedies of the run refusal
+// The states and remedies of the run refusal
 // (mpRunRefusal) for a chosen Bedrock provider.
 const (
 	mpBRNotSignedIn = "you are not signed in to AWS for it"

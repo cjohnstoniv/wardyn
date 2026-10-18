@@ -152,7 +152,7 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 		"site_config_probe.go:runSiteConfigProbe",
 		"workspace_run_launch.go:dispatchAndSettle",
 	}
-	var gated, direct, sandboxes, dispatchers, atTarget []string
+	var gated, direct, sandboxes, dispatchers, atTarget, leaseCreates []string
 	fset := token.NewFileSet()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -195,6 +195,8 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 					dispatchers = append(dispatchers, where)
 				case "createSandboxAtTarget":
 					atTarget = append(atTarget, where)
+				case "leaseDeliverCreate":
+					leaseCreates = append(leaseCreates, where)
 				}
 				return true
 			})
@@ -212,9 +214,14 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	if !slices.Equal(sandboxes, []string{"run_placement_dispatch.go:createSandboxAtTarget", "run_placement_dispatch.go:createSandboxAtTarget"}) {
 		t.Errorf("a CreateSandbox method is called from %v; a sandbox must only ever be created by createSandboxAtTarget (dispatchRun's one call, to the run's persisted target), for a run createRun wrote", sandboxes)
 	}
-	// createSandboxAtTarget is the one CreateSandbox caller, so dispatchRun must be the one caller of it.
-	if !slices.Equal(atTarget, []string{"runs_dispatch.go:dispatchRun"}) {
-		t.Errorf("createSandboxAtTarget is called from %v; only dispatchRun may create a sandbox, on the run's persisted target", atTarget)
+	// createSandboxAtTarget is the one CreateSandbox caller, so dispatchRun must be the one way to reach it:
+	// through leaseDeliverCreate, dispatch's lease, resident delivery and create in that order, which
+	// dispatchRun alone calls (it was split out of dispatchRun for the cyclomatic limit).
+	if !slices.Equal(atTarget, []string{"run_resident_delivery.go:leaseDeliverCreate"}) {
+		t.Errorf("createSandboxAtTarget is called from %v; only dispatchRun (through leaseDeliverCreate) may create a sandbox, on the run's persisted target", atTarget)
+	}
+	if !slices.Equal(leaseCreates, []string{"runs_dispatch.go:dispatchRun"}) {
+		t.Errorf("leaseDeliverCreate is called from %v; only dispatchRun may create a sandbox, on the run's persisted target", leaseCreates)
 	}
 	if !slices.Equal(dispatchers, wantDispatchers) {
 		t.Errorf("dispatchRun callers = %v, want %v — a new dispatch path must dispatch a row createRun wrote, then be listed here", dispatchers, wantDispatchers)

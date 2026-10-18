@@ -34,6 +34,9 @@ const (
 	// barrier the pool does not allow. A pool at its concurrent-run cap is not a
 	// refusal: see Wait.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
+	// ReasonRunTypeMissing: the request carries no run type (an older client's shape), so a pool with
+	// limits cannot tell which of its run types applies. An unknown value is ReasonRunTypeNotAllowed.
+	ReasonRunTypeMissing    Reason = "runner_pool_run_type_missing"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
 	// The pool queue's two refusals (a wait is never one: see Wait). QueueFull answers a create when the
 	// person already has the most runs waiting for the pool; Full answers a revive into a pool at its cap
@@ -53,6 +56,7 @@ var reasonStatus = map[Reason]int{
 	ReasonMemberMismatch:     http.StatusUnprocessableEntity,
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
 	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonRunTypeMissing:     http.StatusUnprocessableEntity,
 	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
 	ReasonQueueFull:          http.StatusUnprocessableEntity,
 	ReasonFull:               http.StatusUnprocessableEntity,
@@ -111,7 +115,7 @@ func DefaultUnavailablePersonalMsg() string {
 }
 
 func DefaultUnavailableOrgMsg() string {
-	return "Your organisation's default pool is no longer available. Choose a pool to continue."
+	return "Your organization's default pool is no longer available. Choose a pool to continue."
 }
 
 func StaleMsg(name string) string {
@@ -139,6 +143,30 @@ func RunnerAtCapacityMsg(name string) string {
 	return fmt.Sprintf("Every runner in %s is at its limit. Try again when a run there finishes, or raise the runner's limits.", name)
 }
 
+// RunnerRecordingOffMsg is the create and preflight refusal (runner_recording_off) for a run whose
+// organisation or pool requires recording when no runner in the pool that could take it records.
+func RunnerRecordingOffMsg(name string) string {
+	return fmt.Sprintf("Recording is required, and no runner in %s records runs. Choose another pool, or turn recording on for the runner.", name)
+}
+
+// RunnerRecordingOffUnpooledMsg is runner_recording_off for a run that has no pool: the runner it
+// would use does not record.
+func RunnerRecordingOffUnpooledMsg() string {
+	return "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner."
+}
+
+// RecordingStoreOffMsg is the create and preflight refusal (recording_store_off) for a run whose
+// organisation or pool requires recording while the organisation keeps no session recordings.
+func RecordingStoreOffMsg() string {
+	return "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred."
+}
+
+// RecordingSaveStoreOffMsg is recording_store_off for saving a required setting while the
+// organisation keeps no session recordings.
+func RecordingSaveStoreOffMsg() string {
+	return "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first."
+}
+
 // RunnerLimitsUnsetMsg is the refusal (runner_limits_unset) when no runner in the pool has declared
 // its limits, so none may take a run.
 func RunnerLimitsUnsetMsg(name string) string {
@@ -155,6 +183,11 @@ func MemberMismatchMsg(runner, name string) string {
 // KindMismatchMsg: the pool has no runner of the kind the request's placement asks for.
 func KindMismatchMsg(name string) string {
 	return fmt.Sprintf("%s has no runner of the kind this run asks for. Choose another pool.", name)
+}
+
+// RunTypeMissingMsg: the request names no run type, so a pool with limits has none to check.
+func RunTypeMissingMsg() string {
+	return "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client."
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {

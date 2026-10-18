@@ -93,6 +93,8 @@ package fixture
 import (
 	"os"
 	"testing"
+
+	"fixture/pgtestutil"
 )
 
 var testfloor = struct{ Mark func(*testing.T, string) }{func(*testing.T, string) {}}
@@ -105,6 +107,13 @@ func pgOpen(t *testing.T) {
 
 func helper(t *testing.T) { pgOpen(t) }
 
+// An export_test.go alias: a var, not a func, that a test reaches the gate through.
+var Alias = helper
+
+var (
+	GroupAlias = helper
+)
+
 type fx struct{}
 
 func (fx) viaMethod(t *testing.T) { helper(t) }
@@ -115,14 +124,47 @@ func TestPlain(t *testing.T)     {}
 func TestDirect(t *testing.T)    { pgOpen(t) }
 func TestViaHelper(t *testing.T) { helper(t) }
 func TestViaMethod(t *testing.T) { fx{}.viaMethod(t) }
+func TestViaAlias(t *testing.T)  { Alias(t) }
+func TestViaGroup(t *testing.T)  { GroupAlias(t) }
+func TestCrossPkg(t *testing.T)  { pgtestutil.Open2(t) }
 func TestProbe(t *testing.T) {
 	testfloor.Mark(t, "pg")
 }
 GO
+# A gate that lives in a helper package (no _test.go file), reached through a second helper.
+mkdir "${tmp}/s/pgtestutil"
+cat > "${tmp}/s/pgtestutil/pgtestutil.go" <<'GO'
+package pgtestutil
+
+import (
+	"os"
+	"testing"
+)
+
+func Open(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_PG") == "" {
+		t.Skip("WARDYN_TEST_PG not set")
+	}
+}
+
+func Open2(t *testing.T) { Open(t) }
+GO
 got="$(cd "${tmp}/s" && "${REPO_ROOT}/scripts/pg-test-select.sh" ./...)" || fail "selector failed on the fixture"
-want='^(TestDirect|TestProbe|TestViaHelper|TestViaMethod)$'
+want='^(TestCrossPkg|TestDirect|TestProbe|TestViaAlias|TestViaGroup|TestViaHelper|TestViaMethod)$'
 [ "${got}" = "${want}" ] || fail "selector picked ${got}, want ${want}"
-ok "selector: direct, helper, method and probe tests selected; plain and comment-only not"
+ok "selector: direct, helper, method, alias (single and grouped), cross-package and probe tests selected; plain and comment-only not"
+
+# The slices: the slow tests in a weights file are dealt out heaviest first to the lightest slice,
+# the rest by hash; together the slices cover the selection and share only the probe.
+printf '10\tTestViaHelper\n9\tTestDirect\n2\tTestViaMethod\n1\tTestViaAlias\n' > "${tmp}/weights.tsv"
+slice() { (cd "${tmp}/s" && PG_TEST_WEIGHTS="${tmp}/weights.tsv" "${REPO_ROOT}/scripts/pg-test-select.sh" --part "$1" ./...); }
+s1="$(slice 1/2)" || fail "slice 1/2 failed"; s2="$(slice 2/2)" || fail "slice 2/2 failed"
+for t in TestViaHelper TestViaAlias; do grep -qw "${t}" <<<"${s1}" || fail "${t} not in slice 1: ${s1}"; grep -qw "${t}" <<<"${s2}" && fail "${t} also in slice 2"; done
+for t in TestDirect TestViaMethod; do grep -qw "${t}" <<<"${s2}" || fail "${t} not in slice 2: ${s2}"; grep -qw "${t}" <<<"${s1}" && fail "${t} also in slice 1"; done
+all="$({ tr -d '^()$' <<<"${s1}"; echo '|'; tr -d '^()$' <<<"${s2}"; } | tr -d '\n' | tr '|' '\n' | sort -u | paste -sd'|')"
+[ "${all}" = "$(tr -d '^()$' <<<"${want}")" ] || fail "slices do not cover the selection: ${all}"
+[ "$(grep -o TestProbe <<<"${s1}${s2}" | wc -l)" = 2 ] || fail "the probe is not in both slices"
+ok "selector: --part packs the weighted tests by seconds, slices cover the selection, probe in every slice"
 
 # The guard: a unit run (DSN unset) where TestHidden skipped naming WARDYN_TEST_PG, but the selector
 # cannot see how it reaches the gate, must fail; one the selector does see must pass.
@@ -141,4 +183,14 @@ glog="$(cd "${tmp}/s" && "${REPO_ROOT}/scripts/pg-test-select.sh" --guard "${tmp
   && fail "guard passed a PG-skipping test outside the selection"
 grep -q "fixture TestHidden" <<<"${glog}" || fail "guard did not name TestHidden: ${glog}"
 ok "guard: a test that skips for WARDYN_TEST_PG outside the selection fails, naming it"
+# The shard package lists: api by default, store on request, anything else refused; the store shard
+# is the old whole-package list, so a package dropped from it would silently lose its PG tests.
+sel="${REPO_ROOT}/scripts/pg-test-select.sh"
+[ "$("${sel}" --packages)" = "$("${sel}" --packages api)" ] || fail "--packages without a set is not api"
+grep -q 'test/apie2e' <<<"$("${sel}" --packages api)" || fail "api set lost test/apie2e"
+for p in internal/store internal/db internal/secretstore internal/broker internal/recording cmd/wardynd internal/notify internal/livebus; do
+  grep -qF "./${p}/..." <<<"$("${sel}" --packages store)" || fail "store set lost ${p}"
+done
+"${sel}" --packages nope >/dev/null 2>&1 && fail "--packages accepted an unknown set"
+ok "selector: --packages names the api and store shard lists, refuses others"
 echo "test-test-report: PASS"

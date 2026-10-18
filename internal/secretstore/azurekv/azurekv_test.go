@@ -738,3 +738,31 @@ func TestCheck_ReadsMetadataOnly(t *testing.T) {
 		t.Fatalf("Check with two same-second versions, the later enabled = %v", err)
 	}
 }
+
+// A DELETE retried after a transient answer can find its own first attempt
+// already deleting the secret: that 404 is "still being deleted", so the purge
+// waits for it and the report does not claim a purge that did not happen.
+func TestDelete_ARetried404IsStillBeingDeleted(t *testing.T) {
+	f := newFakeKV(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "alice", "pat", "", []byte("v"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sn, _, _, _ := s.parse("alice", "pat", ref)
+	f.mu.Lock()
+	f.deleted[sn], f.deleting[sn] = f.secrets[sn], 4 // the first attempt landed
+	delete(f.secrets, sn)
+	f.force = []int{http.StatusServiceUnavailable}
+	f.mu.Unlock()
+	ctx, rep := secretstore.WithDeleteReport(t.Context())
+	if err := s.Delete(ctx, "alice", "pat", ref); err != nil {
+		t.Fatalf("Delete = %v", err)
+	}
+	f.mu.Lock()
+	_, soft := f.deleted[sn]
+	f.mu.Unlock()
+	if soft || !rep.Purged {
+		t.Fatalf("after a retried Delete: soft-deleted %v, report %+v; want it purged for real", soft, *rep)
+	}
+}

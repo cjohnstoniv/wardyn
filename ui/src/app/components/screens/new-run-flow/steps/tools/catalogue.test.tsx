@@ -12,7 +12,7 @@ import { MY_COMPONENTS, ORG_BILLING, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } f
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { MyComponents } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
-import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
+import { ADD_ACCESS, CUSTOM_COMPONENT as CC, MY_COMPONENTS as MY_COMPONENTS_COPY } from "../../../../wardyn/copy/components";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
@@ -25,7 +25,13 @@ const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), 
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../checks/custom-component-dialog", () => ({
-  CustomComponentDialog: (p: { context: string }) => <div role="dialog" aria-label="full editor">{p.context}</div>,
+  CustomComponentDialog: (p: { context: string; onClose: () => void; initialDraft?: { name: string; hosts: string; secrets: { secret_name: string }[] }; initialKeep?: string }) => (
+    <div role="dialog" aria-label="full editor">
+      {p.context}
+      <button type="button" onClick={p.onClose}>close full editor</button>
+      <output data-testid="carried">{JSON.stringify({ name: p.initialDraft?.name, hosts: p.initialDraft?.hosts, secrets: p.initialDraft?.secrets.map((x) => x.secret_name), keep: p.initialKeep })}</output>
+    </div>
+  ),
 }));
 
 const BASE = SCENARIO_ACCESS.member;
@@ -131,6 +137,13 @@ describe("catalogue", () => {
     expect(card("Azure Dev").queryByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeNull();
   });
 
+  // DR-0057: a card's Add is a repeated per-card action, so it is not teal.
+  it("draws a card's Add as an outline button", async () => {
+    await show();
+    const add = await within(await screen.findByRole("heading", { name: "Linear" }).then((el) => el.closest("li") as HTMLElement)).findByRole("button", { name: `${NR_TOOLS.CARD_ADD} Linear` });
+    expect(add).not.toHaveClass("bg-primary");
+  });
+
   it("adds an organisation row by its id and removes it again", async () => {
     await show();
     await userEvent.click(await within(await screen.findByRole("heading", { name: "Linear" }).then((el) => el.closest("li") as HTMLElement)).findByRole("button", { name: `${NR_TOOLS.CARD_ADD} Linear` }));
@@ -218,6 +231,16 @@ describe("Add a secret", () => {
     });
   });
 
+  it("says there is nothing to add when the person has no saved secrets, and adds nothing (FR-0110)", async () => {
+    h.names.mockResolvedValue([]);
+    const dialog = await open();
+    expect(dialog.getByText(NR_TOOLS.SECRET_NONE)).toBeTruthy();
+    expect(dialog.getByLabelText(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(JSON.stringify(draft().overrides ?? {})).not.toContain("add_secrets");
+    expect(dialog.queryByText(NR_TOOLS.SECRET_ERR_HOST)).toBeNull();
+  });
+
   it("does not add a host the run already reaches", async () => {
     const dialog = await open();
     const reached = BASE.hosts[0].host;
@@ -234,7 +257,7 @@ describe("Add a secret", () => {
     setField(dialog.getByLabelText(NR_TOOLS.SECRET_VARIABLE_LABEL), "LINEAR_TOKEN");
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
     expect(draft().components).toEqual([{ name: "linear-token", inline: { hosts: [], secrets: [{ secret_name: "linear-token", delivery: { mode: "env", var: "LINEAR_TOKEN" } }] } }]);
-    expect(draft().overrides).toBeUndefined();
+    expect(JSON.stringify(draft().overrides ?? {})).not.toContain("add_secrets");
 
     dialog = await (async () => {
       await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SECRET_CARD_BUTTON }));
@@ -272,6 +295,42 @@ describe("Add an MCP server", () => {
         mcp: { url: "https://mcp.example.com/mcp", transport: "http" },
       },
     }]);
+  });
+});
+
+describe("A saved-secret read that fails (DR-0252)", () => {
+  it("says so with a retry instead of an empty list, keeps a tokenless add working, and offers the names once the retry answers", async () => {
+    h.names.mockRejectedValueOnce(new Error("secrets are offline"));
+    await show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.MCP_CARD_BUTTON }));
+    const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE }));
+    expect((await dialog.findByRole("alert")).textContent).toContain("secrets are offline");
+    expect(dialog.getByLabelText(NR_TOOLS.MCP_TOKEN)).toHaveProperty("options.length", 1);
+    await userEvent.click(dialog.getByRole("button", { name: MY_COMPONENTS_COPY.RETRY }));
+    await waitFor(() => expect(dialog.queryByRole("alert")).toBeNull());
+    expect(dialog.getByRole("option", { name: "linear-token" })).toBeTruthy();
+    setField(dialog.getByLabelText(NR_TOOLS.MCP_URL), "https://mcp.example.com/mcp");
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(draft().components?.[0].inline).toMatchObject({ mcp: { url: "https://mcp.example.com/mcp" } });
+  });
+
+  it("does not say 'no saved secrets' beside the failure notice when the names could not be read (FR-0110, DR-0252)", async () => {
+    h.names.mockRejectedValueOnce(new Error("secrets are offline"));
+    await show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.SECRET_CARD_BUTTON }));
+    const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.SECRET_CARD_TITLE }));
+    expect((await dialog.findByRole("alert")).textContent).toContain("secrets are offline");
+    expect(dialog.queryByText(NR_TOOLS.SECRET_NONE)).toBeNull();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }));
+    expect(dialog.queryByText(NR_TOOLS.SECRET_ERR_HOST)).toBeNull();
+  });
+
+  it("shows no failure when the read succeeds with no names", async () => {
+    h.names.mockResolvedValueOnce([]);
+    await show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_TOOLS.MCP_CARD_BUTTON }));
+    const dialog = within(await screen.findByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE }));
+    expect(dialog.queryByRole("alert")).toBeNull();
   });
 });
 
@@ -350,6 +409,24 @@ describe("Custom component", () => {
     const dialog = await open();
     await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.CC_MORE_OPTIONS }));
     expect(await screen.findByRole("dialog", { name: "full editor" })).toBeTruthy();
+  });
+
+  it("returns focus to the Custom component button once the full editor is closed", async () => {
+    const dialog = await open();
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.CC_MORE_OPTIONS }));
+    await userEvent.click(await screen.findByRole("button", { name: "close full editor" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toHaveFocus());
+  });
+
+  it("carries the typed form and the save choice into the full editor (DR-0251)", async () => {
+    const dialog = await open();
+    setField(dialog.getByLabelText(NR_TOOLS.CC_NAME), "Billing");
+    setField(dialog.getByLabelText(NR_TOOLS.CC_HOSTS), "billing.acme.internal");
+    await userEvent.selectOptions(dialog.getByLabelText(NR_TOOLS.CC_SECRET), "billing-key");
+    await userEvent.click(dialog.getByLabelText(NR_TOOLS.CC_SAVE));
+    await userEvent.click(dialog.getByRole("button", { name: NR_TOOLS.CC_MORE_OPTIONS }));
+    await screen.findByRole("dialog", { name: "full editor" });
+    expect(JSON.parse(screen.getByTestId("carried").textContent ?? "{}")).toEqual({ name: "Billing", hosts: "billing.acme.internal", secrets: ["billing-key"], keep: "save" });
   });
 
   it("is held, with its reason, for a person who may not define components, and so is an MCP server by URL", async () => {

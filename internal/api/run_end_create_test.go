@@ -329,3 +329,15 @@ func TestStepRun_DeploymentMaxAgeCapsPatch(t *testing.T) {
 		t.Errorf("with no max age: cap %v (%q), %v; want none", r.LifetimeCapAt, r.LifetimeCapSource, err)
 	}
 }
+
+// TestPlanEnd_PastLifetimeCapRefuses: a run that reaches its lifetime cap between the handler's check
+// and the plan gets the handler's own 409, never an end in the past that reads as a successful change.
+func TestPlanEnd_PastLifetimeCapRefuses(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	cur, passed, asked := now.Add(-2*time.Minute), now.Add(-time.Minute), now.Add(time.Hour)
+	var p endWaitPlan
+	p.planEnd(&cur, &asked, types.RunLimits{UserChangesLimits: true}, runCap{at: &passed, source: types.LimitSourceDeployment}, now)
+	if p.status != http.StatusConflict || p.refusalReason != reasonRunEndWaitMaxLifetime || p.endChanged {
+		t.Fatalf("a later end past the lifetime cap = %+v, want the handler's own 409 %s", p, reasonRunEndWaitMaxLifetime)
+	}
+}

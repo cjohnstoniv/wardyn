@@ -229,3 +229,15 @@ func TestLoadTrustedCA_BundleIsRebuiltFromCertificates(t *testing.T) {
 		t.Fatal("the operator's comment line leaked into the forwarded bundle")
 	}
 }
+
+// A bundle too big for a sandbox's one environment string refuses boot with the remedy.
+func TestLoadTrustedCA_RefusesOversizedBundle(t *testing.T) {
+	ca := genTestCert(t, "corp")
+	path := filepath.Join(t.TempDir(), "big.pem")
+	if err := os.WriteFile(path, []byte(strings.Repeat(string(ca), maxOrgTrustedCA/len(ca)+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := loadTrustedCA(path); err == nil || !strings.Contains(err.Error(), "only your organisation's roots") {
+		t.Fatalf("loadTrustedCA(oversized) = %v, want a refusal naming the remedy", err)
+	}
+}

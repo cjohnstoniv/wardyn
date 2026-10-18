@@ -100,7 +100,7 @@ export const permissions = {
   // effect updated in place.
   async upsertGrant(input: CapabilityGrantInput): Promise<GrantUpsert> {
     const res = await wfetch("/permissions/grants", {
-      method: "POST",
+      method: "POST", asPerson: true,
       body: JSON.stringify(input),
     });
     const updated = res.status === 200;
@@ -123,7 +123,7 @@ export const permissions = {
   // must send the whole map, never a patch.
   async putEnforcement(enforcement: Record<string, boolean>): Promise<Record<string, boolean>> {
     const res = await wfetch("/permissions/enforcement", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify(enforcement),
     });
     return (await asJson<Record<string, boolean> | null>(res)) ?? {};
@@ -148,7 +148,7 @@ export const permissions = {
   // the server's message is surfaced verbatim by the caller, never reworded.
   async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
     const res = await wfetch(availabilityPath(kind, value), {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify({ restricted }),
     });
     return asJson<AvailabilityView>(res);

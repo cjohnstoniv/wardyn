@@ -66,6 +66,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	if exit.Code != 0 {
 		terminal, outcome = types.RunFailed, "failure"
 	}
+	// arrival stamps both the run.complete audit row and the run's ended_at, so they agree exactly.
 	var arrival time.Time
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&arrival); err != nil {
 		return false, err
@@ -78,7 +79,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$2,updated_at=clock_timestamp(),ended_at=clock_timestamp() WHERE id=$1`, runID, terminal); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE agent_runs SET state=$2,updated_at=clock_timestamp(),ended_at=$3 WHERE id=$1`, runID, terminal, arrival); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runner_execution_exits(run_id,generation,runner_id,payload,payload_hash,accepted_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()) ON CONFLICT(run_id,generation) DO UPDATE SET accepted_at=EXCLUDED.accepted_at`, runID, exit.Generation, runnerID, payload, hash); err != nil {
@@ -96,14 +97,15 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 func runnerExitAccepted(ctx context.Context, tx pgx.Tx, runID, generation uuid.UUID, hash string) (bool, error) {
 	var oldHash string
 	var acceptedAt *time.Time
-	err := tx.QueryRow(ctx, `SELECT payload_hash,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, generation).Scan(&oldHash, &acceptedAt)
+	var receiptOnly bool
+	err := tx.QueryRow(ctx, `SELECT payload_hash,accepted_at,receipt_only FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, generation).Scan(&oldHash, &acceptedAt, &receiptOnly)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if oldHash != hash {
+	if oldHash != hash || receiptOnly {
 		return false, ErrRunnerExecutionRefused
 	}
 	return acceptedAt != nil, nil
@@ -165,10 +167,11 @@ func (s PG) runnerExitTail(ctx context.Context, runnerID, runID, generation uuid
 	}
 	var payload []byte
 	var acceptedAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete, &acceptedAt); err != nil {
+	var receiptOnly bool
+	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete,accepted_at,receipt_only FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete, &acceptedAt, &receiptOnly); err != nil {
 		return run, exit, false, err
 	}
-	if acceptedAt == nil {
+	if acceptedAt == nil || receiptOnly {
 		return run, exit, false, ErrRunnerExecutionRefused
 	}
 	if complete {

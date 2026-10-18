@@ -255,3 +255,94 @@ func TestHubInactiveOwnerEndsTheSessionUntilReactivated(t *testing.T) {
 	awaitValue(t, ctx, again)
 	waitOnline(t, ctx, link)
 }
+
+// A session that outlives the switch-off (admitted while it was being turned off, so missed by the
+// sweep) is ended by the stored-row recheck.
+func TestHubDisabledEndsALiveSession(t *testing.T) {
+	recheck := storedRowRecheck
+	storedRowRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { storedRowRecheck = recheck })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	var serving sync.WaitGroup
+	defer func() { cancel(); serving.Wait() }()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	var disabled atomic.Bool
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Disabled: func(context.Context) bool { return disabled.Load() },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	defer hub.Close()
+	online := make(chan *runnerwire.Peer, 1)
+	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key,
+		Hooks: sessionHooks(online, make(chan bool, 1)),
+		Dial: func(context.Context) (runnerwire.Conn, error) {
+			org, run := runnerwire.Loopback()
+			serving.Go(func() { _ = hub.Serve(ctx, org, row.ID) })
+			return run, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.Connect(ctx) }()
+	awaitValue(t, ctx, online)
+	waitOnline(t, ctx, link)
+	disabled.Store(true)
+	if err := awaitValue(t, ctx, done); !errors.Is(err, runnerwire.ErrGoaway) || link.Online() {
+		t.Fatalf("live session after runners were switched off: %v, online=%v", err, link.Online())
+	}
+}
+
+// A revocation that finds an admission stalled on a durable call ends it, instead of waiting for the
+// call's own timeout.
+func TestHubRevokeEndsAStalledAdmission(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	var serving sync.WaitGroup
+	defer func() { cancel(); serving.Wait() }()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	stalled := make(chan struct{})
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			return Admission{Substrate: sub, Link: link,
+				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(c context.Context, _ string) error {
+					close(stalled)
+					<-c.Done() // a durable call that never answers
+					return c.Err()
+				},
+				StatePage: func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:     func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	defer hub.Close()
+	org, run := runnerwire.Loopback()
+	served := make(chan error, 1)
+	serving.Go(func() { served <- hub.Serve(ctx, org, row.ID) })
+	go func() { _, _ = runnerwire.AuthenticateOrg(ctx, run, row.ID.String(), "https://org.example", key, nil) }()
+	awaitValue(t, ctx, stalled)
+	start := time.Now()
+	if err := hub.Revoke(ctx, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("Revoke waited %v for a stalled admission", took)
+	}
+	if err := awaitValue(t, ctx, served); err == nil {
+		t.Error("the stalled admission was not ended")
+	}
+}

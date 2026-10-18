@@ -5,6 +5,8 @@ package db
 
 import (
 	"context"
+	"net/url"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -119,5 +121,38 @@ func TestMigration0173_HostingBecomesScope(t *testing.T) {
 		if _, err := pool.Exec(ctx, stmt); err == nil {
 			t.Errorf("the schema accepts %s", what)
 		}
+	}
+}
+
+// TestMigration0173_FindsTheMembersTableByCatalog: the pool-scope migration finds runner_pool_members by the
+// catalog, not by the first schema of the search path. With an empty schema ahead of the real one on the
+// path, current_schema() names the empty one, and a lookup keyed on it finds no executor_id column, skips the
+// conversion, and leaves the members unconverted for 0174 to trip over.
+func TestMigration0173_FindsTheMembersTableByCatalog(t *testing.T) {
+	pool, schema := partialSchemaPool(t, runnerPoolScopeMigration)
+	ctx := context.Background()
+	decoy := schema + "_decoy"
+	pgExec(t, pool, `CREATE SCHEMA `+decoy)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+decoy+` CASCADE`) })
+	remote := uuid.New()
+	pgExec(t, pool, `INSERT INTO runner_pools (id, name, hosting_type) VALUES ($1, 'Remote Provided', 'remote_provided')`, remote)
+	pgExec(t, pool, `INSERT INTO runner_pool_members (pool_id, executor_id) VALUES ($1, 'docker')`, remote)
+
+	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", decoy+","+schema)
+	u.RawQuery = q.Encode()
+	ahead, err := Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect with the decoy schema first: %v", err)
+	}
+	t.Cleanup(ahead.Close)
+	migrateBefore(t, ahead, "0175")
+
+	if got := pgScalar[string](t, pool, `SELECT kind || ':' || remote_runner_id FROM runner_pool_members WHERE pool_id = $1`, remote); got != "remote_hosted:docker" {
+		t.Errorf("member = %q, want it converted to remote_hosted:docker", got)
 	}
 }

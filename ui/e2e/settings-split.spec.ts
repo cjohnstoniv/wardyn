@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, asRealMember, asRealSecurityAdmin, expandCard, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, asRealMember, asRealSecurityAdmin, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
 
 // E2E coverage for the M-5 settings split (#636):
 // src/app/components/screens/settings/{admin-settings-screen,your-account-screen,admin-ssh-keys-card}.tsx
@@ -50,8 +50,17 @@ test.describe("Admin Settings — S-5, a security admin is refused", () => {
     // page or role, so it is not this test's claim. What S-5 promises is
     // narrower: navigating INTO Settings adds no further read of its own —
     // neither a second /setup/status round trip nor GET /site-config (which
-    // only AdminSettingsScreen ever calls, gated on `adminReads`). Counting
-    // from here, right before the navigation, isolates that claim.
+    // only AdminSettingsScreen ever calls, gated on `adminReads`).
+    //
+    // The Runs landing this test starts on reads /setup/status on mount and,
+    // where no container runtime can build the barrier (hosted CI), every 5 s
+    // (runs.tsx SETUP_POLL_MS). Counting by the address at the time the route
+    // handler runs still let one of those reads in flight at the moment of the
+    // pushState be counted as Settings' (#2056). So leave Runs first, for a
+    // screen that reads no setup status, and arm the counters there: nothing
+    // that polls is mounted when Settings is entered.
+    await navTo(page, "Audit");
+    await expect(page).toHaveURL(/\/admin\/audit$/);
     let setupStatusCalls = 0;
     await page.route("**/api/v1/setup/status", (route) => {
       setupStatusCalls++;

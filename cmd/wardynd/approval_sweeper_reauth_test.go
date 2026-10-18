@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -46,16 +48,18 @@ func (s *sweepStore) GetApproval(_ context.Context, id uuid.UUID) (types.Approva
 	return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
 }
 
-func (s *sweepStore) ListApprovals(_ context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+func (s *sweepStore) ListExpiredPendingApprovals(_ context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []types.ApprovalRequest{}
 	for _, r := range s.rows {
-		if state == "" || r.State == state {
+		stale := !r.RequestedAt.After(cutoff) || (r.ExpiresAt != nil && !r.ExpiresAt.After(now))
+		if r.State == types.ApprovalPending && stale && bytes.Compare(r.ID[:], afterID[:]) > 0 {
 			out = append(out, r)
 		}
 	}
-	return out, nil
+	slices.SortFunc(out, func(a, b types.ApprovalRequest) int { return bytes.Compare(a.ID[:], b.ID[:]) })
+	return out[:min(limit, len(out))], nil
 }
 
 func (s *sweepStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {

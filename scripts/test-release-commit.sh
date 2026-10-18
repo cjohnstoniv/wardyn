@@ -19,7 +19,7 @@ trap 'rm -rf "$WORK"' EXIT
 export GIT_AUTHOR_NAME=Release-Test GIT_AUTHOR_EMAIL=release-test@example.invalid
 export GIT_COMMITTER_NAME=Release-Test GIT_COMMITTER_EMAIL=release-test@example.invalid
 
-FILES=(internal/version/version.go deploy/helm/wardyn/Chart.yaml ui/package.json README.md install.sh
+FILES=(internal/version/version.go deploy/helm/wardyn/Chart.yaml deploy/helm/wardyn-runnerd/Chart.yaml ui/package.json README.md install.sh
   docs/ci/github-actions.yml docs/ci/azure-pipelines.yml threatmodel/THREAT-MODEL.md
   deploy/helm/wardyn/values.yaml docs/DESKTOP.md CHANGELOG.md ROADMAP.md
   internal/db/migrations_documented_test.go)
@@ -39,6 +39,7 @@ done
 
 CUR=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' "$ROOT/internal/version/version.go")
 IFS=. read -r MAJ MIN PAT <<<"$CUR"
+PAT=${PAT%%-*}  # a candidate version (X.Y.Z-rc.N) bumps from its X.Y.Z
 NEXT="$MAJ.$MIN.$((PAT + 1))"
 [ -n "$CUR" ] || { echo "FAIL: cannot read the current version"; exit 1; }
 
@@ -59,6 +60,7 @@ out=$("$SCRIPT" --apply --tree "$R1" --from "$CUR" --to "$NEXT" --date 2030-01-0
 [ "$rc" = 0 ] && ok "apply exits 0" || { bad "apply exit $rc"; echo "$out"; }
 expect "version.go bumped"     grep -qF "const Version = \"$NEXT\"" "$R1/internal/version/version.go"
 expect "Chart.yaml bumped"     grep -qF "appVersion: $NEXT" "$R1/deploy/helm/wardyn/Chart.yaml"
+expect "runnerd Chart.yaml bumped" grep -qF "appVersion: $NEXT" "$R1/deploy/helm/wardyn-runnerd/Chart.yaml"
 expect "ui/package.json bumped" grep -qF "\"version\": \"$NEXT\"" "$R1/ui/package.json"
 expect "README pin bumped"     grep -qF "releases/download/v$NEXT/install.sh" "$R1/README.md"
 expect "install.sh pin bumped" grep -qF "releases/download/v$NEXT/install.sh" "$R1/install.sh"

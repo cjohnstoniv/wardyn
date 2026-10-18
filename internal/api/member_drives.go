@@ -311,6 +311,17 @@ func (s *Server) handleDeleteMyDrive(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusNotFound, string(authz.ReasonDriveNotFound), msg)
 		return
 	}
+	if d, gerr := ms.GetMemberDriveOf(r.Context(), owner, id); gerr == nil {
+		refused, serr := s.memberDriveOwnerStarting(withRequestActor(r), ms, d, memberDriveByOwner)
+		if serr != nil {
+			writeServerError(w, r, "read the owner's starting runs", serr)
+			return
+		}
+		if refused {
+			writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInUseMsg())
+			return
+		}
+	}
 	d, started, err := ms.BeginMemberDriveDelete(r.Context(), owner, id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -358,6 +369,20 @@ type memberDriveDeletion struct {
 // only, so the object is the one dispatch mounted. The row goes only when the
 // substrate said deleted or already_absent; every other outcome clears the
 // tombstone and keeps the drive. Every attempt is audited.
+// memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the
+// drive's owner has a run in STARTING: that run may attach the drive, and would meet the tombstone
+// as drive_not_found. The refusal is audited as deleteMemberDrive audits its own. deleteMemberDrive
+// reads the same thing again past the tombstone, for a run that starts in between.
+func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, by string) (bool, error) {
+	starting, err := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject)
+	if err != nil || !starting {
+		return false, err
+	}
+	mount, _ := memberDriveMount(d)
+	s.auditMemberDriveDelete(ctx, d, memberDriveDeletion{object: mount.ObjectName, outcome: driveReclaimOutcomeRefused, reason: reasonMemberDriveInUse}, by)
+	return true, nil
+}
+
 func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
 	// Past the tombstone the delete finishes even if the caller goes away, so
 	// the row is always removed or restored and the attempt audited.
@@ -375,6 +400,20 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
+		// Past the tombstone, a run of the owner's still STARTING may have re-read this drive before it
+		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
+		// as in use until that run leaves STARTING. A run that re-reads later meets the tombstone.
+		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject)
+		if serr != nil {
+			slog.WarnContext(ctx, "api: member drive delete could not read the owner's starting runs",
+				slog.String("drive_id", d.ID.String()), slog.String("error", serr.Error()))
+			res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
+			break
+		}
+		if starting {
+			res.outcome, res.reason = driveReclaimOutcomeRefused, reasonMemberDriveInUse
+			break
+		}
 		outcome, rerr := rc.ReclaimDrive(sctx, mount)
 		switch {
 		case rerr == nil:

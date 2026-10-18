@@ -225,10 +225,7 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 	}
 	// Gated on the SAME probe applyDiskQuota consults; `none` covers both "no size option" (uncapped)
 	// and overlay2-over-non-xfs (fails closed) — a reader must not assume "uncapped" means the former.
-	disk := types.StorageEnforcementNone
-	if storageDriverSupportsQuota(info) {
-		disk = types.StorageEnforcementFilesystem
-	}
+	disk := EphemeralDiskEnforcement(info)
 	// ContainerPause/Unpause is verified only on runc; runsc/Kata pause are UNVERIFIED, so every
 	// other runtime reports false rather than assume an unproven control.
 	freeze := map[types.ConfinementClass]bool{}
@@ -332,8 +329,6 @@ func kvmDeviceGID() string {
 // softDiskNotEnforceable: no policy wrote this disk size (a request or a default did), and the host
 // cannot keep it — the run goes UNCAPPED instead of failing closed (see runner.Resources.DiskMiBSoft
 // for why that asymmetry is the point).
-//
-// DRAFT (M2 canon pending)
 const softDiskNotEnforceable = "wardyn/docker: disk size not enforceable on this host — " +
 	"a requested or default size was set for this run and overlay2 over non-xfs cannot carry the quota, " +
 	"so the run proceeds WITHOUT a disk cap rather than failing closed (a size the run's policy writes still fails closed here); " +
@@ -390,6 +385,15 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 		hc.StorageOpt = map[string]string{}
 	}
 	hc.StorageOpt["size"] = fmt.Sprintf("%dm", res.DiskMiB)
+}
+
+// EphemeralDiskEnforcement is what binds a run's disk on this engine: the filesystem when the storage
+// driver can enforce a per-container size, otherwise none.
+func EphemeralDiskEnforcement(info system.Info) types.StorageEnforcement {
+	if storageDriverSupportsQuota(info) {
+		return types.StorageEnforcementFilesystem
+	}
+	return types.StorageEnforcementNone
 }
 
 // storageDriverSupportsQuota reports, best-effort from `docker info`, whether the storage driver

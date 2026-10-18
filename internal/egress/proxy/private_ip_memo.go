@@ -4,6 +4,8 @@
 package proxy
 
 import (
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,8 +160,13 @@ func (p *Proxy) privateIPMemoed(host string, port int) bool {
 
 // privateIPBlockKind is writeEgressDeny's read of the guard class behind a
 // builtin:private-ip refusal; blockNone is the safe fallback for an unmemoed
-// refusal (e.g. step 0's literal guard, which resolves nothing).
+// refusal (e.g. step 0's literal guard, which resolves nothing). A literal in a
+// k8s runner's hard deny is re-derived here, as step 0 memoes nothing, so its
+// detail names the hard deny rather than a missing allowed_domains entry.
 func (p *Proxy) privateIPBlockKind(host string, port int) blockKind {
+	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.hardDeny.ip(ip) {
+		return blockHardDeny
+	}
 	return p.privIP.kindOf(host, port)
 }
 

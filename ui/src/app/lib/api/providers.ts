@@ -83,6 +83,7 @@ export const providers = {
       method: "PUT",
       // #483: this is the /providers screen's Save (useWriteDropped("providers")).
       save: "providers",
+      asPerson: true,
       headers,
       body: JSON.stringify(next),
     });

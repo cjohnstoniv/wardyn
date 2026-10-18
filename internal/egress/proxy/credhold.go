@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -130,14 +129,10 @@ var (
 var errReauthCapped = errReauthEnded{reason: "no further sign-in will be requested for this run"}
 
 // reauthTimedOutSentence tells the sandbox's SDK nothing was substituted.
-//
-// DRAFT (M2 canon pending)
 const reauthTimedOutSentence = "wardyn held this AWS SSO credential request while its owner was " +
 	"asked to sign in again, and nobody signed in before the hold expired; nothing was substituted"
 
 // reauthEndedSentence is the same answer for a hold that did NOT expire.
-//
-// DRAFT (M2 canon pending)
 const reauthEndedSentence = "wardyn asked this AWS SSO credential request's owner to sign in again, and " +
 	"the request ended before a sign-in arrived; nothing was substituted"
 
@@ -431,24 +426,6 @@ func isAWSSSOPortalHost(h string) bool {
 func isAWSLane(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	return isAWSSSOPortalHost(h) || isBedrockHost(h)
-}
-
-// httpErrorAWSAware is httpError's AWS-lane-aware sibling: on an AWS endpoint
-// it answers with the modelled AWS SDK error body instead of plain text,
-// since an AWS SDK hands plain text straight to a JSON parser. withStage
-// selects Cause's stage-prefixed composition for a dial-shaped err versus the
-// bare masked sentence for a resolve/vet/refresh failure.
-func (p *Proxy) httpErrorAWSAware(w http.ResponseWriter, host, plainMsg string, err error, withStage bool, status int, errType string) {
-	if isAWSLane(host) {
-		msg := p.dialFailureCause(err)
-		if withStage {
-			msg = p.causeSentence(err)
-		}
-		slog.Warn("proxy error returned to the sandbox", "msg", plainMsg, "status", status, "err", msg)
-		writeAWSSDKError(w, status, errType, msg)
-		return
-	}
-	p.httpError(w, plainMsg, err, http.StatusBadGateway)
 }
 
 // reauthPendingFrom decodes the control plane's 423 body into the id to poll;

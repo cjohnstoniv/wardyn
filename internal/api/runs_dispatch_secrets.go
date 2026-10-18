@@ -21,9 +21,14 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // resolveLLMInspectionSecrets resolves the llm_inspection detection corpus
@@ -172,7 +177,19 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 // splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
 // delivers via secretKeyRef rather than inline in the agent Pod spec.
 func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, sandboxEnv map[string]string) []string {
+	names, _ := s.resolveEnvSecretValues(ctx, run, policy, nil, sandboxEnv)
+	return names
+}
+
+// resolveEnvSecretValues is resolveEnvSecretGrants with the run's stored grant
+// rows. A grant whose row is runner_resident is read from the namespace its
+// origin was proved in (readResidentValue), and its variable is set to the
+// grant's placeholder, which the runner fills from its keystore; the value is
+// returned, in grant-id order, for deliverResident and nothing else.
+func (s *Server) resolveEnvSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
+	sandboxEnv map[string]string) ([]string, []residentValue) {
 	var resolvedNames []string
+	var resident []residentValue
 	for _, g := range policy.EligibleGrants {
 		if g.Kind != types.GrantEnvSecret {
 			continue
@@ -196,7 +213,18 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
 		}
 		scope := ""
-		if skip == "" {
+		row, isResident := residentGrantRow(rows, g)
+		if skip == "" && isResident {
+			v, rerr := s.readResidentValue(ctx, run, row, secretName)
+			if rerr != nil {
+				skip = "secret could not be resolved"
+			} else {
+				sandboxEnv[name] = placement.ResidentPlaceholder(row.ID)
+				resolvedNames = append(resolvedNames, name)
+				resident = append(resident, v)
+			}
+		}
+		if skip == "" && !isResident {
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint — none for an owner_only grant.
@@ -228,5 +256,46 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.env_secret.resolve",
 			run.ID.String(), outcome, mustJSON(data)))
 	}
-	return resolvedNames
+	slices.SortFunc(resident, residentByGrantID)
+	return resolvedNames, resident
+}
+
+// residentGrantRow is the stored row an env_secret policy grant was written
+// as (the first of its kind and scope, as localPolicyGrantOrigins binds it),
+// when that row is runner_resident.
+func residentGrantRow(rows []types.CredentialGrant, g types.GrantSpec) (types.CredentialGrant, bool) {
+	for _, row := range rows {
+		if row.Spec.Kind == g.Kind && sameScope(row.Spec.Scope, g.Scope) {
+			return row, row.Delivery == types.GrantDeliveryResident
+		}
+	}
+	return types.CredentialGrant{}, false
+}
+
+// patBrokerGrants converts the run's {host: grant_id} PAT grants into the
+// proxy's per-host broker allowlist, or nil when the lane is off.
+//
+// It converts what it is handed and filters nothing: dispatchRun feeds it the
+// map dropBrokeredGrants already narrowed, so a brokered forge never reaches
+// here. Re-deriving "is this forge brokered?" inside would be a second answer to
+// a question the sandbox half also answers — which is exactly how the two halves
+// came apart.
+//
+// The username is left empty here on purpose: the control plane resolves the
+// host's git username at MINT time (ADO wants "pat", GitLab "oauth2", and an
+// operator may override), so duplicating that resolution at dispatch would be a
+// second place for it to drift. The proxy uses whatever the mint returns.
+func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
+	if !on || len(pat) == 0 {
+		return nil
+	}
+	out := make(map[string]proxy.PATGrant, len(pat))
+	for host, id := range pat {
+		gid, err := uuid.Parse(id)
+		if err != nil {
+			continue // a malformed id cannot broker; the host simply is not granted
+		}
+		out[strings.ToLower(strings.TrimSpace(host))] = proxy.PATGrant{GrantID: gid}
+	}
+	return out
 }

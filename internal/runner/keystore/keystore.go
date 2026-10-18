@@ -11,5 +11,10 @@ import "errors"
 // ErrUnavailable marks a keystore that cannot hold or return a value.
 var ErrUnavailable = errors.New("keystore: the OS keystore is unavailable")
 
-// service names every item wardyn-runnerd stores.
-const service = "wardyn-runnerd"
+// Store is one runner's items in the OS keystore. Each runner has its own service,
+// wardyn-runnerd:<runner-id>, so two runner daemons for one OS user never touch
+// each other's items.
+type Store struct{ service string }
+
+// For is the store of the runner runnerID.
+func For(runnerID string) Store { return Store{service: "wardyn-runnerd:" + runnerID} }

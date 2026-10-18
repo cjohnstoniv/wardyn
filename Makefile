@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -110,6 +110,22 @@ agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e
 	@echo "Oracle e2e image built: wardyn/agent-oracle:local"
 	@echo "AWS SSO login image built: wardyn/agent-aws-sso:local"
 
+# The claude-code image for BOTH laptop architectures in one command. The vendor CLI is not
+# redistributable, so Wardyn publishes no claude-code image and `agent-images-core` builds only the
+# engine's own architecture; a fleet with arm64 and amd64 laptops needs one multi-arch index. A
+# multi-platform build needs the containerd image store or a `docker buildx create --use` builder (the
+# classic store cannot hold the result, so it must be pushed); this pushes it: name a registry
+# repo you can push to (and QEMU for the foreign platform: docker run --privileged --rm tonistiigi/binfmt --install all).
+#   make agent-image-claude-code-multiarch CLAUDE_CODE_IMAGE=registry.example/team/agent-claude-code:1
+#   WARDYN_AGENT_IMAGES='{"claude-code":"registry.example/team/agent-claude-code:1"}'
+# docs/operations/build-images.md has the verify and mirroring steps.
+CLAUDE_CODE_IMAGE ?=
+agent-image-claude-code-multiarch: ## Build + push the claude-code agent image for linux/amd64 and linux/arm64
+	@test -n "$(CLAUDE_CODE_IMAGE)" || { echo "set CLAUDE_CODE_IMAGE=<registry>/<repo>:<tag> (a multi-platform image is pushed, not loaded)" >&2; exit 2; }
+	@test ! -f deploy/images/claude-code/claude-bin || { echo "deploy/images/claude-code/claude-bin is staged: it is one architecture's binary and would be installed into BOTH platforms. Remove it so each platform fetches its own, or build each architecture separately." >&2; exit 2; }
+	docker buildx build $(DOCKER_BUILD_ARGS) --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile -t $(CLAUDE_CODE_IMAGE) --push .
+	@echo "Pushed $(CLAUDE_CODE_IMAGE); check it: docker buildx imagetools inspect $(CLAUDE_CODE_IMAGE)"
+
 # The full toolchain image: the core claude-code agent PLUS real language toolchains
 # (Go, Python, Rust, JDK/Maven, pnpm). Workspace import's Record/Verify runs the
 # repo's OWN setup commands (go build, pnpm install, …), which the toolchain-less
@@ -208,7 +224,7 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
 	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)' ./cmd/wardynd/...
 
@@ -264,6 +280,12 @@ PG_PART ?= 1/1
 test-report-pg-api: PG_REPORT ?= pg-api
 test-report-pg-api: ## An api slice of test-report-pg: just the Postgres-gated tests of internal/api and test/apie2e
 	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part $(PG_PART))'
+
+# The store shard, selected the same way: just the DSN-gated tests of the store, db, broker,
+# cmd/wardynd, ... packages (the unit run guards this selection too).
+test-report-pg-store: PG_REPORT ?= pg-store
+test-report-pg-store: ## The store slice of test-report-pg: just the Postgres-gated tests of the store-side packages
+	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages store)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part 1/1 $(shell ./scripts/pg-test-select.sh --packages store))'
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
@@ -392,6 +414,9 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "internal/runner/docker's docker-tagged suite is already covered by that nightly leg."
 	@echo "Run through test-report.sh (l0-docker): a rename or a skip of the three fails the job."
 	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh l0-docker -tags docker -timeout 5m -run '^TestL0_(MetadataUnreachable|ProxyIsSoleEgressPath|NoDNSExfil)$$' ./internal/runner/docker/...
+	@echo "Running the remote-runner internal_hosts pin (internal/api TestInternalHostsOnRunnerDocker: local dispatch -> runner wire -> the real proxy image)."
+	@echo "Through test-report.sh (internal-hosts-docker): the test's testfloor.Mark makes a skip or a rename fail the job."
+	WARDYN_TEST_DOCKER=1 WARDYN_TEST_REPORT_COVER=0 ./scripts/test-report.sh internal-hosts-docker -tags docker -timeout 10m -run '^TestInternalHostsOnRunnerDocker$$' ./internal/api/
 
 # The key-service suite against real servers (T-33): the Vault Transit KEK and the
 # Vault KV store on the official hashicorp/vault and openbao/openbao dev images, and
@@ -613,6 +638,7 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-workflow-artifacts.sh
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
+	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -650,6 +676,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-runner-units.sh
+	./scripts/test-runner-pkg.sh
 	./scripts/test-runner-limits.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
@@ -754,9 +781,10 @@ licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.tx
 # No kubeconform: it resolves schemas at runtime from an unpinned upstream ref,
 # which would trade a network-free gate for a flaky one and break the pinning
 # discipline scripts/check-image-pins.sh exists to enforce.
-helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
+helm-lint: ## Lint + template-render both Helm charts (default + all-on values + the refusals; runnerd RBAC parity)
 	@echo "Linting + rendering the Helm chart..."
 	./scripts/check-helm-templates.sh
+	./scripts/test-helm-runnerd.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
@@ -796,6 +824,12 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 'name: GOMEMLIMIT' | grep -q 'value: "400MiB"' || { echo "default render does not set GOMEMLIMIT=400MiB for wardynd"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=); \
 	echo "$$out" | grep -q 'GOMEMLIMIT' && { echo "empty goMemLimit still rendered GOMEMLIMIT"; exit 1; } || true
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q 'WARDYN_TRUSTED_PROXIES' && { echo "the DEFAULT render sets WARDYN_TRUSTED_PROXIES — trusting X-Forwarded-For must be opt-in"; exit 1; } || true; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 'name: WARDYN_TRUSTED_PROXIES' | grep -q 'value: "10.42.0.0/16,fd00:42::/64"' || { echo "all-on: trustedProxies did not render WARDYN_TRUSTED_PROXIES"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set trustedProxies=10.0.0.0/8 --set 'extraEnv[0].name=WARDYN_TRUSTED_PROXIES' --set 'extraEnv[0].value=192.168.0.0/16'); \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_TRUSTED_PROXIES')" = "1" ] || { echo "an extraEnv WARDYN_TRUSTED_PROXIES rendered beside the trustedProxies value"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=419430400 2>&1 | grep -q "goMemLimit must be a quoted string with a unit" || { echo "a bare-number goMemLimit did not refuse to render"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set 'extraEnv[0].name=GOMEMLIMIT' --set 'extraEnv[0].value=300MiB'); \
 	[ "$$(echo "$$out" | grep -c 'name: GOMEMLIMIT')" = "1" ] || { echo "an extraEnv GOMEMLIMIT rendered beside the goMemLimit default"; exit 1; }
@@ -1734,6 +1768,9 @@ compose-build: ## Build compose images (wardynd -tags docker + proxy)
 	@echo "Building compose images..."
 	docker compose -f $(COMPOSE_FILE) build
 	docker compose -f $(COMPOSE_FILE) --profile build-only build proxy-image
+
+runnerd-image: ## Build the wardyn-runnerd image (deploy/compose/Dockerfile.runnerd); stamps the revision label scripts/gpl-source-offer.sh reads for its pre-publication note
+	docker build $(DOCKER_BUILD_ARGS) --build-arg RELEASE_BUILD=true -f deploy/compose/Dockerfile.runnerd -t wardyn/wardyn-runnerd:local .
 
 compose-up: ## Start the docker-compose stack (postgres + dex + wardynd)
 	@echo "Starting docker-compose stack..."

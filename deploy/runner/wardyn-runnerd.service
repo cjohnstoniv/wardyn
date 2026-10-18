@@ -21,8 +21,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-# WARDYN_RUNNER_ORG_URL, WARDYN_RUNNER_STATE_DIR, WARDYN_PROXY_IMAGE,
-# WARDYN_INTERNAL_NETWORK and, optionally, DOCKER_HOST, WARDYN_RELAY_LISTEN and WARDYN_RELAY_HOST_TARGET. `--org` and `--state-dir`
+# WARDYN_RUNNER_ORG_URL, WARDYN_RUNNER_STATE_DIR, WARDYN_INTERNAL_NETWORK and, optionally,
+# WARDYN_PROXY_IMAGE, DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and WARDYN_TRUSTED_CA_FILE. `--org` and `--state-dir`
 # are flag-only, hence the variables below.
 EnvironmentFile=%h/.config/wardyn/runnerd.env
 ExecStart=__WARDYN_RUNNERD__ serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}

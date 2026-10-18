@@ -121,11 +121,13 @@ ci_run_green() {
 }
 
 ci_run=""
-api "repos/${repo}/actions/artifacts" -f "name=ci-full-tree-${tree}" -f per_page=100
+# --paginate streams one JSON document per page: -s joins them, so the filters
+# and the newest-first order below cover every page, not just the first 100.
+api "repos/${repo}/actions/artifacts" --paginate -f "name=ci-full-tree-${tree}" -f per_page=100
 # The name, expiry and repository filters are re-checked: an ignored query
 # parameter must not turn someone else's artifact into ours.
-jq_out -r --arg n "ci-full-tree-${tree}" --argjson rid "${repo_id}" '
-  [.artifacts[]
+jq_out -rs --arg n "ci-full-tree-${tree}" --argjson rid "${repo_id}" '
+  [.[].artifacts[]
    | select(.name == $n and .expired == false and .workflow_run.head_repository_id == $rid)]
   | sort_by(.created_at) | reverse | .[] | .workflow_run.id'
 candidates="$(awk '!seen[$0]++' <<<"${JQ}")" || { say "could not list the marker runs"; exit 2; }
@@ -139,9 +141,9 @@ done
 
 nightly_run=""
 nightly_sha=""
-api "repos/${repo}/actions/workflows/nightly.yml/runs" -f status=completed -f per_page=100 -f event=workflow_dispatch
-jq_out -r --arg r "${repo}" --arg t "${tree}" '
-  [.workflow_runs[]
+api "repos/${repo}/actions/workflows/nightly.yml/runs" --paginate -f status=completed -f per_page=100 -f event=workflow_dispatch
+jq_out -rs --arg r "${repo}" --arg t "${tree}" '
+  [.[].workflow_runs[]
    | select(.head_repository.full_name == $r and .head_commit.tree_id == $t and .status == "completed")]
   | map(select(.conclusion != "cancelled"))
   | sort_by(.created_at) | reverse | .[] | [.id, .head_sha, .event] | @tsv'

@@ -171,7 +171,7 @@ describe("TokenDialog show-once", () => {
     const { props } = await revealed({ limitSeconds: 30 * 86400 });
     expect(screen.getByTestId("show-once-token")).toHaveTextContent(SECRET);
     expect(screen.getByText(T.REVEAL_WARNING)).toBeInTheDocument();
-    expect(screen.getByText(T.ACTS_AS_YOU("Member"))).toBeInTheDocument();
+    expect(screen.getByText(T.ACTS_AS_YOU("User"))).toBeInTheDocument();
     expect(screen.getByText("11 Nov 2026 (in 30 days)")).toBeInTheDocument();
     expect(screen.queryByText(T.CLAMPED)).not.toBeInTheDocument();
     expect(props.onCreated).toHaveBeenCalledWith();
@@ -223,6 +223,15 @@ describe("TokenDialog show-once", () => {
     expect(props.onClose).not.toHaveBeenCalled();
     expect(screen.getByText(T.REVEAL_UNCOPIED)).toBeInTheDocument();
     await user.keyboard("{Escape}");
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("the built-in X follows the same rule as Done (FUG-L357)", async () => {
+    const { props } = await revealed();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(T.REVEAL_UNCOPIED)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close" }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 

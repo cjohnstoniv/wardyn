@@ -68,7 +68,7 @@ async function setInlinePolicy(page: Page, policy: Record<string, unknown>, text
 
 async function dexSignIn(email: string): Promise<void> {
   const page = stage();
-  await page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first().click();
+  await page.getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ }).or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ })).first().click();
   await page.locator('input[type="password"]').waitFor({ timeout: 30_000 });
   await page.locator('input[type="text"], input[name="login"]').first().fill(email);
   await page.locator('input[type="password"]').fill("password");

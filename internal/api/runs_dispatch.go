@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -123,12 +122,17 @@ type dispatchParams struct {
 	// carries them INSTEAD of the policy's run-wide push_rules.
 	PushRuleSets []types.PushRuleSet
 	// HarnessToolRules are the run's tool rules per included harness
-	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
+	// (applyHarnessToolRules). When set, the proxy carries them, and a credential
 	// per harness, INSTEAD of the policy's run-wide tool_rules.
 	HarnessToolRules []types.HarnessToolRules
 	// Harnesses are the run's run_harnesses rows, nil without the harness set;
 	// each that names a provider gets its own model credential lane.
 	Harnesses []types.RunHarness
+	// ADOLaneRepo is the run's own repository as the per-person Azure DevOps
+	// lane may serve it. Set only by finishCreateRunLaunch (the create and
+	// pool-queue doors) from the request the fold graded; a server-authored lane
+	// leaves it empty and resolves from WorkspaceRepos alone.
+	ADOLaneRepo string
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -175,6 +179,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
+	// The run's runner_resident values, each read where its placeholder is
+	// authored; deliverResident hands them to the runner before the create.
+	var resident []residentValue
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -199,8 +206,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 
 	// The run's masking manifest opens before any value is resolved and completes
-	// before the sandbox exists (mask_manifest.go).
-	if !s.beginMaskManifest(ctx, run) {
+	// before the sandbox exists (mask_manifest.go); a resident value needs a runner that holds one.
+	if !s.beginValueResolution(ctx, run) {
 		return
 	}
 
@@ -270,7 +277,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its credential grants could not be read. Launch it again.")
 		return
 	}
 	p.PATAPI = patAPIDoor(grantRows)
@@ -337,16 +344,19 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
 	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
-	// already read and the run's own repositories (resolveADOEntraRun). Decided
-	// HERE, ahead of the redirect plan, which leaves a lane host's credential to
-	// the lane (laneCarriesHost), and of the LLM phase, where the per-run CA this
-	// lane cannot run without is minted; it is AUTHORED after both.
-	// A failed site-config read decides nothing — no row, no lane.
-	var adoRun adoEntraRun
-	var adoInject bool
-	if siteCfgErr == nil {
-		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	}
+	// already read and the run's own repositories (resolveADOEntraLane): its
+	// workspace repositories and p.ADOLaneRepo, never run.Repo, which a
+	// server-authored lane sets too. Decided HERE, ahead of the redirect plan,
+	// which leaves a lane host's credential to the lane (laneCarriesHost), and of
+	// the LLM phase, where the per-run CA this lane cannot run without is minted;
+	// it is AUTHORED after both. A failed site-config read decides nothing — no
+	// row, no lane — and says so for a run on an Azure DevOps Services host. A
+	// decline is announced (run.ado_lane.skip and the sandbox env), never refused,
+	// and only once the dispatch is going ahead: a run refused below was never
+	// dispatched without the credential.
+	adoDecision := s.decideADOLane(ctx, run, siteCfg, siteCfgErr, policy.WorkspaceRepos, p.ADOLaneRepo)
+	adoRun := adoDecision.run
+	adoInject := adoRun.rowID != ""
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
@@ -395,6 +405,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
 		return
 	}
+	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)
 
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -430,7 +441,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
-	plan.azureCLI.closeWithheld(&policy, injections) // a door the ceiling withheld takes the hosts it opened with it
+	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -453,7 +464,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	orgConfigKeys := s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
-	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
+	secretEnvKeys, resident := s.resolveEnvSecretValues(ctx, run, policy, grantRows, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
@@ -557,7 +568,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			GitHubAPI: p.Components.GitHubAPI,
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
-			AzureARM: plan.azureCLI.gateFor(injections),
+			AzureARM: azureARM,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
@@ -663,21 +674,25 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
 	// The file_secret files join the spec last, so the manifest completes over their values.
-	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
+	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, grantRows, p.PATBroker, &spec, &resident) {
 		return
 	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
-	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
-	execution, err := s.leaseRunOnRunner(ctx, run)
-	var sb runner.Sandbox
-	if err == nil {
-		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
+	if !s.applyRunRecording(ctx, &run, &spec) {
+		return
 	}
+	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
+	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
+	// The lease, the runner_resident values, then the create, in that order: a runner
+	// refuses a create no lease authorizes, and the create names the values.
+	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
 	endStartWait()
 	stopCreateLease()
+	if refused {
+		return // deliverResident failed the run and recorded why; no create was asked for
+	}
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
@@ -781,7 +796,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 
 	if interactive {
 		if byoi {
-			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
+			s.byoiSelftest(ctx, run, ref, execution, false /* warn-only */)
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(map[string]any{
@@ -802,7 +817,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			if s.byoiExecLessRefused(ctx, run, ref) {
 				return
 			}
-			if !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
+			if !s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */) {
 				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
 				s.failAndRevoke(ctx, run.ID, types.RunRunning,
 					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")
@@ -922,34 +937,6 @@ func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
 	}
 	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
 	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
-// patBrokerGrants converts the run's {host: grant_id} PAT grants into the
-// proxy's per-host broker allowlist, or nil when the lane is off.
-//
-// It converts what it is handed and filters nothing: dispatchRun feeds it the
-// map dropBrokeredGrants already narrowed, so a brokered forge never reaches
-// here. Re-deriving "is this forge brokered?" inside would be a second answer to
-// a question the sandbox half also answers — which is exactly how the two halves
-// came apart.
-//
-// The username is left empty here on purpose: the control plane resolves the
-// host's git username at MINT time (ADO wants "pat", GitLab "oauth2", and an
-// operator may override), so duplicating that resolution at dispatch would be a
-// second place for it to drift. The proxy uses whatever the mint returns.
-func patBrokerGrants(pat map[string]string, on bool) map[string]proxy.PATGrant {
-	if !on || len(pat) == 0 {
-		return nil
-	}
-	out := make(map[string]proxy.PATGrant, len(pat))
-	for host, id := range pat {
-		gid, err := uuid.Parse(id)
-		if err != nil {
-			continue // a malformed id cannot broker; the host simply is not granted
-		}
-		out[strings.ToLower(strings.TrimSpace(host))] = proxy.PATGrant{GrantID: gid}
-	}
-	return out
 }
 
 // dispatchAdmitted refuses, before anything is claimed or written, a run no

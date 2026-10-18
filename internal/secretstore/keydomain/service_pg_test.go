@@ -120,6 +120,59 @@ func TestService_AmbiguousIfGroup(t *testing.T) {
 	}
 }
 
+// A user assignment whose subject spells a group name is a person, not that group: it grants the
+// group's members nothing, and it is not a second group domain for them.
+func TestService_UserAssignmentNamedLikeAGroupIsNotTheGroup(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng")
+	set(t, s, "user", "eng", "a")
+	if got := domainOf(t, s, "gina"); got != keydomain.Default {
+		t.Fatalf("a user named eng assigned to a: gina in group eng is in %q, want default", got)
+	}
+	set(t, s, "group", "eng", "b")
+	if got := domainOf(t, s, "gina"); got != "b" {
+		t.Fatalf("group eng assigned to b: gina is in %q, want b", got)
+	}
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || two {
+		t.Fatalf("InTwoGroupDomains = (%v, %v); want false: the user named eng is not a group domain", two, err)
+	}
+}
+
+// The refusal guards read group assignments only: a user assignment whose subject spells a group
+// name is neither a second group domain for the people in that group nor a group assignment that
+// makes a truncated login unplaceable.
+func TestService_GuardsIgnoreUserAssignmentsNamedLikeGroups(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng", "ops")
+	login(t, s, "hal", true, "eng")
+	set(t, s, "user", "ops", "b")
+	if n, err := s.AmbiguousIfGroup(t.Context(), "eng", "a"); err != nil || n != 0 {
+		t.Fatalf("AmbiguousIfGroup = (%d, %v); want 0: the user named ops is not a group assigned to another domain", n, err)
+	}
+	if yes, err := s.TruncatedWithGroups(t.Context(), "hal"); err != nil || yes {
+		t.Fatalf("TruncatedWithGroups = (%v, %v); want false: no group is assigned, only a user", yes, err)
+	}
+}
+
+// The API's guard reads only group assignments: a user assignment whose subject is spelled like one of
+// the person's groups is not a second group domain.
+func TestService_InTwoGroupDomains(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng", "ops")
+	set(t, s, "group", "eng", "a")
+	set(t, s, "user", "ops", "b")
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || two {
+		t.Fatalf("one group domain and a user assignment spelled like her other group = (%v, %v); want false", two, err)
+	}
+	set(t, s, "group", "ops", "b")
+	if two, err := s.InTwoGroupDomains(t.Context(), "gina"); err != nil || !two {
+		t.Fatalf("two group domains = (%v, %v); want true", two, err)
+	}
+}
+
 // The API's guard counts who a group assignment would lock out: people whose last login lost
 // groups and who have no user assignment.
 func TestService_TruncatedUnassigned(t *testing.T) {
@@ -169,6 +222,22 @@ func TestService_UndeclaredDomainFailsClosed(t *testing.T) {
 	after := keydomain.NewService(pool, nil)
 	if _, err := after.Domain(t.Context(), "gina"); !errors.Is(err, keydomain.ErrUnknownDomain) {
 		t.Fatalf("Domain after the file lost the domain = %v, want ErrUnknownDomain", err)
+	}
+}
+
+// Undeclared lists each domain the assignments name that the file lost, with
+// how many assignments name it; a declared domain and the default are not listed.
+func TestService_UndeclaredListsTheAssignmentsTheFileLost(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	before := keydomain.NewService(pool, []string{"a", "b"})
+	set(t, before, "user", "gina", "a")
+	set(t, before, "user", "hal", "a")
+	set(t, before, "group", "eng", "b")
+	set(t, before, "user", "ivy", keydomain.Default)
+	after := keydomain.NewService(pool, []string{"b"})
+	got, err := after.Undeclared(t.Context())
+	if want := []keydomain.UndeclaredDomain{{Domain: "a", Assignments: 2}}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Undeclared = (%v, %v), want %v", got, err, want)
 	}
 }
 

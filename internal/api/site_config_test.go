@@ -70,6 +70,16 @@ func TestValidateSiteConfig(t *testing.T) {
 			}}, false,
 		},
 		{
+			"go checksum-db opt-out on a go redirect", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://proxy.golang.org/", To: "https://go-mirror.corp/", Ecosystem: "go", GoChecksumDBOff: true},
+			}}, true,
+		},
+		{
+			"go checksum-db opt-out on an npm redirect", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm/", Ecosystem: "npm", GoChecksumDBOff: true},
+			}}, false,
+		},
+		{
 			"bad scheme (ftp) in to", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 				{From: "https://registry.npmjs.org/", To: "ftp://artifactory.corp/npm/", Ecosystem: "npm"},
 			}}, false,
@@ -144,7 +154,7 @@ func TestValidateSiteConfig(t *testing.T) {
 }
 
 // TestValidateSiteConfig_DuplicateFromMessage asserts THROUGH the
-// egressRedirectDuplicateFromRefusal DRAFT constant (F3-F5, server half).
+// egressRedirectDuplicateFromRefusal constant (F3-F5, server half).
 func TestValidateSiteConfig_DuplicateFromMessage(t *testing.T) {
 	err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
 		{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
@@ -224,6 +234,9 @@ func TestValidateSiteConfig_InternalHosts_Rejects(t *testing.T) {
 		"0.0.0.0/0",      // everything
 		"8.8.8.0/24",     // public
 		"::/0",           // everything, v6
+		"fd00:ec2::/64",  // AWS instance-metadata block, inside the liftable ULA range
+		"fd00:ec2::254/128",
+		"100.100.100.200/32", // Alibaba metadata, inside the liftable CGNAT range
 	}
 	for _, cidr := range bad {
 		t.Run(cidr, func(t *testing.T) {
@@ -562,7 +575,7 @@ func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.
 		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 	if want := fmt.Sprintf(legacyArtifactOverridesUnknownEcosystemRefusal, "rubygems"); !strings.Contains(w.Body.String(), want) {
-		t.Errorf("body = %s, want it to contain the DRAFT constant %q", w.Body.String(), want)
+		t.Errorf("body = %s, want it to contain the constant %q", w.Body.String(), want)
 	}
 	// Not the empty-From message a fold that emitted the key would 400 with.
 	if strings.Contains(w.Body.String(), `invalid from ""`) {

@@ -20,27 +20,33 @@ interface Fiber {
 const HOOK_TAGS = new Set([0, 11, 14, 15]);
 const SKIP = new Set(["_owner", "_store", "stateNode", "return", "alternate", "ref", "$$typeof"]);
 
-function holds(value: unknown, needle: string, seen: WeakSet<object>, depth: number): boolean {
+// `path` holds the objects on the way down from the current root, to stop a cycle: an object met again by
+// another route is searched again, because the depth cap may have cut it short the first time.
+function holds(value: unknown, needle: string, path: WeakSet<object>, depth: number): boolean {
   if (typeof value === "string") return value.includes(needle);
-  if (value === null || typeof value !== "object" || depth > 8 || seen.has(value)) return false;
+  if (value === null || typeof value !== "object" || depth > 8 || path.has(value)) return false;
   if (typeof Node !== "undefined" && value instanceof Node) return false;
-  seen.add(value);
-  return Object.entries(value).some(([k, v]) => !SKIP.has(k) && holds(v, needle, seen, depth + 1));
+  path.add(value);
+  try {
+    return Object.entries(value).some(([k, v]) => !SKIP.has(k) && holds(v, needle, path, depth + 1));
+  } finally {
+    path.delete(value);
+  }
 }
 
 /** True when `needle` is in the props or hook state of any component rendered under `container`. */
 export function holdsText(container: Element, needle: string): boolean {
   const key = Object.keys(container).find((k) => k.startsWith("__reactContainer$"));
   if (!key) throw new Error("holdsText: the container has no React root");
-  const seen = new WeakSet<object>();
+  const path = new WeakSet<object>();
   const walk = (f: Fiber | null): boolean => {
     for (let cur = f; cur; cur = cur.sibling) {
-      if (holds(cur.memoizedProps as ReactNode, needle, seen, 0)) return true;
+      if (holds(cur.memoizedProps as ReactNode, needle, path, 0)) return true;
       if (HOOK_TAGS.has(cur.tag)) {
         for (let hook = cur.memoizedState as { memoizedState: unknown; next: unknown } | null; hook; hook = hook.next as typeof hook) {
-          if (holds(hook.memoizedState, needle, seen, 0)) return true;
+          if (holds(hook.memoizedState, needle, path, 0)) return true;
         }
-      } else if (holds(cur.memoizedState, needle, seen, 0)) return true;
+      } else if (holds(cur.memoizedState, needle, path, 0)) return true;
       if (walk(cur.child)) return true;
     }
     return false;

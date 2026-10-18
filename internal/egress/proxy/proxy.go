@@ -5,7 +5,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -115,6 +115,7 @@ type Proxy struct {
 	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
 	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
 	brokeredPATGrantIDs []uuid.UUID
+	residentMints       map[uuid.UUID]ResidentMint // runner_resident mints answered locally (resident_mint.go)
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
@@ -125,6 +126,9 @@ type Proxy struct {
 	patAPI map[string]PATGrant
 	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
 	ghAPI *GitHubAPIGrant
+	// ghAPIStopped is set when shutdown starts handing the door's tokens back; the door mints and
+	// forwards nothing after it.
+	ghAPIStopped atomic.Bool
 	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
 	arm *azureARMDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
@@ -138,8 +142,8 @@ type Proxy struct {
 	// brokered routes (/wardyn/v1/...) to forward to the internal API.
 	controlPlaneURL string
 	// topologyRe are the operator-configured endpoints redactTopology removes
-	// from a SANDBOX-facing error body (httpError) — the control-plane base URL
-	// and the corp upstream proxy address. Compiled once; see topologyPatterns.
+	// from a SANDBOX-facing error body (httpError) — the control-plane base URL,
+	// the corp upstream proxy and LLM gateway hosts. See topologyPatterns.
 	topologyRe []*regexp.Regexp
 	// runToken is the per-run token that authenticates internal calls. It is
 	// held ONLY here in proxy memory and injected toward controlPlaneURL on the
@@ -208,6 +212,11 @@ type Proxy struct {
 	// "yes" for every address, which refuses every lift/trust.
 	exclusionUnknown bool
 
+	// hardDeny and lapse are set on k8s runners only (nil elsewhere): the
+	// in-cluster deny set, and the self-lapse gate every agent request passes.
+	hardDeny *hardDeny
+	lapse    *lapseGate
+
 	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
 	// public host -> {host,port,prefix}), parsed once from Options.LLMUpstreams.
 	// Empty == every brokered LLM route dials the vendor host, byte-identical
@@ -263,108 +272,6 @@ type llmUpstream struct {
 type internalHostRule struct {
 	suffix string
 	cidrs  []*net.IPNet
-}
-
-// Options configures a Proxy. Nil fields fall back to production defaults.
-type Options struct {
-	RunID  uuid.UUID
-	Policy *Policy
-	// Evaluator overrides the pluggable host/method policy-verdict engine. Nil =>
-	// the builtin evaluator wrapping Policy (default; unchanged behavior).
-	Evaluator egress.Evaluator
-	Approval  *approvalClient
-	Injector  *injector
-	Sink      *decisionSink
-	Resolver  resolver
-	// Scanner is the optional outbound content-inspection engine (nil == off).
-	Scanner *contentscan.Engine
-	// CA is the optional TLS-MITM certificate authority (nil == opaque CONNECT).
-	CA *certAuthority
-	// MITMHosts are operator-configured corp artifact hosts eligible for TLS-MITM
-	// beyond the built-in LLM hosts (exact hostnames). See Proxy.mitmHosts.
-	MITMHosts []string
-	// MITMLLM gates TLS-MITM of the built-in LLM hosts on actual intent. See
-	// Proxy.mitmLLM.
-	MITMLLM bool
-	// GitGrants is the git-broker per-repo allowlist ("<org>/<repo>" -> grant id)
-	// backing the /wardyn/gh/ route. See Proxy.gitGrants.
-	GitGrants map[string]uuid.UUID
-	// PATGrants is the git_pat broker's per-HOST allowlist backing /wardyn/git/.
-	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
-	// per-repo.
-	PATGrants map[string]PATGrant
-	// BrokeredPATGrantIDs backs isBrokeredPATGrant. See Config.BrokeredPATGrantIDs.
-	BrokeredPATGrantIDs []uuid.UUID
-	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
-	ADOGrants adoGrantsByHost
-	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
-	AzureGates []AzureGateConfig
-	// GitHubAPI backs the GitHub CLI door (github_api.go). Nil == off.
-	GitHubAPI *GitHubAPIGrant
-	// AzureARM backs the Azure CLI door (azure_arm_door.go). Nil == off.
-	AzureARM *AzureARMGrant
-	// ControlPlaneURL and RunToken back the local brokered routes. The run
-	// token is injected only toward the control plane and never reaches the
-	// sandbox or any LLM upstream.
-	ControlPlaneURL string
-	RunToken        *tokenSource
-	// Upstream is the OPTIONAL corporate parent proxy (parsed form). Nil ==
-	// direct dial. NewServer parses it from Config.UpstreamProxyURL; tests may
-	// build one via parseUpstreamProxy.
-	Upstream *upstreamProxy
-	// UpstreamNoProxy is the operator's upstream BYPASS list
-	// (SiteConfig.UpstreamProxyNoProxy, forwarded verbatim): host/domain
-	// suffixes and CIDRs dialed DIRECTLY rather than CONNECTed through
-	// Upstream. Control-plane-authored, same trust boundary as InternalHosts —
-	// the sandbox cannot set it. Empty (the default) => no bypass. Ignored
-	// entirely when Upstream is nil. See Proxy.noProxy / Proxy.bypassUpstream.
-	UpstreamNoProxy []string
-	// InternalHosts are the operator-declared internal hostnames (site-config,
-	// CONTROL-PLANE-authored — the sandbox cannot set this) eligible for
-	// vetHost's private-IP-guard lift. Empty == no lift. See Proxy.internalHosts.
-	InternalHosts []types.InternalHost
-	// LocalSubnets are the proxy's own interface subnets (net.InterfaceAddrs,
-	// captured once by NewServer before constructing Options). See
-	// Proxy.localSubnets.
-	LocalSubnets []*net.IPNet
-	// ControlPlaneIPs are every address this run's wardynd resolves to,
-	// resolved once by NewServer before constructing Options. See
-	// Proxy.controlPlaneIPs.
-	ControlPlaneIPs []net.IP
-	// ExclusionUnknown reports that NewServer's startup capture of LocalSubnets
-	// or ControlPlaneIPs failed, so the own-subnet/control-plane clamp must
-	// refuse every lift/trust rather than silently permit them. See
-	// Proxy.exclusionUnknown.
-	ExclusionUnknown bool
-	// LLMUpstreams maps a public vendor host to an operator-configured internal
-	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
-	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
-	LLMUpstreams map[string]string
-	// LLMChannelHosts is Config.LLMChannelHosts, forwarded verbatim.
-	LLMChannelHosts map[string]string
-	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
-	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
-	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
-	LLMUnavailableDetail string
-	// Unattended is Config.Unattended: a review-path push is refused, not held.
-	Unattended bool
-	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
-	Attribution *policyref.Ref
-
-	// Dial overrides the connection dialer (tests). Production leaves it nil
-	// and a net.Dialer is used.
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// ViaOrgRoutes are a runner proxy's via_org destinations (via_org.go).
-	ViaOrgRoutes []ViaOrgRoute
-	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
-	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
-	// bundle — see NewServer); nil means system roots alone. Tests use it to
-	// trust an httptest TLS server standing in for an HTTPS upstream.
-	TLSClientConfig *tls.Config
-	// ControlTLS pins the control-plane transport to wardynd's internal CA
-	// (hoptls.ClientConfig). nil pins an EMPTY pool: https fails closed.
-	ControlTLS *tls.Config
-	Now        func() time.Time
 }
 
 // vettedIPKey carries the pre-resolved, policy-checked dial target through the
@@ -431,7 +338,7 @@ func newProxy(opts Options) *Proxy {
 		// channelForHost) — an untrimmed key here is unmatchable.
 		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
-		gatewayVendor[host] = vendor
+		gatewayVendor[hostKey(host)] = vendor
 	}
 	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
 	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
@@ -462,7 +369,7 @@ func newProxy(opts Options) *Proxy {
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
 		upstream:             opts.Upstream,
-		topologyRe:           topologyPatterns(controlPlaneEndpoint(opts.ControlPlaneURL, ""), opts.Upstream),
+		topologyRe:           append(topologyPatterns(controlPlaneEndpoint(opts.ControlPlaneURL, ""), opts.Upstream), gatewayPatterns(llmUpstreams)...),
 		noProxy:              compileNoProxy(opts.UpstreamNoProxy),
 		internalHosts:        internalHosts,
 		localSubnets:         opts.LocalSubnets,
@@ -533,7 +440,16 @@ func newProxy(opts Options) *Proxy {
 			TLSClientConfig:       opts.TLSClientConfig,
 		}
 	}
-	p.transport = mkTransport(egressDial)
+	// A plain-HTTP forward dials through p.transport itself, so a failure before the connection
+	// opened is marked as connecting here, like handshakeOver does for TLS: dialStage otherwise reads
+	// any error that is not a net dial error as one on an open connection.
+	p.transport = mkTransport(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := egressDial(ctx, network, addr)
+		if err != nil {
+			return nil, &connectStageError{err}
+		}
+		return c, nil
+	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
@@ -587,6 +503,11 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A self-lapsing proxy serves nothing while closed or lapsed (§6.2).
+	if !p.lapse.serving() {
+		refuseClosed(w)
+		return
+	}
 	// A via_org destination is the organisation's to decide: no spool row, no
 	// hold and no decision here (design 0.9 §7.3).
 	if route, authority, ok := p.viaOrgRouteFor(r); ok {
@@ -594,7 +515,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var release func()
-	r, release = p.admitSpoolHTTP(w, r)
+	r, release = p.admitSpoolHTTP(w, r, "")
 	if r == nil {
 		return
 	}
@@ -622,13 +543,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // a dot-free deny key "evil.com" while VetHost still resolved+dialed it (an
 // explicit-deny bypass under allow_all_egress). This is the single funnel every
 // request host flows through, so normalizing it here reduces every FQDN-root
-// spelling to the canonical dot-free host for all downstream matching.
+// spelling to the canonical dot-free host for all downstream matching, and an
+// IP literal to its one canonical spelling (domainmatch.CanonHost): the same one
+// the policy and every host-keyed table compile to (hostKey).
 func splitHostPort(hostport string, defaultPort int) (host string, port int) {
 	if h, ps, err := net.SplitHostPort(hostport); err == nil {
 		port, _ = strconv.Atoi(ps)
-		return strings.ToLower(strings.TrimRight(h, ".")), port
+		return domainmatch.CanonHost(strings.TrimRight(h, ".")), port
 	}
-	return strings.ToLower(strings.TrimRight(hostport, ".")), defaultPort
+	return domainmatch.CanonHost(strings.TrimRight(hostport, ".")), defaultPort
 }
 
 // evaluate runs the full decision pipeline for a request, emitting the
@@ -959,6 +882,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		return
 	}
+	defer p.trackTunnel(clientConn)()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = upstream.Close()
 		_ = clientConn.Close()

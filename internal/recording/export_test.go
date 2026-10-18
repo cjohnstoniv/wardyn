@@ -56,3 +56,10 @@ func ReadCast(r io.Reader) ([]byte, error) {
 
 // HoldGroup is holdGroup.
 func HoldGroup(ctx context.Context, group string) (func(), error) { return holdGroup(ctx, group) }
+
+// SetCastWriteChunk shrinks the size one statement of a save writes, restoring it when t ends.
+func SetCastWriteChunk(t testing.TB, n int) {
+	old := castWriteChunk
+	castWriteChunk = n
+	t.Cleanup(func() { castWriteChunk = old })
+}

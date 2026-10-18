@@ -16,7 +16,7 @@ import (
 func (s *Spool) readJSON(name string, limit int64, out any) error {
 	f, err := s.root.Open(name)
 	if err != nil {
-		return err
+		return inDir(s.dir, err)
 	}
 	defer f.Close()
 	st, err := f.Stat()
@@ -31,7 +31,8 @@ func (s *Spool) readJSON(name string, limit int64, out any) error {
 		return errors.New("unsafe or oversized spool file")
 	}
 	dec := json.NewDecoder(io.LimitReader(f, limit+1))
-	dec.DisallowUnknownFields()
+	// Unknown keys are ignored (from 0.9.3 on) so a spool a later runner wrote still loads after a
+	// rollback; the file checks above, trailing data and each caller's validation still refuse.
 	if err := dec.Decode(out); err != nil {
 		return err
 	}
@@ -50,6 +51,14 @@ func (s *Spool) writeJSON(name string, v any) error {
 }
 
 func (s *Spool) writeBytes(name string, b []byte) error {
+	if err := s.writeFile(name, b); err != nil {
+		return inDir(s.dir, err)
+	}
+	return inDir(s.dir, s.syncDir())
+}
+
+// writeFile replaces name with b, synced, without the directory sync that makes the rename durable.
+func (s *Spool) writeFile(name string, b []byte) error {
 	// The process-shared lock gives this fixed temporary name one writer. A
 	// prior crash's temporary file is never mistaken for committed state.
 	tmp := "write.tmp"
@@ -68,9 +77,10 @@ func (s *Spool) writeBytes(name string, b []byte) error {
 	if err := errors.Join(ownErr, writeErr, syncErr, closeErr); err != nil {
 		return err
 	}
-	if err := s.root.Rename(tmp, name); err != nil {
-		return err
-	}
+	return s.root.Rename(tmp, name)
+}
+
+func (s *Spool) syncDir() error {
 	d, err := s.root.Open(".")
 	if err != nil {
 		return err

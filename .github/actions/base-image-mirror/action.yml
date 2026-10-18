@@ -3,10 +3,13 @@ description: >-
   Serves the docker.io digest pins in deploy/base-images.txt from their GHCR
   copies (ghcr.io/<owner>/base-images, made by mirror-base-images.yml), so a
   job's base-image pulls and builds stop spending Docker Hub's pull quota.
-  Starts a loopback mirror, points dockerd's registry-mirrors at it by a SIGHUP
-  config reload (no restart, so service containers keep running), then pulls
-  the pins under their docker.io names. A miss anywhere falls back to Docker
-  Hub exactly as before. See docs/CI.md, "Docker Hub base-image mirror".
+  Starts a loopback mirror, points dockerd's registry-mirrors at it (then at
+  mirror.gcr.io, which serves what the copy cannot: tags and unlisted images)
+  with ONE dockerd restart that brings the job's service containers back, then
+  pulls the pins under their docker.io names. A miss anywhere falls through to
+  the next mirror and then to Docker Hub, exactly as before. A job uses this
+  step INSTEAD of a separate mirror.gcr.io step. See docs/CI.md, "Docker Hub
+  base-image mirror".
 inputs:
   prime:
     description: >-
@@ -20,6 +23,12 @@ inputs:
   list:
     description: The mirror list, relative to the workspace.
     default: deploy/base-images.txt
+  fallback-mirror:
+    description: >-
+      A registry mirror kept behind the loopback one (tags and images outside
+      the list go to it). Empty = none. It is also the only mirror when the
+      loopback one cannot start, so a job never loses its Docker Hub 429 relief.
+    default: https://mirror.gcr.io
 runs:
   using: composite
   steps:
@@ -28,6 +37,7 @@ runs:
       env:
         MIRROR_REPO: ${{ github.repository_owner }}/base-images
         MIRROR_PORT: "15999"
+        FALLBACK_MIRROR: ${{ inputs.fallback-mirror }}
       run: |
         set -euo pipefail
         log="$RUNNER_TEMP/base-image-mirror.log"
@@ -108,25 +118,55 @@ runs:
 
         ThreadingHTTPServer(("127.0.0.1", PORT), Mirror).serve_forever()
         PY
-        curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "http://127.0.0.1:$MIRROR_PORT/v2/"
+        # A mirror that does not come up costs only its own relief: the
+        # fallback mirror below is configured either way.
+        local_mirror="http://127.0.0.1:$MIRROR_PORT"
+        if ! curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "$local_mirror/v2/"; then
+          echo "::warning title=base-image-mirror::the loopback mirror did not start (see $log); using the fallback mirror only"
+          cat "$log" 2>/dev/null || true
+          local_mirror=""
+        fi
 
-        # registry-mirrors is one of dockerd's live-reloadable options
-        # (docs.docker.com/reference/cli/dockerd, "Configuration reload
-        # behavior"): SIGHUP applies it with no restart, so containers already
-        # running (a job's `services:`) are untouched. Mirrors apply to
-        # docker.io only; loopback registries are insecure (plain http) by
-        # default.
+        # Order: the loopback mirror (digest pins from GHCR), then any mirror
+        # already configured, then the fallback mirror (tags, unlisted images),
+        # then Docker Hub itself. Mirrors apply to docker.io only; loopback
+        # registries are insecure (plain http) by default. A SIGHUP reload
+        # resets the host-gateway address, so restart dockerd and bring back
+        # the job's service containers.
         conf=/etc/docker/daemon.json
         sudo test -s "$conf" || echo '{}' | sudo tee "$conf" >/dev/null
-        sudo jq --arg m "http://127.0.0.1:$MIRROR_PORT" '.["registry-mirrors"] = [$m]' "$conf" > "$RUNNER_TEMP/daemon.json"
+        sudo jq --arg l "$local_mirror" --arg f "$FALLBACK_MIRROR" \
+          '.["registry-mirrors"] = ([$l] + ((.["registry-mirrors"] // []) - [$l, $f]) + [$f] | map(select(. != "")))' \
+          "$conf" > "$RUNNER_TEMP/daemon.json"
         sudo install -m 0644 "$RUNNER_TEMP/daemon.json" "$conf"
-        sudo kill -HUP "$(pidof dockerd)"
-        for _ in 1 2 3 4 5 6 7 8 9 10; do
-          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "127.0.0.1:$MIRROR_PORT" && break
-          sleep 1
-        done
-        docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "127.0.0.1:$MIRROR_PORT" \
-          || echo "::warning title=base-image-mirror::dockerd did not pick up the registry mirror; pulls go to Docker Hub as before"
+        running="$(docker ps -q)"; sudo systemctl restart docker
+        if [ -n "$running" ]; then
+          # shellcheck disable=SC2086 # one word per container id
+          docker start $running >/dev/null
+          # A restarted container's health check starts over at "starting": wait for each
+          # container that has one, so a service is usable when this step returns.
+          for c in $running; do
+            [ -n "$(docker inspect --format '{{if .State.Health}}y{{end}}' "$c")" ] || continue
+            healthy=0
+            for _ in $(seq 60); do
+              if [ "$(docker inspect --format '{{.State.Health.Status}}' "$c")" = healthy ]; then healthy=1; break; fi
+              sleep 1
+            done
+            [ "$healthy" = 1 ] || {
+              echo "::error title=base-image-mirror::service container $(docker inspect --format '{{.Name}}' "$c") was not healthy 60 s after the dockerd restart"
+              exit 1
+            }
+          done
+        fi
+        want="${local_mirror:-$FALLBACK_MIRROR}"
+        if [ -n "$want" ]; then
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "${want#*://}" && break
+            sleep 1
+          done
+          docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "${want#*://}" \
+            || echo "::warning title=base-image-mirror::dockerd did not pick up the registry mirror; pulls go to Docker Hub as before"
+        fi
 
     - name: Pull the base-image pins under their docker.io names
       if: inputs.prime != ''

@@ -36,7 +36,7 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 	}
 	// The pass judges other people's runs, so it works on the daemon's own context: a caller's identity
 	// on ctx must never reach it.
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), bound)
+	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx), bound)
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
@@ -77,7 +77,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	room, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
+	room, err := s.queueRunnerFree(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
@@ -121,7 +121,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
 	out := queueRoom{pinned: req.RunnerID != ""}
-	rows, refusal := s.permittedPools(ctx, ps, true)
+	rows, refusal := s.queuePermittedPools(ctx, ps)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
 			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)
@@ -134,13 +134,29 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	}
 	// The candidates are the start's own: the same targets, the same kinds (kindTargets: the kind asked
 	// for, none the profile denies, no runner of the person's for a run with drives) and the same demand
-	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared). A
-	// ceiling that cannot be read denies nothing here: the start judges the run against it again.
+	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared, recording
+	// under a required setting). A ceiling that cannot be read denies nothing here: the start judges the
+	// run against it again.
 	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
-	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
+	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
+	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	if err != nil {
+		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
+	}
+	requireRecording := org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired
+	// A required setting with no store has no room anywhere, and no runner coming online changes that, so
+	// it is said before any runner is looked at: the start would refuse recording_store_off.
+	if requireRecording && s.cfg.RecordingStore == nil {
+		out.wait = runnerpool.WaitRecordingStoreOff
+		return out, nil
+	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
+	if refusal != nil && refusal.err != nil {
+		// A read that failed says nothing about the runners: the run keeps its place with no wait recorded.
+		return out, fmt.Errorf("read the pool's runners: %w", refusal.err)
+	}
 	if refusal != nil {
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil
@@ -153,7 +169,12 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: s.runnerFits(ctx)}
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		return out, err
+	}
+	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits,
+		requireRecording: requireRecording}
 	out.needs = map[string]types.RunnerAmounts{}
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {
@@ -198,7 +219,7 @@ func (s *Server) kickQueue() {
 	}
 	s.goBackground(func() {
 		for {
-			s.promoteWaitingPools(s.cfg.BaseCtx)
+			_ = s.promoteWaitingPools(s.cfg.BaseCtx) // logged there; the leader sweep reports it to sweep health
 			if !s.queue.kick.again() {
 				return
 			}
@@ -207,47 +228,51 @@ func (s *Server) kickQueue() {
 }
 
 // promoteWaitingPools runs one promotion pass for every pool that has waiting runs.
-func (s *Server) promoteWaitingPools(ctx context.Context) {
+func (s *Server) promoteWaitingPools(ctx context.Context) error {
 	qs, ok := s.queueStore()
 	if !ok {
-		return
+		return nil
 	}
+	ctx = withQueuePass(ctx)
 	pools, err := qs.QueuePoolIDs(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list pools with waiting runs", slog.Any("err", err))
-		return
+		return fmt.Errorf("list pools with waiting runs: %w", err)
 	}
 	for _, id := range pools {
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		s.promoteQueue(ctx, id, queueSweepBound)
 	}
+	return nil
 }
 
 // SweepRunQueue is one tick of the leader's queue sweep: end the waiting runs whose deadline passed and
 // the ones whose named runner is revoked, fail the promoted runs whose start died, and promote for every
 // pool that has waiting runs (a slot may have freed with no commit this replica saw). Every write is a
-// CAS under the pool lock, so a second leader for a moment is harmless.
+// CAS under the pool lock, so a second leader for a moment is harmless. A list read that fails is
+// returned (joined), so the sweeper's health shows it; a failed write on one row stays a log line.
 func (s *Server) SweepRunQueue(ctx context.Context) error {
 	if _, ok := s.queueStore(); !ok {
 		return nil
 	}
-	s.expireQueued(ctx)
-	s.endQueuedRunsOfRevokedRunners(ctx)
-	s.failStalePromoted(ctx)
-	s.promoteWaitingPools(ctx)
-	return nil
+	return errors.Join(
+		s.expireQueued(ctx),
+		s.endQueuedRunsOfRevokedRunners(ctx),
+		s.failStalePromoted(ctx),
+		s.promoteWaitingPools(ctx),
+	)
 }
 
 // expireQueued ends each waiting run past its deadline: FAILED queue_timeout, with run.queue.expire.
-func (s *Server) expireQueued(ctx context.Context) {
+func (s *Server) expireQueued(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	now := s.cfg.Now().UTC()
 	expired, err := qs.ExpiredQueueEntries(ctx, now, 200)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list expired queue entries", slog.Any("err", err))
-		return
+		return fmt.Errorf("list expired queue entries: %w", err)
 	}
 	for _, e := range expired {
 		reason := types.RunEndQueueTimeout
@@ -259,6 +284,7 @@ func (s *Server) expireQueued(ctx context.Context) {
 		s.recordAudit(ctx, s.auditEvent(&e.RunID, types.ActorSystem, "wardynd", "run.queue.expire", e.RunID.String(), "success",
 			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID})))
 	}
+	return nil
 }
 
 // queueLeaseStale is how long a promoted run's start may go without touching its lease before the
@@ -268,12 +294,12 @@ const queueLeaseStale = watcherLeaseStaleAfter
 // failStalePromoted fails each promoted run (PENDING, no sandbox, admitted_at set) whose start stopped
 // touching its lease, revoking any identity it was given, so its slot frees within a tick. A plain
 // PENDING run in its image build is never listed: only promotion writes admitted_at.
-func (s *Server) failStalePromoted(ctx context.Context) {
+func (s *Server) failStalePromoted(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	runs, err := qs.StalePromotedRuns(ctx, queueLeaseStale)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list stale promoted runs", slog.Any("err", err))
-		return
+		return fmt.Errorf("list stale promoted runs: %w", err)
 	}
 	for _, run := range runs {
 		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
@@ -282,6 +308,7 @@ func (s *Server) failStalePromoted(ctx context.Context) {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}
+	return nil
 }
 
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.

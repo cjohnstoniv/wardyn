@@ -8,6 +8,7 @@ package k8s
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,8 @@ type nodeInfo struct {
 	labels      map[string]string
 	taints      []corev1.Taint
 	allocatable corev1.ResourceList
+	// healthy is Ready and not cordoned: a node the scheduler would use today.
+	healthy bool
 }
 
 // nodeCache is the last node read, whatever its outcome: a forbidden answer is cached too, so a
@@ -59,7 +62,7 @@ func (d *Driver) cachedNodes(ctx context.Context) ([]nodeInfo, runner.ReadState)
 	if err == nil {
 		for i := range list.Items {
 			n := &list.Items[i]
-			nodes = append(nodes, nodeInfo{name: n.Name, labels: n.Labels, taints: n.Spec.Taints, allocatable: n.Status.Allocatable})
+			nodes = append(nodes, nodeInfo{name: n.Name, labels: n.Labels, taints: n.Spec.Taints, allocatable: n.Status.Allocatable, healthy: nodeHealthy(n)})
 		}
 	}
 	c.mu.Lock()
@@ -90,6 +93,20 @@ func nodeShortfall(nodes []nodeInfo, pl Placement, pods []podDemand) *runner.Nod
 // selector, the required node affinity, the taints the placement tolerates, and the requests
 // against allocatable. Preferred affinity and every co-tenant effect are out of scope.
 func (n nodeInfo) holds(p podDemand, pl Placement) bool {
+	if !n.placementOK(pl, nil) {
+		return false
+	}
+	for name, want := range p.requests {
+		if have, ok := n.allocatable[name]; ok && want.Cmp(have) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// placementOK is the placement half of holds: the node selector, the required node affinity and the
+// taints the placement tolerates. A taint skip reports true for is not counted.
+func (n nodeInfo) placementOK(pl Placement, skip func(corev1.Taint) bool) bool {
 	for k, v := range pl.NodeSelector {
 		if got, ok := n.labels[k]; !ok || got != v {
 			return false
@@ -99,16 +116,35 @@ func (n nodeInfo) holds(p podDemand, pl Placement) bool {
 		return false
 	}
 	for _, t := range n.taints {
-		if t.Effect != corev1.TaintEffectPreferNoSchedule && !tolerated(pl.Tolerations, t) {
-			return false
-		}
-	}
-	for name, want := range p.requests {
-		if have, ok := n.allocatable[name]; ok && want.Cmp(have) > 0 {
+		if t.Effect != corev1.TaintEffectPreferNoSchedule && !(skip != nil && skip(t)) && !tolerated(pl.Tolerations, t) {
 			return false
 		}
 	}
 	return true
+}
+
+// nodeHealthy reports a node that is Ready and not cordoned.
+func nodeHealthy(n *corev1.Node) bool {
+	if n.Spec.Unschedulable {
+		return false
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// transientTaint is a taint a node carries while it joins, drains or leaves: the node-lifecycle taints
+// (cordon, not ready, unreachable, pressure) and the autoscalers' deletion taints. They come and go
+// with the node, so they say nothing about where an operator's placement allows a pod.
+func transientTaint(t corev1.Taint) bool {
+	switch t.Key {
+	case "ToBeDeletedByClusterAutoscaler", "DeletionCandidateOfClusterAutoscaler", "karpenter.sh/disrupted":
+		return true
+	}
+	return strings.HasPrefix(t.Key, "node.kubernetes.io/") || strings.HasPrefix(t.Key, "node.cloudprovider.kubernetes.io/")
 }
 
 func (n nodeInfo) matchesRequiredAffinity(aff *corev1.Affinity) bool {

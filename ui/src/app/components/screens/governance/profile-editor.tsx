@@ -96,7 +96,8 @@ export function ProfileEditor({
    *  save, non-blocking, which is Q6's adopted variant. */
   onSaved: (warnings: string[]) => void;
   /** The write was held for a second person (202): nothing is saved yet. */
-  onSubmitted: () => void;
+  /** The notes the held change carries, for the screen to show beside the submitted note. */
+  onSubmitted: (notes: string[]) => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -222,7 +223,7 @@ export function ProfileEditor({
       onSaved(res.warnings);
     } catch (e) {
       if (e instanceof PendingChangeError) {
-        onSubmitted();
+        onSubmitted(e.change.diff?.notes ?? []);
         return;
       }
       // A refusal the SERVER composed is rendered verbatim — it names the

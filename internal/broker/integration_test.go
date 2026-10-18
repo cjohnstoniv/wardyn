@@ -105,7 +105,7 @@ func seedRun(ctx context.Context, t *testing.T, pool *pgxpool.Pool, runID uuid.U
 	_, err := pool.Exec(ctx,
 		`INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 		 VALUES ($1,'tester','claude-code','acme/widgets','CC2','RUNNING',$2,'docker')`,
-		runID, spiffeForRun(runID))
+		runID, spiffeForRun(defaultTrustDomain, runID))
 	if err != nil {
 		t.Fatalf("insert run: %v", err)
 	}

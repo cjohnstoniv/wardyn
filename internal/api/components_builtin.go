@@ -75,7 +75,7 @@ func (s *Server) admitBuiltinComponent(r *http.Request, adm *componentAdmission,
 ) (attachedComponent, *componentRefusal) {
 	if ref.Builtin != types.ComponentBuiltinGitHub {
 		return attachedComponent{}, &componentRefusal{ordinal: i, source: componentSourceOrg, reason: reasonRequestFieldUnavailable,
-			refusal: builtinUnavailable(i, ref.Builtin)}
+			refusal: builtinUnavailable("", i, ref.Builtin, "so the run was not created.")}
 	}
 	// GitHub names are case-insensitive, and the broker mints one grant's
 	// repositories under ONE owner spelling (splitRepos): lowercase, the
@@ -133,9 +133,9 @@ func (s *Server) admitBuiltinComponent(r *http.Request, adm *componentAdmission,
 }
 
 // builtinUnavailable refuses a built-in no lane serves yet, by name.
-func builtinUnavailable(i int, builtin string) *runRefusal {
+func builtinUnavailable(prefix string, i int, builtin, tail string) *runRefusal {
 	return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
-		"components[%d]: built-in %s access is not available on this server yet, so the run was not created.", i, builtin))
+		"%scomponents[%d]: built-in %s access is not available on this server yet, %s", prefix, i, builtin, tail))
 }
 
 // builtinGitHubGrant is the github_token grant a built-in GitHub component

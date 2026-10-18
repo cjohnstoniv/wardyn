@@ -41,6 +41,68 @@ func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid
 	return nil
 }
 
+func (f *runnerRegistrationFake) TouchRunner(_ context.Context, id uuid.UUID, version string, now time.Time) error {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	if row, ok := f.rows[id]; ok {
+		if version != "" {
+			row.Version = version
+		}
+		row.LastSeenAt = &now
+		f.rows[id] = row
+	}
+	return nil
+}
+
+// A caps event records the version the runner reports and a last_seen_at, whatever the row held.
+func TestRunnerCapsRecordTheVersionAndLastSeen(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	data, _ := json.Marshal(runnerwire.Caps{Version: "0.9.3-test"})
+	if err := srv.EventFromRunner(context.Background(), row.ID, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	f.lock.Lock()
+	got := f.rows[row.ID]
+	f.lock.Unlock()
+	if got.Version != "0.9.3-test" || got.LastSeenAt == nil {
+		t.Fatalf("runner row = version %q, last seen %v; want 0.9.3-test and a time", got.Version, got.LastSeenAt)
+	}
+}
+
+// A superseded session's late caps leave the new session's owed runner.connect row for the new session's
+// own caps, which writes it with its own version.
+func TestRunnerCapsOfASupersededSessionLeaveTheOwedConnectRow(t *testing.T) {
+	srv, f, h := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	srv.runnerStreams.connectMu.Lock()
+	srv.runnerStreams.connectOwed = map[uuid.UUID]string{row.ID: "new"} // the new session's Connected has run
+	srv.runnerStreams.connectMu.Unlock()
+	send := func(session, version string) {
+		data, _ := json.Marshal(runnerwire.Caps{Version: version})
+		if err := srv.eventFromRunner(context.Background(), row.ID, session, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connects := func() (n int, last string) {
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "runner.connect" {
+				n++
+				last = string(ev.Data)
+			}
+		}
+		return n, last
+	}
+	send("old", "0.9.2")
+	if n, _ := connects(); n != 0 {
+		t.Fatalf("a superseded session's caps wrote %d runner.connect rows", n)
+	}
+	send("new", "0.9.3-test")
+	if n, last := connects(); n != 1 || !strings.Contains(last, `"version":"0.9.3-test"`) {
+		t.Fatalf("runner.connect rows = %d, last %s; want one carrying 0.9.3-test", n, last)
+	}
+}
+
 // testRunnerLimits is a valid limit set: 2 runs at once, each of them half the totals.
 func testRunnerLimits() *types.RunnerLimits {
 	return &types.RunnerLimits{RunsAtOnce: 2, Total: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 102400},

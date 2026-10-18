@@ -86,6 +86,11 @@ describe("intentToWire (U1)", () => {
     expect(body).not.toHaveProperty("confinement_class");
   });
 
+  it("sends a component's explicit empty mcp_harnesses as the choice of no harness", () => {
+    const components = [{ id: "mcp-docs", mcp_harnesses: [] }, { id: "mcp-other" }];
+    expect(intentToWire({ components } as unknown as RunIntent).body.components).toEqual(components);
+  });
+
   it("never clamps or defaults: the chosen class goes as chosen beside a stronger policy floor", () => {
     const { body } = intentToWire({ confinement_class: "CC1", inline_policy: { min_confinement_class: "CC3" } });
     expect(body.confinement_class).toBe("CC1");

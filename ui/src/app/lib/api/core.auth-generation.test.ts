@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getToken, onAuthChange, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
+import { getToken, onAuthChange, onUnauthorized, setExpectedPrincipal, setSignedOutHold, setToken, wfetch } from "./core";
 
 const changed = vi.fn();
 let unsubscribe: () => void;
@@ -96,4 +96,17 @@ it("independent listeners dispose without disabling a replacement", () => {
   off();
   expect(changed).toHaveBeenCalledTimes(1);
   expect(second).toHaveBeenCalledTimes(2);
+});
+
+it("names the confirmed person on an asPerson draft write only (DR-0034)", async () => {
+  const sent = () => (fetchMock.mock.calls.at(-1)![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
+  fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }));
+  setExpectedPrincipal("a@example.com");
+  await wfetch("/agent-providers", { method: "PUT", asPerson: true });
+  expect(sent()).toBe("a%40example.com");
+  await wfetch("/agent-providers", { method: "PUT" });
+  expect(sent()).toBeNull();
+  setExpectedPrincipal("");
+  await wfetch("/agent-providers", { method: "PUT", asPerson: true });
+  expect(sent()).toBeNull();
 });

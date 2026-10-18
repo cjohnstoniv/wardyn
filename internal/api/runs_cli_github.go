@@ -141,3 +141,41 @@ func confineBrokerEgress(policy *types.RunPolicySpec, p dispatchParams, sandboxE
 	sandboxEnv["GH_PROMPT_DISABLED"] = "1"
 	return confined
 }
+
+// githubDoorLane is how the ceiling re-assertion names the GitHub CLI door in dropped_broker_lanes.
+const githubDoorLane = "github_api"
+
+// githubCLIBlockedOrgProblem is the GitHub CLI row's refusal under a ceiling that walls GitHub off
+// (componentHostsBounded), as componentRefused words an organisation's component: "this component ...".
+const githubCLIBlockedOrgProblem = "uses the GitHub CLI, and GitHub is blocked by your organisation."
+
+// githubDoorWithheld reports whether a ceiling's denies take the GitHub CLI door away. The door
+// follows the git broker's family rule, not an exact-host one: a profile that denies any host
+// the broker re-originates to (github.com among them) has walled GitHub off, and a credentialed
+// lane on api.github.com must not outlive that. Plain egress to api.github.com stays exact-host.
+func githubDoorWithheld(deny []string) bool { return ceilingDeniesAny(deny, gitBrokerManagedHosts) }
+
+// closeGitHubDoor puts back what confineBrokerEgress lifted for the door: the host's :443 allow
+// goes and its deny returns, so a run whose door was withheld meets the same wall as one that
+// never had a door.
+func closeGitHubDoor(policy *types.RunPolicySpec) {
+	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(d string) bool { return d == ghscope.APIHost+":443" })
+	if !ceilingDenies(policy.DeniedDomains, ghscope.APIHost) {
+		policy.DeniedDomains = append(slices.Clip(policy.DeniedDomains), ghscope.APIHost)
+	}
+}
+
+// dropGitHubDoor withholds the door at dispatch when the ceiling walls GitHub off: no grant, no
+// inert token in the sandbox, and the host closed again. It returns the lane it dropped, if any.
+func dropGitHubDoor(deny []string, policy *types.RunPolicySpec, p *dispatchParams, sandboxEnv map[string]string) []string {
+	if p.Components.GitHubAPI == nil || !githubDoorWithheld(deny) {
+		return nil
+	}
+	p.Components.GitHubAPI = nil
+	closeGitHubDoor(policy)
+	if sandboxEnv["GH_TOKEN"] == githubCLITokenSentinel {
+		delete(sandboxEnv, "GH_TOKEN")
+		delete(sandboxEnv, "GH_PROMPT_DISABLED")
+	}
+	return []string{githubDoorLane}
+}

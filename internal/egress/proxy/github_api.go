@@ -21,6 +21,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -48,6 +49,9 @@ const (
 	// token, well inside a container runtime's stop timeout (10 s on Docker).
 	gitHubAPIRevokeBudget = 3 * time.Second
 )
+
+// errGitHubAPIStopped is what the door answers once the proxy is handing its tokens back at shutdown.
+var errGitHubAPIStopped = errors.New("the proxy is stopping")
 
 // GitHubAPIGrant is the run's GitHub CLI grant: the capabilities the row
 // grants (already without the ones a CLI token never holds), the run's
@@ -148,9 +152,18 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceGitHubAPI, denied: ruleSourceGitHubAPIRefused, mintFailed: "mint github token",
 		credential: func(ctx context.Context) (string, string, error) {
+			if p.ghAPIStopped.Load() {
+				return "", "", errGitHubAPIStopped
+			}
 			tok, _, err := p.brokeredToken(ctx, grantID, func(string) string { return gitBrokerUsername })
 			if err != nil {
 				return "", "", err
+			}
+			// A mint that finished after the shutdown revoke passed over it was never handed back
+			// there, so hand it back here rather than leave it to expire within the hour.
+			if p.ghAPIStopped.Load() {
+				p.revokeGitHubAPIToken(ctx, grantID, tok)
+				return "", "", errGitHubAPIStopped
 			}
 			return "Authorization", "token " + tok, nil
 		}})
@@ -211,8 +224,12 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 	if p.ghAPI == nil {
 		return
 	}
+	// From here the door mints and serves nothing more: a mint still in flight is handed back by
+	// its own request when it lands (serveGitHubAPI), since the loop below skips it.
+	p.ghAPIStopped.Store(true)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitHubAPIRevokeBudget)
 	defer cancel()
+	var target string
 	for _, id := range p.ghAPI.Grants {
 		p.gitTokMu.Lock()
 		e := p.gitTokens[id]
@@ -225,17 +242,58 @@ func (p *Proxy) revokeGitHubAPITokens(ctx context.Context) {
 		if tok == "" {
 			continue
 		}
-		if err := p.revokeGitHubToken(ctx, tok); err != nil {
+		var err error
+		if target == "" {
+			target, err = p.boundedEgressTarget(ctx, ghscope.APIHost, gitHubAPIPort)
+		}
+		if err == nil {
+			err = p.revokeGitHubToken(ctx, target, tok)
+		}
+		if err != nil {
 			slog.Warn("wardyn-proxy: could not hand a GitHub CLI token back; it expires within the hour", "grant_id", id, "err", err)
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
 
-func (p *Proxy) revokeGitHubToken(ctx context.Context, tok string) error {
-	target, _, err := p.egressTarget(ghscope.APIHost, gitHubAPIPort)
-	if err != nil {
-		return err
+// revokeGitHubAPIToken hands one token back within the shutdown budget and logs, never fails, as the
+// shutdown loop does.
+func (p *Proxy) revokeGitHubAPIToken(ctx context.Context, grantID uuid.UUID, tok string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitHubAPIRevokeBudget)
+	defer cancel()
+	target, err := p.boundedEgressTarget(ctx, ghscope.APIHost, gitHubAPIPort)
+	if err == nil {
+		err = p.revokeGitHubToken(ctx, target, tok)
 	}
+	if err != nil {
+		slog.Warn("wardyn-proxy: could not hand a GitHub CLI token back; it expires within the hour", "grant_id", grantID, "err", err)
+	}
+}
+
+// boundedEgressTarget is egressTarget given up at ctx's end: its name lookup takes no context, so a stuck
+// resolver would otherwise hold the shutdown past the revoke budget. A lookup given up on keeps its
+// goroutine until the resolver returns; the proxy is stopping, so that goroutine ends with it.
+func (p *Proxy) boundedEgressTarget(ctx context.Context, host string, port int) (string, error) {
+	type answer struct {
+		target string
+		err    error
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		target, _, err := p.egressTarget(host, port)
+		ch <- answer{target, err}
+	}()
+	select {
+	case a := <-ch:
+		return a.target, a.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (p *Proxy) revokeGitHubToken(ctx context.Context, target, tok string) error {
 	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target), http.MethodDelete, "https://"+ghscope.APIHost+"/installation/token", nil)
 	if err != nil {
 		return err

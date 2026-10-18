@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { RunShape } from "../../types/runs";
-import type { TemplateDocument, TemplateList, TemplateSummary } from "../../types/templates";
+import type { LaunchIntentList } from "../../types/launch-intents";
+import type { TemplateList, TemplateSummary } from "../../types/templates";
 import { everyScenario, type ByScenario } from "./index";
 
 const MEMBER_PUBLISH = { org: false, groups: [], groups_unverified: false };
@@ -13,7 +13,7 @@ const ADMIN_PUBLISH = { org: true, groups: [], groups_unverified: false };
 const NIGHTLY: TemplateSummary = {
   id: "d1111111-1111-4111-8111-111111111111", scope: "person", name: "Nightly tests", revision: 2, coverage: "full",
   includes: ["runner", "tools_image"], needs_setup: [], writable: true, updated_at: "2026-10-10T09:00:00Z",
-  kind: "template", fields: ["intent.runner_pool_id", "intent.tools"],
+  kind: "template", fields: ["runner_pool_id", "tools"],
 };
 const ORG_BASELINE: TemplateSummary = {
   id: "d2222222-2222-4222-8222-222222222222", scope: "org", name: "Organisation baseline", revision: 5, coverage: "partial",
@@ -26,23 +26,6 @@ export const SCENARIO_TEMPLATES: ByScenario<TemplateList> = everyScenario<Templa
   admin: { templates: [NIGHTLY, { ...ORG_BASELINE, writable: true }], publish: ADMIN_PUBLISH },
   governed: { templates: [NIGHTLY, ORG_BASELINE], publish: MEMBER_PUBLISH },
 });
-
-// Stand-ins for lib/types/launch-intents.ts (DS2-S4, not merged): the DS-2
-// LaunchIntent* structs. The fixtures re-type onto the real twin when it lands.
-export interface LaunchIntentSummary {
-  run_id: string;
-  title: string;
-  shape?: RunShape;
-  created_at: string;
-}
-export interface LaunchIntentList {
-  intents: LaunchIntentSummary[];
-}
-export interface LaunchIntent {
-  run_id: string;
-  created_at: string;
-  document: TemplateDocument;
-}
 
 export const NIGHTLY_RUN_ID = "e1111111-1111-4111-8111-111111111111";
 

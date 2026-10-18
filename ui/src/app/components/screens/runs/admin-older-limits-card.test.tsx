@@ -83,6 +83,53 @@ describe("AdminOlderLimitsCard", () => {
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
   });
 
+  it("FR-0163: shows the restart in flight: the button is disabled, busy and spinning until it settles", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" }],
+    });
+    let settle: (v: unknown) => void = () => {};
+    restartAdminRunsMock.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    renderCard();
+    await screen.findByText("Older limits · 1");
+    const button = screen.getByRole("button", { name: "Restart with current limits" });
+    expect(button).not.toHaveAttribute("aria-busy", "true");
+    await user.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button.querySelector("svg.animate-spin")).not.toBeNull();
+    settle({ results: [{ run_id: "r1", ok: true }] });
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-busy", "true"));
+    expect(button.querySelector("svg.animate-spin")).toBeNull();
+  });
+
+  it("FR-0163: shows each batch's results as it lands, while the next is still running", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const ids = ["a1", "a2", "a3", "a4", "a5", "b1"];
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: ids.map((run_id) => ({ run_id, created_by: "u1", state: "RUNNING", proxy_release: "0.6" })),
+    });
+    let settleSecond: (v: unknown) => void = () => {};
+    restartAdminRunsMock
+      .mockResolvedValueOnce({ results: ids.slice(0, 5).map((run_id) => ({ run_id, ok: true })) })
+      .mockReturnValueOnce(new Promise((resolve) => { settleSecond = resolve; }));
+    renderCard();
+    await screen.findByText("Older limits · 6");
+    const button = screen.getByRole("button", { name: "Restart with current limits" });
+    await user.click(button);
+    expect(await screen.findAllByText(/Restarted/)).toHaveLength(5);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("5 of 6")).toBeInTheDocument();
+    expect(screen.getAllByText(/Restarted/)[0].closest("ul")).toHaveAttribute("aria-live", "polite");
+    settleSecond({ results: [{ run_id: "b1", ok: true }] });
+    await waitFor(() => expect(screen.getAllByText(/Restarted/)).toHaveLength(6));
+    await waitFor(() => expect(screen.queryByText("6 of 6")).toBeNull());
+  });
+
   // R2-4 (PR #1317 round-2 review): a real restart rewrites the run's own
   // proxy_release (store_run_revive.go), so the very NEXT listing this same
   // reload asks for comes back with nothing outside the window — the result

@@ -64,15 +64,18 @@ export CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL="${CLAUDE_CODE_DISAB
 # best-effort rewrites — within one run the content is identical, so a failed
 # rewrite over a correct file is harmless. Best-effort system-trust install
 # covers remaining clients. The CA PRIVATE key never enters the sandbox; only
-# the proxy holds it. No-op when WARDYN_MITM_CA_PEM is unset.
-# WARDYN_MITM_CA_DIR overrides the directory for tests that run the script on a
-# shared host; no run sets it.
+# the proxy holds it. A laptop runner's own CA bundle, mounted read-only at
+# /etc/wardyn-trusted-ca.pem (runner.TrustedCAMountPath), is appended after the
+# PEM. No-op when WARDYN_MITM_CA_PEM is unset and nothing is mounted there.
+# WARDYN_MITM_CA_DIR and WARDYN_TRUSTED_CA_PATH override the directory and the
+# mounted file for tests that run the script on a shared host; no run sets them.
 install_mitm_ca() {
-    [[ -n "${WARDYN_MITM_CA_PEM:-}" ]] || return 0
+    local corp="${WARDYN_TRUSTED_CA_PATH:-/etc/wardyn-trusted-ca.pem}"
+    [[ -n "${WARDYN_MITM_CA_PEM:-}" || -s "$corp" ]] || return 0
     local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}" sys="" c
     mkdir -p "$dir" 2>/dev/null || true
     chmod 1777 "$dir" 2>/dev/null || true
-    { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem" \
+    { { [[ -z "${WARDYN_MITM_CA_PEM:-}" ]] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [[ ! -s "$corp" ]] || cat "$corp"; } > "$dir/mitm-ca.pem" \
         && chmod 0644 "$dir/mitm-ca.pem"; } 2>/dev/null || true
     for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
         [[ -f "$c" ]] && sys="$c" && break
@@ -460,6 +463,35 @@ name_run_branch() {
 # clone is attempted only when the dest has no existing .git, so a
 # pre-populated / bind-mounted repo is never clobbered. Failure is a
 # governance signal, not fatal: log and continue.
+# url_host — the lower-cased host of a clone URL (scheme://[user@]host[:port]/…
+# or scp-like [user@]host:path); empty for a local path or file:// URL.
+url_host() {
+    local u="$1"
+    case "$u" in
+        file://*|/*|.*) return 0 ;;
+        *://*) u="${u#*://}"; u="${u%%/*}"; u="${u##*@}"; u="${u%%:*}" ;;
+        *:*) u="${u%%:*}"; u="${u##*@}" ;;
+        *) return 0 ;;
+    esac
+    printf '%s' "${u,,}"
+}
+
+# ado_lane_hint — after a failed clone, says when the run was not given the
+# per-person Azure DevOps credential (WARDYN_ADO_LANE_DECLINED, a closed code
+# dispatch sets) and where the reason is, naming the repository ($1) whose
+# clone failed. Silent when the variable is unset, and silent for a URL ($2)
+# whose host is not one of the declining repositories' hosts
+# (WARDYN_ADO_LANE_DECLINED_HOSTS, space-separated) when dispatch names them.
+ado_lane_hint() {
+    [[ -n "${WARDYN_ADO_LANE_DECLINED:-}" ]] || return 0
+    if [[ -n "${WARDYN_ADO_LANE_DECLINED_HOSTS:-}" ]]; then
+        local host
+        host="$(url_host "${2:-}")"
+        [[ " ${WARDYN_ADO_LANE_DECLINED_HOSTS} " == *" ${host} "* && -n "$host" ]] || return 0
+    fi
+    echo "agent-run: cloning ${1}: this run was not given an Azure DevOps credential (${WARDYN_ADO_LANE_DECLINED}); the run's Credentials panel and 'wardyn run get ${WARDYN_RUN_ID:-<run-id>}' say why" >&2
+}
+
 clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" = the remote's default branch)
     local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
@@ -472,6 +504,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
             name_run_branch "$dest"
         else
             echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+            ado_lane_hint "${slug:-$url}" "$url"
         fi
         return 0
     fi
@@ -493,6 +526,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         name_run_branch "$dest"
     else
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
+        ado_lane_hint "${slug:-$url}" "$url"
     fi
 }
 

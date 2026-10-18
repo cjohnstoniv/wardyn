@@ -9,6 +9,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -108,6 +109,15 @@ type SandboxSpec struct {
 	// implements OutputDrainer, or io.Closer, is told when each copy into it
 	// ends (BeginOutputDrain), so its owner can wait for the last bytes.
 	ExecOutput io.Writer `json:"-"`
+	// Record is the organisation's per-run recording choice. Nil means the organisation predates it,
+	// and the substrate records by its own setting, as before; a substrate never records past its own
+	// setting either way (RecordWithin).
+	Record *bool `json:"record,omitempty"`
+}
+
+// RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
+func (s SandboxSpec) RecordWithin(ceiling bool) bool {
+	return ceiling && (s.Record == nil || *s.Record)
 }
 
 // NotifyWaiting delivers one OnWaiting report, or does nothing when this spec
@@ -162,6 +172,9 @@ type ProxyConfig struct {
 	AzureARM *proxy.AzureARMGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
+	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its
+	// placeholder until the runner fills it; the proxy answers their mints (proxy.Config.ResidentMints).
+	ResidentMints []proxy.ResidentMint
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
 	// chains egress through; control-plane calls bypass it. Empty => direct dial.
 	UpstreamProxyURL string
@@ -262,6 +275,11 @@ var ErrSandboxGone = errors.New("runner: the sandbox is gone")
 // another CPU architecture and the engine does not emulate it. It crosses the wire as the
 // image_arch code, so the org can tell it from a daemon fault.
 var ErrImageArch = errors.New("runner: the image's architecture cannot run on this runner")
+
+// ErrRelayIPFenced is a Kubernetes runner's refusal of a new run whose proxy pod reported an IP the
+// runner still fences for a run whose termination is unknown. It crosses the wire as the
+// relay_ip_fenced code, so the org ends the run with that reason rather than a daemon fault.
+var ErrRelayIPFenced = errors.New("runner: relay_ip_fenced")
 
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
@@ -422,6 +440,18 @@ var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a s
 // removed, the old proxy and did not start the new one.
 var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
+// Selftester is an OPTIONAL Runner capability: run a BYOI image's contract
+// check (agent-run --selftest) in a runner's sandbox as an execution of its
+// own, and return its exit code. It never becomes the sandbox's agent exec:
+// its output and exit stay off the run, and it spends no task generation.
+type Selftester interface {
+	Selftest(ctx context.Context, ref string) (int, error)
+}
+
+// ErrSelftestUnsupported is Selftester's answer from a router whose substrate
+// for ref has no selftest of its own.
+var ErrSelftestUnsupported = errors.New("runner: this substrate has no BYOI selftest of its own")
+
 // SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
 // stopped agent again (revive after a reboot). Files survive; the main
 // process re-runs from the start. Never starts the proxy itself: the caller
@@ -482,6 +512,14 @@ var ErrActivityUnavailable = errors.New("runner: this substrate cannot report sa
 // as unknown, so trust the cache (fail-open).
 type ImageChecker interface {
 	ImagePresent(ctx context.Context, ref string) (bool, error) // present in the substrate's local image store right now
+}
+
+// ImageDescriber is an OPTIONAL Runner capability: a substrate with a local image store (docker)
+// says which image the store resolved ref to (registry digest, platform, and whether that digest
+// is a multi-arch index when the store can tell). It reads the local store only, never a registry.
+// An error means the store has no such image or cannot be read.
+type ImageDescriber interface {
+	DescribeImage(ctx context.Context, ref string) (string, error)
 }
 
 // ImageRemover is an OPTIONAL Runner capability: a substrate with a local
@@ -599,4 +637,128 @@ var ErrDriveLifecycleUnavailable = errors.New("runner: this substrate cannot del
 // wraps ErrDriveLifecycleUnavailable.
 type DriveLifecycleChecker interface {
 	CanManageDrives(ctx context.Context) error
+}
+
+// Containment-pending kinds (a k8s runner, design K1 §3.1 Q2): StopProxy could not prove the proxy
+// stopped, and the run's other pod is either proven stopped (agent_only) or also past its delete
+// bound (pending_delete). Never plain containment: the run stays held until completion evidence.
+const (
+	ContainmentAgentOnly     = "agent_only"
+	ContainmentPendingDelete = "pending_delete"
+)
+
+// ContainmentPendingError is StopProxy's typed answer while a k8s runner's proxy is not yet proven
+// stopped and the run is held as containment pending. The manager counts the run as contained for
+// READY only: it stamps no ProxyStoppedAt, writes no receipt, and keeps retrying each tick.
+type ContainmentPendingError struct {
+	Kind string
+	// NameReused: a Node name the run used was seen on another machine; only the two-person "node
+	// powered off" record releases it.
+	NameReused bool
+	// NoCausalAssociation: some pod of the run has no causal node UID, so an operator record needs
+	// two humans whatever the org setting.
+	NoCausalAssociation bool
+	// Tuple is what an operator record must name to release the run.
+	Tuple *NodeTuple
+	Err   error
+}
+
+func (e *ContainmentPendingError) Error() string {
+	return fmt.Sprintf("containment pending (%s): %v", e.Kind, e.Err)
+}
+
+func (e *ContainmentPendingError) Unwrap() error { return e.Err }
+
+// NodeSample is one observation of the Node holding a name: its UID and the machine identity it
+// published. InternalIP is carried for display and the tier-2 host check; it is never part of a
+// reuse comparison.
+type NodeSample struct {
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
+	MachineID  string `json:"machine_id"`
+	SystemUUID string `json:"system_uuid"`
+	InternalIP string `json:"internal_ip,omitempty"`
+}
+
+// NodeTuplePod is one pod's part of a NodeTuple.
+type NodeTuplePod struct {
+	Component string `json:"component"`
+	UID       string `json:"uid"`
+	NodeName  string `json:"node_name,omitempty"`
+	// CausalUID is set only on a causal association; PostBind only when the after-list showed a
+	// holder. An absent value is stored as absent, never filled in.
+	CausalUID        string      `json:"causal_uid,omitempty"`
+	PostBind         *NodeSample `json:"post_bind,omitempty"`
+	BeforeHolderUID  string      `json:"before_holder_uid,omitempty"`
+	ClosingHolderUID string      `json:"closing_holder_uid,omitempty"`
+}
+
+// NodeTuple binds an operator's node record to one run's recorded machine facts (Codex R9-L1). The
+// runner accepts a record only while its own record still equals the tuple both approvers saw.
+type NodeTuple struct {
+	RunID  uuid.UUID      `json:"run_id"`
+	Pods   []NodeTuplePod `json:"pods"`
+	Reuses []NodeSample   `json:"reuses,omitempty"`
+}
+
+// ProxyObservation is what the k8s runner's periodic pod list saw of one run's proxy pod.
+type ProxyObservation string
+
+const (
+	ProxyRunning   ProxyObservation = "running"
+	ProxyPending   ProxyObservation = "pending"
+	ProxyFailed    ProxyObservation = "failed"
+	ProxySucceeded ProxyObservation = "succeeded"
+	ProxyNotFound  ProxyObservation = "not_found"
+	// ProxyPendingPastStart is a proxy still Pending past the substrate's start timeout.
+	ProxyPendingPastStart ProxyObservation = "pending_past_start"
+)
+
+// Exited reports an observation that is evidence the proxy will not serve again: a terminal phase or
+// a missing pod (design K1 §6.2 P1). NotFound records the obligation but is never completion evidence.
+func (o ProxyObservation) Exited() bool {
+	return o == ProxyFailed || o == ProxySucceeded || o == ProxyNotFound
+}
+
+// ProxyObserver is an OPTIONAL capability of a substrate whose proxy self-lapses: one call lists
+// every run's proxy pod (the k8s runner's 30 s pod list).
+type ProxyObserver interface {
+	ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uuid.UUID]ProxyObservation, error)
+}
+
+// NodeRecordAcceptor is an OPTIONAL capability: check an operator's node record against the run's
+// own record and accept it as an infrastructure fence, or refuse it with the reason.
+type NodeRecordAcceptor interface {
+	AcceptNodeRecord(ctx context.Context, ref string, rec NodeRecord) error
+}
+
+// Node-record attestations (design K1 §3.1 (b)).
+const (
+	AttestNodePoweredOff = "node_powered_off"
+	AttestNoPriorHolder  = "no_prior_holder"
+)
+
+// NodeRecordApprover is one approver of a node record as the org recorded it.
+type NodeRecordApprover struct {
+	Principal string `json:"principal"`
+	Email     string `json:"email,omitempty"`
+	// Human is false for an admin token, which can never make the record.
+	Human bool `json:"human"`
+}
+
+// ErrNodeRecordRefused marks a node record the runner refused for good: its reason is final for
+// that record, which a new record (with fresh approvals) can replace.
+var ErrNodeRecordRefused = errors.New("node record refused")
+
+// NodeRecord is a security operator's audited record that the machines which may have run a run's
+// pods are powered off, or that no other machine held the name.
+type NodeRecord struct {
+	ID          uuid.UUID            `json:"id"`
+	Attestation string               `json:"attestation"`
+	Tuple       NodeTuple            `json:"tuple"`
+	Approvers   []NodeRecordApprover `json:"approvers"`
+	// FourEyes is the org's four-eyes setting for security-operator writes when the record was made.
+	FourEyes bool   `json:"four_eyes"`
+	Source   string `json:"source"`
+	SourceID string `json:"source_id"`
 }

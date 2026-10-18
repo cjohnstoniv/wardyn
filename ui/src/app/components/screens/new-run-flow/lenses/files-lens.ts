@@ -36,11 +36,15 @@ export function detachWorkspace(intent: RunIntent, workspaceId: string): RunInte
 export const setStartsHere = (intent: RunIntent, attachment: string, repo?: string): RunIntent =>
   withKeys(intent, { start_folder: { kind: "attachment", attachment, ...(repo ? { repo } : {}) } });
 
-/** Whether this repository holds the starting folder; a workspace folder with no repo named is its only repository. */
-export function startsAt(intent: RunIntent, workspaceId: string, repo: string, repoCount: number): boolean {
+/**
+ * Whether this repository holds the starting folder. A workspace start that names a repository is that one;
+ * with none named the server opens the first mounted target, so `firstMounted` (this is the first repository
+ * the run clones from the workspace, no folder coming before it) decides.
+ */
+export function startsAt(intent: RunIntent, workspaceId: string, repo: string, firstMounted: boolean): boolean {
   const f = intent.start_folder;
   if (f?.kind !== "attachment" || f.attachment !== workspaceId) return false;
-  return f.repo ? f.repo === repo : repoCount === 1;
+  return f.repo ? f.repo === repo : firstMounted;
 }
 
 const replaceEntry = (intent: RunIntent, entry: WorkspaceEntry): RunIntent =>
@@ -77,7 +81,8 @@ export function excludeRepo(intent: RunIntent, workspaceId: string, repo: string
   if (!entry) return intent;
   const rest = picksOf(entry, all).filter((r) => r.repo !== repo);
   if (!rest.length) return detachWorkspace(intent, workspaceId);
-  const startsThere = startsAt(intent, workspaceId, repo, all.length);
+  // An unnamed start follows the first repository still cloned, so only a start that names this one is cleared.
+  const startsThere = startsAt(intent, workspaceId, repo, false);
   return withKeys(replaceEntry(intent, { ...entry, repos: rest }), { start_folder: startsThere ? undefined : intent.start_folder });
 }
 
@@ -100,9 +105,18 @@ export function setMainDrive(intent: RunIntent, mib: number | undefined): RunInt
 
 const MIB_PER_GIB = 1024;
 
+/** Under 0.1 GiB one decimal would read a valid size as zero, so the field shows whole MiB there instead. */
+export const underTenthGiB = (mib: number): boolean => mib * 10 < MIB_PER_GIB;
+
 /** One decimal, the way an admin's sub-GiB cap reads; a cap rounds down so "up to" is never overstated. */
 export const mibToGibText = (mib: number, rounding: "round" | "floor" = "round"): string =>
   String(Math[rounding]((mib / MIB_PER_GIB) * 10) / 10);
+
+export type SizeUnit = "GiB" | "MiB";
+
+/** The main drive field's text and unit for a stored size: GiB with one decimal from 0.1 GiB up, whole MiB under it. */
+export const sizeField = (mib: number, rounding: "round" | "floor" = "round"): { text: string; unit: SizeUnit } =>
+  underTenthGiB(mib) ? { text: String(mib), unit: "MiB" } : { text: mibToGibText(mib, rounding), unit: "GiB" };
 
 /** A typed GiB size (0.1 steps) as whole MiB, or undefined when it is not a positive number. */
 export function parseGiB(text: string): number | undefined {
@@ -110,9 +124,16 @@ export function parseGiB(text: string): number | undefined {
   return text.trim() !== "" && Number.isFinite(gib) && gib > 0 ? Math.max(1, Math.round(gib * MIB_PER_GIB)) : undefined;
 }
 
+/** The field's text in its unit as whole MiB, or undefined when it is not a positive number. */
+export function parseSize(text: string, unit: SizeUnit): number | undefined {
+  if (unit === "GiB") return parseGiB(text);
+  const mib = Number(text.trim());
+  return text.trim() !== "" && Number.isFinite(mib) && mib > 0 ? Math.max(1, Math.round(mib)) : undefined;
+}
+
 /** What a typed size becomes. A size over the cap is the cap, and says so. */
-export function commitSize(text: string, capMib: number | undefined): { mib?: number; clamped: boolean } {
-  const mib = parseGiB(text);
+export function commitSize(text: string, capMib: number | undefined, unit: SizeUnit = "GiB"): { mib?: number; clamped: boolean } {
+  const mib = parseSize(text, unit);
   if (mib === undefined) return { clamped: false };
   return capMib !== undefined && mib > capMib ? { mib: capMib, clamped: true } : { mib, clamped: false };
 }

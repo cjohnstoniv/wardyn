@@ -260,7 +260,7 @@ func newADOPATLane(t *testing.T) *adoPATFixture {
 	end := adoTestNow.Add(24 * time.Hour)
 	fx.run = types.AgentRun{ID: uuid.New(), State: types.RunRunning, CreatedBy: subject, EndsAt: &end, SandboxRef: "ref-1"}
 	st.runs[fx.run.ID] = fx.run
-	ado, ok := resolveADOEntraRun(st.site, []string{adoTestRepo}, subject)
+	ado, ok := resolveADOEntraRun(st.site, nil, adoTestRepo, subject)
 	if !ok || ado.tokenMode != types.ADOTokenModeMintedPAT || ado.patHours != types.ADOPATMaxHoursDefault {
 		t.Fatalf("lane = %+v ok=%v, want a minted_pat lane with the default token life", ado, ok)
 	}
@@ -765,7 +765,7 @@ func TestMintedPAT_ThroughTheVsspsClientAgainstAdofake(t *testing.T) {
 	row := &fx.st.site.WorkspaceProviders.Git[0]
 	row.Entra.CapabilityCeiling = append(row.Entra.CapabilityCeiling, adoscope.CapProjectRead)
 	row.Entra.DefaultProfile = append(row.Entra.DefaultProfile, adoscope.CapProjectRead)
-	fx.ado, _ = resolveADOEntraRun(fx.st.site, []string{adoTestRepo}, fx.subject)
+	fx.ado, _ = resolveADOEntraRun(fx.st.site, nil, adoTestRepo, fx.subject)
 	ado := adofake.New()
 	t.Cleanup(ado.Close)
 	ado.AddProject("contoso", "p1", "proj")

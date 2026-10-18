@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net"
 	"slices"
@@ -192,6 +193,18 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 	return out
 }
 
+// artifactGoSumDBOff reports whether the go mirror artifactBaseURLs picks (the last go row) opts out of
+// checksum-database verification.
+func artifactGoSumDBOff(sc types.SiteConfig) bool {
+	off := false
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "go" {
+			off = r.GoChecksumDBOff
+		}
+	}
+	return off
+}
+
 // planArtifactRedirect builds the dispatch-time egress-redirect plan for a run
 // from the operator-wide site-config: each Ecosystem-tier redirect's per-tool
 // config (URL-only) as a base64 env payload agent-run materializes under $HOME,
@@ -215,7 +228,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		return plan
 	}
 	have := artifactRunHostSet(preDomains)
-	files, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc))
+	files, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
 	if len(env) > 0 {
 		plan.env = env
 	}
@@ -241,7 +254,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	// stored SLICE (operator-authored order, already deterministic), so a
 	// shared host with divergent token refs resolves first-sighted-wins stably
 	// without needing a sort.
-	seenHost := map[string]bool{}
+	seenHost := map[string]int{} // host -> the port its token was injected for
 	for _, r := range sc.EgressRedirects {
 		if r.TokenSecretRef == "" && r.TokenIntegrationRef == "" {
 			continue // no token configured for this redirect
@@ -253,7 +266,19 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			continue
 		}
 		host := strings.ToLower(hostrules.HostOf(r.To))
-		if host == "" || seenHost[host] {
+		if host == "" {
+			continue
+		}
+		if first, dup := seenHost[host]; dup {
+			// The injection is keyed by bare host, so a second redirect to it shares the first's token;
+			// on another port that mirror gets none, which is worth a row.
+			if port := redirectPort(r.To); port != first {
+				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
+					run.ID.String(), "denied", mustJSON(map[string]any{
+						"ecosystem": r.Ecosystem, "host": host, "port": port,
+						"detail": fmt.Sprintf("another redirect to this host already carries the token, on port %d; this port was applied without token injection", first),
+					})))
+			}
 			continue
 		}
 		// Veto a To that is a model provider's host or a public model-provider
@@ -265,7 +290,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		// (modelServingHosts).
 		if s.modelServingHosts(sc)(host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": "refused: To names a model-provider or configured gateway host, which would collide with the LLM injection route",
 				})))
@@ -273,7 +298,7 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}
 		if laneCarriesHost(laneHosts, host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": "the per-person Azure DevOps lane carries this host's credential; redirect applied without token injection",
 				})))
@@ -287,13 +312,13 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		tok, why := s.resolveRedirectToken(ctx, r, present)
 		if why != "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
-				run.ID.String(), "warn", mustJSON(map[string]any{
+				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": why + "; redirect applied without token injection",
 				})))
 			continue
 		}
-		seenHost[host] = true
+		seenHost[host] = port
 		grantID := uuid.New()
 		// require_tls: the redirect's OWN transport intent, declared by the one
 		// producer that knows it. An `https://` To is TLS by construction (the proxy

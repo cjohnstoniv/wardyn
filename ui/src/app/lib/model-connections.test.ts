@@ -65,6 +65,12 @@ describe("connectionsSummary", () => {
     expect(connectionsSummary(rows)).toEqual({ label: CONNECTIONS.SUMMARY_NEEDS_YOU, tone: "warning" });
   });
 
+  it("a default whose store could not be read: Could not check, not Needs you", () => {
+    const s = status([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "not_configured" }]);
+    s.provider_access![0].cause = "store_unreadable";
+    expect(connectionsSummary(connectionRows(s))).toEqual({ label: CONNECTIONS.COULD_NOT_CHECK, tone: "neutral" });
+  });
+
   // Packet MP-D case (d): the key row carries no alarm because it isn't the
   // default — only a DEFAULT's own state moves the summary.
   it("a non-default row unconnected does not turn Ready into Needs you", () => {

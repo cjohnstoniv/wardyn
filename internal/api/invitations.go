@@ -144,7 +144,7 @@ func invitationLifetime(w http.ResponseWriter, req createInvitationRequest) (tim
 		return life, true
 	}
 	writeErrorReason(w, http.StatusBadRequest, reasonInvitationTTLInvalid,
-		"expires_in_seconds: between 1 second and 14 days; token_ttl_seconds: not negative")
+		"expires_in_seconds: between 1 second and 14 days; token_ttl_seconds: between 0 and a hundred years")
 	return 0, false
 }
 
@@ -268,7 +268,7 @@ func (s *Server) handleClaimInvitation(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	sub, ok := s.mintGuards(w, r)
+	sub, ok := s.mintGuards(w, r, "me.invitations.claim")
 	if !ok {
 		return
 	}

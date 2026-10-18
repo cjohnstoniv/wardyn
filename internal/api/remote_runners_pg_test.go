@@ -163,7 +163,7 @@ func TestPG_LeaverPurgeStripsPeoplePolicyAndNeverWidens(t *testing.T) {
 		t.Fatalf("people policy = %d %s", w.Code, w.Body)
 	}
 	before := e.remoteRunner("fake")
-	if _, _, _, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-person"}, nil); err != nil {
+	if _, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-person"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	rr := e.remoteRunner("fake")

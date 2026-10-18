@@ -307,9 +307,9 @@ Every Go change runs the full tree (`go test ./...`): the audit doc guards live 
 |---|---|---|---|
 | 0 | Free Z0, throwaway, commits nothing | — | The spike: checks (a) to (d) on a real daemon |
 | 1a | Free Z0 | 0 passed | Migration, `types.ImageBuild`, the compare-and-swap writer, `GeneratedInputs`, golden fixtures |
-| 1b | Sonnet/high | 1a | `BuiltImage`, build-ID tags, `aux.ID`, the `byoi` digest wrap, `LocalImage`, currency, records, `run.build` fields, `GET /build` |
-| 2 | Sonnet/high or Opus | 1b | `RemoteDigest`, the pin file, `Pins`, rebuild from record |
-| 3 | Sonnet/high | 1b | Refresh core, builder options, the cache-bust line, `workspace.image.refresh` |
+| 1b | core | 1a | `BuiltImage`, build-ID tags, `aux.ID`, the `byoi` digest wrap, `LocalImage`, currency, records, `run.build` fields, `GET /build` |
+| 2 | core | 1b | `RemoteDigest`, the pin file, `Pins`, rebuild from record |
+| 3 | core | 1b | Refresh core, builder options, the cache-bust line, `workspace.image.refresh` |
 | 4 | Free Z0 | 3 | New command `wardyn workspace build <id> [--refresh]`, `pkg/client` methods, extra negative tests |
 | 5 | Free Z0 | 2 and 3 | [ENVBUILD.md](../../ENVBUILD.md), [build-images.md](../../operations/build-images.md), REPORT text for CHANGELOG and threat model |
 

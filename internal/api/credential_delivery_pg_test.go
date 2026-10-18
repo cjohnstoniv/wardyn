@@ -13,10 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const credentialDeliveryPath = "/api/v1/governance/credential-delivery"
@@ -68,8 +70,8 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 	}
 	e.approve(held.ID)
 	got := stored()
-	if got.For(placement.ClassAPIKey).Mode != placement.ModeViaOrg || got.For(placement.ClassGitHubToken).Mode != placement.ModeViaOrg ||
-		got.For(placement.ClassEnvSecret).Mode != placement.ModeRefuse {
+	if got.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg || got.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg ||
+		got.ForTrust(placement.ClassEnvSecret, types.RunnerTrustPersonal).Mode != placement.ModeRefuse {
 		t.Fatalf("stored policy after approval = %+v", got)
 	}
 	rows := e.audits(placement.ActionCredentialDeliveryWrite)
@@ -82,14 +84,14 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 		ProposedBy string                   `json:"proposed_by"`
 	}
 	if err := json.Unmarshal(rows[0].Data, &d); err != nil || len(d.Before.Classes) != 0 ||
-		d.After.For(placement.ClassAPIKey).Mode != placement.ModeViaOrg || d.ProposedBy != govSubAlice {
+		d.After.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg || d.ProposedBy != govSubAlice {
 		t.Errorf("audit data = %s (%v), want before {} and after the approved policy", rows[0].Data, err)
 	}
 	var doc struct {
 		Policy placement.DeliveryPolicy `json:"policy"`
 	}
 	if w := e.call(e.carol, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &doc) != nil ||
-		doc.Policy.For(placement.ClassGitHubToken).Mode != placement.ModeViaOrg {
+		doc.Policy.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg {
 		t.Errorf("GET = %d %s, want the stored policy", w.Code, w.Body)
 	}
 
@@ -101,7 +103,45 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 	if w := e.call(e.bob, http.MethodPost, approvePath(stale.ID), ""); w.Code == http.StatusOK {
 		t.Fatalf("approving a stale change = %d, want a refusal", w.Code)
 	}
-	if got := stored(); got.For(placement.ClassAPIKey).Mode != placement.ModeRefuse || got.For(placement.ClassGitHubToken).Mode != placement.ModeRefuse {
+	if got := stored(); got.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeRefuse || got.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeRefuse {
 		t.Errorf("stored after a stale approval = %+v", got)
+	}
+}
+
+// TestCredentialDeliveryWrite_IfMatch: GET carries the policy's ETag, a stale If-Match is a 412 before
+// anything is held, and the current one is accepted (and held, with the second person on).
+func TestCredentialDeliveryWrite_IfMatch(t *testing.T) {
+	e := newGovEnv(t)
+	const body = `{"classes":{"api_key":{"mode":"via_org"}}}`
+	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	etag := got.Header().Get("ETag")
+	if got.Code != http.StatusOK || etag == "" {
+		t.Fatalf("GET = %d, ETag %q, want 200 with an ETag", got.Code, etag)
+	}
+	stale := doSSOIfMatch(t, e.srv, http.MethodPut, credentialDeliveryPath, e.alice, `"0000"`, body)
+	if stale.Code != http.StatusPreconditionFailed || !strings.Contains(stale.Body.String(), reasonCredentialDeliveryStale) {
+		t.Fatalf("stale If-Match = %d %s, want 412 %s", stale.Code, stale.Body, reasonCredentialDeliveryStale)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Fatalf("%d changes held for a stale write", n)
+	}
+	if w := doSSOIfMatch(t, e.srv, http.MethodPut, credentialDeliveryPath, e.alice, etag, body); w.Code != http.StatusAccepted {
+		t.Fatalf("current If-Match = %d %s, want 202 (held)", w.Code, w.Body)
+	}
+}
+
+// The ETag a direct save answers with is the one the next GET reports, so a console that sends it back as If-Match is
+// never refused for a document nobody else touched (U3).
+func TestCredentialDeliveryWrite_DirectSaveETagIsTheNextGETs(t *testing.T) {
+	e := newGovEnv(t)
+	const body = `{"classes":{"api_key":{"mode":"via_org"},"env_secret":{"mode":"runner_resident","require_posture":{"mdm_managed":true,"os_min":{"linux":"1.2.3"}}}}}`
+	put := e.admin(http.MethodPut, credentialDeliveryPath, body)
+	if put.Code != http.StatusOK {
+		t.Fatalf("direct PUT = %d %s, want 200", put.Code, put.Body)
+	}
+	saved := put.Header().Get("ETag")
+	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	if got.Code != http.StatusOK || saved == "" || got.Header().Get("ETag") != saved {
+		t.Fatalf("PUT ETag %q, next GET %d ETag %q, want the same non-empty ETag", saved, got.Code, got.Header().Get("ETag"))
 	}
 }

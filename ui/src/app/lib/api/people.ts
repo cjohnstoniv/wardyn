@@ -30,7 +30,7 @@ export const people = {
 
   // POST /api/v1/people {principal, email?} -> 201 (created) or 200 (already there).
   async create(principal: string, email: string): Promise<void> {
-    await ok(await wfetch("/people", { method: "POST", body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
+    await ok(await wfetch("/people", { method: "POST", asPerson: true, body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
   },
 
   // GET /api/v1/people -> the one person with this principal, or undefined. There is no read-one route,

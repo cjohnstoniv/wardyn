@@ -205,7 +205,7 @@ func (e *poolEnv) emptiedByLeaverPurge(pool uuid.UUID) {
 	if w := e.admin(http.MethodPut, usePolicyPath(pool), `{"subjects":[{"subject_type":"user","subject":"sub-leaver"}]}`); w.Code != http.StatusOK {
 		e.t.Fatalf("seed policy = %d %s", w.Code, w.Body)
 	}
-	if _, _, _, err := e.pg.DeleteUserSubjectRows(context.Background(), uuid.New(), []string{"sub-leaver"}, nil); err != nil {
+	if _, err := e.pg.DeleteUserSubjectRows(context.Background(), uuid.New(), []string{"sub-leaver"}, nil); err != nil {
 		e.t.Fatal(err)
 	}
 	if n := e.count(`SELECT count(*) FROM runner_pool_use_policies WHERE pool_id = $1 AND jsonb_array_length(subjects) = 0`, pool); n != 1 {

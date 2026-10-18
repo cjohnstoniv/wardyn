@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -175,6 +177,8 @@ var testHost = types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 5
 func init() {
 	measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil }
 	engineArch = func(context.Context) string { return "arm64" }
+	engineVMDisk = func(context.Context, string) (int64, bool) { return 0, false }
+	engineDiskCapped = func(context.Context) (bool, bool) { return false, false }
 }
 
 // Registration sends the engine's architecture, and none when the engine could not be asked.
@@ -186,6 +190,27 @@ func TestRegisterSendsTheEngineArch(t *testing.T) {
 	t.Cleanup(func() { engineArch = func(context.Context) string { return "arm64" } })
 	if sent, _, _, err := registerWith(t); err != nil || sent.Arch != "" {
 		t.Fatalf("arch sent with no engine = %q, %v; want none", sent.Arch, err)
+	}
+}
+
+// A k8s runner reports its --arch (or WARDYN_RUNNERD_ARCH) at registration, never the engine's, and
+// refuses to register without one before anything is sent. A Docker runner refuses --arch.
+func TestRegisterK8sSendsItsArch(t *testing.T) {
+	k8s := []string{"--substrate=k8s", "--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}
+	if sent, _, _, err := registerWith(t, append(k8s, "--arch=amd64")...); err != nil || sent.Arch != "amd64" {
+		t.Fatalf("arch sent = %q, %v; want the flag's amd64, not the engine's arm64", sent.Arch, err)
+	}
+	for _, bad := range []struct{ name, want string }{{"", "want amd64 or arm64"}, {"x86_64", "want amd64 or arm64"}} {
+		if _, called, _, err := registerWith(t, append(k8s, "--arch="+bad.name)...); err == nil || called || !strings.Contains(err.Error(), bad.want) {
+			t.Fatalf("--arch=%q: called=%v err=%v, want a refusal before any request", bad.name, called, err)
+		}
+	}
+	if _, called, _, err := registerWith(t, "--arch=amd64"); err == nil || called || !strings.Contains(err.Error(), "applies only to --substrate=k8s") {
+		t.Fatalf("docker --arch: called=%v err=%v, want a refusal", called, err)
+	}
+	t.Setenv(archEnv, "arm64")
+	if sent, _, _, err := registerWith(t, k8s...); err != nil || sent.Arch != "arm64" {
+		t.Fatalf("arch sent from %s = %q, %v; want arm64", archEnv, sent.Arch, err)
 	}
 }
 
@@ -266,6 +291,33 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 }
 
+// A missing token file is reported before the computer is measured (and so before any limit question).
+func TestRegisterReadsTheTokenFileBeforeMeasuring(t *testing.T) {
+	measured := false
+	measureHost = func(context.Context) (types.RunnerAmounts, error) { measured = true; return testHost, nil }
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	cmd := newRegisterCommand()
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetIn(strings.NewReader(""))
+	root := t.TempDir()
+	cmd.SetArgs([]string{"--org", "https://org.example", "--token-file", filepath.Join(root, "missing"), "--state-dir", filepath.Join(root, "identity")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "open registration token file") || measured {
+		t.Fatalf("err = %v, measured = %v; want the token file refused before the host was measured", err, measured)
+	}
+}
+
+// A host that cannot be measured says why, beside the "not measured" figures.
+func TestRegisterSaysWhyTheHostWasNotMeasured(t *testing.T) {
+	measureHost = func(context.Context) (types.RunnerAmounts, error) {
+		return types.RunnerAmounts{}, errors.New("docker did not answer")
+	}
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	_, called, out, err := registerWith(t)
+	if err == nil || called || !strings.Contains(out, "measuring this computer failed: docker did not answer") {
+		t.Fatalf("an unmeasurable host = %v (sent %v)\n%s", err, called, out)
+	}
+}
+
 // registerAnswering runs register against an organisation that answers with the given proxy image,
 // and returns the state directory, the organisation URL and what register printed.
 func registerAnswering(t *testing.T, image string) (string, string, string) {
@@ -325,5 +377,48 @@ func TestRegisterSavesTheProxyImageTheOrganisationNamed(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(state, "runner.json")); strings.Contains(string(raw), "proxy_image") {
 		t.Errorf("runner.json carries proxy_image for the release image: %s", raw)
+	}
+}
+
+// --trusted-ca-file makes the registration call trust a corporate CA beside the system roots; without it
+// a server signed by that CA is refused. A bundle that cannot be read is refused before a request.
+func TestRegisterTrustsTheNamedCABundle(t *testing.T) {
+	var org string
+	called := false
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		var req types.RunnerRegisterRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey), State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), Limits: req.Limits})
+	}))
+	defer srv.Close()
+	org = srv.URL
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte("wdr_"+strings.Repeat("c", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(root, "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(bundle, pemBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	k8s := []string{"--substrate=k8s", "--arch=amd64", "--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}
+	run := func(state string, extra ...string) error {
+		cmd := newRegisterCommand()
+		cmd.SetOut(&strings.Builder{})
+		cmd.SetIn(strings.NewReader(""))
+		cmd.SetArgs(append(append([]string{"--org", org, "--token-file", tokenFile, "--state-dir", filepath.Join(root, state)}, k8s...), extra...))
+		return cmd.Execute()
+	}
+	if err := run("plain"); err == nil || called {
+		t.Fatalf("a server signed by an unknown CA was trusted: called=%v err=%v", called, err)
+	}
+	if err := run("bad", "--trusted-ca-file", filepath.Join(root, "missing.pem")); err == nil || called {
+		t.Fatalf("an unreadable bundle was accepted: called=%v err=%v", called, err)
+	}
+	if err := run("good", "--trusted-ca-file", bundle); err != nil || !called {
+		t.Fatalf("a server signed by the named CA was refused: called=%v err=%v", called, err)
 	}
 }

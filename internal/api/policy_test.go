@@ -6,8 +6,11 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -471,5 +474,30 @@ func TestUIApp_PathOrRoot(t *testing.T) {
 	}
 	if got := (types.UIApp{Path: "/ide"}).PathOrRoot(); got != "/ide" {
 		t.Fatalf("set path -> %q", got)
+	}
+}
+
+// A blank allowed_methods entry is refused at the door: it would be stored as a
+// restriction that names no method.
+func TestValidatePolicySpecRefusesABlankAllowedMethod(t *testing.T) {
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedMethods: []string{"GET", " "}}
+	if err := validatePolicySpec(spec); err == nil || !strings.Contains(err.Error(), "allowed_methods[1]") {
+		t.Errorf("err = %v, want one naming allowed_methods[1]", err)
+	}
+	spec.AllowedMethods = []string{"GET", "post"}
+	if err := validatePolicySpec(spec); err != nil {
+		t.Errorf("a named method list: %v", err)
+	}
+}
+
+// A policy name is a bounded handle: too long, or carrying a control character, is a 400 before any store read.
+func TestCreatePolicy_NameIsBounded(t *testing.T) {
+	spec := `"spec":{"min_confinement_class":"CC2","first_use_approval":"always_deny"}`
+	for name, nm := range map[string]string{"too long": strings.Repeat("a", maxGovernanceProfileNameLen+1), "control character": `a\u0007b`} {
+		w := httptest.NewRecorder()
+		(&Server{}).handleCreatePolicy(w, httptest.NewRequest(http.MethodPost, "/api/v1/policies", strings.NewReader(`{"name":"`+nm+`",`+spec+`}`)))
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "name is invalid") {
+			t.Errorf("%s: %d %s, want 400 name is invalid", name, w.Code, w.Body.String())
+		}
 	}
 }

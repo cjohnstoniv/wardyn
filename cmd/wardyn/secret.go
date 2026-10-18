@@ -31,6 +31,9 @@ func secretCmd(client clientFn) *cobra.Command {
 		Short: "Store a secret (value read from stdin)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if personal && shared {
+				return fmt.Errorf("--personal and --shared are exclusive")
+			}
 			// Stdin is the ONLY input: piped, redirected from a file, or a
 			// prompted line. There is deliberately no --value flag — argv is
 			// world-readable in `ps` / /proc/<pid>/cmdline, and this is the write
@@ -47,8 +50,6 @@ func secretCmd(client clientFn) *cobra.Command {
 			}
 			put := client().SetSecret
 			switch {
-			case personal && shared:
-				return fmt.Errorf("--personal and --shared are exclusive")
 			case personal:
 				put = client().SetMySecret
 			case shared:

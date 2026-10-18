@@ -44,6 +44,7 @@ import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
 import { Segmented } from "../../wardyn/segmented";
@@ -110,6 +111,8 @@ export function ProvidersScreen() {
       .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(load, [load]);
+
+  const discard = useDiscardReload(load);
 
   // The Agents tab's own Save re-fires only this — never `load` (A-01): a
   // successful agent save needs `setupStatus` refreshed (modelAccess/
@@ -279,7 +282,7 @@ export function ProvidersScreen() {
               Copy my changes before Discard mine and reload (= load()) — a
               "Save over theirs" arm is still refused, a security document is
               never last-writer-wins from this banner. */}
-          {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
+          {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={discard} />}
           {narrowed !== null && (
             <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3 text-body text-warning">
               {PROVIDERS.SAVED_NARROWED(narrowed)}
@@ -311,6 +314,7 @@ export function ProvidersScreen() {
               storage={draft.storage ?? {}}
               onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
               enforcement={enforcement}
+              kubernetes={setupStatus?.runner.kubernetes}
               operator={operator}
             />
           )}

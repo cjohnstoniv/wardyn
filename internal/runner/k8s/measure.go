@@ -59,13 +59,16 @@ func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 // measureCluster is each amount from the tightest quota that sets it, else the nodes' sum.
 func measureCluster(quotas []corev1.ResourceQuota, nodes []corev1.ResourceList) types.RunnerAmounts {
 	amount := func(quotaName, nodeName corev1.ResourceName, scale func(resource.Quantity) int64) int64 {
+		// A quota that sets an amount to zero is a zero, the tightest there is: the nodes answer only
+		// when no quota sets the amount at all.
 		var best int64
+		set := false
 		for _, q := range quotas {
-			if v, ok := q.Spec.Hard[quotaName]; ok && (best == 0 || scale(v) < best) {
-				best = scale(v)
+			if v, ok := q.Spec.Hard[quotaName]; ok && (!set || scale(v) < best) {
+				best, set = scale(v), true
 			}
 		}
-		if best > 0 {
+		if set {
 			return best
 		}
 		for _, n := range nodes {

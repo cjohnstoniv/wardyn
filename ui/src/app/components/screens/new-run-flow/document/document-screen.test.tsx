@@ -4,7 +4,7 @@
  */
 
 import type * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { SCENARIO_HARNESSES } from "../../../../lib/new-run-fixtures/scenarios/harnesses";
@@ -14,7 +14,6 @@ import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps } from "../new-run-route";
 import { NR_DOCUMENT as C } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { MISSING_COPY } from "./missing-copy";
 import { DocumentScreen, type DocumentDeps } from "./document-screen";
 import { MAX_DOCUMENT_BYTES } from "./run-document";
 
@@ -135,6 +134,25 @@ describe("run document editor", () => {
     await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "issues"));
     expect(editor().value).toBe(before);
     expect(importDocument).not.toHaveBeenCalled();
+    expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.TOO_LARGE);
+  });
+
+  it("Import file says so when the browser cannot read the file (FR-0098)", async () => {
+    open();
+    await screen.findByRole("textbox");
+    const real = globalThis.FileReader;
+    class Unreadable {
+      onerror: (() => void) | null = null;
+      readAsText() { queueMicrotask(() => this.onerror?.()); }
+      abort() {}
+    }
+    vi.stubGlobal("FileReader", Unreadable);
+    try {
+      upload(file("run.yaml", "a: 1"));
+      await waitFor(() => expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.FILE_UNREADABLE));
+    } finally {
+      vi.stubGlobal("FileReader", real);
+    }
   });
 
   it("Import file loads a .json file as JSON and moves the URL to it", async () => {
@@ -155,11 +173,89 @@ describe("run document editor", () => {
     expect(editor().value).not.toContain(ROSTER[0].id);
   });
 
+  // DR-0217: a file read lands whenever the browser finishes it. These readers finish only when told, and still
+  // call onload after abort, so the screen's own guard (not the browser's abort) is what is pinned.
+  describe("a file read that finishes late", () => {
+    class SlowReader {
+      static all: SlowReader[] = [];
+      result: string | null = null;
+      aborted = false;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        SlowReader.all.push(this);
+      }
+      readAsText() {}
+      abort() {
+        this.aborted = true;
+      }
+      finish(body: string) {
+        this.result = body;
+        act(() => this.onload?.());
+      }
+    }
+    const YAML_A = "api_version: wardyn/v1\nkind: Run\nintent:\n  agent: from-file-a\n";
+    const YAML_B = "api_version: wardyn/v1\nkind: Run\nintent:\n  agent: from-file-b\n";
+
+    beforeEach(() => {
+      SlowReader.all = [];
+      vi.stubGlobal("FileReader", SlowReader);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("does not overwrite what was typed after the file was chosen", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      type("intent: typed-later");
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe("intent: typed-later");
+      expect(SlowReader.all[0].aborted).toBe(true);
+    });
+
+    it("does not overwrite a Load example pressed after the file was chosen", async () => {
+      open();
+      await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeEnabled());
+      upload(file("a.yaml", YAML_A));
+      press(C.LOAD_EXAMPLE);
+      const example = editor().value;
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe(example);
+    });
+
+    it("lets only the newest of two chosen files land", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      upload(file("b.yaml", YAML_B));
+      SlowReader.all[1].finish(YAML_B);
+      SlowReader.all[0].finish(YAML_A);
+      expect(editor().value).toBe(YAML_B);
+    });
+
+    it("is aborted when the screen is left, and a callback that still arrives changes nothing", async () => {
+      open();
+      await screen.findByRole("textbox");
+      upload(file("a.yaml", YAML_A));
+      cleanup();
+      expect(SlowReader.all[0].aborted).toBe(true);
+      expect(() => SlowReader.all[0].finish(YAML_A)).not.toThrow();
+    });
+  });
+
+  it("holds Load example without a reason when the roster could not be read", async () => {
+    open({ loadHarnesses: async () => { throw new Error("setup is offline"); } });
+    await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
+    expect(screen.queryByText(C.NO_HARNESS)).toBeNull();
+    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
+  });
+
   it("holds Load example when no harness is enabled", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }] });
     await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
-    // The canon has no reason text yet (MISSING_COPY), so none is rendered.
-    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
+    // FR-0098: the reason is written where the button is off, and the button points at it.
+    expect(screen.getByText("Choose a harness to load its example.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toHaveAccessibleDescription("Choose a harness to load its example.");
   });
 
   it("announces one error in the singular", async () => {
@@ -284,8 +380,8 @@ describe("run document editor", () => {
     await waitFor(() => expect(text("path")).not.toContain("step="));
   });
 
-  it("the words the canon lacks are an empty seam, not text on any normal path", () => {
-    expect(Object.values(MISSING_COPY)).toEqual(["", "", ""]);
+  it("the FR-0098 sentences are the approved words", () => {
+    expect([C.TOO_LARGE, C.FILE_UNREADABLE, C.NO_HARNESS]).toEqual(["This file is over 1 MiB, the most the editor reads.", "The browser could not read this file.", "Choose a harness to load its example."]);
   });
 
   it("starts from the draft's intent written as a kind Run document", async () => {

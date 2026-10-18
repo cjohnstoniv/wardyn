@@ -58,7 +58,7 @@ type createRunLaunch struct {
 	overridden bool
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
-	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
+	// harnessRules are the run's tool rules per included harness (applyHarnessToolRules).
 	harnessRules []types.HarnessToolRules
 	// harnesses is the run's harness set as create authorised it, in tools[]
 	// order, each with the model provider it was granted (the run_harnesses rows).
@@ -82,7 +82,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	}
 }
 
-// DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
+// The run's failure_hint when the detached launch
 // PANICS. The caller already holds a 201, so the run itself has to carry the
 // reason. Names the class and where the detail is, since a panic's own text is
 // a stack trace nobody should read off a console banner.
@@ -138,6 +138,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			SSHGrants:          l.gw.sshGrants,
 			Injections:         l.gw.injections,
 			Interactive:        l.req.Interactive,
+			ADOLaneRepo:        l.req.Repo,
 			TaskMode:           l.req.TaskMode,
 			InteractiveStart:   l.req.InteractiveStart,
 			SeedAutoTools:      l.req.SeedAutoTools,

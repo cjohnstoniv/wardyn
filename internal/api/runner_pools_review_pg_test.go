@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,8 +159,13 @@ func TestPG_RunnerPoolLeaverPurgeStripsUseSubjectsAndNeverWidens(t *testing.T) {
 	e.call(e.alice, http.MethodPut, usePolicyPath(solo.ID), `{"subjects":[{"subject_type":"user","subject":"sub-leaver"}]}`)
 	revShared, revSolo := e.revision(shared.ID), e.revision(solo.ID)
 
-	if _, _, _, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-leaver"}, nil); err != nil {
+	n, err := e.pg.DeleteUserSubjectRows(ctx, uuid.New(), []string{"sub-leaver"}, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The purge says what it did to the pools: both narrowed, one of them left permitting nobody.
+	if n.PoolsNarrowed != 2 || n.PoolsEmptied != 1 {
+		t.Errorf("pools narrowed %d, emptied %d; want 2 and 1", n.PoolsNarrowed, n.PoolsEmptied)
 	}
 	got := e.policySubjects(shared.ID)
 	if len(got) != 2 || got[0].Subject != "sub-stays" || got[1].Subject != "pool-users" || e.revision(shared.ID) != revShared+1 {
@@ -399,6 +405,29 @@ func TestPG_RunnerPoolDetachFromAPolicyPoolIsHeld(t *testing.T) {
 	}
 	if n := len(e.audits("governance.change.bypass")); n != before+1 {
 		t.Errorf("%d bypass rows, want %d", n, before+1)
+	}
+}
+
+// A held detach whose executor was taken out meanwhile is refused as stale, never applied as a
+// no-op, so no detach row is written for a removal that did not happen.
+func TestPG_RunnerPoolHeldDetachOfAnAbsentExecutorIsStale(t *testing.T) {
+	e := newPoolEnv(t, true)
+	a := e.createPool("A", types.RunnerPoolOrganization)
+	if w := e.call(e.super, http.MethodPut, poolPath(a.ID)+"/remote-runners/fake", ""); w.Code != http.StatusOK {
+		t.Fatalf("attach = %d", w.Code)
+	}
+	e.approve(e.pending(e.call(e.alice, http.MethodPut, usePolicyPath(a.ID), `{"subjects":[{"subject_type":"user","subject":"sub-named"}]}`)).ID)
+	held := e.pending(e.call(e.super, http.MethodDelete, poolPath(a.ID)+"/remote-runners/fake", ""))
+	if _, err := e.pool.Exec(t.Context(), `DELETE FROM runner_pool_members WHERE pool_id = $1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := len(e.audits(auditPoolRunnerRemove))
+	w := e.call(e.superTwo, http.MethodPost, "/api/v1/governance/changes/"+held.ID.String()+"/approve", `{"reason":"ok"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "governance_change_stale") {
+		t.Fatalf("approving a detach of an absent executor = %d %s, want 409 governance_change_stale", w.Code, w.Body)
+	}
+	if n := len(e.audits(auditPoolRunnerRemove)); n != before {
+		t.Errorf("a stale detach wrote %d detach rows", n-before)
 	}
 }
 

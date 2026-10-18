@@ -18,7 +18,7 @@ import { Fingerprint } from "lucide-react";
 import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
-import { RUN_PLACEMENT, runnerLabel } from "../../../wardyn/copy/runners";
+import { RUN_PLACEMENT, RUN_RECORDING, runnerLabel } from "../../../wardyn/copy/runners";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
@@ -152,6 +152,13 @@ export function IdentityWidget({
           <>
             <dt className="text-muted-foreground">{RUN_PLACEMENT.EVIDENCE}</dt>
             <dd className="min-w-0 truncate text-right text-foreground">{RUN_PLACEMENT.REPORTED_BY(runnerLabel(run))}</dd>
+          </>
+        )}
+
+        {run.not_recorded && (
+          <>
+            <dt className="text-muted-foreground">{RUN_RECORDING.LABEL}</dt>
+            <dd className="min-w-0 text-right text-foreground">{RUN_RECORDING[run.not_recorded]}</dd>
           </>
         )}
 

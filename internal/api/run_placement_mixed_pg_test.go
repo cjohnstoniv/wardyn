@@ -204,6 +204,29 @@ func TestPlacement_RemoteMemberDroppedWhenPeoplePolicyNarrows(t *testing.T) {
 	}
 }
 
+// A user pool holding only a remote-hosted runner whose people policy stops admitting the person reads
+// unavailable (no_eligible_member) in the list, and the launch is refused: availability narrows by the
+// people policy as placement does (kills mutation MF2b: availability read from the unnarrowed row).
+func TestPG_PoolWithOnlyANoLongerAdmittingRemoteRunnerReadsUnavailable(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createOwnPool(e.person, "Borrowed")
+	e.setPeople("alpha", everyonePeople)
+	if w := e.call(e.person, http.MethodPut, myRemotePath(pool.ID, "alpha"), ""); w.Code != http.StatusCreated {
+		t.Fatalf("add alpha = %d %s", w.Code, w.Body)
+	}
+	if got := e.listed(e.person)[pool.ID]; got.Availability != client.RunnerPoolAvailable {
+		t.Fatalf("while admitted the pool reads %s %s", got.Availability, got.Reason)
+	}
+	e.setPeople("alpha", `{"people_pools":"listed","subjects":[{"subject_type":"user","subject":"sub-someone-else"}]}`)
+	if got := e.listed(e.person)[pool.ID]; got.Availability != client.RunnerPoolUnavailable || got.Reason != runnerpool.ReasonNoEligibleMember {
+		t.Errorf("list = %s %s, want unavailable no_eligible_member", got.Availability, got.Reason)
+	}
+	body := runBody(`"runner_pool_id":"` + pool.ID.String() + `"`)
+	if w := e.call(e.person, http.MethodPost, "/api/v1/runs", body); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("launch = %d %s, want 422", w.Code, w.Body)
+	}
+}
+
 // RP-2 DONE 3: deny_placements holds each kind in a mixed pool, never the pool as a whole. A member denied
 // local launches lands only on its remote-hosted runner; one denied remote launches only on their own
 // runner, and waits for it rather than spill onto the remote-hosted one when it is full. Asking for the
@@ -306,7 +329,7 @@ func TestPG_SelfHostedRunsAreAlwaysTheirOwners(t *testing.T) {
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
 	e.exec(`UPDATE agent_runs SET state = 'COMPLETED'`)
-	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 		t.Fatal(err)
 	}
 	occupant := e.occupy(pool)
@@ -333,7 +356,7 @@ func TestPG_PromotedRunKeepsItsOwnRunnersLastPlace(t *testing.T) {
 			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
-	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 		t.Fatal(err)
 	}
 	occupant := e.occupy(pool)

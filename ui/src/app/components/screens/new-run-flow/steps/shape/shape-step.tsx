@@ -14,7 +14,7 @@ import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunShape } from "../../../../../lib/types/runs";
 import type { TemplateSummary } from "../../../../../lib/types/templates";
-import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/scenarios/templates";
+import type { LaunchIntentSummary } from "../../../../../lib/types/launch-intents";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { newRunHref } from "../../draft/new-run-url";
 import { chooseShape } from "../../lenses/shape-lens";

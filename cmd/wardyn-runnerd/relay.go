@@ -121,7 +121,12 @@ func (r *localRelay) forward(c net.Conn) {
 		r.mu.Unlock()
 		_ = c.Close()
 	}()
-	st, err := peer.Open(r.ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
+	relayCopy(r.ctx, peer, c)
+}
+
+// relayCopy copies c over one new relay stream on peer, with half-close both ways.
+func relayCopy(ctx context.Context, peer *runnerwire.Peer, c net.Conn) {
+	st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
 	if err != nil {
 		return
 	}

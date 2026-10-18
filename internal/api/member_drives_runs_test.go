@@ -168,7 +168,7 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 
 	srv, _ := multiDriveServer()
 	d := reachableDrive{owned: true, winner: store.UserDriveWinner{Drive: member}, resolved: &types.ResolvedDrive{Drive: member, Writable: true}}
-	if got := srv.driveUnavailableHere(context.Background(), d, self, true); got != client.MeDriveUnavailableNotInPool {
+	if got := srv.driveUnavailableHere(context.Background(), d, self, true, false); got != client.MeDriveUnavailableNotInPool {
 		t.Errorf("catalogue on a self-hosted pool = %q, want not_in_pool", got)
 	}
 
@@ -200,6 +200,9 @@ type memberRecheckStore struct {
 	*dispatchTestStore
 	drives map[uuid.UUID]types.UserDrive
 }
+
+// SetRunImage is the image write a launch makes.
+func (*memberRecheckStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
 
 func (s *memberRecheckStore) GetMemberDriveOf(_ context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
 	if d, ok := s.drives[id]; ok && d.OwnerSubject == owner {
@@ -266,6 +269,33 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 				t.Error("a refused member drive was audited as mounted")
 			}
 		})
+	}
+}
+
+// TestMemberDriveLaunchCarriesTheOwnersToDispatch: the launch both create and the pool queue's start build
+// from the fold hands dispatch each member drive's owner, so a drive deleted before the sandbox is created
+// fails the run. A launch that dropped the owners would skip the re-read and create the sandbox.
+func TestMemberDriveLaunchCarriesTheOwnersToDispatch(t *testing.T) {
+	id := uuid.New()
+	row := types.UserDrive{ID: id, Name: "Mine", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
+	fr := &fakeRunner{}
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	srv.cfg.Store = &memberRecheckStore{dispatchTestStore: st, drives: map[uuid.UUID]types.UserDrive{}} // the drive is gone
+	run.Task, run.CreatedBy, st.run.CreatedBy = "", aliceSub, aliceSub
+	mount := types.DriveMount{DriveID: id, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x", DriveName: "Mine",
+		HomeName: "d-x", Target: runner.DrivesRoot + "/mine", Enforcement: types.StorageEnforcementNone}
+	f := runFold{drives: []runDrive{{resolved: types.ResolvedDrive{Drive: row}}}, driveMounts: []types.DriveMount{mount},
+		adoGrade: adoEntraUngraded(), bedrockGrade: bedrockCredUngraded()}
+	l := f.launch(createRunRequest{Agent: "claude-code"}, types.RunPolicySpec{MinConfinementClass: types.CC1}, governanceCeiling{}, grantWiring{}, "run-token", run)
+	if got := l.memberDrives[id]; got != aliceSub {
+		t.Fatalf("launch member drives = %v, want %s's drive %s", l.memberDrives, aliceSub, id)
+	}
+	srv.finishCreateRunLaunch(context.Background(), l)
+	if fr.createCalls != 0 {
+		t.Fatalf("CreateSandbox ran %d time(s) for a member drive that was gone", fr.createCalls)
+	}
+	if st.State() != types.RunFailed || st.FailureHint() != driveNotFoundMsg(id.String()) {
+		t.Errorf("run = %s %q, want FAILED with the drive_not_found sentence", st.State(), st.FailureHint())
 	}
 }
 
@@ -464,5 +494,47 @@ func TestMemberDriveAttachAndDispatchAgree(t *testing.T) {
 		if !srv.memberDrivesStillThere(tc.ctx, types.AgentRun{ID: uuid.New(), CreatedBy: creator}, memberDriveOwners(drives)) {
 			t.Errorf("%s: attach admitted the drive but dispatch refused it", name)
 		}
+	}
+}
+
+// startingFirstStore records the run's state each time dispatch re-reads a member drive.
+type startingFirstStore struct {
+	*memberRecheckStore
+	statesAtRead []types.RunState
+}
+
+func (s *startingFirstStore) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
+	s.statesAtRead = append(s.statesAtRead, s.State())
+	return s.memberRecheckStore.GetMemberDriveOf(ctx, owner, id)
+}
+
+// TestMemberDriveRereadFollowsTheStartingClaim: dispatch claims PENDING->STARTING before it re-reads
+// the run's member drives. A delete reads STARTING after its tombstone, so with this order either the
+// re-read meets the tombstone or the delete meets the STARTING run; a re-read before the claim would
+// let both miss.
+func TestMemberDriveRereadFollowsTheStartingClaim(t *testing.T) {
+	id := uuid.New()
+	row := types.UserDrive{ID: id, Name: "Mine", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
+	fr := &fakeRunner{}
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	order := &startingFirstStore{memberRecheckStore: &memberRecheckStore{dispatchTestStore: st, drives: map[uuid.UUID]types.UserDrive{id: row}}}
+	srv.cfg.Store = order
+	run.Task, run.CreatedBy, st.run.CreatedBy = "", aliceSub, aliceSub
+	mount := types.DriveMount{DriveID: id, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x", DriveName: "Mine",
+		HomeName: "d-x", Target: runner.DrivesRoot + "/mine", Enforcement: types.StorageEnforcementNone}
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Drives: []types.DriveMount{mount},
+		MemberDrives: map[uuid.UUID]string{id: aliceSub},
+	})
+	if len(order.statesAtRead) == 0 {
+		t.Fatal("dispatch never re-read the member drive")
+	}
+	for i, s := range order.statesAtRead {
+		if s != types.RunStarting {
+			t.Fatalf("re-read %d ran with the run %s, want STARTING: the claim must come first", i, s)
+		}
+	}
+	if fr.createCalls != 1 {
+		t.Fatalf("CreateSandbox calls = %d, want the drive mounted once", fr.createCalls)
 	}
 }

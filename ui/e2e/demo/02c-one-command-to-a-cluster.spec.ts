@@ -54,7 +54,7 @@ test("V02c act 1 — sign in, and the install refuses to let you wander", async 
   // The token box is gone — this install trusts the identity provider now.
   await caption(page, "Sign in again. The sign-in page has changed — no token box; this install trusts your identity provider now.");
   await beat(page, PACE.read);
-  await act(page, page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first(), "One click — the role map decides who is an admin.");
+  await act(page, page.getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ }).or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ })).first(), "One click — the role map decides who is an admin.");
 
   // Dex's demo login form. Filmed, not hidden: this is the multi-user story.
   await page.locator('input[type="password"]').waitFor({ timeout: 30_000 });

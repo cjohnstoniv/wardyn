@@ -239,6 +239,9 @@ function describeEvent(e: AuditEvent): string {
     }
     if (reason === "expired") return ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED;
   }
+  if (e.action === "run.build" && e.data?.cache_hit === true) {
+    return e.target ? `${AUDIT.REUSED_IMAGE} — ${e.target}` : AUDIT.REUSED_IMAGE;
+  }
   const verb = ACTION_VERB[e.action];
   if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
   return e.target ? `${e.action} — ${e.target}` : e.action;

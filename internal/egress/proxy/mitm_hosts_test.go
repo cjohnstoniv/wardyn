@@ -6,6 +6,10 @@ package proxy
 import (
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestIsMITMHost_OperatorWidening pins the trust boundary of the isMITMHost
@@ -147,5 +151,48 @@ func TestIsCorpMITMHost_ReservedLLMHostsExcludedEvenWhenListed(t *testing.T) {
 	// A genuine corp host in the same allowlist is unaffected.
 	if !p.isCorpMITMHost("artifactory.corp") {
 		t.Errorf("isCorpMITMHost(artifactory.corp) = false, want true (real corp host must still work)")
+	}
+}
+
+// Two spellings of one IP literal share every host-keyed table, in both directions: an IPv4-mapped,
+// expanded or compressed request host reaches the terminate-and-inspect entry, its port and scheme,
+// the model channel and the injection rule configured under another spelling, exactly as the
+// canonical spelling does; another address shares none of them.
+func TestHostTables_IPLiteralSpellingsAreOneHost(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+		MITMHosts:       []string{"http://10.0.0.5:8443", "[2001:0db8:0000:0000:0000:0000:0000:0001]:443", "::ffff:10.0.0.9"},
+		LLMChannelHosts: map[string]string{"2001:db8::2": anthropicHost}})
+	for _, h := range []string{"10.0.0.5", "::ffff:10.0.0.5", "::FFFF:a00:5", "0:0:0:0:0:ffff:10.0.0.5"} {
+		if !p.isCorpMITMHost(h) || !p.mitmPortAllowed(h, 8443) || p.mitmPortAllowed(h, 443) || !p.mitmPlaintextUpstream(h, 8443) {
+			t.Errorf("%q: eligible %v, port 8443 %v, port 443 %v, plaintext %v; want the 10.0.0.5:8443 plain-HTTP entry",
+				h, p.isCorpMITMHost(h), p.mitmPortAllowed(h, 8443), p.mitmPortAllowed(h, 443), p.mitmPlaintextUpstream(h, 8443))
+		}
+	}
+	for _, h := range []string{"2001:db8::1", "2001:DB8:0:0::1"} {
+		if !p.isCorpMITMHost(h) || !p.mitmPortAllowed(h, 443) || p.mitmPlaintextUpstream(h, 443) {
+			t.Errorf("%q: want the expanded IPv6 TLS entry on 443", h)
+		}
+	}
+	if !p.isCorpMITMHost("10.0.0.9") {
+		t.Error("10.0.0.9 missed the entry configured as ::ffff:10.0.0.9")
+	}
+	if p.isCorpMITMHost("10.0.0.6") || p.isCorpMITMHost("::ffff:10.0.0.6") || p.isCorpMITMHost("2001:db8::3") {
+		t.Error("another address matched an entry")
+	}
+	want := p.channelForHost(anthropicHost)
+	for _, h := range []string{"2001:db8::2", "2001:0DB8:0000::0002"} {
+		if !p.isLLMHost(h) || p.channelForHost(h) != want {
+			t.Errorf("%q: model host %v, channel %v; want the channel configured as 2001:db8::2", h, p.isLLMHost(h), p.channelForHost(h))
+		}
+	}
+	g := uuid.New()
+	inj := &injector{byHost: map[string]*injEntry{"10.0.0.5": {grantID: g}}}
+	for _, h := range []string{"10.0.0.5", "::ffff:10.0.0.5", "10.0.0.5."} {
+		if got, ok := inj.grantIDFor(h); !ok || got != g {
+			t.Errorf("injection rule for %q = (%v, %v), want the 10.0.0.5 rule", h, got, ok)
+		}
+	}
+	if h, port := splitHostPort("[::ffff:10.0.0.5]:443", 443); h != "10.0.0.5" || port != 443 {
+		t.Errorf("splitHostPort = (%q, %d), want the canonical (10.0.0.5, 443)", h, port)
 	}
 }

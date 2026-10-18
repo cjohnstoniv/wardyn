@@ -13,7 +13,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending)
 const (
 	// inlineSecretStoreMissingRefusal is the 422 for a spec whose grants need a
 	// stored secret on a deployment with no secret store wired. Reachable from

@@ -5,7 +5,6 @@ package api
 
 import "github.com/cjohnstoniv/wardyn/internal/types"
 
-// DRAFT (M2 canon pending).
 const mpRunModelEnvSecret = "This run's policy grants env_secret %s as %s, but on this deployment a run's model credential " +
 	"comes only from its model provider — remove that grant from the policy, or ask your admin."
 

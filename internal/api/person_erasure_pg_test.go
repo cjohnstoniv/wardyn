@@ -296,3 +296,29 @@ func TestPG_PersonErasure_ReachesEveryCopyOnEveryReplica(t *testing.T) {
 		_ = rc.Close()
 	}
 }
+
+// A person an admin created by object id who then signed in under a pairwise subject can still own runs
+// under the entra:<tenant>:<object> name. Erasing the subject's mask copies fences and deletes those
+// runs' manifests too, so no replica keeps vouching for masking sealed under the erased keys.
+func TestPG_PersonErasure_MaskCopiesReachRunsUnderTheEntraName(t *testing.T) {
+	l := newMaskLab(t)
+	fail := false
+	a := erasureReplica(l, &fail)
+	pg := store.NewPG(l.pool)
+	oid := uuid.NewString()
+	entra, pairwise := "entra:"+identTenant+":"+oid, "pairwise-kit-"+oid
+	ownPerson(t, pg, entra, identIssuer, oid)
+	ownBind(t, pg, pairwise, identIssuer, oid)
+	run := l.personRun(entra, "a run started under the entra name")
+	a.dispatch(t, run, "entra-secret-value-"+run.ID.String())
+	if !a.srv.cfg.MaskManifests.Covered(t.Context(), run.ID) {
+		t.Fatal("the run under the entra name is not admitted before the erasure")
+	}
+	sec := ssoSession(t, "sec-sub", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+pairwise+"/erasure", sec, erasureBody("mask_copies")); w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+	if a.srv.cfg.MaskManifests.Covered(t.Context(), run.ID) {
+		t.Error("the run under the entra name is still admitted after the person's mask copies were erased")
+	}
+}

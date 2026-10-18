@@ -58,10 +58,10 @@ const (
 // useless for a guesser (the token is 256 bits; the bound is on store and
 // audit load, not on guessing).
 //
-// ponytail: keyed on the TCP peer because RealIP is deliberately not installed
-// (routes.go) — behind an ingress every laptop shares the ingress's bucket, so
-// a large MDM rollout enrols at the sustained rate and retries on 429. A
-// trusted-proxy allowlist is the upgrade if that ever bites.
+// ponytail: keyed on the client address, which is the TCP peer unless
+// WARDYN_TRUSTED_PROXIES lists it (realip.go) — behind an unlisted ingress
+// every laptop shares the ingress's bucket, so a large MDM rollout enrols at
+// the sustained rate and retries on 429.
 const (
 	enrolRatePerSec      = 0.1
 	enrolBurst           = 10.0

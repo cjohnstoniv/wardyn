@@ -291,7 +291,7 @@ export const DRIVES = {
   // GOV.PREVIEW_RESULT_UNKNOWN. It resolves the claims AS TYPED against the
   // allocations and is not a person lookup; a truncated snapshot surfaces at
   // the member's launch as MEMBER.DENIED_STALE_GROUPS, not here.
-  PREVIEW_LEAD: "Paste the roles, groups, or email a person's token would carry, and see which drive and directory they would mount.",
+  PREVIEW_LEAD: "Paste the roles, groups, or email a person's token would carry, choose their user type, and see which drive and directory they would mount.",
   PREVIEW_CTA: "Preview",
   PREVIEW_NONE: "No drive is allocated to these claims.",
   // {tier} is one of the four PREVIEW_TIER_* words, frozen in the table

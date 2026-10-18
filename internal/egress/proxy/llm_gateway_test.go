@@ -161,8 +161,8 @@ func TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP(t *testin
 	// reaching the private target even if some other caller got this far.
 	rec := httptest.NewRecorder()
 	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+host+"/v1/messages", nil), host, 443)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("serveMITMRequest status = %d, want 502 (denied, never dialled)", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("serveMITMRequest status = %d, want 403 egress_denied (denied, never dialled)", rec.Code)
 	}
 	if spy.reached {
 		t.Fatal("serveMITMRequest must never reach the private gateway target")

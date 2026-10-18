@@ -79,7 +79,7 @@ import {
 import { apiHeaders, BEAT_SHORT, pollScreen, silentCard } from "./demos";
 import { APPROVAL_APPEARS, decide } from "./funnel";
 import {
-  addRepository,
+  addFolder,
   chooseShape,
   confirmLaunchButton,
   launchRunButton,
@@ -504,10 +504,8 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   await nextStep(page, NEW_RUN_HEADING.harnesses);
   await nextStep(page, NEW_RUN_HEADING.files);
 
-  // OPEN: the workspace `meet-wardyn` is a local directory, and Files lists only
-  // repository sources, never local-directory workspaces. This addresses it as
-  // the repository the approved flow would give it, added through the Add dialog.
-  await addRepository(page, WORKSPACE, "Our workspace."); // C22
+  // The workspace `meet-wardyn` is a local directory, so it is added as a folder on this machine.
+  await addFolder(page, WORKSPACE, "Our workspace."); // C22
   await sizeMainDrive(page);
   await nextStep(page, NEW_RUN_HEADING.tools);
 

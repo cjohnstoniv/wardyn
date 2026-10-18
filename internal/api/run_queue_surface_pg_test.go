@@ -29,7 +29,7 @@ func (e *queueEnv) bothTypesPool(name string, max int) types.RunnerPool {
 	limits := *p.Limits
 	limits.Interactive = &types.RunnerPoolInteractiveLimits{CPUMillis: limits.Background.CPUMillis, MemoryMiB: limits.Background.MemoryMiB,
 		Lifetime: limits.Background.Lifetime, Idle: &types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 3600}}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("allow interactive: %v", err)
 	}

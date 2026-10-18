@@ -26,7 +26,9 @@
 # flag beats a managed defaultMode: acceptEdits, so a hold run is never auto-accepting). A last
 # check proves allowManagedHooksOnly on the bypass-launched document; another that every built-in tool an
 # attended-rules document denies is missing from the tools its init event lists, and present without a file: a repository SessionStart
-# hook fires without the managed file and does not with it. No step needs a credential. Bump the Dockerfile pin and this probe re-runs against the
+# hook fires without the managed file and does not with it. A final pair drives an offline Messages API stand-in
+# to prove a permissions.ask entry still holds WebFetch under --dangerously-skip-permissions and that a repository's
+# own permissions.allow does not lift it. No step needs a credential. Bump the Dockerfile pin and this probe re-runs against the
 # new version.
 #
 # The install runs npm with --ignore-scripts into a temp dir: only the package's files are
@@ -184,13 +186,16 @@ echo "ok: Claude Code $pin runs no repository hook under --dangerously-skip-perm
 # the session: the init event lists the session's tools before any model call, so this is offline too. A tool
 # the CLI does not list without the managed file proves nothing, so that control is required.
 tools_of() { # <settings dir or ""> -> the init event's tools array, as JSON text
-    local mount=()
+    local mount=() out
     [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro")
-    docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+    # T: marks a recognised init event with a tools array (an empty one is a valid answer: every tool
+    # denied); no such event means the run proved nothing, so it fails instead of reading as "no tools".
+    out="$(docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
         --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
         -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
         claude --print hi --output-format stream-json --verbose 2>"$tmp/stderr" \
-        | sed -nE 's/.*"subtype":"init".*"tools":\[([^]]*)\].*/\1/p' | head -1 || true
+        | sed -nE 's/.*"subtype":"init".*"tools":\[([^]]*)\].*/T:\1/p' | head -1 || true)"
+    case "$out" in T:*) echo "${out#T:}" ;; *) die "Claude Code $pin printed no init event with a tools array (settings: ${1:-none}) — the deny check would pass without evidence; stderr: $(head -c 400 "$tmp/stderr")" ;; esac
 }
 unfiled="$(tools_of "")"
 denied=0
@@ -206,3 +211,65 @@ for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
 done
 [ "$denied" -gt 0 ] || die "no attended-rules document denies a built-in tool — the deny check has nothing to prove"
 echo "ok: Claude Code $pin drops every built-in tool the attended-rules documents deny ($denied checks)"
+
+# 8. Ask and repository allow. An attended-rules document's permissions.ask has to hold a tool back even under
+# --dangerously-skip-permissions (the no-level, L2 and L2-locked bases launch bypass), and with
+# allowManagedPermissionRulesOnly a repository's own permissions.allow must not lift it. A tiny Messages API
+# stand-in (node, which the image has) asks the CLI to call WebFetch; `--print` records a call it refused in
+# the result event's permission_denials, so no model, network or credential is needed. A control run without
+# the managed file must let WebFetch through under each condition, or the assertions prove nothing.
+mkdir -p "$tmp/ws-empty" "$tmp/ws-allow/.claude"
+echo '{"permissions":{"allow":["WebFetch"]}}' > "$tmp/ws-allow/.claude/settings.json"
+echo '{"hasCompletedOnboarding":true,"projects":{"/ws":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' > "$tmp/claude.json"
+cat > "$tmp/stub.js" <<'JS'
+const http = require("http");
+const ev = (n, d) => "event: " + n + "\ndata: " + JSON.stringify(d) + "\n\n";
+http.createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    const body = JSON.parse(raw || "{}");
+    if (!req.url.startsWith("/v1/messages") || req.url.includes("count_tokens")) { res.writeHead(200, { "content-type": "application/json" }); return res.end('{"input_tokens":1}'); }
+    const last = (body.messages || []).slice(-1)[0];
+    const answered = last && Array.isArray(last.content) && last.content.some((c) => c.type === "tool_result");
+    const call = !answered && (body.tools || []).some((t) => t.name === "WebFetch");
+    const block = call ? { type: "tool_use", id: "toolu_probe1", name: "WebFetch", input: {} } : { type: "text", text: "" };
+    const delta = call ? { type: "input_json_delta", partial_json: '{"url":"https://example.com/","prompt":"summarise"}' } : { type: "text_delta", text: "ok" };
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(ev("message_start", { type: "message_start", message: { id: "m", type: "message", role: "assistant", model: "claude-sonnet-4-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } })
+      + ev("content_block_start", { type: "content_block_start", index: 0, content_block: block })
+      + ev("content_block_delta", { type: "content_block_delta", index: 0, delta })
+      + ev("content_block_stop", { type: "content_block_stop", index: 0 })
+      + ev("message_delta", { type: "message_delta", delta: { stop_reason: call ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } })
+      + ev("message_stop", { type: "message_stop" }));
+  });
+}).listen(8080, "127.0.0.1");
+JS
+chmod -R a+rX "$tmp/ws-empty" "$tmp/ws-allow" "$tmp/stub.js" "$tmp/claude.json"
+webfetch_of() { # <settings dir or ""> <workspace dir> [claude args...] -> denied | ran | "" (no result event)
+    local mount=() ws="$2" out; [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro"); shift 2
+    out="$(docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+        --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
+        -v "$tmp/stub.js:/probe/stub.js:ro" -v "$tmp/claude.json:/probe/claude.json:ro" -v "$ws:/ws:ro" -w /ws \
+        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 -e ANTHROPIC_BASE_URL=http://127.0.0.1:8080 -e ANTHROPIC_AUTH_TOKEN=probe-token \
+        --entrypoint sh "$image" -c 'cp /probe/claude.json /tmp/.claude.json; node /probe/stub.js & sleep 1; timeout 60 claude --print "run the probe" --output-format stream-json --verbose "$@"' sh "$@" 2>"$tmp/stderr" \
+        | grep -oE '"permission_denials":\[[^]]*\]' | head -1 || true)"
+    case "$out" in "") ;; *WebFetch*) echo denied ;; *) echo ran ;; esac
+}
+[ "$(webfetch_of "" "$tmp/ws-empty" --dangerously-skip-permissions)" = ran ] || die "WebFetch did not run under --dangerously-skip-permissions without a managed file — the ask-under-bypass check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+[ "$(webfetch_of "" "$tmp/ws-allow")" = ran ] || die "a repository permissions.allow did not let WebFetch run without a managed file — the repository-allow check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+asked=0; allowed=0
+for doc in "$POLICY_DIR"/testdata/attended-rules/*.json; do
+    grep -q '"WebFetch"' <(sed -n '/"ask": \[/,/\]/p' "$doc") || continue
+    dir="$tmp/settings-attended-rules-$(basename "$doc" .json)"
+    if ! grep -q '"disableBypassPermissionsMode"' "$doc"; then
+        [ "$(webfetch_of "$dir" "$tmp/ws-empty" --dangerously-skip-permissions)" = denied ] || die "attended-rules/$(basename "$doc"): WebFetch ran under --dangerously-skip-permissions although the file's permissions.ask names it — ask no longer beats bypass; stderr: $(head -c 400 "$tmp/stderr")"
+        asked=$((asked + 1))
+    fi
+    if grep -q '"allowManagedPermissionRulesOnly": true' "$doc"; then
+        [ "$(webfetch_of "$dir" "$tmp/ws-allow")" = denied ] || die "attended-rules/$(basename "$doc"): a repository permissions.allow let WebFetch run although the file sets allowManagedPermissionRulesOnly and asks for it; stderr: $(head -c 400 "$tmp/stderr")"
+        allowed=$((allowed + 1))
+    fi
+done
+[ "$asked" -gt 0 ] && [ "$allowed" -gt 0 ] || die "no attended-rules document asks for WebFetch with bypass launchable and allowManagedPermissionRulesOnly — the ask and repository-allow checks have nothing to prove"
+echo "ok: Claude Code $pin still asks for WebFetch under --dangerously-skip-permissions ($asked document(s)) and ignores a repository allow ($allowed document(s))"

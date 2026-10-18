@@ -14,17 +14,19 @@ import { toast } from "sonner";
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
-import { RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
+import { RES, RUNNER_TRUST, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
+import { useSecurityOperator } from "../../wardyn/operator-context";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine } from "./resource-table";
 import { amountsText, runnerRes } from "./resources";
 import { ArchText, MachineText, PoolLinks } from "./runner-card";
-import { RunnerChip } from "./runner-chip";
+import { RunnerChip, TrustChip } from "./runner-chip";
 import { barrierNames, postureLines, shortDate } from "./runner-display";
 import { ConfirmDialog } from "./confirm-dialog";
+import { RunnerTrust } from "./runner-trust";
 
 function Section({ label, reported, children, ...rest }: { label: string; reported?: string; children: React.ReactNode } & React.HTMLAttributes<HTMLElement>) {
   return (
@@ -42,7 +44,7 @@ function Header({ runner }: { runner: RunnerView }) {
   const dated = (text: (when: string) => string, iso: string) => (
     <span title={absoluteTime(iso)}>{text(shortDate(iso))}</span>
   );
-  const parts: React.ReactNode[] = [runner.owner ?? ""];
+  const parts: React.ReactNode[] = [runner.owner || RUNNER_V6.ORGANIZATION];
   if (runner.state === "revoked" && runner.revoked_at) {
     parts.push(dated((when) => RUNNER.REVOKED_BY(runner.revoked_by ?? "", when), runner.revoked_at));
   } else {
@@ -74,12 +76,19 @@ export function RunnerDrawer({
   onOpenPool: (id: string) => void;
 }) {
   const [confirming, setConfirming] = React.useState(false);
+  const securityAdmin = useSecurityOperator();
   const titleRef = React.useRef<HTMLSpanElement | null>(null);
   if (!runner) return null;
   const claimed = runner.state === "claimed";
   const reportedAt = runner.posture_reported_at ? RUNNER.REPORTED_AT(relativeTime(runner.posture_reported_at)) : "";
   const reported = (extra?: string) => [RUNNER.REPORTED, extra].filter(Boolean).join(" · ");
   const res = runnerRes(runner.limits, runner.usage);
+  // Between Resources and Pools on a claimed runner; an unclaimed one has neither, so it leads.
+  const trust = (
+    <Section label={RUNNER_TRUST.TITLE} reported={RUNNER_TRUST.META} data-trust>
+      <RunnerTrust runner={runner} canEdit={securityAdmin} onChanged={onChanged} />
+    </Section>
+  );
 
   return (
     <>
@@ -109,9 +118,11 @@ export function RunnerDrawer({
             <div className="flex flex-wrap items-center gap-2">
               <KindChip kind="self_hosted" />
               <RunnerChip runner={runner} />
+              <TrustChip runner={runner} />
             </div>
           </SheetHeader>
           <div className="px-4">
+            {!claimed && trust}
             {claimed && (
               <>
                 <Section label={RUNNER_V6.MACHINE} reported={RUNNER.REPORTED} data-machine>
@@ -136,6 +147,7 @@ export function RunnerDrawer({
                     </Hint>
                   )}
                 </Section>
+                {trust}
                 <Section label={RUNNER_V6.POOLS} data-pools>
                   <PoolLinks pools={runner.pools} onOpenPool={onOpenPool} />
                   <Hint>{RUNNER_V6.POOLS_HINT}</Hint>

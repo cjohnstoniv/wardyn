@@ -213,3 +213,30 @@ func TestCurrentActivityRefusalKeepsPeerOnline(t *testing.T) {
 		t.Fatalf("stale session activity not refused: %v", err)
 	}
 }
+
+// An organization's runner (owner empty) passes the activity barrier; a changed kind or a named owner on it
+// is a changed identity.
+func TestCurrentActivityAdmitsOrgRunner(t *testing.T) {
+	for _, mode := range []string{"valid", "named owner", "changed kind", "revoked"} {
+		t.Run(mode, func(t *testing.T) {
+			h, s, row, peer := activityFixture(t)
+			row.Owner, row.OwnerKind = "", types.RunnerOwnerOrg
+			current := row
+			switch mode {
+			case "named owner":
+				current.Owner = "owner"
+			case "changed kind":
+				current.OwnerKind = types.RunnerOwnerPerson
+			case "revoked":
+				current.State = types.RunnerRevoked
+			}
+			h.cfg.Lookup = func(context.Context, uuid.UUID) (types.Runner, error) { return current, nil }
+			calls := 0
+			a := Admission{Activity: func(context.Context, uuid.UUID) error { calls++; return nil }}
+			err := h.currentActivity(t.Context(), row, a, s, peer, uuid.New())
+			if (mode == "valid") != (err == nil && calls == 1) {
+				t.Fatalf("org runner activity: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}

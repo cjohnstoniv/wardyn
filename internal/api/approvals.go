@@ -205,7 +205,7 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // the part a reviewer has to be able to read without scrolling. Each helper
 // writes its own 4xx and reports false: the reply strings are asserted verbatim
 // by the API tests and belong next to the rule that refuses.
-// DRAFT (M2 canon pending) — the one sentence a decision on an already-ended run
+// The one sentence a decision on an already-ended run
 // gets back, wording borrowed from the console's CANCELLED_BODY
 // (ui/.../copy.ts) and the git helper's cancelled-credential error so the three
 // surfaces say the same thing. It is a 409, not a 404: the approval exists and

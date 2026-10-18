@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -32,6 +33,13 @@ func resourceAsk(req *client.RunResources, own types.ResourceLimits) types.Resou
 // or, when the run takes the caller's profile ceiling as its policy, the profile's AUTHORED size,
 // because that spec carries the deployment's size wherever the profile sets none.
 func sourceSize(source policySourceRecord, ceiling governanceCeiling) types.ResourceLimits {
+	// A policy_overlay that names resources replaces the source's whole size, so its size is the ask.
+	if source.overlaid != nil && slices.Contains(source.Overlay, "resources") {
+		if r := source.overlaid.Resources; r != nil {
+			return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+		}
+		return types.ResourceLimits{}
+	}
 	if source.Kind == policyKindProfile {
 		return ceiling.authoredSize()
 	}
@@ -91,4 +99,30 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 	}
 	out.SourceName = names[out.Source]
 	return out
+}
+
+// appliedPids is the process limit the run's source policy asked for held against the one it got after
+// the ceiling clamp. The pools fold no PIDs limit, so the cut is the ceiling's alone: the caller's
+// governance profile when its chain authored a limit, even one equal to the deployment's, else the
+// deployment (a profile with none inherits the deployment's, which is not the profile's). A profile
+// used as the policy asks nothing of its own; a policy_overlay that names resources asks through the
+// overlaid spec, which is where the console's ask arrives.
+func appliedPids(source policySourceRecord, ceiling governanceCeiling, applied int) *client.AppliedAmount {
+	asked := 0
+	switch {
+	case source.overlaid != nil && slices.Contains(source.Overlay, "resources"):
+		if r := source.overlaid.Resources; r != nil {
+			asked = r.PidsLimit
+		}
+	case source.Kind != policyKindProfile && source.Spec.Resources != nil:
+		asked = source.Spec.Resources.PidsLimit
+	}
+	out := client.AppliedAmount{Requested: asked, Applied: applied}
+	if asked > 0 && applied > 0 && applied < asked {
+		out.Capped, out.Source = true, types.LimitSourceDeployment
+		if p := ceiling.Profile; p != nil && p.AuthoredResources.PidsLimit > 0 {
+			out.Source, out.SourceName = types.LimitSourceGovernance, p.Name
+		}
+	}
+	return &out
 }

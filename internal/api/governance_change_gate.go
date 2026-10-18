@@ -179,6 +179,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRemoteRunnerPeople:  {approver: securityApprover, apply: applyRemoteRunnerPeopleChange},
 	govKindCredentialDelivery:  {approver: securityApprover, apply: applyCredentialDeliveryChange},
 	govKindServiceIdentity:     {approver: securityApprover, apply: applyServiceIdentityChange},
+	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
+	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
@@ -211,6 +213,8 @@ type govProposal struct {
 	// differ. A nil before is a create, a nil after a delete.
 	before, after any
 	changed       []string
+	// notes are advisory sentences the reviewer reads beside the diff (a profile's omission warnings).
+	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
 }
@@ -227,7 +231,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -241,8 +245,8 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 			Error: "a change to this target is already waiting for approval: " + pending.ID.String()}
 		// The held change rides in the refusal, with whether it is this proposal, so a repeat apply
 		// of the same write reports it as pending. A read that fails or finds it gone leaves the
-		// plain refusal.
-		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending {
+		// plain refusal, as does a held change the caller's role may not read.
+		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending && s.canSeeGovernanceChange(r, held) {
 			matches := held.Op == p.op && samePayload(held.Payload, payload)
 			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}
@@ -275,12 +279,14 @@ type governanceDiffBody struct {
 	Before  json.RawMessage `json:"before,omitempty"`
 	After   json.RawMessage `json:"after,omitempty"`
 	Changed []string        `json:"changed"`
+	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed []string) json.RawMessage {
-	body := governanceDiffBody{Changed: changed}
+func renderGovernanceDiff(before, after any, changed, notes []string) json.RawMessage {
+	body := governanceDiffBody{Changed: changed, Notes: notes}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

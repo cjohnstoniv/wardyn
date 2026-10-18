@@ -90,8 +90,6 @@ type Observations struct {
 // sensorCorrelatedNothingAnomaly is the one anomaly sourced from the sensor's own counters rather
 // than from this run's events. It says what the counters PROVE and no more: the count is cumulative
 // since the sensor started, so the sentence does not claim it happened during this capture.
-//
-// DRAFT (M2 canon pending)
 const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this capture and correlated none " +
 	"of what it saw to any run (%d event(s) dropped as unmapped, cumulative since the sensor started): either " +
 	"the run-correlation is broken, or activity reached the kernel outside every sandbox — this capture has no " +

@@ -184,11 +184,16 @@ func TestLLMRouteHonoursAllowedMethods(t *testing.T) {
 		forward := httptest.NewRecorder()
 		p.ServeHTTP(forward, httptest.NewRequest(http.MethodDelete, "http://"+openaiHost+"/v1/files/file-abc", nil))
 
-		if forward.Code != http.StatusForbidden || brokered.Code != forward.Code || brokered.Body.String() != forward.Body.String() {
+		// Same refusal, each lane in its own body shape: the brokered route
+		// speaks the provider's, the forward lane's is {"wardyn":...}.
+		if forward.Code != http.StatusForbidden || brokered.Code != forward.Code {
 			t.Fatalf("brokered %d %q, forward %d %q: want the same 403",
 				brokered.Code, brokered.Body.String(), forward.Code, forward.Body.String())
 		}
 		for k := range forward.Header() {
+			if k == "Content-Type" {
+				continue
+			}
 			if got, want := brokered.Header().Get(k), forward.Header().Get(k); got != want {
 				t.Errorf("header %s: brokered %q, forward %q", k, got, want)
 			}

@@ -75,7 +75,7 @@ func adoStandingLaunch(t *testing.T, c adoStandingCase, defaults, ceiling []ados
 	row := f.st.site.WorkspaceProviders.Git[0].Entra
 	row.DefaultProfile, row.CapabilityCeiling = slices.Clone(defaults), slices.Clone(ceiling)
 	f.st.grants = nil
-	a, on := resolveADOEntraRun(f.st.site, []string{adoTestRepo}, f.subject)
+	a, on := resolveADOEntraRun(f.st.site, nil, adoTestRepo, f.subject)
 	if !on {
 		t.Fatal("provider did not resolve")
 	}

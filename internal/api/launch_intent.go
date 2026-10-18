@@ -198,7 +198,7 @@ func (s *Server) handleGetLaunchIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var doc client.TemplateDocument
-	if err := json.Unmarshal(rec.Document, &doc); err != nil {
+	if err := json.Unmarshal(redactRepoURLsInJSON(rec.Document), &doc); err != nil {
 		writeServerError(w, r, "read launch intent", err)
 		return
 	}

@@ -29,7 +29,7 @@ var errMountsUnsupported = errors.New("k8s: host bind mounts are not supported o
 // wardynd never auto-creates one; the claim name/namespace go to the
 // operator's log line, not this run's hint (ensureDrivePVC).
 //
-// DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
+// The frozen member sentence for this refusal.
 var errDriveClaimNotProvisioned = errors.New("drive: your drive's volume is not provisioned on this cluster — ask an admin")
 
 // errDrivePVCForbidden is ensureDrivePVC's refusal on a 403 from the claim's
@@ -72,7 +72,7 @@ var errDriveClaimVanished = errors.New("your drive's volume claim was deleted wh
 // claim's NAME cannot prove that by itself: DriveObjectName's slug fold can
 // collide two different (drive, home) pairs onto one name.
 //
-// DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
+// The frozen member sentence for this refusal.
 var errDriveClaimForeign = errors.New("drive: your drive's volume is not the one allocated to you — ask an admin")
 
 var errDriveBackendUnsupported = errors.New("k8s: this drive's backend is not a Kubernetes one and cannot be mounted on this substrate") // ensureDrivePVC's refusal of a drive whose backend belongs to another substrate; reaching here is a bug

@@ -43,3 +43,16 @@ type RunnerRegistration struct {
 type RunnerClaimRequest struct {
 	Fingerprint string `json:"fingerprint"`
 }
+
+// RunnerOrgTokenRequest is POST /runners/org-tokens: a security operator mints a token for an
+// organization's runner. Name labels the token in its audit row.
+type RunnerOrgTokenRequest struct {
+	Name string `json:"name"`
+}
+
+// RunnerTrustRequest is PUT /runners/{id}/trust: a security operator's change of a runner's trust class,
+// with the reason the audit row keeps.
+type RunnerTrustRequest struct {
+	TrustClass RunnerTrustClass `json:"trust_class"`
+	Reason     string           `json:"reason"`
+}

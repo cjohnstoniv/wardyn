@@ -73,7 +73,8 @@ test.describe("New Run — the Azure DevOps launch door", () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(live ? [{ state: "live", source: "separate" }] : []),
+        // The live row is the refusal's own org: only that organisation's sign-in finishes this connect (DR-0270).
+        body: JSON.stringify(live ? [{ state: "live", source: "separate", org, kind: "azure_devops" }] : []),
       });
     });
 

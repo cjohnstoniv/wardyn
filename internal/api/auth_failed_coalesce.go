@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -129,6 +130,8 @@ type authFailedStreak struct {
 	// keeps the host:port shape every other audit row in the package uses and a
 	// streak's summary stays readable next to the row that opened it.
 	sourceAddr string
+	// proxyPeer is the opening refusal's trusted-proxy TCP peer, "" when it came direct.
+	proxyPeer string
 	// peers is the set of distinct peer IPs (peerIP) the streak folded, capped
 	// at maxAuthFailedPeers.
 	peers     map[string]struct{}
@@ -156,7 +159,10 @@ type authFailedStreak struct {
 // cap on a streak's total duration: the motivating flood was one row a minute
 // forever, and a 5m gap window folds exactly that while leaving a handful of
 // genuinely spaced-out failures individually visible.
-func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (bool, *types.AuditEvent) {
+//
+// proxyPeer is the TCP peer behind a proxy-reported remoteAddr ("" for a direct connection); the streak keeps
+// the opening one so the summary row, whose source_ip is the opening address, names the connection that sent it.
+func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr, proxyPeer string) (bool, *types.AuditEvent) {
 	window := s.cfg.AuditCoalesceWindow
 	if window <= 0 {
 		return false, nil // disabled: every refusal is its own row, exactly as before
@@ -189,7 +195,7 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 	// A different key (or none open): close what was open, then start a streak
 	// whose FIRST row the caller goes on to emit normally.
 	summary := s.closeAuthFailedStreakLocked()
-	fresh := &authFailedStreak{key: key, sourceAddr: remoteAddr, peers: map[string]struct{}{peer: {}},
+	fresh := &authFailedStreak{key: key, sourceAddr: remoteAddr, proxyPeer: proxyPeer, peers: map[string]struct{}{peer: {}},
 		count: 1, firstSeen: now, lastSeen: now}
 	// A streak closed by the timer has no request in flight, so its summary is
 	// recorded under BaseCtx (daemon lifetime) — a cancelled request context
@@ -302,6 +308,10 @@ func (s *Server) closeAuthFailedStreakLocked() *types.AuditEvent {
 			"last_seen":       open.lastSeen.UTC().Format(time.RFC3339),
 		}))
 	ev.SourceIP = open.sourceAddr
+	if open.proxyPeer != "" {
+		// The summary is recorded outside any request, so the request's stamp is not there to add this.
+		ev.Data = audit.StampProxyPeer(audit.WithProxyPeer(context.Background(), open.proxyPeer), ev.SourceIP, ev.Data)
+	}
 	return &ev
 }
 

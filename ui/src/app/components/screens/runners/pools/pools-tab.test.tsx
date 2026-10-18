@@ -161,6 +161,13 @@ describe("Pools tab", () => {
     await waitFor(() => expect(setOrgDefaultsMock).toHaveBeenCalledWith({ pool_id: "p-ci", barrier: "CC2" }));
   });
 
+  it("keeps the organization's recording setting and names the revision it read when it makes a pool the default", async () => {
+    orgDefaultsMock.mockResolvedValue({ pool_id: "p-gen", barrier: "CC2", recording: "required", revision: 4 });
+    renderTab();
+    await userEvent.click(await screen.findByRole("button", { name: "Make CI jobs the organization default" }));
+    await waitFor(() => expect(setOrgDefaultsMock).toHaveBeenCalledWith({ pool_id: "p-ci", barrier: "CC2", recording: "required", revision: 4 }));
+  });
+
   it("shows the server's sentence above the table when the default is refused", async () => {
     setOrgDefaultsMock.mockRejectedValue(new HttpError(409, "CI jobs is switched off right now. Choose another pool.", "runner_pool_unavailable"));
     renderTab();

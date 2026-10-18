@@ -12,6 +12,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
+import { RUNNER } from "../../wardyn/copy/runners";
 import { Button } from "../../ui/button";
 import {
   AlertDialog,
@@ -95,7 +96,7 @@ export function ConfirmDialog({
           </div>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{RUNNER.CANCEL}</AlertDialogCancel>
           <Button variant={destructive ? "destructive" : "default"} disabled={busy} onClick={() => void run()}>
             {busy && <Loader2 className="size-3.5 animate-spin" />}
             {confirmLabel}

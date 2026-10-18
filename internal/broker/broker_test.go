@@ -456,7 +456,7 @@ func seedApproval(db *fakeDB, runID, grantID uuid.UUID, scope json.RawMessage, s
 }
 
 func callerFor(runID uuid.UUID) *identity.Claims {
-	return &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID)}
+	return &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(defaultTrustDomain, runID)}
 }
 
 // ---- tests ---------------------------------------------------------------
@@ -496,8 +496,8 @@ func TestMintForGrant_ApprovedHappyPath_WritesJTI(t *testing.T) {
 	if !mints[0].preCommit {
 		t.Fatal("mint audit not written before commit — not atomic with the minted_jti burn (D29)")
 	}
-	if mints[0].actorType != types.ActorAgent || mints[0].actor != spiffeForRun(runID) {
-		t.Fatalf("audit actor = %s/%s, want agent/%s", mints[0].actorType, mints[0].actor, spiffeForRun(runID))
+	if mints[0].actorType != types.ActorAgent || mints[0].actor != spiffeForRun(defaultTrustDomain, runID) {
+		t.Fatalf("audit actor = %s/%s, want agent/%s", mints[0].actorType, mints[0].actor, spiffeForRun(defaultTrustDomain, runID))
 	}
 	if got := au.byAction("credential.mint"); len(got) != 0 {
 		t.Fatalf("success mint must not also go through the post-commit recorder (double durable write): %+v", got)
@@ -731,7 +731,7 @@ func TestMintForGrant_AutoMint_APIKey_InjectionRuleNoSecret(t *testing.T) {
 // exactly-once, fail-closed, namespace resolution — through exactly that
 // shape, so the shape lives on here.
 func mintOnApproval(b *Broker, ctx context.Context, runID, grantID uuid.UUID, sub string) (Minted, error) {
-	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(runID), Sub: sub}
+	caller := &identity.Claims{RunID: runID, SPIFFEID: spiffeForRun(defaultTrustDomain, runID), Sub: sub}
 	return b.mint(ctx, caller, grantID, uuid.Nil)
 }
 

@@ -89,6 +89,7 @@ function DurPair({
   noLabel,
   values,
   error,
+  maxError,
   onPatch,
 }: {
   rt: RtKey;
@@ -97,6 +98,8 @@ function DurPair({
   noLabel: string;
   values: RtValues;
   error?: string;
+  /** The error is about the Maximum field, not the Default. */
+  maxError?: string;
   onPatch: Patch;
 }) {
   const title = rt === "bg" ? POOL_DRAWER.BACKGROUND : POOL_DRAWER.INTERACTIVE;
@@ -110,8 +113,8 @@ function DurPair({
       step="any"
       disabled={disabled}
       aria-label={`${title}, ${label}, ${caption}`}
-      aria-invalid={suffix === "Dn" && error ? true : undefined}
-      aria-describedby={suffix === "Dn" && error ? `${id}-e` : undefined}
+      aria-invalid={error && (suffix === "Mn") === !!maxError ? true : undefined}
+      aria-describedby={error && (suffix === "Mn") === !!maxError ? `${id}-e` : undefined}
       value={values[`${pre}${suffix}`]}
       onChange={(e) => onPatch({ [`${pre}${suffix}`]: e.target.value })}
     />
@@ -195,7 +198,7 @@ export function RtSection({
       {amount("cpu", POOL_FORM.CPU)}
       {amount("mem", POOL_FORM.MEMORY)}
       {amount("disk", POOL_FORM.DISK)}
-      <DurPair rt={rt} pre="life" label={POOL_FORM.LIFETIME} noLabel={POOL_FORM.NO_MAXIMUM} values={values} error={errors[`${rt}.life`]} onPatch={onPatch} />
+      <DurPair rt={rt} pre="life" label={POOL_FORM.LIFETIME} noLabel={POOL_FORM.NO_MAXIMUM} values={values} error={errors[`${rt}.life`]} maxError={errors[`${rt}.life.max`]} onPatch={onPatch} />
       {rt === "bg" ? (
         <div className="-mt-1.5 space-y-1">
           <label className="inline-flex items-center gap-2 text-sm font-normal">
@@ -205,7 +208,7 @@ export function RtSection({
           <p className="text-xs text-muted-foreground">{POOL_FORM.NO_END_HINT}</p>
         </div>
       ) : (
-        <DurPair rt={rt} pre="idle" label={POOL_FORM.IDLE} noLabel={POOL_FORM.NEVER} values={values} error={errors[`${rt}.idle`]} onPatch={onPatch} />
+        <DurPair rt={rt} pre="idle" label={POOL_FORM.IDLE} noLabel={POOL_FORM.NEVER} values={values} error={errors[`${rt}.idle`]} maxError={errors[`${rt}.idle.max`]} onPatch={onPatch} />
       )}
     </fieldset>
   );
