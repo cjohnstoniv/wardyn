@@ -53,7 +53,7 @@ func (s *Store) putOverPointer(ctx context.Context, name string, r sealedRow) er
 			slog.String("secret", ref), slog.String("store", store))
 		return nil
 	}
-	if _, err := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, store, loc); err != nil {
+	if _, _, err := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, store, loc); err != nil {
 		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
 			slog.String("secret", ref), slog.String("store", store), slog.Any("err", err))
 	}
