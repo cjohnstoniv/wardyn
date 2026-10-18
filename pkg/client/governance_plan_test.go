@@ -139,6 +139,7 @@ func TestGovernance_CanonicalSubjectIsUnchangedUnderPrune(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("plan.Unchanged = %d", plan.Unchanged)
 	if len(plan.Steps) != 0 || plan.Destructive || plan.Unchanged != 4 {
 		t.Fatalf("plan = %+v, want no steps, not destructive, 4 unchanged (profile and 3 assignments)", plan)
 	}
