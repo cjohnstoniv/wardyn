@@ -142,3 +142,20 @@ func splitPrivileges(list string) []string {
 	slices.Sort(out)
 	return out
 }
+
+// TestSplitRoleRecipeNamesNoDroppableRelation: a multi-relation REVOKE aborts
+// whole when one relation is gone, and audit_events_legacy is dropped by
+// -audit-split-legacy and by retention, so the recipe must reach it only through
+// the partition loop and must be run with ON_ERROR_STOP.
+func TestSplitRoleRecipeNamesNoDroppableRelation(t *testing.T) {
+	doc := readDoc(t, "docs/OPERATIONS.md")
+	if !strings.Contains(doc, "ON audit_partition_meta, audit_chain_anchors FROM wardyn_app;") {
+		t.Error("the split-role recipe no longer REVOKEs on audit_partition_meta and audit_chain_anchors alone")
+	}
+	if strings.Contains(doc, "audit_chain_anchors, audit_events_legacy") {
+		t.Error("the split-role recipe REVOKEs on audit_events_legacy by name; once it is dropped the whole REVOKE fails")
+	}
+	if !strings.Contains(doc, "`psql -v ON_ERROR_STOP=1` so the first failed statement stops the script") {
+		t.Error("the split-role recipe no longer says to run it with ON_ERROR_STOP")
+	}
+}
