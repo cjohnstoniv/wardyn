@@ -304,7 +304,7 @@ describe("PolicyPanel — safety meter", () => {
     render(<Harness initial="{ not json" />);
     const meter = screen.getByTestId("safety-meter");
     expect(meter).toHaveAttribute("data-safety", "");
-    expect(meter).toHaveTextContent(/fix the json first/i);
+    expect(meter).toHaveTextContent(/fix the policy first/i);
     expect(gradePolicyMock).not.toHaveBeenCalled();
   });
 });
