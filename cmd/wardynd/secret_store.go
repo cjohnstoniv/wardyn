@@ -77,17 +77,28 @@ func verifyKeyDomains(ctx context.Context, s secretstore.Store) error {
 	return nil
 }
 
+// pointerAuditor is the part of the PG secret store warnUnderivedPointers reads.
+type pointerAuditor interface {
+	UnderivedPointers(ctx context.Context) (n int, example string, err error)
+	ExternalName() string
+}
+
 // warnUnderivedPointers warns at a serving boot about pointer rows the
 // configured external store does not derive. Its naming settings are fixed once
 // rows exist: a changed one makes every read of those rows a refusal that names
 // a moved or forged pointer, and this line names the likelier cause.
 func warnUnderivedPointers(ctx context.Context, s secretstore.Store) {
-	ps, ok := s.(*secretstorepg.Store)
+	ps, ok := s.(pointerAuditor)
 	if !ok {
 		return
 	}
 	n, ref, err := ps.UnderivedPointers(ctx)
-	if err != nil || n == 0 {
+	if err != nil {
+		// A diagnostic only: the boot goes on, but a scan that cannot run leaves a trace.
+		slog.DebugContext(ctx, "wardynd: could not scan for secret pointer rows the external store does not derive", slog.Any("err", err))
+		return
+	}
+	if n == 0 {
 		return
 	}
 	slog.WarnContext(ctx, underivedPointersWarning(ps.ExternalName()), slog.Int("rows", n), slog.String("example_ref", ref))
