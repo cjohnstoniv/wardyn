@@ -466,6 +466,8 @@ test.describe("New Run, Files: the person's drive (public)", () => {
 // #2107: Review says a typed branch is not checked until the run starts; a picked one says nothing new.
 test.describe("New Run, Review: a typed branch", () => {
   async function toReview(page: Page) {
+    // Continue is held while nothing is attached (it then points at Add and goes nowhere), so wait for the card first.
+    await expect(cards(page).filter({ hasText: "web" })).toBeVisible();
     await continueNewRun(page, NR_TOOLS.TITLE);
     await continueNewRun(page, NR_REVIEW.TITLE);
   }
