@@ -5,7 +5,8 @@
 # docs/operations/secrets-and-keys.md 10781 = 10711 + 70, measured: the undeclared-domain row and the sealed-actor wording in the key-custody rows.
 # docs/operations/secrets-and-keys.md 10713 adds 2 over 10711 (0.9.3 FIN-B), measured: the node role is shared by every pod or process on that machine.
 # docs/operations/secrets-and-keys.md 10783, measured at the second decided-rows merge into the final train (both sides' sentences).
-docs/operations/secrets-and-keys.md=10783 share=25
+# docs/operations/secrets-and-keys.md 10829 adds 46 over 10783, measured: a re-run that finds a staged key refuses, and what to do with the file.
+docs/operations/secrets-and-keys.md=10829 share=25
 # docs/operations/secrets-and-keys.md 10535 adds 1001 over 9534 (0.9 F-588 M1): the 'Key service: AWS KMS' section, AWS KMS in the key-service lists, and the custody sentence for all three key services.
 # docs/operations/secrets-and-keys.md 10434 adds 900 (0.9 F-588 M1): the 'Key service: AWS KMS' section and AWS KMS in the key-service lists.
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.

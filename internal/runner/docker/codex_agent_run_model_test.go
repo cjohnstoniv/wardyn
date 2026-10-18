@@ -68,15 +68,17 @@ func TestCodexAgentRun_ModelUnsetLeavesTheirModelAlone(t *testing.T) {
 	}
 }
 
-// Task mode: `codex exec` gets -m with the variable set, and no -m at all without it.
+// Task mode: `codex exec` runs outside a git repo with codex's own approvals and sandbox off (#2174), and
+// gets -m with the variable set, and no -m at all without it.
 func TestCodexAgentRun_TaskModeArgvCarriesModelOnlyWhenSet(t *testing.T) {
+	const flags = "exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox"
 	for name, tc := range map[string]struct {
 		env  []string
 		want string
 	}{
-		"unset": {nil, "argv: exec a task\n"},
-		"empty": {[]string{"WARDYN_CODEX_MODEL="}, "argv: exec a task\n"},
-		"set":   {[]string{"WARDYN_CODEX_MODEL=" + cxModel}, "argv: exec -m " + cxModel + " a task\n"},
+		"unset": {nil, "argv: " + flags + " a task\n"},
+		"empty": {[]string{"WARDYN_CODEX_MODEL="}, "argv: " + flags + " a task\n"},
+		"set":   {[]string{"WARDYN_CODEX_MODEL=" + cxModel}, "argv: " + flags + " -m " + cxModel + " a task\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, binDir, codexLog := cxArgvCodex(t)

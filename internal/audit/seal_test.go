@@ -425,3 +425,38 @@ func TestParseSealMode(t *testing.T) {
 		t.Error("a misspelt mode was accepted")
 	}
 }
+
+// Free text a sandboxed agent or a member controls can spell the marker and the pending prefix
+// inside a string value; only a parsed top-level marker beside a pending string where Seal writes
+// one makes a row pending.
+func TestIsPendingParsesTheRowNotItsText(t *testing.T) {
+	const crafted = `/"seal2p.x"pending_subject`
+	row := func(action string, data map[string]any) types.AuditEvent {
+		b, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return types.AuditEvent{ID: uuid.New(), Action: action, Data: b}
+	}
+	for name, ev := range map[string]types.AuditEvent{
+		"an egress path":                   row("egress.allow", map[string]any{"host": "any.host", "path": crafted}),
+		"a token name":                     row("token.create", map[string]any{"name": `"seal2p.x "pending_subject`}),
+		"a marker that is a string":        row("approval.decide", map[string]any{PendingMarker: "true", "reason": "seal2p.abc"}),
+		"a marker with no pending value":   row("approval.decide", map[string]any{PendingMarker: true, "reason": "plain"}),
+		"a pending string at no seal path": row("approval.decide", map[string]any{PendingMarker: true, "other": "seal2p.abc"}),
+		"a nested marker":                  row("approval.decide", map[string]any{"x": map[string]any{PendingMarker: true}, "reason": "seal2p.abc"}),
+	} {
+		if IsPending(ev) {
+			t.Errorf("%s: %s reads as pending", name, ev.Data)
+		}
+	}
+	for name, ev := range map[string]types.AuditEvent{
+		"a pending seal field": row("approval.decide", map[string]any{PendingMarker: true, "reason": "seal2p.abc"}),
+		"a pending actor":      row("egress.allow", map[string]any{PendingMarker: true, PendingActorKey: "seal2p.abc"}),
+		"a pending sponsor":    row("run.create", map[string]any{PendingMarker: true, "sponsor": "seal2p.abc"}),
+	} {
+		if !IsPending(ev) {
+			t.Errorf("%s: %s does not read as pending", name, ev.Data)
+		}
+	}
+}
