@@ -305,3 +305,16 @@ test.describe("Tier B run tabs at 390px", () => {
     expect(await pre.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   });
 });
+
+test.describe("Tier B run tabs at desktop width", () => {
+  // #2925: the empty Approvals card stops at the width the populated list and the other tabs use.
+  test("Approvals tab (none): the empty card is no wider than the populated list", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Approvals/ }).click();
+    const card = page.getByTestId("run-approvals-empty");
+    await expect(card).toBeVisible();
+    expect((await card.boundingBox())!.width).toBeLessThanOrEqual(768 + 1);
+  });
+});

@@ -63,7 +63,7 @@ export function ApprovalsTab({
   const adoTokens = useRunAdoTokens(run.id, !isTerminalRunState(run.state), approvals.some(isAdoCapabilityRequest));
   if (approvals.length === 0) {
     return (
-      <div className="rounded-xl border border-border bg-card">
+      <div data-testid="run-approvals-empty" className="max-w-3xl rounded-xl border border-border bg-card">
         <EmptyState
           icon={ShieldCheck}
           title="No approvals for this run"

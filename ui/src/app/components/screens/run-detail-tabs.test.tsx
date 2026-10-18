@@ -377,6 +377,18 @@ describe("RunDetailScreen — Audit tab row shape", () => {
   });
 });
 
+// #2925: the empty card has the populated list's width, so the content does not jump between tabs.
+describe("RunDetailScreen — Approvals tab empty card", () => {
+  it("is capped at the populated list's width", async () => {
+    renderRun({ ...RUN, state: "COMPLETED" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+    const card = await screen.findByTestId("run-approvals-empty");
+    expect(card).toHaveTextContent("No approvals for this run");
+    expect(card.className).toContain("max-w-3xl");
+  });
+});
+
 // #2924: the requested scope of a pending tool call wraps, so the command being decided on is fully on screen.
 describe("RunDetailScreen — Approvals tab requested scope", () => {
   it("wraps a long command instead of scrolling it out of sight", async () => {
