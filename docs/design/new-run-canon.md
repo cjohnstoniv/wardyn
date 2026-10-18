@@ -248,6 +248,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LEDE_AUTONOMOUS` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
+| `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
 | `EYEBROW(n)` | mock | Harness {n} |
 | `HARNESS_LABEL` | mock | Harness |
 | `AVAILABLE(name)` | mock | {name} is available in this environment. |

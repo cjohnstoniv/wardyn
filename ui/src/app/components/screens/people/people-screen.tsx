@@ -139,7 +139,12 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
       ) : status === "error" ? (
         <ErrorState onRetry={() => load()} />
       ) : rows.length === 0 ? (
-        <EmptyState icon={Users} title={P.TABLE_TITLE} description={q || filter !== "all" ? undefined : P.EMPTY} />
+        // The unfiltered title is not "People": it would repeat the section label right above (#2902).
+        <EmptyState
+          icon={Users}
+          title={q || filter !== "all" ? P.EMPTY_FILTERED_TITLE : P.EMPTY_TITLE}
+          description={q || filter !== "all" ? P.EMPTY_FILTERED : P.EMPTY}
+        />
       ) : (
         <div className="overflow-x-auto">
           <Table>

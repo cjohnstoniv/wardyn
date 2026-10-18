@@ -136,6 +136,8 @@ interface NavItem {
   // joins it (grants and preview are securityOps); Secrets is super-only;
   // Recordings waits for F1 (packet M-A QM-5).
   tier?: "super" | "security";
+  // Other paths that keep this item lit (see SidebarLowerLinks).
+  also?: string[];
 }
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
@@ -178,7 +180,8 @@ const USER_NAV: NavItem[] = [
 // view.
 const ADMIN_LOWER: NavItem[] = [
   { to: "/admin/setup", label: "Setup", icon: Compass },
-  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings },
+  // Providers, Components and Drives are opened only from Settings' cards and have no entry of their own.
+  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings, also: ["/admin/providers", "/admin/components", "/admin/drives"] },
 ];
 const USER_LOWER: NavItem[] = [
   { to: "/setup", label: "Getting started", icon: Compass },

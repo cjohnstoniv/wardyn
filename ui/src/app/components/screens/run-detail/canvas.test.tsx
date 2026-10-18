@@ -138,6 +138,16 @@ describe("RunCanvas — loading a layout", () => {
     );
   });
 
+  // #2909 (stopgap): the grid is floored at 480px, so on a phone the pane scrolls sideways instead of slicing the right column.
+  it("scrolls the grid pane sideways rather than hiding the overflow", async () => {
+    render(<RunCanvas ctx={ctx()} />);
+    const tile = await screen.findByTestId("run-terminal-pane");
+    const pane = screen.getByTestId("run-canvas-scroll");
+    expect(pane).toContainElement(tile);
+    expect(pane).toHaveClass("overflow-x-auto");
+    expect(pane).not.toHaveClass("overflow-x-hidden");
+  });
+
   it("falls through to the preset default when nothing is saved", async () => {
     render(<RunCanvas ctx={ctx()} />);
 

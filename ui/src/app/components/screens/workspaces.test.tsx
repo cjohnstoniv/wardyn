@@ -59,9 +59,9 @@ import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { setField } from "../../../test/set-field";
 
-function renderScreen() {
+function renderScreen(path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <WorkspacesScreen />
     </MemoryRouter>,
   );
@@ -590,8 +590,16 @@ describe("WorkspacesScreen — the User drives door", () => {
     listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { status: "scanned" })]);
   });
 
+  // #2887: the door lands on /admin/drives, so a User-view reader would be switched
+  // to the Admin view by clicking it.
+  it("an operator in the User view does not get it", async () => {
+    renderScreen("/workspaces");
+    await screen.findByRole("button", { name: /add workspace/i });
+    expect(screen.queryByRole("button", { name: DRIVES.TITLE })).not.toBeInTheDocument();
+  });
+
   it("an operator gets it beside Add workspace, outline — the teal stays on Add workspace", async () => {
-    renderScreen();
+    renderScreen("/admin/workspaces");
     const door = await screen.findByRole("button", { name: DRIVES.TITLE });
     expect(door.className.split(/\s+/)).not.toContain("bg-primary");
     expect(screen.getByRole("button", { name: /add workspace/i }).className.split(/\s+/)).toContain("bg-primary");

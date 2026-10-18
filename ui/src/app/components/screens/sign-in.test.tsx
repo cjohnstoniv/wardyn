@@ -339,6 +339,21 @@ describe("SignIn — the token field advertises no working credential or env var
   });
 });
 
+// #2854: the label's text was a bare text node plus a span, i.e. two flex items
+// that wrapped as two side-by-side columns.
+describe("SignIn — the Remember label reads as one sentence", () => {
+  it("is one text element beside the checkbox", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    const box = await screen.findByRole("checkbox", { name: "Remember on this device" });
+    const label = box.closest("label")!;
+    // The checkbox, then ONE text element (a bare text node beside a span wrapped as two columns).
+    expect(label.lastElementChild).toHaveTextContent(
+      "Remember on this device (keeps the token after the browser closes)",
+    );
+  });
+});
+
 // Every submitToken failure used to collapse to probeAuth's plain
 // boolean, so a daemon 5xx and an unreachable control plane both rendered the
 // SAME "That admin token was rejected" copy as an actually-bad token — and

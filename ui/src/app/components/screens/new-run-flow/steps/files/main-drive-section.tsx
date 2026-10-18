@@ -214,14 +214,14 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
           </div>
         )}
-        {/* Make's rule row: a 150 px column holding the checkbox, its label and Coming soon, then the tooltip. */}
-        <div className="grid grid-cols-[150px_1fr] items-start gap-3 border-t border-border pt-[11px] text-sm max-[520px]:grid-cols-1">
+        {/* The rule row: checkbox, label and Coming soon in one wrapper, the tooltip beside it, on one line that wraps whole (#2860). */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-[11px] text-sm">
           <span className="flex flex-wrap items-center gap-2 opacity-60">
             <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
             <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
             <Chip>{NR_SHARED.COMING_SOON}</Chip>
           </span>
-          <span><InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip></span>
+          <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>
         </div>
       </div>
     </FilesGroup>

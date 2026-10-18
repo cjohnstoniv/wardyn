@@ -190,9 +190,9 @@ export function CopyPill({ text }: { text: string }) {
       text={text}
       label="Copy command"
       iconClassName="size-3"
-      className="gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-0.5 hover:text-foreground"
+      className="max-w-full gap-1.5 rounded-md border border-border bg-surface-2/60 px-2 py-0.5 text-left hover:text-foreground"
     >
-      <Mono className="text-foreground">{text}</Mono>
+      <Mono className="break-all text-foreground">{text}</Mono>
     </CopyButton>
   );
 }

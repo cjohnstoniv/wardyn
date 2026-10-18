@@ -81,6 +81,11 @@ import { Cockpit } from "./run-detail/cockpit";
 // piece of state it held (grants, approvals, recording, ending audit) die with
 // the old instance instead of landing on B (#1483). react-router reuses one
 // element across a param change, so without the key nothing resets.
+// The TabsList is transparent on the page, so the primitive's light-theme active pill (bg-card) vanishes
+// into it and no tab reads as selected; give the active tab a visible fill and the rest a muted label (#2911).
+const RUN_TAB =
+  "h-7 gap-1.5 text-xs text-muted-foreground data-[state=active]:border-border data-[state=active]:bg-muted data-[state=active]:text-foreground";
+
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   return <RunDetailPage key={id} id={id} />;
@@ -294,10 +299,10 @@ function RunDetailPage({ id }: { id: string }) {
           <RunDetailCommandBar
             tabs={
               <TabsList className="h-7 bg-transparent p-0">
-                <TabsTrigger value="overview" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="overview" className={RUN_TAB}>
                   <LayoutDashboard className="size-3.5" /> Overview
                 </TabsTrigger>
-                <TabsTrigger value="approvals" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="approvals" className={RUN_TAB}>
                   <ShieldCheck className="size-3.5" /> Approvals
                   {pending.length > 0 && (
                     <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
@@ -305,16 +310,16 @@ function RunDetailPage({ id }: { id: string }) {
                     </span>
                   )}
                 </TabsTrigger>
-                <TabsTrigger value="policy" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="policy" className={RUN_TAB}>
                   <FileText className="size-3.5" /> {POLICY_TAB.tab}
                 </TabsTrigger>
-                <TabsTrigger value="audit" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="audit" className={RUN_TAB}>
                   <ScrollText className="size-3.5" /> Audit
                 </TabsTrigger>
-                <TabsTrigger value="recording" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="recording" className={RUN_TAB}>
                   <SquareTerminal className="size-3.5" /> Recording
                 </TabsTrigger>
-                <TabsTrigger value="output" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="output" className={RUN_TAB}>
                   <Logs className="size-3.5" /> {RUN_OUTPUT.tab}
                 </TabsTrigger>
               </TabsList>

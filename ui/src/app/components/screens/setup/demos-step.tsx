@@ -85,21 +85,22 @@ export default function DemoDetail({
           data-testid="demos-step-not-ready"
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>
-            Demos need the sandbox runner — finish the{" "}
-            {onJump ? (
+          {onJump ? (
+            <p>
+              Demos need the sandbox runner — finish the{" "}
               <button
                 type="button"
                 onClick={() => onJump("environment")}
                 className="font-medium underline underline-offset-2 hover:text-foreground"
               >
                 Environment step
-              </button>
-            ) : (
-              <span className="font-medium">Environment step</span>
-            )}{" "}
-            first, then come back.
-          </p>
+              </button>{" "}
+              first, then come back.
+            </p>
+          ) : (
+            // A member has no Environment step to finish (#2842).
+            <p>Demos need a sandbox runner — ask your admin to set up a barrier, then come back.</p>
+          )}
         </div>
       )}
 

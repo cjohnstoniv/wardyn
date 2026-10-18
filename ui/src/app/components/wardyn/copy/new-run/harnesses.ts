@@ -16,6 +16,7 @@ export const NR_HARNESSES = {
   LEDE_AUTONOMOUS: "An agent runs on its own, with no SSH or terminal.",
   EMPTY_TITLE: "No harnesses added",
   EMPTY_BODY: "This workload can continue without one.",
+  LOADING: "Loading harnesses…",
   EYEBROW: (n: string | number) => `Harness ${n}`,
   HARNESS_LABEL: "Harness",
   AVAILABLE: (name: string | number) => `${name} is available in this environment.`,

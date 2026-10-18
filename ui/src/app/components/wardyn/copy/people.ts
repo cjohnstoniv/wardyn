@@ -38,6 +38,9 @@ export const PEOPLE_PAGE = {
     ].filter(Boolean);
     return parts.length ? parts.join(" · ") : "—";
   },
+  EMPTY_TITLE: "No people yet",
+  EMPTY_FILTERED_TITLE: "No one matches",
+  EMPTY_FILTERED: "Nothing matches this search or filter.",
   EMPTY: "Nobody has signed in yet. People appear here after their first sign-in, or when you add them.",
   ADD: "Add a person",
   ADD_HINT: "Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.",

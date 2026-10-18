@@ -94,6 +94,18 @@ describe("Branding card (#1125)", () => {
     expect(screen.getByRole("button", { name: /^Example Corp Wardyn/ })).toHaveAttribute("aria-pressed", "false");
   });
 
+  // #2871: an untouched form opens on the default colour pair, not on two errors.
+  it("opens on a valid default colour pair, with no error before any input", async () => {
+    getSettings.mockResolvedValue({});
+    renderCard();
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+    await expandCard(BRANDING.TITLE);
+    expect(await screen.findByLabelText(BRANDING.PRIMARY_LABEL)).toHaveValue("#0f766e");
+    expect(screen.getByLabelText(BRANDING.TEXT_LABEL)).toHaveValue("#ffffff");
+    expect(screen.queryByText(BRANDING.ERR_COLOR)).not.toBeInTheDocument();
+    expect(screen.queryByText(BRANDING.FIX_ONE)).not.toBeInTheDocument();
+  });
+
   it("refuses an invalid colour, live, and holds the save", async () => {
     await validDraft();
     await fill(BRANDING.PRIMARY_LABEL, "#7Q3aeZ");

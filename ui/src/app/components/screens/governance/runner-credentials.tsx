@@ -321,7 +321,7 @@ function ClassRow({
             return (
               <div key={mode} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-2">
-                  <RadioGroupItem id={id} value={mode} disabled={!!reason} aria-describedby={`${id}-d`} />
+                  <RadioGroupItem id={id} value={mode} disabled={!!reason} aria-describedby={`${id}-d`} className="peer" />
                   <Label htmlFor={id} className="text-sm">
                     {DELIVERY.MODE[mode]}
                   </Label>
