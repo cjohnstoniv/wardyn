@@ -280,6 +280,12 @@ phase_prepare() {
     begin "merge $MERGE"
     git rev-parse --verify -q "$MERGE^{commit}" >/dev/null || die "MERGE '$MERGE' is not a commit"
     if git merge-base --is-ancestor "$MERGE" HEAD; then finish "skipped (already in)"
+    elif git grep -qF -e "## [$V]" HEAD -- CHANGELOG.md; then
+      # A resume after the release commit: the release's notes, checks and scope were fixed
+      # there. Commits $MERGE gained since (lanes keep merging during the wait) are not
+      # part of $V; taking them would publish code the Release body never mentions.
+      say "$MERGE has $(git rev-list --count "HEAD..$MERGE") commit(s) this candidate lacks; not merging them: $V is frozen at its release commit. Cut the next patch for them"
+      finish "skipped (candidate already cut; scope frozen)"
     else
       git -c rerere.enabled=false merge --no-ff --no-edit --signoff "$MERGE" \
         || die "merging $MERGE conflicted. Resolve it, commit with \`git commit -s --no-edit\` (so the merge is signed off), and re-run: it resumes here"

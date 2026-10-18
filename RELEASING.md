@@ -180,7 +180,7 @@ make release-patch V=0.8.4 DRY_RUN=1 BRANCH=<a branch whose tree CI tested> HIGH
 |---|---|
 | `V` | `X.Y.Z` or `X.Y.Z-rc.N`, required. It must be greater than every `vX.Y.*` tag. |
 | `BRANCH` | An existing branch that contains `origin/release/X.Y`. Default: `chore/release-V`, cut from `origin/release/X.Y`. |
-| `MERGE` | A ref to merge into the candidate, for example `origin/main`. Merged with `--no-ff --signoff` and `rerere.enabled=false`. |
+| `MERGE` | A ref to merge into the candidate, for example `origin/main`. Merged with `--no-ff --signoff` and `rerere.enabled=false`. A resume after the release commit skips it, so the release stays what was cut. |
 | `NOTES` | The CHANGELOG paste file, passed to `release-commit.sh --notes`. |
 | `BODY` | The Release body file. Default: the new CHANGELOG section. Over 125000 characters is refused. |
 | `HIGHLIGHTS` | The ROADMAP Shipped row's text. Required when the row is missing. |
