@@ -536,7 +536,8 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // 500) and returns failed=true — the caller (one frame up, off-request-capable)
 // owns refreshing the run and answering the response; a WORKSPACE image build
 // failure is fail-open (keeps the convention image), since onboarding is a
-// convenience, not a gate. Each build is one a kill of the run stops
+// convenience, not a gate, except that a failed wrap of the workspace's CHOSEN
+// base image marks the run FAILED like a BYOI build (the workspace_id door's answer). Each build is one a kill of the run stops
 // (trackRunBuild); a run already terminal builds nothing and also returns
 // failed=true, with its state left as it is, and a run that cannot be read
 // builds nothing and is failed. The resolved image is persisted for provenance
