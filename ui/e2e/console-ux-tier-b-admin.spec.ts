@@ -8,8 +8,22 @@
 import type { Locator, Page } from "@playwright/test";
 import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
 import { KIND, PERM } from "../src/app/lib/permissions-copy";
+import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
 const PHONE = { width: 390, height: 844 };
+const WIDE = { width: 1440, height: 900 };
+
+// The Who column of an add-a-grant row holds the type switch. Its options must sit on one line and the column must
+// not clip them (#2900): that is a layout fact, so it is read from the engine, not from the class string.
+async function expectWhoColumnFitsSwitch(whoField: Locator): Promise<void> {
+  const options = whoField.getByRole("button").filter({ hasText: /\S/ });
+  expect(await options.count()).toBeGreaterThan(1);
+  const tops = await options.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+  expect(new Set(tops).size, `the switch wrapped: option tops ${tops.join(",")}`).toBe(1);
+  const fits = await whoField.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  expect(fits, "the Who column clips its content").toBe(true);
+}
 
 async function boxOf(target: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
   const box = await target.boundingBox();
@@ -72,6 +86,43 @@ test.describe("Tier B at desktop width", () => {
     await expect(open).toBeVisible();
     await expect(open.locator("svg")).toHaveCount(1);
     expect((await boxOf(open.locator("svg"))).x).toBeCloseTo((await boxOf(del.locator("svg"))).x, 0);
+  });
+});
+
+test.describe("Tier B layout rulings at desktop width", () => {
+  // #2900: the Who column sizes to its content instead of an equal third, so the type switch stays on one line.
+  test("Governance: the add-a-grant Who column holds its type switch on one line", async ({ page }) => {
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    const grid = page.getByText(GOV.SIGNIN_NOTE).locator("xpath=following-sibling::div[1]");
+    await expect(grid).toBeVisible();
+    await expectWhoColumnFitsSwitch(grid.locator("xpath=./*[1]"));
+  });
+
+  test("Permissions: the add-a-grant Who column holds its type switch on one line", async ({ page }) => {
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Permissions");
+    const who = page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true });
+    await expect(who).toBeVisible();
+    const grid = who.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " grid ")][1]');
+    await expectWhoColumnFitsSwitch(grid.locator("xpath=./*[1]"));
+  });
+
+  // #2894: the back link leads the page: above the title, on the page's left edge.
+  test("Runner pool form: the back link sits above the title, left edges level", async ({ page }) => {
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/account/pools/new");
+    const title = page.getByRole("heading", { name: POOL_FORM.TITLE_NEW });
+    const back = page.getByRole("button", { name: POOL_FORM.BACK_MINE });
+    await expect(title).toBeVisible();
+    const [b, t] = [await boxOf(back), await boxOf(title)];
+    expect(b.y + b.height, "back link is not above the title").toBeLessThanOrEqual(t.y + 1);
+    // The ghost button insets its label by its own padding; -ml-3 cancels that, so compare the label's edge.
+    const pad = await back.evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft));
+    expect(Math.abs(b.x + pad - t.x), "back link label and title left edges differ").toBeLessThanOrEqual(4);
   });
 });
 
