@@ -33,7 +33,8 @@ Setup status lists the ones that reach your deployment ("Defaults changed by thi
 
 These are covered by tests against simulated parts only; check them on your estate.
 
-- The macOS runner's spool fix, on a real Mac with your container engine. The macOS package ships unsigned.
+- A run on a macOS runner sending its decisions to the runner end to end, on a real Mac with your container engine.
+  The macOS package ships unsigned.
 - Recovery after a control-plane restart, on a laptop fleet.
 - The proxy NetworkPolicy's cluster-DNS peer, on a network plugin that selects pods by identity.
 - The proxy's memory limit under production load in a real cluster.
