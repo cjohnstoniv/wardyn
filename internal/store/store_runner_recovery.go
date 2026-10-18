@@ -57,23 +57,9 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 	if blocked {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
-	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT assertion FROM runner_inventory_observations WHERE runner_id = $1 AND run_id = $2`, runnerID, runID).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
-	}
+	marker, err := reportedContainmentMarker(ctx, tx, runnerID, runID, generation)
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
-	}
-	var row runnerwire.RunState
-	if err := json.Unmarshal(raw, &row); err != nil {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
-	}
-	marker := row.Containment
-	if marker == nil || !marker.Contained || row.ContainmentOnly || row.MutationFailure != nil || row.Retirement != nil ||
-		row.ContainmentPending != nil || !row.SandboxPresent || marker.Generation != generation || row.Generation != generation ||
-		(marker.Operation != string(types.RunnerActionEnd) && marker.Operation != string(types.RunnerActionStopProxy)) {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	var generationArg *uuid.UUID
 	if generation != uuid.Nil {
@@ -122,4 +108,30 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 		return types.RunnerPendingAction{}, false, err
 	}
 	return a, true, tx.Commit(ctx)
+}
+
+// reportedContainmentMarker is the containment marker the runner reported for the run on its current
+// session, or ErrRunnerActionRefused when there is none or the report rules a recovery out: not contained,
+// containment only, a mutation failure, a retirement, a containment pending hold, no sandbox, another
+// generation, or an operation other than end or stop_proxy.
+func reportedContainmentMarker(ctx context.Context, tx pgx.Tx, runnerID, runID, generation uuid.UUID) (*types.RunnerMutationFailure, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT assertion FROM runner_inventory_observations WHERE runner_id = $1 AND run_id = $2`, runnerID, runID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrRunnerActionRefused
+	}
+	if err != nil {
+		return nil, err
+	}
+	var row runnerwire.RunState
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return nil, ErrRunnerActionRefused
+	}
+	marker := row.Containment
+	if marker == nil || !marker.Contained || row.ContainmentOnly || row.MutationFailure != nil || row.Retirement != nil ||
+		row.ContainmentPending != nil || !row.SandboxPresent || marker.Generation != generation || row.Generation != generation ||
+		(marker.Operation != string(types.RunnerActionEnd) && marker.Operation != string(types.RunnerActionStopProxy)) {
+		return nil, ErrRunnerActionRefused
+	}
+	return marker, nil
 }
