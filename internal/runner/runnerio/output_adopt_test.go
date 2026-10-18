@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -163,6 +164,24 @@ func testAdoption(t *testing.T, ackFirst, compete bool) {
 			t.Fatal("no later OPEN was accepted into the adopted sink")
 		}
 	}
+	// The runner's OPEN, sent as the recovery began writing, reached the org while the sink was still
+	// catching up: it is turned away with a capacity reset (the runner retries) or already accepted,
+	// never refused or failed, which would end the adopted sink with a forward gap. Once the recovery
+	// ends the sink is gone and a later retry is refused, so only results from before that count.
+	var first error
+	select {
+	case first = <-watch.opens:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the runner's OPEN ahead of the catch-up never reached the org")
+	}
+	for err := first; ; err = <-watch.opens {
+		if err != nil && !errors.Is(err, runnerwire.ErrOpenCapacity) {
+			t.Fatalf("the OPEN ahead of the catch-up was answered %v; want a capacity reset or an accept", err)
+		}
+		if len(watch.opens) == 0 {
+			break
+		}
+	}
 	if _, err = w.Write(p3); err != nil {
 		t.Fatal(err)
 	}
@@ -291,14 +310,5 @@ func TestOutputAdoption_OpenAheadOfCatchUp(t *testing.T) {
 	}
 	if !bytes.Equal(capture.Bytes(), want) || capture.err != nil {
 		t.Fatalf("adopted %d bytes, end %v; want %d bytes, end nil", capture.Len(), capture.err, len(want))
-	}
-	// The runner's OPEN that waited for the catch-up must have been accepted, not refused.
-	for accepted := false; !accepted; {
-		select {
-		case err := <-watch.opens:
-			accepted = err == nil
-		case <-time.After(10 * time.Second):
-			t.Fatal("the runner's OPEN ahead of the catch-up was never accepted")
-		}
 	}
 }
