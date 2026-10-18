@@ -379,7 +379,7 @@ function AvailabilityFields({
             }
           }}
           disabled={disabled}
-          className="h-8 max-w-[240px] font-mono"
+          className="h-8 max-w-[280px] font-mono placeholder:font-sans"
         />
         <Button
           type="button"
