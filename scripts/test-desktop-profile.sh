@@ -452,6 +452,13 @@ chmod 0644 "${md}/policy.json" "${md}/site-config.json"
 f185_run "${md}" >/dev/null
 [ -e "${md}/PWNED" ] \
   || fail "root-owned 0644 envelope files were refused — the check must refuse only what another account can write"
+# A symlinked wardyn.env is judged by the file it points at: a link to a
+# root-owned 0644 file starts as it does today.
+md="$(f185_fixture 0600)"
+mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
+f185_run "${md}" >/dev/null
+[ -e "${md}/PWNED" ] \
+  || fail "a symlinked wardyn.env pointing at a root-owned 0644 file was refused — the check must follow the link"
 echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
 
 # ── #1493: the published port the launcher probes is the one compose publishes ─

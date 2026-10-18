@@ -70,7 +70,7 @@ SITE_CONFIG="${MANAGED_DIR}/site-config.json"
 # same owner and write rule secret.env gets below (readable is fine for these).
 refuse_shared_write() { # FILE
   local st perm
-  st="$(stat -c '%a %u' "$1" 2>/dev/null || stat -f '%OLp %u' "$1" 2>/dev/null || true)"
+  st="$(stat -L -c '%a %u' "$1" 2>/dev/null || stat -L -f '%OLp %u' "$1" 2>/dev/null || true)"
   [ -n "${st}" ] || die "wardyn-desktop.sh: cannot stat $1 — refusing to use a file whose mode and owner are unknown"
   perm=$(( 8#${st%% *} ))
   if [ "${st##* }" != "$(id -u)" ] || [ $(( perm & 0022 )) -ne 0 ]; then
