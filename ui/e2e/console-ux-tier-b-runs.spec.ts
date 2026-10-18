@@ -7,7 +7,7 @@
 // wrapping, computed positions). Text-shaped fixes are pinned in vitest next to their screen.
 import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute, sidebarLink } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute, sidebarLink, sql } from "./fixtures";
 
 const PHONE = { width: 390, height: 844 };
 
@@ -129,5 +129,22 @@ test.describe("Tier B runs list at 390px", () => {
     );
     expect(direct).toBe(true);
     expect(await summary.evaluate((el) => getComputedStyle(el).textOverflow)).toBe("ellipsis");
+  });
+});
+
+test.describe("Tier B run header", () => {
+  // #2916: with room to spare at desktop width, the pending-approval chip shows its whole sentence.
+  test("Run detail header: '1 waiting · sandbox held' is not cut off at 1440", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${id}'`);
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${id}','tool_call','{"tool":"Bash","cmd":"ls"}'::jsonb,'PENDING',now())`,
+    );
+    await navToRoute(page, `/runs/${id}`);
+    const chip = page.locator("span.truncate", { hasText: /^1 waiting · sandbox held$/ });
+    await expect(chip).toBeVisible();
+    expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   });
 });
