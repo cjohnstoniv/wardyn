@@ -2815,6 +2815,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **[0.9.4]** An accepted record releases the run only for the tuple it was approved for. runnerd compares the tuple again as it stores the record and again before the record releases the run, so a holder of the node name latched after approval lapses the record; the run stays held until a record for the new tuple is accepted ([`internal/runner/k8s/evidence.go`](../internal/runner/k8s/evidence.go)).
     - Owner acceptance is pending; listing the residual here is not acceptance.
 
+92. **With local mode on, `WARDYN_LOCAL_TRUST_FORWARDER` (compose default `true`) treats every peer on the `wardyn-internal` network as the local operator [0.9.4].** ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), [`internal/api/http.go`](../internal/api/http.go).)
+    - The setting exists because traffic on the published port reaches wardynd from the bridge gateway, not from loopback. wardynd cannot tell that hop apart from another member of the network.
+    - The members are Wardyn's own containers: the per-run proxy sidecars, the registry and relay probes. The desktop tier inherits the compose default.
+    - Narrowing the trust to the gateway address is planned for 0.10, once the desktop and compose flows are proven with it on Docker and Podman. The variable and its default stay as they are.
+
+93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go).)
+    - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
+    - The run's sandbox reaches it over the run's own network; nothing checks the caller's address.
+    - A check that serves only the run's sandbox address, with no change to how the proxy is addressed, is planned for 0.10 once proven on Docker and Podman.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.
