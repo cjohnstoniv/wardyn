@@ -235,15 +235,19 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			if ref == "" {
 				continue
 			}
-			// A name the member OWNS is exempt from capSecret: that capability
-			// bounds access to OPERATOR material, and a member's own row widens
-			// nothing (6c).
-			if s.ownsSecretMemoized(ctx, owner, ref) {
-				continue
-			}
+			owned := s.ownsSecretMemoized(ctx, owner, ref)
 			ok, err := cap.allowed(ctx, capSecret, ref)
 			if err != nil {
 				return nil, nil, err
+			}
+			// A name the member OWNS is exempt from capSecret: that capability
+			// bounds access to OPERATOR material, and a member's own row widens
+			// nothing (6c). That holds only while the grant reads the own row
+			// alone, so an exempted grant is owner_only: a row deleted after
+			// launch never falls back to the operator's.
+			if !ok && owned {
+				g.OwnerOnly = true
+				continue
 			}
 			if !ok {
 				refused = ref
