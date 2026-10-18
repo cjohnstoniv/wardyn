@@ -23,7 +23,7 @@ describe("credentialDelivery.get", () => {
     const by_trust = { personal: { classes: { env_secret: { mode: "refuse" as const } } } };
     respond({
       policy: { classes: { env_secret: { mode: "runner_resident" } }, by_trust },
-      updated_at: "2026-10-18T00:00:00Z",
+      updated_at: "",
       updated_by: "admin@wardyn.test",
     });
     const snap = await credentialDelivery.get();
