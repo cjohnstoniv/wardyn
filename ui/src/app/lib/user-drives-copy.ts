@@ -194,6 +194,11 @@ export const DRIVES = {
   HOME_SUB_HINT: "The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person.",
   HOME_EMAIL_LOCAL: "Email, before the @",
   HOME_EMAIL_LOCAL_HINT: "The part before the @, lowercased — the usual shape of a corporate home directory.",
+  // Why a Directory-name option is greyed out, per backend (homeTemplateDisabled).
+  HOME_UNAVAILABLE_MANAGED:
+    "Not available for a Wardyn-managed volume: the directory name would be printed by docker volume ls / kubectl get pvc.",
+  HOME_UNAVAILABLE_SHARE: "Not available for a share: a derived id would name a directory nobody made.",
+  HOME_UNAVAILABLE_CLAIM: "Not available for a pre-created claim: it would fold two people's claims onto one volume.",
   HOME_RULE:
     "A directory name is lowercase letters and digits, then any of . _ -, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.",
   FIELD_SIZE: "Size (MiB)",
