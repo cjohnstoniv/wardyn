@@ -198,7 +198,7 @@ func run() error {
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
 	// the pool exists and before anything registers process-local state, and
 	// held until shutdown. See claimSingleInstance for the ceiling.
-	releaseInstance, err := claimSingleInstance(rootCtx, pool, singleInstanceExempt(f))
+	releaseInstance, err := claimSingleInstanceFor(rootCtx, pool, f)
 	if err != nil {
 		return err
 	}
