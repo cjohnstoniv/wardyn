@@ -403,7 +403,7 @@ describe("RecordingScreen — paging (#159)", () => {
 
     await screen.findByText("fix the leak");
     expect(screen.getByText("1 recording loaded so far — there are more on the server.")).toBeInTheDocument();
-    const loadMore = screen.getByRole("button", { name: "Load 100 more" });
+    const loadMore = screen.getByRole("button", { name: "Search 100 more runs" });
     expect(loadMore).toHaveClass("text-info");
     expect(screen.queryByText(/of 1,000|100 of/i)).not.toBeInTheDocument();
   });
@@ -417,13 +417,39 @@ describe("RecordingScreen — paging (#159)", () => {
     expect(screen.queryByRole("button", { name: /load .* more/i })).not.toBeInTheDocument();
   });
 
+  it("#2519: a truncated first page with no recording still offers the next page, counted in runs", async () => {
+    const bare = Array.from({ length: 100 }, (_, i) => run(`bare_${i}`));
+    listRunsMock.mockResolvedValueOnce(page(bare, true));
+    listRunsMock.mockResolvedValueOnce(page([recorded("run_101", { task: "found it" })], false));
+    renderScreen();
+
+    await screen.findByText("No recordings in your newest 100 runs");
+    expect(screen.queryByText("None of your runs have a recording yet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
+
+    await screen.findByText("found it");
+    expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 100 });
+  });
+
+  it("#2519: a failed page from an empty library offers Retry, with no '0 already loaded'", async () => {
+    listRunsMock.mockResolvedValueOnce(page([run("bare_1")], true));
+    listRunsMock.mockRejectedValueOnce(new Error("boom"));
+    renderScreen();
+
+    await screen.findByText("No recordings in your newest run");
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
+    await screen.findByText("Couldn't load more recordings");
+    expect(screen.queryByText(/The 0 already loaded/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
   it("Load more asks for the next page at offset=runs.length and appends the result", async () => {
     listRunsMock.mockResolvedValueOnce(page([recorded("run_1", { task: "fix the leak" })], true));
     listRunsMock.mockResolvedValueOnce(page([recorded("run_2", { task: "bump deps" })], false));
     renderScreen();
 
     await screen.findByText("fix the leak");
-    fireEvent.click(screen.getByRole("button", { name: "Load 100 more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
 
     await screen.findByText("bump deps");
     expect(listRunsMock).toHaveBeenLastCalledWith({ includeRecordingMeta: true, limit: 100, offset: 1 });
@@ -438,7 +464,7 @@ describe("RecordingScreen — paging (#159)", () => {
     renderScreen();
 
     await screen.findByText("fix the leak");
-    fireEvent.click(screen.getByRole("button", { name: "Load 100 more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
 
     await screen.findByText("Couldn't load more recordings");
     expect(

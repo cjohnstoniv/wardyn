@@ -367,7 +367,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
-	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+	return reviveResult{RunID: run.ID, DeniedAdded: nonNilStrings(re.added), ProxyRelease: version.Version, AgentStarted: rebooted}, nil
 }
 
 // claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A

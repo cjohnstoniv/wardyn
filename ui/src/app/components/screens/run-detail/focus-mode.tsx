@@ -250,6 +250,7 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
             <span className="text-warning">{RUN_COCKPIT.failed(failed)}</span>
           </>
         )}
+        {ctx.auditGap && <span title={RUN_COCKPIT.countsFloorTitle}> · {RUN_COCKPIT.countsFloor}</span>}
       </span>
       <span className="text-muted-foreground">
         {RUN_COCKPIT.credentials} <span>{RUN_COCKPIT.eligible(ctx.grants.length)}</span> ·{" "}

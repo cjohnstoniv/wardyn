@@ -220,9 +220,10 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 
 // QueryAuditEventsFilteredPage returns audit events narrowed by f, bounded by p.
 // A non-nil runID scopes to one run and keeps that trail's chronological seq ASC
-// order (the per-run contract in docs/sdk.md); nil is the newest-first global
-// feed. Only a request that actually sets a predicate takes this path — an
-// unfiltered read stays on the two plain queries above, whose plans are unchanged.
+// order (the per-run contract in docs/sdk.md) unless p.Newest asks for its newest
+// rows first; nil is the newest-first global feed. Only a request that actually
+// sets a predicate takes this path — an unfiltered read stays on the two plain
+// queries above, whose plans are unchanged.
 //
 // No new index: 0001 covers (time) and 0017 (action, seq DESC); a bounded LIMIT
 // query index-scans the pkey backward and filters, which is what the caps are for.
@@ -230,15 +231,16 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 // planner walks the pkey or the (time) index and filters, and the LIMIT plus a
 // Since window bound it (about 0.1 s over 2M rows in the #1449 review).
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
-	q, args := filteredAuditQuery(auditCols, runID, f, 0)
+	q, args := filteredAuditQuery(auditCols, runID, f, p.Newest, 0)
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
 
 // filteredAuditQuery is the filtered audit read without its LIMIT: cols from audit_events narrowed by the
-// run and f, in the order QueryAuditEventsFilteredPage documents. A positive afterSeq continues past that
-// row in the same direction (below it newest-first, above it for a run's trail).
-func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, afterSeq int64) (string, []any) {
+// run and f, in the order QueryAuditEventsFilteredPage documents (newest flips a run's trail to newest-first).
+// A positive afterSeq continues past that row in the same direction (below it newest-first, above it for a
+// run's trail read oldest-first).
+func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, newest bool, afterSeq int64) (string, []any) {
 	q := `
 		SELECT ` + cols + `
 		FROM audit_events`
@@ -251,7 +253,7 @@ func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, afterSeq i
 	extra, args := f.where(args)
 	clauses = append(clauses, extra...)
 	dir, cmp := "DESC", "<"
-	if runID != nil {
+	if runID != nil && !newest {
 		dir, cmp = "ASC", ">"
 	}
 	if afterSeq > 0 {
@@ -288,7 +290,7 @@ func (r seqRow) Scan(dest ...any) error { return r.Row.Scan(append(dest, r.seq).
 // from the cursor, so the export costs O(rows) however long it runs, and rows committed after it began sit
 // beyond the cursor (newest-first) or past the last page, never inside one already sent.
 func (s PG) QueryAuditEventsFilteredAfter(ctx context.Context, runID *uuid.UUID, f AuditFilter, afterSeq int64, limit int) ([]types.AuditEvent, int64, error) {
-	q, args := filteredAuditQuery(auditCols+", seq", runID, f, afterSeq)
+	q, args := filteredAuditQuery(auditCols+", seq", runID, f, false, afterSeq)
 	q, args = Page{Limit: limit}.appendTo(q, args)
 	last := afterSeq
 	evs, err := collect(ctx, s.Pool, "query", "audit events", q, args, func(r pgx.Row) (types.AuditEvent, error) {

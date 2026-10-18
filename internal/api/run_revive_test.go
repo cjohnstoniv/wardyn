@@ -350,6 +350,25 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	}
 }
 
+// TestReviveRun_NothingNewDeniedAnswersAnEmptyList pins denied_added on the
+// wire: a revive whose ceiling adds no host must say [], not null, which the
+// console reads with .length.
+func TestReviveRun_NothingNewDeniedAnswersAnEmptyList(t *testing.T) {
+	f := newReviveFixture(t)
+	f.rs.profiles[0].Ceiling.DeniedDomains = nil
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("revive: code %d (%s), want 200", w.Code, w.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw["denied_added"]); got != "[]" {
+		t.Errorf("denied_added = %s, want []", got)
+	}
+}
+
 // TestReviveRun_NotRunningReasonIsPinned covers a run outside RunRunning,
 // which cannot be revived at all — reviveEligible's very first check.
 // Asserts the LITERAL wire value, not the Go const, so a rename of

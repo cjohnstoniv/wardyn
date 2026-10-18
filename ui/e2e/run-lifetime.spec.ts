@@ -258,6 +258,8 @@ test.describe("Run lifetime — the ending-soon warning", () => {
 
     const banner = page.getByTestId("run-lifetime-warning");
     await expect(banner.getByText("This run ends in 10 minutes")).toBeVisible();
+    await expect(banner).toContainText("your admin sets how long");
+    await expect(banner).not.toContainText(/\d+ days/);
     await banner.getByRole("button", { name: "Dismiss" }).click();
     await expect(banner).toHaveCount(0);
   });

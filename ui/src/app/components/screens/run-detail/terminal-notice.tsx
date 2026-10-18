@@ -26,6 +26,7 @@ import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
+import { QueuedWait } from "./queued-wait";
 
 export function TerminalPane({
   run,
@@ -119,6 +120,19 @@ export function TerminalPane({
             }
           />
         )}
+      </PaneFrame>
+    );
+  }
+
+  // Waiting for a pool slot: there is no startup to narrate yet, so the hero says why it waits and where it stands.
+  // A queue the wire did not carry falls through to the plain frame below.
+  if (run.state === "QUEUED" && run.queue) {
+    return (
+      <PaneFrame
+        title={run.interactive ? "Terminal" : "Output"}
+        chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
+      >
+        <QueuedWait queue={run.queue} />
       </PaneFrame>
     );
   }

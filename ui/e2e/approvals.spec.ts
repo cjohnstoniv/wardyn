@@ -571,6 +571,35 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
   });
 });
 
+test.describe("Approvals — a deny confirmation whose request vanishes (run cockpit)", () => {
+  test("the dialog does not come back for the vanished request when the next row arrives", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    const first = uniqueMarker("vanish-a");
+    const second = uniqueMarker("vanish-b");
+    const firstId = seedPending({ kind: "egress_domain", scope: { host: first, port: 443 } });
+    let secondId = "";
+    try {
+      await page.goto(`/runs/${runId}`);
+      const row = page.getByTestId("live-approval-row");
+      await expect(row.getByText(markerRe(first))).toBeVisible();
+      await row.getByRole("button", { name: "Deny" }).first().click();
+      await expect(page.getByRole("alertdialog")).toBeVisible();
+
+      // The request leaves PENDING elsewhere; the strip empties and the dialog goes with it.
+      deleteApproval(firstId);
+      await expect(page.getByRole("alertdialog")).toHaveCount(0, { timeout: 10_000 });
+
+      secondId = seedPending({ kind: "egress_domain", scope: { host: second, port: 443 } });
+      await expect(page.getByTestId("live-approval-row").getByText(markerRe(second))).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    } finally {
+      deleteApproval(firstId);
+      if (secondId) deleteApproval(secondId);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // B3 + B4 — the "held" count is now LIVE STATE (isHeld over the run's own
 // pending rows), never a count of historical audit events; and killing a run

@@ -64,12 +64,12 @@ describe("RunRow — Revive (F1)", () => {
     expect(toastErrorMock).toHaveBeenCalled();
   });
 
-  it("a wait that ended before the runner answered says the runner is still starting the run, not an error", async () => {
+  it("a wait that ended before the runner answered says the result is unknown, not an error", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
     renderRow(makeRun({ attention: { kind: "lost", by: "you", pending: 0 } }));
     await user.click(screen.getByRole("button", { name: "Revive" }));
-    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("The runner is still starting this run. Check back in a minute."));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 

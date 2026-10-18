@@ -112,12 +112,12 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
   });
 
-  it("a wait that ended before the runner answered says the runner is still starting the run, not an error", async () => {
+  it("a wait that ended before the runner answered says the result is unknown, not an error", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
     renderBanner(detail({ lost_reason: "reboot" }));
     await user.click(screen.getByRole("button", { name: "Revive" }));
-    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("The runner is still starting this run. Check back in a minute."));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -244,6 +244,27 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
   });
 
+  it("Extend and revive: a revive whose wait ended says the result is unknown, and the page still refreshes for the moved end", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
+    const onChanged = vi.fn();
+    renderBanner(detail({ lost_reason: "ended", interactive: true }), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("Extend and revive: a revive that fails outright still refreshes the page, because the end already moved", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new Error("boom"));
+    const onChanged = vi.fn();
+    renderBanner(detail({ lost_reason: "ended", interactive: true }), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't extend and revive this run", expect.anything()));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
   // R2-2 (PR #1317 round-2 review, F9 REJECTED): reviveEligible always
   // refuses a task run's revive, AND run_end_wait.go is explicit that
   // extending an already-ended run changes nothing observable — no network,
@@ -318,6 +339,13 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(screen.getByRole("button", { name: "Change end…" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("This run ends in 10 minutes")).not.toBeInTheDocument();
+  });
+
+  it("#2596: the warning does not promise a number of days the admin may have changed", () => {
+    renderBanner(detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() }));
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent("your admin sets how long");
+    expect(banner).not.toHaveTextContent(/\d+ days/);
   });
 
   it("M1: Change end… opens the SAME Change… dialog the Ends row uses, and Save PATCHes", async () => {

@@ -348,7 +348,9 @@ export function AuditScreen() {
     // events, so an event list structurally cannot show them — a dead sensor
     // reads exactly like a quiet one. health() never rejects.
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
-    return api.listAudit(runFilter || undefined).then(setEvents);
+    // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
+    // investigating: ask for its newest page.
+    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(setEvents);
   }, [runFilter]);
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
@@ -560,7 +562,7 @@ export function AuditScreen() {
       {status === "ready" && (
         <TruncatedNote count={events.length} cap={LIST_LIMIT}>
           {runFilter
-            ? `Showing the first ${LIST_LIMIT} events for this run (truncated) — older events for this run may have rolled off.`
+            ? `Showing the newest ${LIST_LIMIT} events for this run (truncated) — its earliest events are not shown here.`
             : `Showing the first ${LIST_LIMIT} events (truncated) — older events may have rolled off this window. Filter by a run to see that run's own trail.`}
         </TruncatedNote>
       )}

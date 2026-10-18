@@ -50,6 +50,8 @@ import {
   RECORDINGS_LOADING,
   RECORDINGS_LOAD_MORE,
   RECORDINGS_MORE_NOTE,
+  RECORDINGS_NONE_SEARCHED_TITLE,
+  RECORDINGS_NONE_SO_FAR,
   RECORDINGS_PAGE_ERROR_BODY,
   RECORDINGS_PAGE_ERROR_TITLE,
 } from "./recording-copy";
@@ -215,6 +217,45 @@ export function RecordingScreen() {
   const filtersActive = query !== "" || agentFacet !== "all" || stateFacet !== "all";
   const showFilters = library.length > MIN_CARDS_FOR_FILTERS || filtersActive;
 
+  // The paged footer, shared by the list and by an empty first page: runs
+  // without a recording fill a page too, so "no recordings yet" with
+  // truncated set must still offer the next page (#2519). #159: the house
+  // pattern for a paged list is a text link matching the Runs board's own
+  // "Load N more" (runs.tsx#RunsTable), never a second button convention. No
+  // total ever renders; see recording-copy.ts.
+  const pager = (
+    <div className="mt-4">
+      {pageError ? (
+        <div className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-subtle p-3.5">
+          <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">{RECORDINGS_PAGE_ERROR_TITLE}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {RECORDINGS_PAGE_ERROR_BODY(library.length)}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={loadMore}>
+            <RotateCw className="size-3.5" /> Retry
+          </Button>
+        </div>
+      ) : truncated ? (
+        <p className="text-center text-xs text-muted-foreground">
+          {library.length === 0 ? RECORDINGS_NONE_SO_FAR(runs.length) : RECORDINGS_MORE_NOTE(library.length)}{" "}
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="font-medium text-info hover:underline disabled:pointer-events-none disabled:opacity-60"
+          >
+            {loadingMore ? RECORDINGS_LOADING : RECORDINGS_LOAD_MORE(PAGE_SIZE)}
+          </button>
+        </p>
+      ) : (
+        <p className="text-center text-xs text-muted-foreground">{RECORDINGS_ALL_LOADED(library.length)}</p>
+      )}
+    </div>
+  );
+
   return (
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
@@ -256,7 +297,13 @@ export function RecordingScreen() {
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
-            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
+            title={
+              recordingDisabled
+                ? RECORDING_DISABLED_TITLE
+                : truncated
+                  ? RECORDINGS_NONE_SEARCHED_TITLE(runs.length)
+                  : "None of your runs have a recording yet"
+            }
             description={
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
@@ -272,6 +319,7 @@ export function RecordingScreen() {
               )
             }
           />
+          {!recordingDisabled && (truncated || pageError) ? <div className="px-4 pb-4">{pager}</div> : null}
         </div>
       ) : (
         <>
@@ -352,40 +400,7 @@ export function RecordingScreen() {
             </div>
           )}
 
-          {/* #159 — the house pattern for a paged list: a text link matching
-              the Runs board's own "Load N more" (runs.tsx#RunsTable), never a
-              second button convention. No total ever renders — see
-              recording-copy.ts. */}
-          <div className="mt-4">
-            {pageError ? (
-              <div className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-subtle p-3.5">
-                <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground">{RECORDINGS_PAGE_ERROR_TITLE}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {RECORDINGS_PAGE_ERROR_BODY(library.length)}
-                  </p>
-                </div>
-                <Button variant="outline" size="sm" onClick={loadMore}>
-                  <RotateCw className="size-3.5" /> Retry
-                </Button>
-              </div>
-            ) : truncated ? (
-              <p className="text-center text-xs text-muted-foreground">
-                {RECORDINGS_MORE_NOTE(library.length)}{" "}
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="font-medium text-info hover:underline disabled:pointer-events-none disabled:opacity-60"
-                >
-                  {loadingMore ? RECORDINGS_LOADING : RECORDINGS_LOAD_MORE(PAGE_SIZE)}
-                </button>
-              </p>
-            ) : (
-              <p className="text-center text-xs text-muted-foreground">{RECORDINGS_ALL_LOADED(library.length)}</p>
-            )}
-          </div>
+          {pager}
         </>
       )}
 

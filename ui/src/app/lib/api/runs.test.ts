@@ -156,3 +156,20 @@ describe("runs.takeoverAttach — the refusal keeps its reason", () => {
     await expect(runs.takeoverAttach("run-1")).rejects.toMatchObject({ status: 403, reason: "run_owner_only" });
   });
 });
+
+describe("runs.reviveRun — denied_added", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads a null denied_added as an empty list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ run_id: "run-1", denied_added: null, proxy_release: "r1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    expect((await runs.reviveRun("run-1")).denied_added).toEqual([]);
+  });
+});

@@ -96,7 +96,7 @@ function RunDetailPage({ id }: { id: string }) {
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
   const {
-    run, grants, egress, approvals, audit, recordingAudit, status, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
     recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
@@ -336,6 +336,7 @@ function RunDetailPage({ id }: { id: string }) {
               grants={grants}
               egress={egress}
               audit={endingEvents}
+              auditGap={auditGap}
               held={held}
               outcomeReady={outcomeReady}
               pending={pending}

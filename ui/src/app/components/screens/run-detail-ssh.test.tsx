@@ -106,6 +106,18 @@ describe("ConnectSSHCard — visibility", () => {
     expect(healthMock).toHaveBeenCalled();
   });
 
+  // A service identity's sponsor opens the terminal and apps (service_attach, decided by the ticket mint), but the
+  // server refuses a sponsor's SSH, so the card offers the CLI and apps and no SSH lane.
+  it("renders for a sponsor of a service identity's run, with the CLI but no SSH lane", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
+    listKeysMock.mockResolvedValue([]);
+    renderCard({ created_by: "service:ci-bot" }, "sam@example.com", false);
+    await waitFor(() => expect(screen.getByText("Attach from your terminal")).toBeInTheDocument());
+    expect(screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`))).toBeInTheDocument();
+    expect(screen.queryByText("SSH")).toBeNull();
+    expect(screen.queryByText("Manage SSH keys")).toBeNull();
+  });
+
   it("renders nothing for a stopped run, even when owned", async () => {
     healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
     const { container } = renderCard({ state: "COMPLETED" });

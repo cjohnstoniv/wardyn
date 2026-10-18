@@ -156,8 +156,10 @@ const KILL_PARTIAL_SCRATCH =
 const GITHUB_HELD = "A GitHub token it already held stays valid until it expires, within an hour.";
 const ENV_SECRET_HELD =
   "Wardyn can't revoke a secret this run received as an environment variable — rotate it where it was issued.";
+const FILE_SECRET_HELD =
+  "Wardyn can't revoke a secret this run received as a file — rotate it where it was issued.";
 const HELD_UNREADABLE = "Wardyn couldn't read which credentials this run held.";
-const HELD_RANK: Record<HeldCredential["kind"], number> = { github_token: 0, git_pat: 1, ssh_key: 2, env_secret: 3 };
+const HELD_RANK: Record<HeldCredential["kind"], number> = { github_token: 0, git_pat: 1, ssh_key: 2, env_secret: 3, file_secret: 4 };
 
 function heldLines(held: HeldCredentials | undefined): string[] {
   if (!held) return []; // still loading: say nothing rather than "couldn't read"
@@ -169,7 +171,9 @@ function heldLines(held: HeldCredentials | undefined): string[] {
         ? GITHUB_HELD
         : c.kind === "env_secret"
           ? ENV_SECRET_HELD
-          : `Wardyn can't revoke the ${c.kind === "git_pat" ? "git token" : "SSH key"} this run used — it stays live until you rotate it on ${c.host}.`,
+          : c.kind === "file_secret"
+            ? FILE_SECRET_HELD
+            : `Wardyn can't revoke the ${c.kind === "git_pat" ? "git token" : "SSH key"} this run used — it stays live until you rotate it on ${c.host}.`,
     );
 }
 

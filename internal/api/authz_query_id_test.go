@@ -142,6 +142,7 @@ var queryParamNotAnID = map[string]string{
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
+	"order":                     "GET /audit: oldest-first or newest-first (order=desc) over a trail the caller's scope already bounds; it picks which end of that scoped trail is read and names no entity",
 	"until":                     "audit time filter; narrows an already-scoped feed",
 	"action":                    "audit action filter; narrows an already-scoped feed",
 	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",

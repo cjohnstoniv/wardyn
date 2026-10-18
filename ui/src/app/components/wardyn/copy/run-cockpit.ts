@@ -189,6 +189,16 @@ export const RUN_COCKPIT = {
   // event with outcome "success" is a real issued credential.
   eligible: (n: number) => `${n} eligible`,
   brokered: (n: number) => `${n} brokered`,
+  /** A QUEUED run's hero (the owner-approved mock): the title, then one line of place, wait and give-up. */
+  queuedTitle: "Queued",
+  queuedLine: (place: string, since: string, givesUp: string) => `You are ${place} · ${since} · ${givesUp}`,
+  queuedSince: (time: string) => `waiting since ${time}`,
+  queuedJustJoined: "just joined the line",
+  queuedGivesUpIn: (wait: string) => `gives up in ${wait}`,
+  queuedGivesUpAt: (time: string) => `gives up at ${time}`,
+  /** The strip's counts when a very long trail's oldest and newest pages leave a gap between them. */
+  countsFloor: "at least",
+  countsFloorTitle: "This run's audit trail is longer than one page, so the counts cover its oldest and newest events only.",
   // Only the shortcuts this file actually binds. ⌘K (no command palette
   // exists), ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) and ⇧⌘F
   // (AttachTerminal ships a fullscreen BUTTON, not a key binding) are on the

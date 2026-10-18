@@ -311,9 +311,21 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
       expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (${words})`, old: false });
     }
   });
-  it("a reason this console has no words for adds no uncopied text", () => {
+  it("a reason this console has no words for adds no uncopied text, and is still drawn as revoked", () => {
     const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: "mystery" })], false);
-    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02");
+    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41");
+  });
+  it("a token minted but never handed out reads as such, and does not make its predecessor (renewed)", () => {
+    const v = runTokenView(
+      [tok({}), tok({ created_at: at(15, 2), valid_to: at(23, 2), revoked_at: at(15, 3), revoke_reason: "unrecorded" })],
+      false,
+    );
+    expect(v.lines).toEqual([
+      { text: "Azure DevOps token: created 09:02 · expires 17:02", old: false },
+      { text: "Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:03 (not handed out)", old: false },
+    ]);
+    const unreadable = runTokenView([tok({ revoked_at: at(9, 3), revoke_reason: "ends_unreadable" })], false);
+    expect(unreadable.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:03 (sign-in state unreadable)");
   });
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
     expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual(["17:02"]);

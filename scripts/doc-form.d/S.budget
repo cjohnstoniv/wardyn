@@ -156,12 +156,13 @@
 # docs/sdk.md 18992 = 18946 + 46, measured: both sides after the final-train merge: revision on PUT /runner-pool-defaults and the expected_principal_mismatch row
 # docs/sdk.md 19004 = 18992 + 12, measured: per-source meaning of incomplete on recording versus stdout
 # docs/sdk.md 19021 = 18992 + 29, measured: the revive_containment_recovering row.
-# docs/sdk.md 19072 = 19033 + 39 (the drive_subject_unsupported reason row)
 # docs/sdk.md 19033 = 18992 + 12 + 29, measured: both sides after the AF1 merge
+# 0.9.4 L6a +21: the order=desc sentence on the per-run audit trail.
+# docs/sdk.md 19072 = 19033 + 39 (the drive_subject_unsupported reason row)
 # 0.9.4 L7a2 +38: the promote-egress skipped-hosts header and audit field.
 # docs/sdk.md 19085 = 19033 + 52, measured: the workspace_name_taken and workspace_update_conflict rows.
 # docs/sdk.md 19048 adds 15 over 19033, measured: 0.9.4 L4b, node_record_human_only names the API token.
-docs/sdk.md=19177 share=21
+docs/sdk.md=19198 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

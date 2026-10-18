@@ -268,6 +268,9 @@ export function LiveApprovals({
           // A failed read is not a reason to claim anything happened.
         }
       }
+      // A deny confirmation for a request that is no longer pending (decided elsewhere, expired, run ended) must
+      // not wait to reopen for it when the next row arrives.
+      setDenyTarget((t) => (t && all.some((a) => a.id === t.request.id) ? t : null));
       setPending(
         all.filter(
           // run_id is a belt-and-braces no-op now that the fetch above carries

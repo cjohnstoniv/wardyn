@@ -98,7 +98,7 @@ export function warnTitle(stage: EndsWarningStage): string {
   return `This run ends in ${WARNING_REL_TEXT[stage]}`;
 }
 export function warnBody(dateText: string): string {
-  return `At ${dateText} the run stops. Its files are kept for 7 days; push or save anything you need before then.`;
+  return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
@@ -143,7 +143,7 @@ export const LOST_OUTAGE =
 export const LOST_K8S = "The node it ran on restarted. Files on your drive are kept; the rest is gone.";
 export const REVIVE = "Revive";
 export const REVIVING = "Reviving… (about a minute)";
-export const REVIVE_STILL_STARTING = "The runner is still starting this run. Check back in a minute.";
+export const REVIVE_RESULT_UNKNOWN = "No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again.";
 export function revivePolicy(hostsBlocked: number): string {
   return `Policy updated at revive: ${hostsBlocked} host${hostsBlocked === 1 ? "" : "s"} now blocked.`;
 }

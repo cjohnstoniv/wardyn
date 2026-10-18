@@ -40,6 +40,9 @@ export const RUNS_AGED_WINDOW_LABEL: Record<string, string> = {
   all: "full history",
 };
 
+/** The list answered a full page and more matched: said under the sections so a missing row is never read as absent. */
+export const runsTruncatedNote = (limit: number): string => `Showing the newest ${limit} runs. Narrow the filters to see the rest.`;
+
 export const RUNS_SHOW_30 = "Show the last 30 days";
 export const RUNS_INCLUDE_KILLED = "Include killed";
 

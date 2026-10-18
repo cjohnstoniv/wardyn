@@ -6,8 +6,8 @@
 // Which credentials a run held that Wardyn cannot take back when the run is
 // killed (#1487). Read from the run's own credential.mint success rows, joined
 // on data.grant_id to its grants for the kind and host, plus its env_secret
-// grants (a whole-run secret is resolved into the sandbox environment at launch
-// and leaves no mint row). Only the KIND and the HOST ever leave this file: a
+// and file_secret grants (a whole-run secret is resolved into the sandbox at
+// launch, as an environment variable or a file, and leaves no mint row). Only the KIND and the HOST ever leave this file: a
 // grant's scope, a mint row's jti and any value never reach the DOM.
 //
 // "readable: false" is a first-class answer, not an empty list: when the grants
@@ -18,7 +18,8 @@ import type { AuditEvent, CredentialGrant } from "./types";
 export type HeldCredential =
   | { kind: "github_token" }
   | { kind: "git_pat" | "ssh_key"; host: string }
-  | { kind: "env_secret" };
+  | { kind: "env_secret" }
+  | { kind: "file_secret" };
 
 export type HeldCredentials = { readable: true; items: HeldCredential[] } | { readable: false };
 
@@ -36,7 +37,7 @@ export function heldCredentials(
     seen.add(key);
     items.push(c);
   };
-  for (const g of grants) if (g.audience === "env_secret") add({ kind: "env_secret" });
+  for (const g of grants) if (g.audience === "env_secret" || g.audience === "file_secret") add({ kind: g.audience });
   for (const row of mintRows) {
     if (row.action !== "credential.mint" || row.outcome !== "success") continue;
     const id = row.data?.grant_id;
