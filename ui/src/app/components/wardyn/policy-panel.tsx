@@ -31,7 +31,7 @@
 import * as React from "react";
 import { Globe, Plus, ShieldCheck, Timer } from "lucide-react";
 import type { PolicySourceEditResult } from "../../lib/policy-document";
-import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../lib/types";
+import type { RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
 import { templateProviders } from "./policy-template-providers";
 import { Button } from "../ui/button";
@@ -225,19 +225,6 @@ const HIDDEN_ON_RUN: readonly (keyof RunPolicySpec)[] = ["workspace_mounts"];
 // Re-exported for the screens that read them beside the panel.
 export { egressSummary, lifecycleSummary, toolRulesSummary, type ChipTone } from "./policy-document/policy-facts";
 export { parseSpec, type ParsedSpec };
-
-// C5's one real trap, named: a parse that succeeds but whose
-// min_confinement_class names no real barrier class silently sets no floor —
-// the caller's own barrier control is what actually launches, and nothing
-// said so. Returns the unparseable value (for the caller's hint) or null —
-// null for an omitted field too (a policy that authors no floor on purpose is
-// not a trap).
-export function unparseableFloorClass(parsed: ParsedSpec): string | null {
-  if (!parsed.ok) return null;
-  const raw = (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class;
-  const known: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-  return typeof raw === "string" && raw.length > 0 && !known.includes(raw as ConfinementClass) ? raw : null;
-}
 
 /* ---------- the panel ---------- */
 
