@@ -10,7 +10,7 @@ import type { Locator, Page } from "@playwright/test";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../src/app/components/wardyn/copy";
 import {
   test, expect, asRealMember, chooseFiles, chooseRunMode, chooseShape, consoleAPI, continueNewRun, firstHarness, gotoConsole,
-  mockPreflightClear, navToRoute, sidebarLink, sql, startGuided, walkGuidedToFiles, walkGuidedToReview,
+  mockPreflightClear, navToRoute, sql, startGuided, walkGuidedToFiles, walkGuidedToReview,
 } from "./fixtures";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
@@ -95,7 +95,8 @@ test.describe("Tier B run pages", () => {
       const id = await seedRun(page);
       await navToRoute(page, `${view === "admin" ? "/admin" : ""}/runs/${id}`);
       await expect(page.getByRole("tab", { name: /Overview/ })).toBeVisible();
-      await expect(sidebarLink(page, "Runs")).toHaveAttribute("aria-current", "page");
+      // The run header's breadcrumb is also a "Runs" link, so look inside the sidebar only.
+      await expect(page.locator("aside").getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
     });
   }
 });
