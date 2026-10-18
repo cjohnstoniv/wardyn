@@ -292,5 +292,25 @@ class TestHarnessesRecipe(unittest.TestCase):
             self.assertIn(f"deploy/images/{harness}/agent-run /usr/local/lib/wardyn/harness/{harness}/agent-run", dockerfile)
 
 
+class FullImageHomeOwnership(unittest.TestCase):
+    """`install -d -o agent` owns only the directories it names: a parent it creates on the way stays root:root 0755."""
+
+    def test_install_d_names_every_parent_under_home(self):
+        text = (ROOT / "deploy/images/full/Dockerfile").read_text().replace("\\\n", " ")
+        checked = 0
+        for line in text.splitlines():
+            m = re.match(r"RUN install -d -o agent -g agent ([^&]+?)(?:&&|$)", line.strip())
+            if not m:
+                continue
+            named = set(m.group(1).split())
+            for path in sorted(named):
+                parent = str(Path(path).parent)
+                while parent.startswith("/home/agent/"):
+                    checked += 1
+                    self.assertIn(parent, named, f"{path}: install -d would leave {parent} root-owned; name it")
+                    parent = str(Path(parent).parent)
+        self.assertGreater(checked, 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
