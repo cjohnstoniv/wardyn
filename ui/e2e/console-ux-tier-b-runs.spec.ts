@@ -148,3 +148,18 @@ test.describe("Tier B run header", () => {
     expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   });
 });
+
+test.describe("Tier B run Overview", () => {
+  // #2919: a failed run with no recognised ending and no hint still says what it knows, not a lone button.
+  test("Failed run with no recorded cause: the card says so above Open audit trail", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    sql(`UPDATE agent_runs SET state = 'FAILED' WHERE id = '${id}'`);
+    await navToRoute(page, `/runs/${id}`);
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toBeVisible();
+    await expect(block).toContainText("What happened");
+    await expect(block).toContainText("no recorded cause");
+    await expect(block.getByRole("button", { name: /Open audit trail/ })).toBeVisible();
+  });
+});
