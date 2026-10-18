@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ── Governance (migration 0052) ─────────────────────────────────────────────
@@ -164,8 +166,23 @@ func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) 
 }
 
 // governanceAssignmentKey is the natural key ApplyGovernance and
-// handleUpsertGovernanceAssignment both upsert an assignment by.
+// handleUpsertGovernanceAssignment both upsert an assignment by. The subject is folded the way
+// validateGovernanceAssignment stores it, so a document's "Alice@Corp.com" meets the stored
+// "alice@corp.com" instead of reading as one delete plus one create.
 func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) string {
+	switch subjectType {
+	case types.CapabilitySubjectAll:
+		subject = ""
+	case types.CapabilitySubjectGroup:
+		// A subject the server would refuse stays as written; the write reports it.
+		if canon, ok := types.CanonicalGroupSubject(subject); ok {
+			subject = canon
+		}
+	case types.CapabilitySubjectUser:
+		subject = types.CanonicalUserSubject(subject)
+	default:
+		subject = strings.TrimSpace(subject)
+	}
 	return string(subjectType) + "\x00" + subject
 }
 
