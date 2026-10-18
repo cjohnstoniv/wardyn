@@ -181,7 +181,7 @@
 
     <!-- S.GIT_FOOTER, once, as the plain note under the tab — imported, not re-frozen (§5 #1). -->
     <div class="pad" style="padding-top:0;padding-bottom:14px">
-      <div class="note plain" style="margin-top:0"><span>Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all.</span></div>
+      <div class="note plain" style="margin-top:0"><span>The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all.</span></div>
     </div>
     <hr class="rule">
     <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
