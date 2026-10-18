@@ -252,6 +252,9 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **A bulk action names what it skipped.** Approving observed egress skips a model provider's own
+  hosts; the toast reads "Approved 3 hosts. Skipped 1 model-provider host: <host>" (`EGRESS.PROMOTED_SKIPPED`
+  in the copy module) instead of reporting success for the whole click.
 - **Pool words.** A runner is a **self-hosted runner** (a person's computer) or a **remote-hosted
   runner** (the server's Docker host or Kubernetes cluster); a pool is an **organization pool** or
   a **user pool**; every runner has **Runs at once**, and a pool's limits come from its runners.

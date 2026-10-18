@@ -15,6 +15,10 @@ export const EGRESS = {
   // overlay. The requirements PUT here replaces only the overlay, so clearing
   // it has to happen where it was written. Distinct from the scan sentence
   // above, which would contradict the row's own "required by this workspace".
+  // A bulk approve that skipped model-provider hosts (a provider row's host is plumbing,
+  // never promoted): the toast names them, because the click otherwise looks like it did it all.
+  PROMOTED_SKIPPED: (approved: number, skipped: string[]): string =>
+    `Approved ${approved} ${approved === 1 ? "host" : "hosts"}. Skipped ${skipped.length} model-provider ${skipped.length === 1 ? "host" : "hosts"}: ${skipped.join(", ")}`,
   INHERITED_REASON: "Required by a source this workspace composes, not by an approval here — clear it where it was written.",
 } as const;
 

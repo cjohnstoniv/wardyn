@@ -18,6 +18,7 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
+import { EGRESS } from "../../wardyn/copy";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
@@ -236,15 +237,17 @@ export function WorkspaceDetailScreen() {
 
   // `hosts` is the subset the confirm dialog's checkboxes actually approved —
   // the server validates every one against the recording's promotable set
-  // (record.go's handlePromoteRecordEgress) and rejects anything else. No 404
+  // (record.go's handlePromoteRecordEgress): a model provider row's host is
+  // skipped (and named back in the toast), any other host outside it is rejected. No 404
   // fallback: the console ships baked into the server image, so there is no
   // version-skew window, and the retired fallback re-approved the FULL
   // observed union — every host the operator just unchecked included.
   const promoteEgress = async (taskKey: string, hosts: string[]) => {
     if (!ws) return;
     try {
-      setWs(await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts));
-      toast.success("Approved observed egress");
+      const { skipped_hosts: skipped, ...updated } = await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts);
+      setWs(updated as Workspace);
+      toast.success(skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress");
     } catch (e) {
       toast.error("Failed to promote egress", { description: getErrorMessage(e) });
     }

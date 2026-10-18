@@ -328,6 +328,30 @@ describe("WorkspaceDetailScreen — Start a run survives a write response with n
     expect(screen.getByRole("button", { name: /^start a run$/i })).toBeEnabled();
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
   });
+
+  it("a bulk approve that skipped model-provider hosts says so in the toast", async () => {
+    const rr: RecordResult = {
+      run_id: "r1",
+      label: "build & test",
+      mode: "interactive",
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    getWorkspaceMock.mockResolvedValue(ws({ record_results: { "build-test": rr } }));
+    promoteRecordEgressMock.mockResolvedValue({ ...ws({}), skipped_hosts: ["bedrock-runtime.us-east-1.amazonaws.com"] });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(promoteRecordEgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
+      "Approved 0 hosts. Skipped 1 model-provider host: bedrock-runtime.us-east-1.amazonaws.com",
+    ));
+  });
 });
 
 describe("WorkspaceDetailScreen — image row: three honest variants, never a /build fetch to find out", () => {
