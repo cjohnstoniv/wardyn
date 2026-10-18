@@ -30,6 +30,16 @@ describe("Segmented", () => {
     expect(screen.queryByTestId("tab-dirty-chip-storage")).toBeNull();
   });
 
+  // #2870: an over-wide set scrolls inside its card rather than being clipped, and no label wraps.
+  it("never wraps a label and scrolls inside itself rather than clipping", () => {
+    render(<Segmented value="git" options={OPTIONS} onChange={() => {}} />);
+    const git = screen.getByRole("button", { name: "Git" });
+    expect(git).toHaveClass("whitespace-nowrap");
+    const bar = git.parentElement!;
+    expect(bar).toHaveClass("max-w-full", "overflow-x-auto");
+    expect(bar).not.toHaveClass("overflow-hidden");
+  });
+
   it("disables every option together", () => {
     render(<Segmented value="git" options={OPTIONS} onChange={() => {}} disabled />);
     for (const b of screen.getAllByRole("button")) expect(b).toBeDisabled();
