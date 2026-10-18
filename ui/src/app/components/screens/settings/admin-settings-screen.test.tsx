@@ -420,7 +420,7 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
   });
 
   // …and a retry that succeeds must recover: the failure state is per-load,
-  // not sticky. "Re-check this host" is the control that drives it.
+  // not sticky. "Re-check" is the control that drives it.
   it("recovers on a re-check that succeeds", async () => {
     getSiteConfigMock
       .mockRejectedValueOnce(new Error("HTTP 500 store unavailable"))
@@ -432,7 +432,7 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
     await expandCard("Host");
     expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
     expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
     expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
   });

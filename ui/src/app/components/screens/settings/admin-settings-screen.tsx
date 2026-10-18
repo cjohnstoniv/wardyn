@@ -33,7 +33,7 @@
 // once. The summary is read from the same SiteConfig, so it can't go stale.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, RotateCw } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
@@ -232,13 +232,9 @@ function HostCard({
           <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
         </button>
       )}
-      <button
-        type="button"
-        onClick={onRecheck}
-        className="mt-2 text-meta text-muted-foreground underline-offset-2 hover:underline"
-      >
-        Re-check this host
-      </button>
+      <Button variant="outline" size="sm" className="mt-3" onClick={onRecheck}>
+        <RotateCw className="size-3.5" /> Re-check
+      </Button>
     </CollapsibleCard>
   );
 }
