@@ -127,6 +127,9 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 			data["error"], outcome = err.Error(), "failure"
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, subject, adoPATAuditDisconnect, rowID, outcome, mustJSON(data)))
+		if err != nil {
+			break // the rows after it were never tried, so they get no row; a retry reaches them
+		}
 	}
 	if db.LockRefused(err) {
 		writeLockRefused(w, r, err)
