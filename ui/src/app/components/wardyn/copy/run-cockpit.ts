@@ -111,7 +111,7 @@ export const RUN_COCKPIT = {
       ? `No git repository at ${path} — there's no diff to show.`
       : "This workspace isn't a git repository — there's no diff to show.",
   // The substrate has no exec channel, so neither evidence read can run.
-  execUnsupported: "This runner can't be inspected while it's running.",
+  execUnsupported: "This runner doesn't let Wardyn look inside its sandbox.",
   // Empty/degraded states shared by the two POLLING evidence widgets. They live
   // here rather than as per-file consts because both widgets need the same two
   // sentences — a duplicated literal in each file is exactly the drift this
