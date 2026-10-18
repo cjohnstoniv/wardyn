@@ -49,11 +49,7 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 	if !ok {
 		return claudeSignInImageState{ref: ref, resolved: true}
 	}
-	// Bounded like Capabilities on the same page: a wedged daemon must not hang
-	// every setup-status poll. A timeout is the inconclusive arm below.
-	pctx, cancel := context.WithTimeout(ctx, storePingTimeout)
-	defer cancel()
-	present, err := ic.ImagePresent(pctx, ref)
+	present, err := ic.ImagePresent(ctx, ref)
 	if err != nil {
 		// Fail-open on an inconclusive check — the same posture
 		// cachedImageStillPresent already takes for the same reason: an
@@ -95,6 +91,12 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 	const id, label = "claude_signin_image", "Claude sign-in image"
 	fix := "Build it: `make agent-images-core` (or `make setup`, which builds and pins it). " +
 		"See Operations → Claude sign-in image."
+	// Bounded like Capabilities on the same page: a wedged daemon must not hang
+	// every setup-status poll. A timeout is the inconclusive arm. Only this
+	// read-only row is bounded: the write-time refusal (E4) keeps asking with the
+	// request's own context, so a slow but healthy daemon still answers it.
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+	defer cancel()
 	st := resolveClaudeSignInImage(ctx, images, rnr)
 	if st.ref == "" {
 		return SetupCheck{

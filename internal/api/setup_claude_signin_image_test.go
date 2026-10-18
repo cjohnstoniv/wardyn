@@ -168,12 +168,12 @@ func TestSetupStatusImageProbesAreBoundedAgainstAWedgedDaemon(t *testing.T) {
 	rnr := wedgedImageRunner{&fakeRunner{}}
 
 	start := time.Now()
-	st := resolveClaudeSignInImage(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr)
+	chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr)
 	if took := time.Since(start); took > 4*time.Second {
-		t.Errorf("resolveClaudeSignInImage took %s on a wedged daemon; want about storePingTimeout", took)
+		t.Errorf("claudeSignInImageCheck took %s on a wedged daemon; want about storePingTimeout", took)
 	}
-	if !st.resolved || st.verified || st.checkErr == nil {
-		t.Errorf("state = %+v, want resolved, unverified, with the timeout as the inconclusive error", st)
+	if chk.Status != "info" || !strings.Contains(chk.Detail, "could not answer") {
+		t.Errorf("check = %+v, want the inconclusive (fail-open) row", chk)
 	}
 
 	start = time.Now()
@@ -222,5 +222,32 @@ func TestSetupStatus_ClaudeSignInImageProbeIsOperatorOnly(t *testing.T) {
 	}
 	if n := rnr.probes.Load(); n != 0 {
 		t.Errorf("a member's poll made %d image presence probe(s); it must not wait on the substrate", n)
+	}
+}
+
+// slowImageRunner answers after a delay longer than the setup page's bound.
+type slowImageRunner struct {
+	*fakeRunner
+	delay time.Duration
+}
+
+func (r slowImageRunner) ImagePresent(ctx context.Context, _ string) (bool, error) {
+	select {
+	case <-time.After(r.delay):
+		return false, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+// The setup page's bound must not reach the write-time refusal (E4): a slow but
+// healthy daemon that answers "not present" still refuses the write, as before.
+func TestClaudeSignInImageResolves_WriteTimeCheckIsNotBounded(t *testing.T) {
+	prev := storePingTimeout
+	storePingTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { storePingTimeout = prev })
+	rnr := slowImageRunner{&fakeRunner{}, 300 * time.Millisecond}
+	if claudeSignInImageResolves(context.Background(), map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr) {
+		t.Fatal("a slow daemon that answers not-present must still refuse the write; the setup bound failed it open")
 	}
 }
