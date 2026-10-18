@@ -828,6 +828,10 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
+	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
+	// once more. A durable mark on the person row would need a migration.
+	attachIgnoredSeen sync.Map
 	// authFailedLimiter rate-bounds the auth.fail audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
