@@ -653,3 +653,18 @@ describe("user-drives-prompt §2.4 — the home-template rule's mirror direction
     expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*homeTemplateDisabled\(backend, t\)/);
   });
 });
+
+// A person can reach several drives (0.9): only the first mounts at the legacy
+// path, the rest beside it. The admin copy must not claim a single drive.
+describe("user-drives-copy — the multi-drive model (0.9)", () => {
+  it("LEAD names where the first and the further drives mount", () => {
+    expect(DRIVES.LEAD).toContain("/home/agent/drive;");
+    expect(DRIVES.LEAD).toContain("/home/agent/drives");
+    expect(DRIVES.LEAD).toContain("/home/agent/shared");
+  });
+
+  it("ALLOC_LEAD does not claim one drive per person", () => {
+    expect(DRIVES.ALLOC_LEAD).not.toMatch(/one drive per person/i);
+    expect(DRIVES.ALLOC_LEAD).toContain("more than one drive");
+  });
+});

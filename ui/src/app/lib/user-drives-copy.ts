@@ -122,7 +122,7 @@ export const DRIVES = {
   // header's outline button, the setup card's title and the Settings card's
   // title — the way GOVERNANCE.TITLE serves nav and heading (§7.2 prose).
   TITLE: "User drives",
-  LEAD: "Persistent storage a run can mount at /home/agent/drive. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.",
+  LEAD: "Persistent storage a run can mount. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. A person's first drive mounts at /home/agent/drive; any others mount beside it, under /home/agent/drives or /home/agent/shared.",
   // The org switch (the `disabled` field on GET /drives's snapshot): renders
   // ABOVE the table it still shows in full — everything here is kept, nothing
   // mounts until the switch is back on. Q9 (workspace-providers-prompt.md,
@@ -232,7 +232,7 @@ export const DRIVES = {
 
   // ---- §7.3 allocations and the preview ----
   ALLOC_TITLE: "Allocations",
-  ALLOC_LEAD: "Who gets a drive. A person's own row beats their group's; a group's beats everyone's. One drive per person.",
+  ALLOC_LEAD: "Who gets a drive. A person's own row beats their group's; a group's beats everyone's. A person can be given more than one drive.",
   PRECEDENCE:
     "The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name.",
   // EFFECT_NOTE and SIGNIN_NOTE are two halves of ONE fact and render
