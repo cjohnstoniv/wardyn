@@ -441,7 +441,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     if (promoted && wsRef.current?.readyState === WebSocket.OPEN) return;
     setMode(null);
     reclaimRef.current(); // evict-then-reconnect; see reclaimRef's assignment
-  }, [runId]);
+  }, [runId, createdBy]);
 
   // Mounting note: this panel is safe to embed anywhere — a page, a card, a
   // dialog — because fullscreen goes through the native API (see

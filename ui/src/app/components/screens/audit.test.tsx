@@ -630,7 +630,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-9"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-9", { newest: true }));
     expect(await screen.findByText(/run-9/)).toBeInTheDocument();
   });
 
