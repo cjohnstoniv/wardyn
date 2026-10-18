@@ -72,6 +72,10 @@
 #      `docker-compose` entry of .github/dependabot.yml lists — the `docker`
 #      ecosystem reads Dockerfiles, so a compose pin outside that entry is never
 #      proposed an update.
+#  20. release.yml bundles licenses/texts and THIRD-PARTY-NOTICES.md as
+#      wardyn-licenses.tar.gz next to the standalone binaries and fails the
+#      release unless that asset landed — the binaries are copies, and their
+#      MIT/BSD/Apache terms need the notice texts to travel with them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -705,6 +709,20 @@ else
     else
         ok "every compose directory with a digest-pinned image ($(echo $pinned_dirs)) is in Dependabot's docker-compose entry"
     fi
+fi
+
+# ── 20. the release bundles the licence texts next to the binaries ──────────
+# A table of licence names is not the notice MIT, BSD and Apache-2.0 require to
+# accompany a binary copy; licenses/texts/ is. The CLI and runnerd binaries reach
+# people as bare release assets, so the texts ship as one more asset.
+RELEASE_YML="${RELEASE_YML:-.github/workflows/release.yml}"
+if ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*licenses/texts' "$RELEASE_YML" \
+    || ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*THIRD-PARTY-NOTICES\.md' "$RELEASE_YML"; then
+    bad "$RELEASE_YML: 'Assemble the asset set' does not build assets/wardyn-licenses.tar.gz from licenses/texts and THIRD-PARTY-NOTICES.md"
+elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep -q 'wardyn-licenses\.tar\.gz'; then
+    bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
+else
+    ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

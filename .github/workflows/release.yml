@@ -1148,6 +1148,8 @@ jobs:
         run: |
           set -euo pipefail
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
+          # The standalone binaries are copies: the verbatim licence texts travel with them.
+          tar -czf assets/wardyn-licenses.tar.gz THIRD-PARTY-NOTICES.md licenses/texts
           chmod +x assets/wardyn-* 2>/dev/null || true
           # The runner's per-user service files and installer, one download.
           tar -czf assets/wardyn-runner-units.tar.gz -C deploy runner
@@ -1190,7 +1192,7 @@ jobs:
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
-                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg; do
+                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"
