@@ -496,7 +496,16 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
     local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
     [[ -e "${dest}/.git" ]] && return 0   # never clobber a populated/bind-mounted repo
-    mkdir -p "$dest"
+    # Anything else already at dest (a host folder through a writable mount)
+    # is never deleted or cloned over: the clone is skipped instead.
+    if [[ -e "$dest" && ( ! -d "$dest" || -n "$(ls -A -- "$dest" 2>/dev/null)" ) ]]; then
+        echo "agent-run: clone SKIPPED for ${dest} — it already holds files that are not a checkout of ${slug:-$url}; they are left as they are; continuing" >&2
+        return 0
+    fi
+    if ! mkdir -p -- "$dest" 2>/dev/null; then
+        echo "agent-run: clone SKIPPED for ${dest} — the folder cannot be created (a read-only mount?); continuing" >&2
+        return 0
+    fi
     echo "agent-run: cloning ${slug:-$url}${ref:+ @ ${ref}} into ${dest} (shallow, via wardyn-proxy)" >&2
     if [[ -z "$ref" ]]; then
         if git clone --depth 1 -- "$url" "$dest"; then
@@ -517,8 +526,10 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         name_run_branch "$dest"
         return 0
     fi
-    rm -rf "$dest"
-    mkdir -p "$dest"
+    # dest was empty or absent above, so what is in it now is the failed
+    # attempt's own; empty it for the fallback, never the folder itself, which
+    # may be a mount point.
+    find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
     if git clone --no-checkout --depth 1 -- "$url" "$dest" 2>/dev/null \
         && git -C "$dest" fetch --depth 1 origin "$ref" \
         && git -C "$dest" checkout FETCH_HEAD; then
