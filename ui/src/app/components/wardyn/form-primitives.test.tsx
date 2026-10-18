@@ -7,7 +7,7 @@
 // control to its hint text. One pinning test for the auto id + wiring.
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { Field } from "./form-primitives";
+import { Field, Switch } from "./form-primitives";
 
 describe("Field — hint is wired to the control via aria-describedby", () => {
   it("gives the hint an id and describes the control with it", () => {
@@ -42,5 +42,20 @@ describe("Field — hint is wired to the control via aria-describedby", () => {
     // caller's own id survived — this would stay green if the wiring itself
     // were dropped.
     expect(described.split(" ")).toEqual(expect.arrayContaining(["other-note", "name-input-hint"]));
+  });
+});
+
+// #2828: the off track is bg-muted on a bg-card page, ~1.1:1, so it must carry a
+// border that does clear the 3:1 non-text minimum (--ring) in both themes.
+describe("Switch — the off state is visible", () => {
+  it("outlines the off track with the ring colour and fills the on track with primary", () => {
+    const { rerender } = render(<Switch checked={false} onChange={() => {}} label="Writable" />);
+    const off = screen.getByRole("switch", { name: "Writable" });
+    expect(off.className).toContain("border-ring");
+    expect(off.className).not.toContain("border-transparent");
+    rerender(<Switch checked onChange={() => {}} label="Writable" />);
+    const on = screen.getByRole("switch", { name: "Writable" });
+    expect(on.className).toContain("bg-primary");
+    expect(on.className).not.toContain("border-ring");
   });
 });

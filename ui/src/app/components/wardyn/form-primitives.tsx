@@ -151,8 +151,10 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        checked ? "bg-primary" : "bg-muted",
+        "inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border p-[1px] transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        // Off: the --ring border (>=3:1 on bg-card in both themes, WCAG 1.4.11)
+        // outlines the track, which bg-muted alone leaves invisible.
+        checked ? "border-transparent bg-primary" : "border-ring bg-muted",
         className,
       )}
     >
