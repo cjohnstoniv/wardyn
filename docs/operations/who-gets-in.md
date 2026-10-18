@@ -115,6 +115,7 @@ A console session is a signed cookie: nothing re-contacts the identity provider 
   - So keep the idle timeout at most half that length (`WARDYN_OIDC_SESSION_TTL`, or the ID token's lifetime when it is unset), or a session can expire inside its idle time.
 - Boot refuses a session TTL or a renewal cap above `24h`.
 - Revocation and sign-out end a session at once in every shape: renewal never moves the sign-in time they are measured from.
+- A sliding session never asks the identity provider. A person disabled there keeps it until the cap, or until an admin runs `wardyn session revoke`; `WARDYN_OIDC_SILENT_REAUTH` acts only at the next sign-in.
 - Pair a long session with `WARDYN_ROLE_STAMP_TTL`, or a person disabled only at the identity provider keeps the console until the session ends.
 - The console never renews a session with the provider's refresh token; `WARDYN_OIDC_SILENT_REAUTH` signs a returning browser in without interaction instead, where the provider allows `prompt=none`.
 - Every setting is in [ENV.md](../ENV.md#wardyn_oidc_session_ttl).

@@ -1616,6 +1616,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - While it is on, every answer to a live session names its expiry in `X-Wardyn-Session-Expires`, so the console's expiry warning and open terminals follow a renewal.
 - A session past half its length is renewed to that length from the request, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
 - Renewal moves only the expiry: revocation, suspension and sign-out end a renewed cookie exactly as before.
+- Renewal never contacts the identity provider. A person disabled there keeps a renewing session until this cap, or until an admin runs `POST /sessions/revoke` (`wardyn session revoke`).
+- `WARDYN_OIDC_SILENT_REAUTH` does not close that: it acts only at the next sign-in.
 - Boot refuses a negative value or one above `24h`.
 
 ### `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`
