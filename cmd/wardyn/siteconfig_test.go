@@ -347,10 +347,12 @@ func TestSiteConfigSet_NotesANullBlockAsCarriedForward(t *testing.T) {
 			t.Errorf("stderr = %q, want it to name %q — a null block is carried forward, not cleared", stderr, want)
 		}
 	}
-	// …and the sibling written as [] is still a real mention, so it is still
-	// absent from the note: this change moved `null` only.
-	if strings.Contains(stderr, "internal_hosts") {
-		t.Errorf("stderr = %q, want it to NOT name a field the file mentions with a value", stderr)
+	// …and the sibling written as [] is not an omission: the omitted-fields
+	// note must not list it. (It earns the separate "empty, not sent" note.)
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "omits") && strings.Contains(line, "internal_hosts") {
+			t.Errorf("omitted-fields note %q names internal_hosts, which the file mentions", line)
+		}
 	}
 	if got.WorkspaceProviders != nil {
 		t.Errorf("wire carried workspace_providers = %#v, want it absent (omitempty on a nil pointer)", got.WorkspaceProviders)
