@@ -6,7 +6,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { RunPolicySpec } from "../../lib/types";
-import { ADO_ACCESS } from "../../lib/ado-access-copy";
 import { orgCeilings, unionCeiling } from "../../lib/ado-ceilings";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 
@@ -27,8 +26,7 @@ describe("ADOCapabilitiesSection across organisations", () => {
   it("leaves a capability one organisation allows open, and says who does not allow it", () => {
     renderIt();
     expect(screen.getByRole("checkbox", { name: /^Contribute to pull requests/ })).toBeEnabled();
-    expect(screen.getByTestId("ado-cap-hint-pr")).toHaveTextContent(ADO_ACCESS.NOT_ALLOWED_FOR("beta"));
-    expect(ADO_ACCESS.NOT_ALLOWED_FOR("beta")).toBe("Not allowed for beta.");
+    expect(screen.getByTestId("ado-cap-hint-pr")).toHaveTextContent("Not allowed for beta.");
   });
 
   it("locks a capability no organisation allows, with no hint", () => {
