@@ -393,6 +393,7 @@ f185_fixture() { # MODE -> managed dir
   local mode="$1" md
   md="$(mktemp -d -p "${F185_TMP}")"
   printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n' > "${md}/wardyn.env"
+  chmod 0644 "${md}/wardyn.env"
   printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
   # secret.env IS a shell script, which is what dot-sourcing means.
   printf 'WARDYN_OIDC_CLIENT_SECRET=s3cret\ntouch "%s/PWNED"\n' "${md}" > "${md}/secret.env"
@@ -431,6 +432,28 @@ md="$(f185_fixture 0600)"; f185_run "${md}" >/dev/null
   || fail "a root-owned 0600 secret.env was NOT sourced — the audit-sink bearer token and OIDC client secret never reach the stack (F185)"
 echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 
+# 4. The other MDM envelope files the launcher acts on as root (wardyn.env,
+#    policy.json, site-config.json) get the same owner and write rule: one
+#    another account can write is refused before anything is sourced or run;
+#    readable stays fine (the table ships them 0644).
+for f in wardyn.env policy.json site-config.json; do
+  md="$(f185_fixture 0600)"
+  [ -f "${md}/${f}" ] || printf '{}\n' > "${md}/${f}"
+  chmod 0666 "${md}/${f}"
+  out="$(f185_run "${md}")"
+  [ ! -e "${md}/PWNED" ] \
+    || fail "wardyn-desktop.sh went on past a group/world-writable ${f} — whoever can write it chooses what this root process runs"
+  printf '%s' "${out}" | grep -q "${f} is owned by uid .* group/world-writable" \
+    || fail "wardyn-desktop.sh did not refuse a group/world-writable ${f} by name. Got: $(printf '%s' "${out}" | tail -1)"
+done
+md="$(f185_fixture 0600)"
+printf '{}\n' > "${md}/policy.json"; printf '{}\n' > "${md}/site-config.json"
+chmod 0644 "${md}/policy.json" "${md}/site-config.json"
+f185_run "${md}" >/dev/null
+[ -e "${md}/PWNED" ] \
+  || fail "root-owned 0644 envelope files were refused — the check must refuse only what another account can write"
+echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
+
 # ── #1493: the published port the launcher probes is the one compose publishes ─
 #
 # Compose takes WARDYN_UP_PORT from the process environment, then --env-file.
@@ -444,7 +467,7 @@ f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DI
   printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
   mkdir -p "${md}/bin"; mv "${md}/bin-curl" "${md}/bin/curl"; mv "${md}/bin-docker" "${md}/bin/docker"
   chmod +x "${md}/bin/curl" "${md}/bin/docker"
-  printf '{}\n' > "${md}/site-config.json"
+  printf '{}\n' > "${md}/site-config.json"; chmod 0644 "${md}/site-config.json"
   timeout 30 env -u WARDYN_UP_PORT PATH="${md}/bin:${PATH}" \
       DOCKER_HOST="unix:///nonexistent-f1493.sock" WARDYN_MANAGED_DIR="${md}" "$@" \
       "${DESKTOP_SH}" up >"${md}/out.log" 2>&1
@@ -452,6 +475,7 @@ f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DI
 f1493_fixture() { # ENVELOPE_PORT_LINE [SECRET_LINE] -> managed dir
   local md; md="$(mktemp -d -p "${F185_TMP}")"
   printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n%s\ntouch "%s/ENVELOPE_SOURCED"\n' "$1" "${md}" > "${md}/wardyn.env"
+  chmod 0644 "${md}/wardyn.env"
   printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
   if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "${md}/secret.env"; chmod 0600 "${md}/secret.env"; fi
   printf '%s' "${md}"

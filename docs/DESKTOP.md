@@ -291,6 +291,9 @@ Three more the tier inherits rather than introduces:
 | `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts and provider policy; see [below](#etcwardynsite-configjson). | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
 
+- The launcher runs as root and refuses to start while `wardyn.env`, `secret.env`, `policy.json` or `site-config.json` is not owned by root or is group- or world-writable.
+- It names the file and its mode; ship the file root-owned at the mode above and re-run.
+
 ### `/etc/wardyn/site-config.json`
 
 - corporate network facts — upstream proxy, artifact mirrors, SCM hosts —
