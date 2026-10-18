@@ -83,6 +83,8 @@ type AuditSpool struct {
 	// again, which would only record those lines twice. Guarded by mu.
 	poisonProven bool
 	retireFailed bool
+	// retireBlocked counts the passes retireFailed has held back since the last probe pass.
+	retireBlocked int
 }
 
 // spoolPoisonAttempts is how many consecutive Drain attempts one line gets
@@ -96,6 +98,11 @@ type AuditSpool struct {
 // re-proves the same rejection while the events BEHIND it wait, and
 // docs/OPERATIONS.md promises the trail "becomes complete again automatically".
 const spoolPoisonAttempts = 3
+
+// spoolRetireProbeEvery bounds how long a failed rewrite blocks the drain behind a poison line the
+// sidecar will not take: every this-many blocked passes, one pass records the lines behind it again,
+// and its rewrite finds out whether the spool volume has healed.
+const spoolRetireProbeEvery = 10
 
 // spoolDrainDeadline bounds ONE Drain pass, and with it how long the spool lock
 // can be held. Half the 30-second drain tick (auditSpoolDrainInterval,
@@ -365,7 +372,11 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			}
 			suspectIdx, suspect = i, ev
 			if a.poisonProven && a.retireFailed {
-				break
+				a.retireBlocked++
+				if a.retireBlocked < spoolRetireProbeEvery {
+					break
+				}
+				a.retireBlocked = 0 // this pass is the probe: its rewrite tells whether the volume healed
 			}
 			continue
 		}
@@ -622,7 +633,7 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 func (a *AuditSpool) strikeLine(line []byte) int {
 	key := sha256.Sum256(line)
 	if key != a.poisonKey {
-		a.poisonKey, a.poisonHits, a.poisonProven = key, 0, false
+		a.poisonKey, a.poisonHits, a.poisonProven, a.retireBlocked = key, 0, false, 0
 	}
 	a.poisonHits++
 	return a.poisonHits

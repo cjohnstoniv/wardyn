@@ -507,3 +507,41 @@ func TestAuditSpoolFailedQuarantineDoesNotReplayTheLinesBehindAgain(t *testing.T
 		t.Fatalf("after heal: recorded %d, quarantined %d, %d lines left; want 6 (the 3 again, once), 1 and 0", got, q, n)
 	}
 }
+
+// TestAuditSpoolHealedVolumeDrainsBehindAPoisonLineTheSidecarStillRefuses: the rewrite failing once
+// holds the drain behind the poison line (#2412). When the spool volume heals but the sidecar keeps
+// failing, a later pass must still retire the lines behind it rather than block them for good.
+func TestAuditSpoolHealedVolumeDrainsBehindAPoisonLineTheSidecarStillRefuses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
+	sp, err := NewAuditSpool(path)
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	for _, action := range []string{"poison", "good.a", "good.b", "good.c"} {
+		if err := sp.Append(newTestEvent(action)); err != nil {
+			t.Fatalf("append %s: %v", action, err)
+		}
+	}
+	for _, p := range []string{path + ".quarantine", path + ".tmp"} {
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := &rejectingRecorder{reject: "poison"}
+	for i := 0; i < spoolPoisonAttempts+2; i++ {
+		_, _ = sp.Drain(context.Background(), rec, 100)
+	}
+	if got := sp.Lines(); got != 4 {
+		t.Fatalf("Lines = %d with the rewrite failing; want 4", got)
+	}
+	// The volume heals; the sidecar path stays unusable.
+	if err := os.Remove(path + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= spoolRetireProbeEvery; i++ {
+		_, _ = sp.Drain(context.Background(), rec, 100)
+	}
+	if got := sp.Lines(); got != 1 {
+		t.Fatalf("Lines = %d after the volume healed; want only the poison line left", got)
+	}
+}
