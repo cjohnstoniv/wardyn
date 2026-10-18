@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -588,6 +589,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.Attachments, ws.BaseImageID = atts, baseImageID
 	created, err := s.cfg.Store.CreateWorkspace(r.Context(), ws)
+	if errors.Is(err, store.ErrConflict) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken, workspaceNameTakenMsg)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "create workspace", err)
 		return
@@ -683,9 +688,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
-	// this GET→mutate→UPDATE can race an async repo-scan upload and
-	// write back a stale profile; identity edits are rare and the remedy is a
-	// re-scan — add an optimistic updated_at guard if it ever bites for real.
+	// This GET→mutate→UPDATE writes the whole row back, so the store applies it
+	// only while updated_at still matches the snapshot read here (ErrWorkspaceStale
+	// below): a run claim, record result or build that landed in between is
+	// never reverted.
 	sourcesChanged := !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
 	stampEgressEdit := false
 	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
@@ -714,7 +720,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// before this request's own response leaves the store.
 		ws.ApprovedEgress = nil
 		ws.Requirements = nil
-		ws.RecordResults = nil
+		// A session still recording is not "reviewed against the old sources": it
+		// is a live run whose capture lands in this map, so dropping its entry
+		// loses the recording and strands active_run_id.
+		ws.RecordResults = inFlightRecordResults(ws.RecordResults)
 		// Stamp the clear (0055) — asked for here, written by the database. This
 		// handler is the THIRD durable writer of approved_egress, beside the two
 		// scoped setters migration 0055 named. The boot heal
@@ -754,6 +763,14 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
 	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
+		return
+	}
+	if errors.Is(err, store.ErrWorkspaceStale) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceUpdateConflict, workspaceUpdateConflictMsg)
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken, workspaceNameTakenMsg)
 		return
 	}
 	if err != nil {

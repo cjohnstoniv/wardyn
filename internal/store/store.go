@@ -62,6 +62,13 @@ var ErrDriveSlugConflict = fmt.Errorf(
 var ErrDriveAllocated = fmt.Errorf(
 	"%w: this user drive gained an allocation while the write was being prepared", ErrConflict)
 
+// ErrWorkspaceStale is returned by UpdateWorkspace when the row changed after
+// the caller read it (every writer stamps updated_at), so replaying the
+// caller's snapshot would revert a concurrent claim, record result or build.
+// Wraps ErrConflict.
+var ErrWorkspaceStale = fmt.Errorf(
+	"%w: the workspace changed while this edit was being prepared", ErrConflict)
+
 // ErrAlreadyDecided is returned when DecideApproval targets an approval that
 // has already left PENDING. Fail closed: a second decision never overwrites
 // the first.

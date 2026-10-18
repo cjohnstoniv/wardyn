@@ -33,6 +33,8 @@ const (
 	// being told is a silently lost recording. It names the run id rather than a
 	// title: the id is what /runs/{id} takes and what the audit trail keys on.
 	workspaceDelete409ActiveRun = "workspace is in use by run %s — stop that run first, then delete"
+	workspaceNameTakenMsg       = "a workspace with this name already exists — pick another name"
+	workspaceUpdateConflictMsg  = "the workspace changed while this edit was being saved — reload it and apply the edit again"
 )
 
 // canonicalWorkspaceSource returns src with its IDENTITY fields spelled the way
