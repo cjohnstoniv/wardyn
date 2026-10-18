@@ -310,6 +310,7 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 | Snapshots, fork, warm pools and sleep on disconnect | #2960 |
 | Per-setting delegation, personal walls, agent rules, place rules | #2947, #2948, #2949, #2950 |
 | Live two-way sync with a conflict view, and organisation controls for local folders | #2987, #2990 |
+| Pause on every runtime, cold move between machines, and org sites with a reference edge box | #2991 |
 | Preview URLs, in-browser approvals, action gates, watermark, browser lock-down, Record Mode for desktops | #2965, #2964, #2971, #2969, #2970, #2966 |
 
 **Also in 0.10:** the New Run items marked Coming soon in 0.9.
