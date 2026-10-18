@@ -7,6 +7,7 @@
 // wrapping, computed positions). Text-shaped fixes are pinned in vitest next to their screen.
 import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
+import { RUN_COCKPIT, RUN_OUTPUT } from "../src/app/components/wardyn/copy";
 import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute, sidebarLink, sql } from "./fixtures";
 
 const PHONE = { width: 390, height: 844 };
@@ -161,5 +162,21 @@ test.describe("Tier B run Overview", () => {
     await expect(block).toContainText("What happened");
     await expect(block).toContainText("no recorded cause");
     await expect(block.getByRole("button", { name: /Open audit trail/ })).toBeVisible();
+  });
+});
+
+test.describe("Tier B run tabs", () => {
+  // #2920: a known limit of this server is not titled as a transient load error.
+  test("Output tab: the live-output limit has its own title, not 'Couldn't load right now'", async ({ page }) => {
+    await page.route("**/api/v1/runs/*/output", (route) =>
+      route.fulfill({ status: 503, json: { error: "refused", reason: "mask_state_unavailable" } }),
+    );
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: RUN_OUTPUT.tab }).click();
+    await expect(page.getByText(RUN_OUTPUT.maskTitle)).toBeVisible();
+    await expect(page.getByText(RUN_OUTPUT.maskUnavailable)).toBeVisible();
+    await expect(page.getByText(RUN_COCKPIT.loadError)).toHaveCount(0);
   });
 });
