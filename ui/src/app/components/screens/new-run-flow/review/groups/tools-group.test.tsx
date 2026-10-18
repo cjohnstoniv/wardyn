@@ -48,6 +48,12 @@ describe("Review: the count line for Autonomous harnesses", () => {
     expect(screen.queryByText(/1 of 1 harnesses/)).not.toBeInTheDocument();
   });
 
+  it("keeps the noun singular when the only harness has no task to start on ('0 of 1 harness starts')", () => {
+    show({ ...AUTO, workload: { kind: "agent_task", task: "" } });
+    expect(screen.getByText("0 of 1 harness starts automatically")).toBeInTheDocument();
+    expect(screen.queryByText(/harnesses/)).not.toBeInTheDocument();
+  });
+
   it("keeps the plural count when there are several", () => {
     show({ ...AUTO, tools: [...(AUTO.tools ?? []), { id: "codex-cli", kind: "harness" }] });
     expect(screen.getByText("1 of 2 harnesses start automatically")).toBeInTheDocument();

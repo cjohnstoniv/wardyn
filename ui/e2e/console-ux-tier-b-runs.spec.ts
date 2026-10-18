@@ -45,7 +45,7 @@ test.describe("Tier B at 390px", () => {
     await expect(titles.first()).toBeVisible();
     const unrecorded = page.locator("div:has(> [data-testid=episode-title])").filter({ hasText: "Not recorded yet" });
     expect(await unrecorded.count()).toBeGreaterThan(0);
-    await expect(unrecorded.locator("svg.lucide-play")).toHaveCount(0);
+    await expect(unrecorded.getByTestId("episode-play")).toHaveCount(0);
     const cut = await titles.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
     expect(cut).toBe(0);
   });
@@ -79,9 +79,8 @@ test.describe("Tier B runs list", () => {
     );
     await gotoConsole(page);
     await navToRoute(page, "/runs");
-    const card = (l: Locator) => l.locator("xpath=ancestor-or-self::*[contains(@class,'rounded-xl')][1]");
-    const composer = card(page.getByRole("form", { name: "Start a run" }));
-    const empty = card(page.getByText("Runs you launch appear here"));
+    const composer = page.getByTestId("runs-composer");
+    const empty = page.getByTestId("runs-member-empty");
     await expect(empty).toBeVisible();
     const [c, e] = [(await composer.boundingBox())!, (await empty.boundingBox())!];
     expect(e.y - (c.y + c.height)).toBeGreaterThanOrEqual(8);
@@ -130,7 +129,7 @@ test.describe("Tier B runs list at 390px", () => {
       }),
     );
     await phoneAt(page, "admin", "/admin/runs");
-    const summary = page.getByTestId("fleet-capacity-card").locator("span.truncate").first();
+    const summary = page.getByTestId("fleet-capacity-card-summary");
     await expect(summary).toContainText("configured reservations");
     const direct = await summary.evaluate((el) =>
       [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").includes("configured reservations")),
@@ -144,6 +143,7 @@ test.describe("Tier B run header", () => {
   // #2916: with room to spare at desktop width, the pending-approval chip shows its whole sentence.
   test("Run detail header: '1 waiting · sandbox held' is not cut off at 1440", async ({ page }) => {
     await gotoConsole(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
     const id = await seedRun(page);
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${id}'`);
     sql(
@@ -151,7 +151,7 @@ test.describe("Tier B run header", () => {
        ('${randomUUID()}','${id}','tool_call','{"tool":"Bash","cmd":"ls"}'::jsonb,'PENDING',now())`,
     );
     await navToRoute(page, `/runs/${id}`);
-    const chip = page.locator("span.truncate", { hasText: /^1 waiting · sandbox held$/ });
+    const chip = page.getByTestId("pending-approval-chip-text");
     await expect(chip).toBeVisible();
     expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   });
@@ -347,6 +347,7 @@ test.describe("Tier B review footer", () => {
   test("Review at 1440: the Save buttons are in the footer, with no More menu", async ({ page }) => {
     await mockPreflightClear(page);
     await gotoConsole(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
     await navToRoute(page, "/runs/new");
     await walkGuidedToReview(page);
     await expect(page.getByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE })).toBeVisible();

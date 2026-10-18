@@ -434,7 +434,7 @@ export function SummaryHeader({
         {pendingApprovalCount > 0 && (
           <Chip tone="warning" className="h-7 max-w-[130px] gap-1 min-[1400px]:max-w-[200px]">
             <ShieldAlert className="size-3 shrink-0" />
-            <span className="block min-w-0 truncate">
+            <span data-testid="pending-approval-chip-text" className="block min-w-0 truncate">
               {awaitingAdoConsent
                 ? // Azure DevOps, never AWS (F13) — checked ahead of
                   // awaitingReauth, same ownership rule.

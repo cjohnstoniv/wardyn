@@ -34,7 +34,7 @@ export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string 
   return (
     <div className="flex flex-col gap-2 border-b border-border py-3 last:border-b-0">
       <div className="flex items-center gap-2">
-        {episode.tag !== null && <Play className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+        {episode.tag !== null && <Play data-testid="episode-play" className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
         <span data-testid="episode-title" className="min-w-0 flex-1 break-words text-sm text-foreground">{episode.title}</span>
         {chip && <Chip tone="info">{chip}</Chip>}
         {episode.tag !== null && episode.minutes && (

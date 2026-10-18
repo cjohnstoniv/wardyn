@@ -75,7 +75,7 @@ export const NR_REVIEW = {
   TOOLS_NO_HARNESS: "No harness",
   TOOLS_AUTO_ONE: "1 harness starts automatically",
   TOOLS_AUTO: (n: string | number, total: string | number) =>
-    `${n} of ${total} harnesses start automatically`,
+    `${n} of ${total} ${Number(total) === 1 ? "harness starts" : "harnesses start"} automatically`,
   HARNESS_STARTS: "Starts with run",
   HARNESS_AFTER: "Available after start",
   HARNESS_AUTO: "Starts automatically",

@@ -18,7 +18,7 @@ import { RUNS_MEMBER_EMPTY as T } from "../wardyn/copy";
 
 export function RunsMemberEmpty() {
   return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
+    <div data-testid="runs-member-empty" className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
       <EmptyState
         icon={Rocket}
         title={T.TITLE}
