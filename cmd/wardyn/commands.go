@@ -535,8 +535,8 @@ func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) strin
 
 // approvalScopePeek extracts the fields common to the several
 // requested_scope JSON shapes (egressScope, apiKeyScope, gitPATScope,
-// sshKeyScope all carry "host"; only the egress_domain shape carries "mode")
-// without the CLI needing to know which kind it is decoding.
+// sshKeyScope all carry "host") without the CLI needing to know which kind it
+// is decoding.
 type approvalScopePeek struct {
 	Host string `json:"host,omitempty"`
 }
@@ -769,22 +769,35 @@ func parseDecisionUntil(s string) (time.Time, error) {
 	return t, nil
 }
 
+// logTailMargin backs the server-side Since filter off the newest event time.
+// The server pages by chain seq, not time, and an event's time is stamped
+// before it waits for the chain lock (up to db.AuditChainLockTimeout, 5s), so
+// a lower-seq event can carry a later time than a higher-seq one.
+const logTailMargin = 10 * time.Second
+
 // logTail dedupes a run's audit-event stream across repeated polls for
-// runLogsCmd. The server's Since filter is RFC3339 (second resolution, see
-// AuditFilter.Since), so re-polling with since=<last event's second> can
-// legitimately re-return every event from that same second — logTail tracks
-// which event IDs at the current boundary second were already emitted so
-// those are skipped, while a genuinely new event at (or after) that second
-// is not.
+// runLogsCmd. Progress is tracked by event ID, never by time: the Since filter
+// is only a coarse, margin-backed server-side bound, so each poll re-returns
+// recent events and the seen set drops the ones already printed.
+// ponytail: seen grows with the run's events (UUIDs only); prune by age if a
+// follow session ever runs long enough to matter.
 type logTail struct {
-	since time.Time
+	since time.Time // newest event time emitted
 	seen  map[uuid.UUID]bool
 }
 
-// filter returns the events in page (server-guaranteed time-ascending, i.e.
-// oldest-first) that are new since the last call, plus the tail's updated
-// state. A value receiver/return (not a pointer method) so a unit test can
-// assert the before/after state directly with no I/O.
+// sinceFilter is the Since value for the next poll; zero before any event.
+func (t logTail) sinceFilter() time.Time {
+	if t.since.IsZero() {
+		return t.since
+	}
+	return t.since.Add(-logTailMargin)
+}
+
+// filter returns the events in page that were not emitted by an earlier call,
+// plus the tail's updated state. A value receiver/return (not a pointer
+// method) so a unit test can assert the before/after state directly with no
+// I/O.
 func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 	next := t
 	if next.seen == nil {
@@ -792,17 +805,12 @@ func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 	}
 	var newEvents []types.AuditEvent
 	for _, e := range page {
-		if e.Time.Before(next.since) {
-			continue // stale event from a filter granularity mismatch; already emitted
+		if next.seen[e.ID] {
+			continue
 		}
-		if e.Time.Equal(next.since) {
-			if next.seen[e.ID] {
-				continue
-			}
-			next.seen[e.ID] = true
-		} else {
+		next.seen[e.ID] = true
+		if e.Time.After(next.since) {
 			next.since = e.Time
-			next.seen = map[uuid.UUID]bool{e.ID: true}
 		}
 		newEvents = append(newEvents, e)
 	}
@@ -864,8 +872,8 @@ only at the end.`,
 			drains := 0
 			for {
 				var f sdk.AuditFilter
-				if !tail.since.IsZero() {
-					f.Since = tail.since.UTC().Format(time.RFC3339)
+				if since := tail.sinceFilter(); !since.IsZero() {
+					f.Since = since.UTC().Format(time.RFC3339)
 				}
 				page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f)
 				if err != nil {
