@@ -315,3 +315,42 @@ func TestRecordPromote_PublicIPLiteralIsNotPromotable(t *testing.T) {
 		t.Fatalf("H4: a public IP literal was promoted as a required egress row (code=%d, rows=%v)", w.Code, fake.ws.Requirements)
 	}
 }
+
+// TestRecordPromote_ModelProviderRowHostsAreSkipped: a Bedrock or gateway
+// provider row's serving hosts are harness plumbing like api.anthropic.com, so
+// promoting a recording must not offer them as a workspace need.
+func TestRecordPromote_ModelProviderRowHostsAreSkipped(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+		{Host: "gateway.corp.example", AllowCount: 4},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{
+		{
+			ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+			Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
+		},
+		{
+			ID: "gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint,
+			BaseURL:   "https://gateway.corp.example",
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "m"}},
+		},
+	}}}
+	srv := New(baseTestConfig(newHarness(t), fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, k := range []string{"egress:bedrock-runtime.us-east-1.amazonaws.com", "egress:gateway.corp.example"} {
+		if _, ok := fake.ws.Requirements[k]; ok {
+			t.Errorf("model-provider plumbing promoted as a workspace need: %s (rows: %v)", k, fake.ws.Requirements)
+		}
+	}
+	if _, ok := fake.ws.Requirements["egress:api.stripe.com"]; !ok {
+		t.Errorf("an ordinary app host was not promoted: %v", fake.ws.Requirements)
+	}
+}

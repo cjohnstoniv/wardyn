@@ -562,6 +562,25 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 	return skip
 }
 
+// recordPromoteSkipHosts is promoteSkipHosts plus every model provider row's
+// serving hosts (a Bedrock runtime, a gateway): the same plumbing, spelled by
+// the site config rather than the ceiling. Record promotion only: the skip set
+// promoteSkipHosts returns is shared with approve·always, whose refusals stay
+// as they were.
+func (s *Server) recordPromoteSkipHosts(ctx context.Context, ws types.Workspace) map[string]struct{} {
+	skip := s.promoteSkipHosts(ctx, ws)
+	if s.cfg.Store != nil {
+		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+			for _, h := range modelProviderRowHosts(sc) {
+				if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+					skip[h] = struct{}{}
+				}
+			}
+		}
+	}
+	return skip
+}
+
 // skipCovers reports whether any skip ENTRY names or covers host.
 //
 // The entries are kept VERBATIM — a ceiling's "*.anthropic.com" (the spelling
@@ -694,7 +713,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 		return nil, "the control plane's own address is not configured, so the guard that keeps Wardyn's API " +
 			"off this workspace's allowlist cannot be evaluated — set WARDYN_CONTROL_PLANE_URL and retry"
 	}
-	skipHost := s.promoteSkipHosts(r.Context(), ws)
+	skipHost := s.recordPromoteSkipHosts(r.Context(), ws)
 	// Fallback, and only ever a WIDENING of that exclusion: a deployment is often
 	// dialled by a name other than the configured one (host.docker.internal, the
 	// in-cluster service name, an ingress host), and an exact match sees none of
