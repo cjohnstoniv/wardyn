@@ -37,7 +37,12 @@
 # counted and skipped.
 #
 # Modes (first argument; the optional second is the PR-list file):
-#   (none)        both phases in one process, GH_TOKEN unset between them.
+#   (none)        both phases in one process, for local use only. GH_TOKEN is
+#                 unset between the phases, but the process's original
+#                 environment stays readable (/proc/PID/environ), so the
+#                 checks are NOT token-isolated here. Its scratch refs live
+#                 under a per-process namespace, so two local runs at once
+#                 do not delete each other's refs.
 #   --fetch-only  needs GH_TOKEN: lists the PRs, writes the list to FILE and
 #                 fetches the same-repo heads into local refs.
 #   --check-only  needs no token and no network: reads FILE and runs passes 1-3.
@@ -74,8 +79,11 @@ AST_GUARD_TESTS='TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough|Test
 MIGRATIONS_DIR="internal/db/migrations"
 # PR heads are fetched into a private ref namespace, force-updated, so a rerun
 # after a force-push cannot fail on a non-fast-forward, and the check phase's
-# trap removes every one of them.
+# trap removes every one of them. The two workflow phases are separate
+# processes and share the plain namespace; the single-process mode adds its pid
+# so concurrent local runs keep their own refs.
 NS="refs/scratch/nightly"
+if [ "$MODE" = all ]; then NS="$NS-$$"; fi
 
 # The checkout does not persist credentials, so the token reaches git only
 # through the environment of the fetches below, never argv or .git/config.
