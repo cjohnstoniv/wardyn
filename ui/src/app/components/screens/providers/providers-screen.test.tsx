@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
 import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
@@ -76,9 +76,10 @@ vi.mock("../../../lib/api/base-images", () => ({
   baseImages: { list: () => Promise.resolve([]), add: vi.fn() },
 }));
 
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
-  return { ...actual, useNavigate: () => vi.fn() };
+  return { ...actual, useNavigate: () => navigateMock };
 });
 
 // #460 review — wrapped in UnsavedGuardProvider even for tests that never
@@ -86,17 +87,12 @@ vi.mock("react-router-dom", async () => {
 // so every existing assertion below is unaffected, and it's what the tab-
 // switch-guard tests need to see the real confirm dialog rather than the
 // context's own no-provider fallback (which would proceed silently).
-function Where() {
-  return <p data-testid="where">{useLocation().pathname}</p>;
-}
-
 function renderScreen(operator = true) {
   return render(
     <MemoryRouter initialEntries={["/admin/providers"]}>
       <UnsavedGuardProvider>
         <OperatorProvider operator={operator} principal="alice">
           <ProvidersScreen />
-          <Where />
         </OperatorProvider>
       </UnsavedGuardProvider>
     </MemoryRouter>,
@@ -108,6 +104,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  navigateMock.mockReset();
   getWorkspaceProvidersMock.mockReset();
   putWorkspaceProvidersMock.mockReset();
   getSetupStatusMock.mockReset();
@@ -128,7 +125,7 @@ describe("ProvidersScreen — a security admin", () => {
     expect(getSetupStatusMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: PROVIDERS.TITLE })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA }));
-    expect(screen.getByTestId("where")).toHaveTextContent("/admin/runs");
+    expect(navigateMock).toHaveBeenCalledWith("/admin/runs");
   });
 });
 

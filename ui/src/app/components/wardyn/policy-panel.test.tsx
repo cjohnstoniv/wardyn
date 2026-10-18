@@ -119,12 +119,13 @@ describe("PolicyPanel — templates", () => {
     expect(t.spec.allowed_domains).toEqual([]);
   });
 
-  it("clicking a chip replaces the textarea body with that template", async () => {
+  it("picking a template replaces the textarea body with that template", async () => {
     const user = userEvent.setup();
     render(<Harness initial="{}" />);
     const t = POLICY_TEMPLATES.find((x) => x.id === "registries")!;
 
-    await user.click(screen.getByRole("button", { name: t.label }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId(`policy-template-${t.id}`));
 
     expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBe(specBox());
     expect(specBox().value).toBe(templateText(t));
@@ -585,7 +586,8 @@ describe("PolicyPanel — one source string, YAML unless JSON is chosen", () => 
     expect(within(screen.getByRole("status")).getByText("Valid JSON")).toBeInTheDocument();
 
     const t = POLICY_TEMPLATES.find((x) => x.id === "ci")!;
-    await user.click(screen.getByRole("button", { name: t.label }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId(`policy-template-${t.id}`));
     expect(box).toHaveValue(templateText(t, "json"));
   });
 

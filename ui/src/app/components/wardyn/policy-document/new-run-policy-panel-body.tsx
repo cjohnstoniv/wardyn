@@ -43,6 +43,7 @@ import { SectionLabel } from "../primitives";
 import { STATES } from "../states";
 import { PolicyDocument, type PolicyView } from "./policy-document";
 import { PolicyEditor, useEditModeFocus } from "./policy-editor";
+import { PolicyTemplateMenu } from "./policy-template-menu";
 import {
   applySpecChange,
   parseSpec,
@@ -348,21 +349,12 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
           }}
           onDone={() => setEditing(false)}
           operationError={refused}
+          toolbarLead={<PolicyTemplateMenu templates={templates} onPick={(t) => setSource(templateText(t, format))} />}
+          toolbarNote={
+            providerNames.length > 0 ? <p className="text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p> : undefined
+          }
           structured={
             <>
-              <div>
-                <SectionLabel className="mb-1.5">{C.START}</SectionLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {templates.map((t) => (
-                    <Button key={t.id} type="button" variant="outline" size="sm" title={t.hint} onClick={() => setSource(templateText(t, format))}>
-                      {t.label}
-                    </Button>
-                  ))}
-                </div>
-                {providerNames.length > 0 && (
-                  <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
-                )}
-              </div>
               {parsed.ok && (
                 <div id={NEW_RUN_POLICY_IDS.TOOL_RULES}>
                   <ToolRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />
