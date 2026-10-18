@@ -47,7 +47,7 @@ import { EgressTab, useElapsedTimer, type ProbeUiState } from "./corp-network-eg
 // compactEndpoint moved with the egress family; re-exported so its tests and
 // any caller keep one import path for this step's helpers.
 export { compactEndpoint } from "./corp-network-egress";
-import type { CorpNetworkGate, CorpNetworkState } from "./steps";
+import { keepCurrentRedirects, upstreamKey, type CorpNetworkGate, type CorpNetworkState } from "./steps";
 // HostProxyTab (+ EvidenceBlock/ProxyTestBlock and the evidence-reading pure
 // helpers) moved to corp-network-proxy.tsx — the same size-gate split
 // corp-network-egress.tsx already got for the Egress tab. Re-exported so every
@@ -126,7 +126,22 @@ export function CorpNetworkStep({
   const [innerTab, setInnerTab] = React.useState<"proxy" | "egress">("proxy");
   const tab = tabProp ?? innerTab;
   const setTab = onTabChange ?? setInnerTab;
-  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveSiteConfig);
+  // Probe results are keyed by address, not by what was tested. Every save of this step
+  // routes through here, so a landed save that changed the upstream or a redirect target
+  // drops the verdict it just made stale (#2557, #2573).
+  const saveAndInvalidate = async (next: SiteConfig) => {
+    await saveSiteConfig(next);
+    if (upstreamKey(next) !== upstreamKey(siteConfig)) {
+      onGateChange({ proxyProbe: undefined });
+      setTest({ kind: "idle" });
+    }
+    const kept = keepCurrentRedirects(siteConfig, next, redirectProbesRef.current);
+    if (kept) {
+      redirectProbesRef.current = kept;
+      onGateChange({ redirectProbes: kept });
+    }
+  };
+  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveAndInvalidate);
 
   // ---- The probe, owned HERE (not in HostProxyTab): the gate row can fire it
   // from either tab, and its UI state must survive tab switches. ----

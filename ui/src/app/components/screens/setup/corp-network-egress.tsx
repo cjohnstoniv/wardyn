@@ -25,6 +25,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { SITE } from "../../wardyn/copy";
+import { keepCurrentRedirects } from "./steps";
 
 // Display-compaction for a redirect endpoint: drop the scheme, never touch
 // the host, elide only the MIDDLE of a long path once the whole thing exceeds
@@ -470,7 +471,10 @@ export function EgressTab({
   // operator's draft on a refusal instead of clearing it (#492).
   const setRedirects = async (next: EgressRedirect[]) => {
     const ok = await mutate({ ...(siteConfig ?? {}), egress_redirects: next }, "Failed to save the egress redirect");
-    if (ok) toast.success("Egress redirects saved", { description: SITE.SAVE_NOTE });
+    if (ok) {
+      toast.success("Egress redirects saved", { description: SITE.SAVE_NOTE });
+      setTestStates((s) => keepCurrentRedirects(siteConfig, { egress_redirects: next }, s) ?? s);
+    }
     return ok;
   };
 
