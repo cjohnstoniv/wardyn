@@ -355,7 +355,7 @@ export function EnvironmentStep({
       <p className="text-sm text-muted-foreground">
         {noRunner
           ? "The tier matrix is shown for reference — tiers can't be selected until a runner is available."
-          : "Weakest to strongest — pick a column to save it in this browser as the default barrier for new runs."}
+          : "Weakest to strongest. New runs default to the strongest barrier installed here; you can pick a different one per run in New Run."}
       </p>
 
       {/* The picker: a radiogroup whose radios are the three column headers. */}
@@ -519,7 +519,7 @@ export function EnvironmentStep({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Your pick is saved in this browser as the default barrier for new runs.
+        Nothing here is saved: New Run starts from the strongest installed barrier and lets you pick per run.
       </p>
     </div>
   );

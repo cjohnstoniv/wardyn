@@ -20,12 +20,9 @@
 import type { ConfinementClass } from "./types";
 
 export const TIER_PICKER = {
-  // Was "Weakest to strongest — pick a column to save it in this browser as
-  // the default barrier for new runs." (environment-step.tsx, unchanged
-  // there — the full table is the one control with actual columns). T-4:
-  // every non-table shape says "pick one" instead.
-  PICK_ONE:
-    "Weakest to strongest — pick one to save it in this browser as the default barrier for new runs.",
+  // Nothing persists a barrier pick (default-confinement.ts), so no picker line may claim a
+  // browser-saved default; New Run resolves its own from /setup/status.
+  PICK_ONE: "Weakest to strongest — pick one.",
   // #1200 review P2-3 — New Run's own pick is per-run and nothing persists
   // (no localStorage write anywhere under new-run/*), so PICK_ONE's browser-
   // persistence claim would be false here.
