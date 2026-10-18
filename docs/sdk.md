@@ -258,10 +258,10 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   gate, even after recording is disabled.
   A portal's delegated token reads `stdout` output only; for the other two
   it gets the 409 a run with no such row gives, audited `delegation_scope`.
-- `incomplete` says bytes may be missing
-  and is always true for recording recovery.
+- `incomplete` on `stdout` says bytes may be missing.
+  On `recording` it is always true and says the output cannot be vouched byte-complete.
 - `capture_gap` says capture or recovery
-  was lost.
+  was lost: the failure signal.
   Previously persisted masked stdout chunks may remain.
 - `mask_scope` is
   `run` when the capture was masked against the run's complete manifest and

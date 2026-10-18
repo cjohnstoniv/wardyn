@@ -58,6 +58,7 @@ These are covered by tests against simulated parts only; check them on your esta
 
 ### Fixed
 
+- Run output with `source` `recording` no longer reads "some bytes may be missing" in the CLI or `docs/sdk.md`: `incomplete` there means the output cannot be vouched complete, and only `capture_gap` says a capture failed. The wire field is unchanged.
 - "Discard mine and reload" on the Providers and Agents screens and the model provider editor now also re-reads who you are signed in as and reloads the page when another tab switched the session to someone else, so the page no longer keeps refusing every save as the previous person.
 - The run page's "Not recorded by the runner" note no longer claims the organization's sessions are recorded now.
 - A forward-lane request the egress audit cannot record (a full decision spool, or a record too large) now carries

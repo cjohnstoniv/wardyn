@@ -54,7 +54,8 @@ func TestRunOutput_BytesUnchangedAndNotice(t *testing.T) {
 		want string
 	}{
 		{"truncated", map[string]any{"truncated": true, "complete": true, "source": "stdout"}, "truncated"},
-		{"incomplete", map[string]any{"incomplete": true, "complete": true, "source": "stdout"}, "incomplete"},
+		{"incomplete", map[string]any{"incomplete": true, "complete": true, "source": "stdout"}, "incomplete: some bytes may be missing"},
+		{"incomplete recording", map[string]any{"incomplete": true, "complete": true, "source": "recording"}, "cannot be vouched complete; only a capture gap means capture failed"},
 		{"capture gap", map[string]any{"capture_gap": true, "complete": true, "source": "stdout"}, "capture gap"},
 		{"pane snapshot", map[string]any{"complete": true, "source": "pane_snapshot"}, "pane snapshot"},
 		{"globals only", map[string]any{"complete": true, "source": "stdout", "mask_scope": "globals_only"}, "global secrets only"},
