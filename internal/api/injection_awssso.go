@@ -361,6 +361,21 @@ type awsSSOReauthScopeBody struct {
 	ComponentID      string `json:"component_id,omitempty"`
 }
 
+// raisedAs reports whether ap is the request raised with scope b: an AWS
+// sign-in body (no lane key) naming the same session. Provider is only the name
+// shown, so it is not compared.
+func (b awsSSOReauthScopeBody) raisedAs(ap types.ApprovalRequest) bool {
+	var sc struct {
+		awsSSOReauthScopeBody
+		Lane string `json:"lane"`
+	}
+	if json.Unmarshal(ap.RequestedScope, &sc) != nil || sc.Lane != "" {
+		return false
+	}
+	sc.Provider = b.Provider
+	return sc.awsSSOReauthScopeBody == b
+}
+
 // holdOrRefuseCredentialReauth answers the DEAD-credential path: 423 while a
 // request is open, 403 once one has been refused, cancelled or aged out.
 //
@@ -380,6 +395,20 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonApprovalsUnreadable, credentialReauthApprovalsUnreadableBody)
 		return true
 	}
+	// The scope is the DEDUP KEY, so it carries identity and nothing else: the
+	// reason lives on the audit row, not here. A provider run's hold also names
+	// its provider — the id to show, the UID to match (reauthResolvableBy) — so
+	// only a sign-in for that provider answers it; a roster run's scope stays
+	// byte-for-byte what it was.
+	scope := awsSSOReauthScopeBody{
+		Mechanism:        snapshot.Mechanism,
+		CredentialSource: snapshot.CredentialSource,
+		Owner:            snapshot.OwnerSubject,
+	}
+	if snapshot.ProviderUID != "" {
+		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
+	}
+	scope.ComponentID = snapshot.ComponentID
 	workflows := 0
 	var terminal *types.ApprovalRequest
 	for i := range rows {
@@ -392,6 +421,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		workflows++
+		// Every other sign-in row spends the shared budget, but only this
+		// session's own request holds or closes it.
+		if !scope.raisedAs(rows[i]) {
+			continue
+		}
 		switch rows[i].State {
 		case types.ApprovalPending:
 			// Already open: the sidecar is (or will be) holding on this id.
@@ -419,20 +453,6 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		return true
 	}
 
-	// The scope is the DEDUP KEY, so it carries identity and nothing else: the
-	// reason lives on the audit row, not here. A provider run's hold also names
-	// its provider — the id to show, the UID to match (reauthResolvableBy) — so
-	// only a sign-in for that provider answers it; a roster run's scope stays
-	// byte-for-byte what it was.
-	scope := awsSSOReauthScopeBody{
-		Mechanism:        snapshot.Mechanism,
-		CredentialSource: snapshot.CredentialSource,
-		Owner:            snapshot.OwnerSubject,
-	}
-	if snapshot.ProviderUID != "" {
-		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
-	}
-	scope.ComponentID = snapshot.ComponentID
 	reqScope, _ := json.Marshal(scope)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
