@@ -22,7 +22,7 @@ func TestExpectedPrincipalGuardRunsAfterAuth(t *testing.T) {
 	cfg.LocalMode = true
 	cfg.LocalOperator = "local:test"
 	cfg.LocalLoopback = true
-	h := New(cfg).Handler()
+	h := panicFails(t, New(cfg).Handler())
 	post := func(who string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set(expectedPrincipalHeader, url.PathEscape(who))
