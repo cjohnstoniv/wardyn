@@ -428,16 +428,20 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	// they see, and the two are separate because the same getter feeds
 	// workspace_build.go and workspace_envcode.go, which need the real host
 	// paths and image refs to do their work.
+	writeJSON(w, http.StatusOK, s.workspaceForResponse(r, ws))
+}
+
+// workspaceForResponse is the one projection every single-workspace answer
+// gets, a read or a write's echo of the updated row: the reader's tier
+// (redactWorkspaceForRead), then the server-owned `admitted` flag the list
+// also carries — one document, one projection (the list route learned that
+// lesson for redaction one release ago) — and #1267's available_to_you.
+func (s *Server) workspaceForResponse(r *http.Request, ws types.Workspace) types.Workspace {
 	out := redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
-	// The single-row read carries the same server-owned `admitted` flag the list
-	// does — one document, one projection (the list route learned that lesson for
-	// redaction one release ago).
 	if stamp := s.admissionStamper(r.Context()); stamp != nil {
 		out = stamp(out)
 	}
-	// #1267: the same per-row available_to_you the list carries.
-	out = s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
-	writeJSON(w, http.StatusOK, out)
+	return s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
 }
 
 // pinStamper projects a workspace's model-provider pin for this caller: a pin

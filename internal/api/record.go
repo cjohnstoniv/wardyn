@@ -865,7 +865,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 				"domains": promoted, "source": "record:" + taskKey,
 			})))
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, s.workspaceForResponse(r, updated))
 }
 
 // controlPlaneHost extracts the lowercase hostname of the configured control
