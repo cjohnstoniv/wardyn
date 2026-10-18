@@ -384,9 +384,40 @@ func withPendingMarker(data json.RawMessage, on bool) (json.RawMessage, error) {
 	return json.Marshal(m)
 }
 
-// IsPending reports whether ev waits under the pending key.
+// IsPending reports whether ev waits under the pending key: its data sets
+// PendingMarker true and holds a pending string where Seal writes one. Both are
+// parsed, so a writer's free text that only spells them (a request path, a
+// token name) is not pending.
 func IsPending(ev types.AuditEvent) bool {
-	return len(ev.Data) > 0 && bytes.Contains(ev.Data, []byte(`"`+PendingMarker+`"`)) && bytes.Contains(ev.Data, []byte(`"`+pendingPrefix))
+	if !markedPending(ev) {
+		return false
+	}
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(ev.Data, &m)
+	held := func(v json.RawMessage) bool {
+		s, ok := stringValue(v)
+		return ok && strings.HasPrefix(s, pendingPrefix)
+	}
+	for _, k := range append([]string{PendingActorKey, PendingTargetKey}, sponsorFieldNames(ev)...) {
+		if held(m[k]) {
+			return true
+		}
+	}
+	found := false
+	for _, f := range sealFields[ev.Action] {
+		_, _, _ = rewrite(ev.Data, strings.Split(f.Path, "."), func(v json.RawMessage) (json.RawMessage, bool, error) {
+			found = found || held(v)
+			return v, false, nil
+		})
+	}
+	return found
+}
+
+// markedPending reports whether ev's data sets PendingMarker true at the top level.
+func markedPending(ev types.AuditEvent) bool {
+	var m map[string]json.RawMessage
+	var on bool
+	return len(ev.Data) > 0 && json.Unmarshal(ev.Data, &m) == nil && json.Unmarshal(m[PendingMarker], &on) == nil && on
 }
 
 // parseSealed splits a sealed string. ok is false for any other string.
@@ -587,7 +618,7 @@ func (s *Sealer) unsealData(ctx context.Context, memo *keyMemo, ev types.AuditEv
 // the drain quarantines the line instead of storing the junk.
 func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 	fields := sealFields[ev.Action]
-	if !IsPending(ev) {
+	if len(ev.Data) == 0 || !bytes.Contains(ev.Data, []byte(`"`+PendingMarker+`"`)) || !bytes.Contains(ev.Data, []byte(`"`+pendingPrefix)) {
 		return ev, nil
 	}
 	pk := s.pendingKey()

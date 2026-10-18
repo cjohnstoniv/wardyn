@@ -33,6 +33,17 @@
 #      and the loop repeats until the checks pass, so every bad PR is named,
 #      not only the first.
 #
+# Only PRs whose head lives in this repo are fetched and built; fork PRs are
+# counted and skipped.
+#
+# Modes (first argument; the optional second is the PR-list file):
+#   (none)        both phases in one process, GH_TOKEN unset between them.
+#   --fetch-only  needs GH_TOKEN: lists the PRs, writes the list to FILE and
+#                 fetches the same-repo heads into local refs.
+#   --check-only  needs no token and no network: reads FILE and runs passes 1-3.
+# The workflow runs the two as separate steps so the checks start without
+# GH_TOKEN in their environment.
+#
 # Exits non-zero (a red nightly, the PRs named in GITHUB_STEP_SUMMARY) on a
 # migration-number claim, a check failure, or a conflict under
 # internal/db/migrations. Informational, not a release gate.
@@ -45,18 +56,58 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-: "${GH_TOKEN:?GH_TOKEN is required (gh pr list needs it)}"
+MODE="${1:-all}"
+PRS_FILE="${2:-}"
+case "$MODE" in
+  all|--fetch-only|--check-only) ;;
+  *) echo "usage: $0 [--fetch-only|--check-only FILE]" >&2; exit 2 ;;
+esac
+if [ "$MODE" != all ] && [ -z "$PRS_FILE" ]; then
+  echo "usage: $0 $MODE FILE" >&2; exit 2
+fi
+if [ "$MODE" != --check-only ]; then
+  : "${GH_TOKEN:?GH_TOKEN is required (gh pr list needs it)}"
+fi
 REPO="${GITHUB_REPOSITORY:-cjohnstoniv/wardyn}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 AST_GUARD_TESTS='TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough|TestOnlyThreeArmsSetBlocking'
 MIGRATIONS_DIR="internal/db/migrations"
+# PR heads are fetched into a private ref namespace, force-updated, so a rerun
+# after a force-push cannot fail on a non-fast-forward, and the check phase's
+# trap removes every one of them.
+NS="refs/scratch/nightly"
 
-git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+# The checkout does not persist credentials, so the token reaches git only
+# through the environment of the fetches below, never argv or .git/config.
+token_fetch() {
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+    git fetch --quiet origin "$@"
+}
 
-# Every open PR, whatever its state — the stacked-base check needs drafts and
-# PRs on other bases too.
-prs_json="$(gh pr list --repo "$REPO" --state open --limit 200 \
-  --json number,headRefName,baseRefName,isDraft)"
+# jq filters, kept as the exact complements of each other: a PR is built only
+# when GitHub says its head is in this repo (a missing field counts as a fork).
+CANDIDATE='.isDraft==false and .baseRefName=="main" and .isCrossRepository==false'
+FORK='.isDraft==false and .baseRefName=="main" and .isCrossRepository!=false'
+
+if [ "$MODE" != --check-only ]; then
+  token_fetch "+refs/heads/main:refs/remotes/origin/main"
+  # Every open PR, whatever its state — the stacked-base check needs drafts and
+  # PRs on other bases too.
+  prs_json="$(gh pr list --repo "$REPO" --state open --limit 200 \
+    --json number,headRefName,baseRefName,isDraft,isCrossRepository)"
+  [ -z "$PRS_FILE" ] || printf '%s' "$prs_json" >"$PRS_FILE"
+  mapfile -t fetch_prs < <(printf '%s' "$prs_json" | jq -r ".[] | select($CANDIDATE) | .number")
+  if [ "${#fetch_prs[@]}" -gt 0 ]; then
+    refspecs=()
+    for n in "${fetch_prs[@]}"; do refspecs+=("+pull/$n/head:$NS/pr-$n"); done
+    token_fetch "${refspecs[@]}"
+  fi
+  unset GH_TOKEN
+  if [ "$MODE" = --fetch-only ]; then exit 0; fi
+else
+  prs_json="$(cat "$PRS_FILE")"
+fi
 
 # ── 1. stacked-base retarget check ──────────────────────────────────────────
 # A PR is "stacked" when its base is neither main/master, a release/** branch,
@@ -81,8 +132,8 @@ done < <(printf '%s' "$prs_json" | jq -r '.[] | [.number, .baseRefName] | @tsv')
 # No filter on GitHub's `mergeable`: it is computed lazily and comes back
 # UNKNOWN for most PRs on a cold query, so filtering on it checks a different,
 # sometimes empty, set each night. The scratch merge below finds out for itself.
-mapfile -t candidates < <(printf '%s' "$prs_json" \
-  | jq -r '.[] | select(.isDraft==false and .baseRefName=="main") | .number' | sort -n)
+mapfile -t candidates < <(printf '%s' "$prs_json" | jq -r ".[] | select($CANDIDATE) | .number" | sort -n)
+forks="$(printf '%s' "$prs_json" | jq "[.[] | select($FORK)] | length")"
 drafts="$(printf '%s' "$prs_json" | jq '[.[] | select(.isDraft and .baseRefName=="main")] | length')"
 other_base="$(printf '%s' "$prs_json" | jq '[.[] | select(.baseRefName!="main")] | length')"
 
@@ -97,8 +148,8 @@ other_base="$(printf '%s' "$prs_json" | jq '[.[] | select(.baseRefName!="main")]
   fi
   echo
   echo "### Candidates"
-  echo "${#candidates[@]} open, non-draft PR(s) target main. Not checked: $drafts draft(s) targeting main," \
-       "$other_base PR(s) targeting another branch (stacked or release)."
+  echo "${#candidates[@]} open, non-draft, same-repo PR(s) target main. Not checked: $forks fork PR(s)," \
+       "$drafts draft(s) targeting main, $other_base PR(s) targeting another branch (stacked or release)."
   echo
 } >>"$SUMMARY"
 
@@ -109,10 +160,6 @@ fi
 REPO_ROOT="$(pwd)"
 WORKDIR="$(mktemp -d)"
 LOGDIR="$(mktemp -d)"
-# PR heads are fetched into a private ref namespace, force-updated, so a rerun
-# after a force-push cannot fail on a non-fast-forward, and the trap removes
-# every one of them.
-NS="refs/scratch/nightly-$$"
 cleanup() {
   cd "$REPO_ROOT"
   git worktree remove --force "$WORKDIR" 2>/dev/null || true
@@ -136,10 +183,6 @@ export GIT_COMMITTER_NAME=wardyn-nightly GIT_COMMITTER_EMAIL=nightly@invalid
 # sides' lines kept): garbage for a lockfile, but nothing here reads one.
 printf '%s\n' '* merge=union' '*.go merge=text' '*.sql merge=text' 'go.mod merge=text' 'go.sum merge=text' \
   >"$LOGDIR/attributes"
-
-refspecs=()
-for n in "${candidates[@]}"; do refspecs+=("+pull/$n/head:$NS/pr-$n"); done
-git fetch --quiet origin "${refspecs[@]}"
 
 status=0
 

@@ -46,10 +46,11 @@ import (
 // RESIDUAL: the bind-time re-check resolves the real path as late as this
 // process can, but validate and ContainerCreate are still not atomic — the
 // same TOCTOU window ValidateMountSource's own residual note documents.
-// Bounded by two things: the roots are operator-set, so a member can only
-// race WITHIN the declared roots, never enlarge them; and the dotfile
-// deny-list matches the post-EvalSymlinks real path, so a won race landing on
-// ~/.ssh is still refused.
+// Bounded by three things: the roots are operator-set, so a member can only
+// race WITHIN the declared roots, never enlarge them; the dotfile deny-list
+// matches the post-EvalSymlinks real path, so a won race landing on ~/.ssh is
+// still refused; and a writable bind is held to the writable roots and deny on
+// that same real path.
 
 // memberDeniedSegments are path SEGMENTS a member mount's resolved real path
 // may neither end in nor traverse. Modeled on deniedSourcePrefixes (mount.go)
@@ -129,32 +130,56 @@ func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool)
 	if !writable {
 		return nil
 	}
-	if withinAnyRoot(real, p.WritableDeny) {
+	return p.Writable().allows(src, real)
+}
+
+// UserWritableCeiling is the writable half of UserMountPolicy, carried on a
+// member run's spec (SandboxSpec.UserWritable) so the bind-time gate decides
+// writability again on the path it is about to bind.
+type UserWritableCeiling struct {
+	Roots []string // WARDYN_USER_WRITABLE_ROOTS
+	Deny  []string // WARDYN_USER_WRITABLE_DENY
+}
+
+// Writable is p's writable ceiling.
+func (p UserMountPolicy) Writable() UserWritableCeiling {
+	return UserWritableCeiling{Roots: p.WritableRoots, Deny: p.WritableDeny}
+}
+
+// allows reports whether the ALREADY-RESOLVED real path of src may be bound
+// read-write under c.
+func (c UserWritableCeiling) allows(src, real string) error {
+	if withinAnyRoot(real, c.Deny) {
 		return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_USER_WRITABLE_DENY)", src)
 	}
 	// The other direction: a writable bind of a directory covers everything
 	// under it, the denied subtree included, and nothing downstream re-covers
 	// that subtree read-only.
-	if deny := denyPathUnder(real, p.WritableDeny); deny != "" {
+	if deny := denyPathUnder(real, c.Deny); deny != "" {
 		return fmt.Errorf("mount source %q may not be mounted writable: it contains the member writable-deny path %q (WARDYN_USER_WRITABLE_DENY)", src, deny)
 	}
-	if len(p.WritableRoots) == 0 {
+	if len(c.Roots) == 0 {
 		return fmt.Errorf("mount source %q may not be mounted writable: no member writable roots are configured (WARDYN_USER_WRITABLE_ROOTS) — member mounts are read-only by default", src)
 	}
-	if !withinAnyRoot(real, p.WritableRoots) {
+	if !withinAnyRoot(real, c.Roots) {
 		return fmt.Errorf("mount source %q may not be mounted writable: it is outside every member writable root (WARDYN_USER_WRITABLE_ROOTS)", src)
 	}
 	return nil
 }
 
-// ValidateUserMountSource is the BIND-time gate: the source half only, run
-// against the roots already resolved for the run (SandboxSpec.UserMountRoots)
-// as the last thing before the driver hands the bind to the container runtime.
-// Writability is not re-derived here — it was decided at authoring time and
-// rides on the mount itself, so a path swap cannot change it.
-func ValidateUserMountSource(src string, roots []string) error {
-	_, err := validateUserSource(src, roots)
-	return err
+// ValidateUserMountSource is the BIND-time gate, run against the roots already
+// resolved for the run (SandboxSpec.UserMountRoots) as the last thing before
+// the driver hands the bind to the container runtime. writable, non-nil for a
+// read-write bind, is the run's writable ceiling (SandboxSpec.UserWritable): a
+// source re-pointed since authoring is held to it on the path it resolves to
+// now. Nil skips that half, as a spec from a control plane that sends no
+// ceiling asks.
+func ValidateUserMountSource(src string, roots []string, writable *UserWritableCeiling) error {
+	real, err := validateUserSource(src, roots)
+	if err != nil || writable == nil {
+		return err
+	}
+	return writable.allows(src, real)
 }
 
 // validateUserSource runs the three additive checks and returns the resolved
@@ -235,16 +260,20 @@ func denyPathUnder(real string, deny []string) string {
 }
 
 // deniedUserSegment returns the offending path element when real IS or
-// TRAVERSES a credential dotfile path, or "" when it is clean.
+// TRAVERSES a credential dotfile path, or "" when it is clean. Elements compare
+// case-folded: on a case-insensitive filesystem EvalSymlinks keeps the
+// spelling it was given, so ".SSH" there is ~/.ssh.
 func deniedUserSegment(real string) string {
 	parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(real), "/"), "/")
 	for i, part := range parts {
-		if memberDeniedSegments[part] {
-			return part
+		for seg := range memberDeniedSegments {
+			if strings.EqualFold(part, seg) {
+				return part
+			}
 		}
 		if i+1 < len(parts) {
 			for _, pair := range memberDeniedPairs {
-				if part == pair[0] && parts[i+1] == pair[1] {
+				if strings.EqualFold(part, pair[0]) && strings.EqualFold(parts[i+1], pair[1]) {
 					return pair[0] + "/" + pair[1]
 				}
 			}

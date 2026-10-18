@@ -1729,17 +1729,25 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Scheduled checks build only same-repo refs and run without credentials:
+      # no persisted checkout token, no setup-go cache, and the checks step
+      # below has no token in its env.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - name: Octopus scratch merge + stacked-base retarget check
+          cache: false
+      - name: List and fetch same-repo PR heads
         env:
           GH_TOKEN: ${{ github.token }}
+        run: ./scripts/nightly-migration-merge-check.sh --fetch-only "$RUNNER_TEMP/prs.json"
+      - name: Octopus scratch merge + stacked-base retarget check
+        env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-        run: ./scripts/nightly-migration-merge-check.sh
+        run: ./scripts/nightly-migration-merge-check.sh --check-only "$RUNNER_TEMP/prs.json"
 
   # Managed-settings drift probe (#1279, from #705). internal/agentpolicy writes
   # keys into /etc/claude-code/managed-settings.json that only the Claude Code CLI

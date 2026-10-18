@@ -217,6 +217,23 @@ if [ "${#PORT}" -gt 5 ] || [ "$(( 10#${PORT} ))" -lt 1 ] || [ "$(( 10#${PORT} ))
   die "wardyn-desktop.sh: WARDYN_UP_PORT is '${PORT}' — it must be a port number from 1 to 65535 (0 is refused: the desktop does not support an ephemeral port)"
 fi
 
+# The server-side OIDC issuer, resolved the same way. compose defaults it to
+# Dex's http://dex:5556, which no desktop stack runs, so an envelope naming a
+# real IdP and no internal issuer would send boot discovery nowhere. Set in
+# neither place, it is the issuer itself; a loopback issuer is the Dex demo's
+# and keeps compose's default.
+if [ -z "${WARDYN_OIDC_INTERNAL_ISSUER+x}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_OIDC_INTERNAL_ISSUER)" ]; then
+  if [ -n "${WARDYN_OIDC_ISSUER+x}" ]; then
+    ISSUER="${WARDYN_OIDC_ISSUER}"
+  else
+    ISSUER="$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)"
+  fi
+  case "${ISSUER}" in
+    ''|http://localhost:*|http://127.0.0.1:*) ;;
+    *) export WARDYN_OIDC_INTERNAL_ISSUER="${ISSUER}" ;;
+  esac
+fi
+
 log "Bringing up the desktop compose stack (image ${WARDYN_WARDYND_IMAGE})"
 compose up -d --no-build --pull missing
 

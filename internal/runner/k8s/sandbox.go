@@ -170,7 +170,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// list would drop NetworkPolicies as soon as Delete is issued, and a pod
 	// mid-Terminating is unselected by any policy (default-allow), reopening
 	// unconfined egress on a pod still holding this run's MITM CA key and
-	// RunToken. Zero grace period: nothing has been handed to a caller yet.
+	// RunToken. Shortest grace: nothing has been handed to a caller yet.
 	fail := func(err error) (runner.Sandbox, error) {
 		zero := int64(0)
 		if terr := d.teardownByRunID(context.Background(), spec.RunID, &zero); terr != nil {

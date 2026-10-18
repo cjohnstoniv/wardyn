@@ -20,17 +20,7 @@ func (s PG) PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.Run
 	if len(hs) == 0 {
 		return errors.New("store: put run harnesses: no harnesses; a run without any writes no rows")
 	}
-	err := s.inTx(ctx, func(q Querier) error {
-		const ins = `
-			INSERT INTO run_harnesses (run_id, ordinal, harness, model_provider_id, starts)
-			VALUES ($1, $2, $3, $4, $5)`
-		for i, h := range hs {
-			if _, err := q.Exec(ctx, ins, runID, i, h.Harness, h.ModelProviderID, h.Starts); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := s.inTx(ctx, func(q Querier) error { return insertRunHarnesses(ctx, q, runID, hs) })
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "23503":
@@ -39,6 +29,19 @@ func (s PG) PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.Run
 		return ErrConflict
 	case err != nil:
 		return fmt.Errorf("store: put run harnesses: %w", err)
+	}
+	return nil
+}
+
+// insertRunHarnesses writes hs as runID's harness rows on q.
+func insertRunHarnesses(ctx context.Context, q Querier, runID uuid.UUID, hs []types.RunHarness) error {
+	const ins = `
+		INSERT INTO run_harnesses (run_id, ordinal, harness, model_provider_id, starts)
+		VALUES ($1, $2, $3, $4, $5)`
+	for i, h := range hs {
+		if _, err := q.Exec(ctx, ins, runID, i, h.Harness, h.ModelProviderID, h.Starts); err != nil {
+			return err
+		}
 	}
 	return nil
 }

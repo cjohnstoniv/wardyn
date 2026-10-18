@@ -103,7 +103,9 @@ chmod 0755 "${PREFIX}/deploy/desktop/"*.sh
 
 # ── tarball ────────────────────────────────────────────────────────────────
 TARBALL="${OUT}/${PKG}-${VERSION}-${GOARCH_PKG}.tar.gz"
-tar -C "${PAYLOAD}" -czf "${TARBALL}" .
+# Root-owned entries, and no './' entry: unpacked at / as root, the tarball
+# must neither hand the builder's uid the payload nor re-own / itself.
+tar --owner=0 --group=0 --numeric-owner -C "${PAYLOAD}" -czf "${TARBALL}" usr
 echo "==> ${TARBALL}"
 
 # ── .deb ───────────────────────────────────────────────────────────────────

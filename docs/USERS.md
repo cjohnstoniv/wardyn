@@ -125,7 +125,7 @@ Three things worth naming here, because they read as bugs otherwise:
   - `user_drive_denied_by_profile` — the **door**: the name of the governance
     profile that refuses to mount a drive for you, or `""` when none does.
   - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
-    one of five tokens saying it could **not**, and which remedy that implies:
+    one of six tokens saying it could **not**, and which remedy that implies:
     - `groups_snapshot_stale` — your group membership cannot be read, so an
       allocation may exist and be invisible to this answer. Sign in again; until
       you do, a launch that asks for the drive is refused (`403`).
@@ -136,6 +136,8 @@ Three things worth naming here, because they read as bugs otherwise:
     - `unmountable` — an allocation exists and this deployment cannot bind it: a
       directory that is not on the share, or a name that cannot name a directory.
       An admin's fix, not yours; a launch is a `422`.
+    - `drive_subject_unsupported` — no directory name is derived from your
+      sign-in name. An admin sets a directory name for you; a launch is a `422`.
     - `unavailable` — your allocation could not be read at all. A launch is a
       `500`; try again, and tell an admin if it persists.
     - `governance_unavailable` — your ceiling could not be resolved, so whether
