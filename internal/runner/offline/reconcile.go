@@ -138,7 +138,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return m.refuseAction(ctx, a, refusal(errors.New("containment-only identity refuses this action")))
 	}
 	if a.Kind == types.RunnerActionRecoverContainment {
-		return m.recoverContainment(a, r)
+		res, err := m.recoverContainment(a, r)
+		if refused := (actionRefusal{}); errors.As(err, &refused) {
+			// Refused, not failed: a plain error would fail Pending on every fresh session.
+			return m.refuseAction(ctx, a, err)
+		}
+		return res, err
 	}
 	if a.Kind == types.RunnerActionRecoverMutation {
 		return m.recoverMutation(a, r)

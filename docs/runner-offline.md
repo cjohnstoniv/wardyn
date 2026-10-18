@@ -54,3 +54,13 @@ generation; a pre-execution sandbox instead requires that no execution has yet
 been issued. The queued proof stays immutable, and another incarnation remains
 fenced until settlement. The audit records organisation arrival time and labels
 the runner's observed time as asserted evidence. It never restores credentials.
+
+A run contained this way, by a settled `end` or `stop_proxy`, comes back only
+through a revive. Its runner refuses the run a lease until a `recover_containment`
+clears its containment marker. The first revive re-checks the run's owner and
+policy, then queues that action and answers `409` `revive_containment_recovering`.
+Its proof is the marker the runner last reported, used only when the
+organisation's own records match every field. The runner applies it on its next
+fresh session, and the next revive leases the run. A run that was killed or
+quarantined, a run held pending a node record, and a runner-side record kept only
+for containment are never recovered.

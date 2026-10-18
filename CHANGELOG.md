@@ -67,6 +67,10 @@ These are covered by tests against simulated parts only; check them on your esta
 - A clone failure that points at a declined Azure DevOps credential names the repository whose clone failed.
 - A kill a runner deferred is asked again once that runner completes its next inventory, and the run's fence lifts when
   the runner confirms it; before, the deferred answer stayed the run's last word until someone killed the run again.
+- A run on a runner that was contained while the runner was offline (its runner restarted, for example) can be revived
+  again. Before, the runner refused it a lease forever. Now the first revive queues the runner's recovery and answers
+  `409` `revive_containment_recovering`, and the next revive, once the runner has reconnected, brings the run back.
+  A killed or quarantined run is still never recovered. The new audit action is `runner.recovery.request`.
 - A policy apply is audited together with the run's creation, so a refused launch leaves no policy apply row, and a recording upload for a run that no longer exists answers 404.
 
 ## [0.9.3-rc.3] — 2026-10-17

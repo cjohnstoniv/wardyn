@@ -49,16 +49,18 @@ func containmentRank(kind types.RunnerActionKind) int {
 
 // recoverContainment does not issue authority. H3 must authorize this exact
 // action first, then separately issue a new lease above the persisted replay floor.
+// A proof that does not match is refused, so the action closes instead of
+// failing every fresh session's PENDING.
 func (m *Manager) recoverContainment(a runnerwire.PendingAction, r localRun) (runnerwire.ActionResult, error) {
 	proof := a.Recovery
 	if proof == nil || r.Containment == nil || *proof != *r.Containment || !proof.Contained || !m.mutationsDrained(a.RunID) || r.Quarantine != nil || r.ContainmentOnly || r.FailedCreation {
-		return runnerwire.ActionResult{}, errors.New("containment recovery proof does not match settled disposition")
+		return runnerwire.ActionResult{}, refusal(errors.New("containment recovery proof does not match settled disposition"))
 	}
 	if proof.Operation != string(types.RunnerActionEnd) && proof.Operation != string(types.RunnerActionStopProxy) {
-		return runnerwire.ActionResult{}, errors.New("terminal containment cannot be recovered")
+		return runnerwire.ActionResult{}, refusal(errors.New("terminal containment cannot be recovered"))
 	}
 	if proof.Generation != r.Generation {
-		return runnerwire.ActionResult{}, errors.New("containment recovery generation changed")
+		return runnerwire.ActionResult{}, refusal(errors.New("containment recovery generation changed"))
 	}
 	r.Containment = nil
 	m.state.Runs[a.RunID] = r

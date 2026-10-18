@@ -57,7 +57,7 @@ func (e runnerExecution) selftest() runnerExecution {
 var (
 	errRunnerExecutionUnbound = runnerwire.Refuse("this call carries no execution generation the organisation issued")
 	// errRunnerContained: the runner contained the run while it was offline and refuses it a lease until a
-	// recovery the server does not send yet.
+	// revive's recovery (reviveRecoverContainment) has been applied.
 	errRunnerContained   = errors.New("the run was contained on its runner while it was offline and cannot be leased again")
 	errRunnerLeaseLapsed = errors.New("the run's token lapsed before its lease reached its runner")
 	errRunnerLeaseEnded  = errors.New("the run's end passed before its lease reached its runner")
