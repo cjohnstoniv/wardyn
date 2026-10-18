@@ -136,7 +136,7 @@ export function SafetyMeter({
       ? "Grading…"
       : label
     : specKey == null
-      ? "Fix the JSON first"
+      ? "Fix the policy first"
       : error
         ? "Can't grade this spec"
         : "Grading…";
