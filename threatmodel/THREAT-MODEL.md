@@ -685,6 +685,10 @@ is not the deployment described above.**
   (Early Hints) as well as the final response —
   - so the app's SERVER cannot plant a cookie on sibling hosts under a shared parent domain, nor
     smuggle a nameless one whose value the browser sends back as `wardyn_ui_sess`.
+- Every `Clear-Site-Data` header is DROPPED, on a `1xx` and on the final response: the browser
+  applies it to the whole registrable domain, so the app's server leaves the browser state of the
+  console, other relay sessions and sibling sites alone — pinned by
+  [`internal/api/uigateway_cookies_test.go`](../internal/api/uigateway_cookies_test.go).
 - Inbound, `WARDYN_UI_SANDBOX_STRIP_COOKIES` (`allow:`/`deny:` cookie names, unset = every
   non-`wardyn_*` cookie forwarded; `allow:__Host-*` is the browser-guaranteed host-only choice)
   keeps a sibling host's **HttpOnly** `Domain=` cookies away from the app
