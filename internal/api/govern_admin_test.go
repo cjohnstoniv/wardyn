@@ -279,8 +279,13 @@ func governSites() []governSite {
 					t.Fatalf("effectiveCeiling: %v", err)
 				}
 				req := &createRunRequest{Agent: "claude-code", PolicyOverlay: json.RawMessage(`{"allowed_domains":["api.anthropic.com","evil.example"]}`)}
-				spec, _, refusal := s.applyPolicyOverlay(ctx, governReq(ctx), types.RunPolicySpec{}, req, ceiling, true, &policySourceRecord{})
-				return refusal == nil && !slices.Contains(spec.AllowedDomains, "evil.example")
+				// A valid base: the merged spec is validated, and an empty one is refused for every caller.
+				base := types.RunPolicySpec{MinConfinementClass: types.CC1}
+				spec, _, refusal := s.applyPolicyOverlay(ctx, governReq(ctx), base, req, ceiling, true, &policySourceRecord{})
+				if refusal != nil {
+					t.Fatalf("applyPolicyOverlay refused: status %d %+v", refusal.status, refusal.body)
+				}
+				return !slices.Contains(spec.AllowedDomains, "evil.example")
 			}},
 		{"run_end_create.go resolveCreateEnd", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
