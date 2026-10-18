@@ -215,7 +215,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const outcomes = screen.getAllByTestId("audit-outcome-cell");
     expect(actors).toHaveLength(2);
     expect(outcomes).toHaveLength(2);
-    for (const cell of actors) expect(cell.className).toContain("w-[92px]");
+    for (const cell of actors) expect(cell.className).toContain("w-[88px]");
     for (const cell of outcomes) expect(cell.className).toContain("w-[72px]");
     expect(actors[0]).toHaveTextContent(/human/i);
     expect(actors[1]).toHaveTextContent(/system/i);

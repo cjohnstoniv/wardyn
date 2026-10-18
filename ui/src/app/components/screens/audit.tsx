@@ -785,7 +785,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         {clockTime(event.time)}
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
-      <span data-testid="audit-actor-cell" className="w-[92px] shrink-0">
+      <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
         <ActorTypeChip type={event.actor_type} />
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
