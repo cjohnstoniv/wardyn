@@ -40,8 +40,9 @@ at the call site, not baked into the string.
    button and no sentence about SSO — the whole disabled-stub branch (button + its
    `WARDYN_OIDC_*` title + the "isn't configured" paragraph) is deleted; nothing renders for a
    door that does not exist.
-5. **Both doors** — token form, an "OR" divider, "Sign in with SSO". The token form's submit is
-   the one primary (teal) button on the screen; the SSO link/button is `variant="outline"`.
+5. **Both doors** — "Sign in with SSO" (with its helper line when state 9 applies), an "OR"
+   divider, then the token form. The token form's submit is the one primary (teal) button on the
+   screen; the SSO link/button is `variant="outline"`.
 6. **Refusals name no environment variable.** Every `auth_error=<code>` arm
    (`authErrorMessage` in `sign-in.tsx`) reads `SIGNIN.*` below — none of them names a
    `WARDYN_OIDC_*`/`WARDYN_*` value.

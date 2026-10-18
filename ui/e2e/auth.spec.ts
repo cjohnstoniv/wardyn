@@ -351,6 +351,9 @@ test.describe("Microsoft sign-in button (sso_provider)", () => {
     await expect(page.getByRole("link", { name: "Sign in with SSO" })).toHaveCount(0);
     await expect(button.locator("img")).toHaveCount(0);
     await expect(button).toHaveCSS("height", "41px");
+    // Both doors: the SSO button sits above the token form, as in the approved mock.
+    const [ssoBox, tokenBox] = await Promise.all([button.boundingBox(), signInToken(page).boundingBox()]);
+    expect(ssoBox!.y).toBeLessThan(tokenBox!.y);
     await expect(button).toHaveCSS("background-color", "rgb(255, 255, 255)");
     await expect(button).toHaveCSS("color", "rgb(94, 94, 94)");
     await expect(button).toHaveCSS("border-top-color", "rgb(140, 140, 140)");

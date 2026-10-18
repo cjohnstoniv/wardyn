@@ -309,94 +309,10 @@ export function SignIn({
               either way, just an honest "checking" row. After
               STILL_CHECKING_AFTER_READS unanswered reads (Q457-2), say the
               checking is still going rather than sit silent. */}
-          {checking ? (
+          {checking && (
             <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               <span>{stillChecking ? SIGNIN.STILL_CHECKING : SIGNIN.CHECKING}</span>
-            </div>
-          ) : (
-            // #378/#379: the admin-token form renders only when the daemon
-            // says a token can actually work (showTokenForm) — never on an
-            // SSO-only deployment, where a live token is a second front
-            // door the posture asserts does not exist. Every other cell
-            // (today's combined deployment, a token-only deployment, and
-            // the "neither is known to work" local-mode/misconfigured
-            // case) keeps rendering it.
-            showTokenForm && (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void submitToken();
-                }}
-                className="space-y-2"
-              >
-                <Label htmlFor="token" className="text-foreground">
-                  {TOKEN_LABEL}
-                </Label>
-                <div className="relative">
-                  <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="token"
-                    type="password"
-                    value={token}
-                    onChange={(e) => {
-                      setTokenValue(e.target.value);
-                      if (error) setError(null);
-                    }}
-                    className="pl-9 font-mono"
-                    autoComplete="off"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
-                <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Checkbox
-                    checked={remember}
-                    onCheckedChange={(v) => setRemember(v === true)}
-                    aria-label="Remember on this device"
-                  />
-                  Remember on this device
-                  <span className="text-muted-foreground">
-                    (keeps the token after the browser closes)
-                  </span>
-                </label>
-                <Button
-                  type="submit"
-                  className="mt-1 w-full"
-                  disabled={!token || loading !== null}
-                >
-                  {loading === "token" ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <>
-                      Sign in
-                      <ArrowRight className="size-4" />
-                    </>
-                  )}
-                </Button>
-              </form>
-            )
-          )}
-
-          {error && (
-            <div
-              role="alert"
-              className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
-            >
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-          {error && refusalCode && SIGNIN_HELP_REFUSALS.has(refusalCode) && (
-            <SignInHelp text={help.text} url={help.url} />
-          )}
-
-          {showDivider && (
-            <div className="my-5 flex items-center gap-3">
-              <div className="h-px flex-1 bg-border" />
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                or
-              </span>
-              <div className="h-px flex-1 bg-border" />
             </div>
           )}
 
@@ -438,6 +354,90 @@ export function SignIn({
                 </a>
               </Button>
             )
+          )}
+
+          {showDivider && (
+            <div className="my-5 flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                or
+              </span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+          )}
+
+          {/* #378/#379: the admin-token form renders only when the daemon
+              says a token can actually work (showTokenForm) — never on an
+              SSO-only deployment, where a live token is a second front door
+              the posture asserts does not exist. Every other cell (a token-only
+              deployment, and the "neither is known to work" local-mode or
+              misconfigured case) keeps rendering it. It sits below the SSO
+              button and the "or" divider, as the approved mock shows. */}
+          {!checking && showTokenForm && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitToken();
+              }}
+              className="space-y-2"
+            >
+              <Label htmlFor="token" className="text-foreground">
+                {TOKEN_LABEL}
+              </Label>
+              <div className="relative">
+                <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="token"
+                  type="password"
+                  value={token}
+                  onChange={(e) => {
+                    setTokenValue(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  className="pl-9 font-mono"
+                  autoComplete="off"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
+              <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={remember}
+                  onCheckedChange={(v) => setRemember(v === true)}
+                  aria-label="Remember on this device"
+                />
+                Remember on this device
+                <span className="text-muted-foreground">
+                  (keeps the token after the browser closes)
+                </span>
+              </label>
+              <Button
+                type="submit"
+                className="mt-1 w-full"
+                disabled={!token || loading !== null}
+              >
+                {loading === "token" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <>
+                    Sign in
+                    <ArrowRight className="size-4" />
+                  </>
+                )}
+              </Button>
+            </form>
+          )}
+
+          {error && (
+            <div
+              role="alert"
+              className={`mt-3 ${NOTE_BOX} border-danger/30 bg-danger-subtle text-danger`}
+            >
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          {error && refusalCode && SIGNIN_HELP_REFUSALS.has(refusalCode) && (
+            <SignInHelp text={help.text} url={help.url} />
           )}
         </div>
       </div>

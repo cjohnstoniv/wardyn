@@ -182,6 +182,20 @@ describe("SignIn — SSO button wording by provider", () => {
     expect(screen.queryByRole("link", { name: /sign in with sso/i })).not.toBeInTheDocument();
   });
 
+  it("both doors: SSO button, helper line, 'or' divider, then the token form (the approved mock's order)", async () => {
+    healthMock.mockReset();
+    healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: "microsoft", token_login: true });
+    renderSignIn();
+    const link = await screen.findByRole("link", { name: SIGNIN.SSO_MICROSOFT });
+    const hint = screen.getByText(SIGNIN.SSO_MICROSOFT_HINT);
+    const divider = screen.getByText("or");
+    const field = screen.getByLabelText(/admin token/i);
+    const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(link, hint)).toBe(true);
+    expect(before(hint, divider)).toBe(true);
+    expect(before(divider, field)).toBe(true);
+  });
+
   it("any other provider keeps 'Sign in with SSO' and no helper line", async () => {
     healthMock.mockReset();
     healthMock.mockResolvedValue({ status: "ok", sso: true, sso_provider: "" });
