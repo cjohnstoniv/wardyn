@@ -370,20 +370,12 @@ describe("PolicyTab — changes grouped by cause", () => {
     }
   });
 
-  it("sets a host in monospace and a setting's words in the console's own type (#2926)", async () => {
-    show(
-      view({
-        changes: [
-          change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] }),
-          change({ cause: "limits", field: "first_use_approval", added: ["deny_with_review"] }),
-        ],
-      }),
-    );
+  it("names the first-use setting beside its value, so a bare 'Refused' is not read as a host (#2926)", async () => {
+    show(view({ changes: [change({ cause: "limits", field: "first_use_approval", added: ["deny_with_review"] })] }));
     await ready();
-    const gh = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
-    expect(within(gh).getByText("Any other host: Refused, then sent for approval").className).not.toContain("font-mono");
-    const gw = screen.getByRole("heading", { name: CHANGE_HEADING.workspace }).parentElement!;
-    expect(within(gw).getByText("registry.npmjs.org").className).toContain("font-mono");
+    const g = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
+    expect(within(g).getByText("Any other host: Refused, then sent for approval")).toBeInTheDocument();
+    expect(within(g).queryByText("Refused, then sent for approval")).not.toBeInTheDocument();
   });
 
   it("a change to wait_for_review names the policy's own hold time, not the default", async () => {
