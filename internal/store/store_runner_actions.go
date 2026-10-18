@@ -306,7 +306,8 @@ func (s PG) LastRunnerTeardown(ctx context.Context, runID uuid.UUID, ref string)
 }
 
 // RunHeldContainedOnRunner reports whether the run's runner holds it contained: a kill, end, stop_proxy
-// or quarantine was queued for it and no later recover_containment succeeded, or the runner reported it
+// or quarantine was queued for it and no recover_containment queued after it (queue_seq, the delivery
+// order) succeeded, or the runner reported it
 // containment pending. Such a runner refuses any lease for the run, and a refused
 // lease ends its session.
 func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
@@ -314,7 +315,7 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = $1
 		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
-			AND r.outcome = 'success' AND r.queued_at > c.queued_at))
+			AND r.outcome = 'success' AND r.queue_seq > c.queue_seq))
 		OR EXISTS (SELECT 1 FROM run_containment_pending WHERE run_id = $1)`, runID).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("store: check runner containment: %w", err)
