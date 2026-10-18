@@ -115,6 +115,8 @@ describe("ADO_PAT copy canon", () => {
       sweep: "cleaned up after a restart",
       upstream_401: "rejected by Azure DevOps",
       offboarding: "person removed",
+      unrecorded: "not handed out",
+      ends_unreadable: "sign-in state unreadable",
     });
   });
 

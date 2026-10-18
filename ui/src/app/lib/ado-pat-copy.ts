@@ -128,6 +128,8 @@ export const ADO_PAT = {
   RUN_TOKEN_LINE: (created: string, expires: string) => `Azure DevOps token: created ${created} · expires ${expires}`,
   RUN_TOKEN_LINE_REVOKED: (created: string, expires: string, revoked: string, reason: string) =>
     `Azure DevOps token: created ${created} · expires ${expires} · revoked ${revoked} (${reason})`,
+  RUN_TOKEN_LINE_REVOKED_BARE: (created: string, expires: string, revoked: string) =>
+    `Azure DevOps token: created ${created} · expires ${expires} · revoked ${revoked}`,
   // A token is never revoked early, so one replaced by a renewal or a widening,
   // or closed at its own expiry, has no revoke time to name. It reads its expiry
   // and why it ended.
@@ -145,6 +147,9 @@ export const ADO_PAT = {
     sweep: "cleaned up after a restart",
     upstream_401: "rejected by Azure DevOps",
     offboarding: "person removed",
+    // Minted, then revoked before the run could use it.
+    unrecorded: "not handed out",
+    ends_unreadable: "sign-in state unreadable",
   } as Record<string, string>,
   RUN_PAUSED: "Paused: this run's token was revoked. A new one is created when the run resumes.",
   RUN_RENEWAL_FAILED: (expires: string) =>

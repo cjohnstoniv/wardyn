@@ -407,6 +407,26 @@ test.describe("the run page", () => {
     }
   });
 
+  test("a token minted but never handed out reads as such and leaves the current token plain", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    const t = (h: number, m: number) => new Date(2000, 8, 29, h, m);
+    clearRunTokens(runId);
+    try {
+      seedRunTokens(runId, [
+        // Still the run's working token: its replacement failed to record and was revoked at once.
+        { createdAt: t(9, 2), validTo: t(17, 2) },
+        { createdAt: t(15, 2), validTo: t(23, 2), revokedAt: t(15, 3), reason: "unrecorded" },
+      ]);
+      await gotoConsole(page);
+      await navToRoute(page, `/runs/${runId}`);
+      const lines = page.getByTestId("ado-run-tokens").locator("p:not([role=alert])");
+      await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created 09:02 · expires 17:02`);
+      await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:03 (not handed out)`);
+    } finally {
+      clearRunTokens(runId);
+    }
+  });
+
   test("a run that holds no token draws no Azure DevOps token list", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     clearRunTokens(runId);

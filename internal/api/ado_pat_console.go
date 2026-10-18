@@ -311,9 +311,10 @@ type adoRunToken struct {
 	Scope     []string   `json:"scope"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// RevokeReason is L2's revoke reason, as written: run_end, kill, pause,
-	// drift, disconnect, offboarding, upstream_401, sweep, or expired (the
-	// token reached valid_to; RevokedAt is then when its record was closed,
-	// not a revoke).
+	// drift, disconnect, offboarding, upstream_401, sweep, unrecorded or
+	// ends_unreadable (a token minted but never handed to the run), or
+	// expired (the token reached valid_to; RevokedAt is then when its record
+	// was closed, not a revoke).
 	RevokeReason string `json:"revoke_reason,omitempty"`
 	// RevokeFailed: the record was closed with a failed revoke on it, so the
 	// token lives to ValidTo on its own.

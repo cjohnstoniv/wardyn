@@ -258,6 +258,9 @@ function widened(t: ADORunToken, next: ADORunToken): boolean {
   return has.size > had.size && [...had].every((n) => has.has(n));
 }
 
+/** The revoke reasons of a token that was minted but never reached the run. */
+const NEVER_HANDED_OUT = new Set(["unrecorded", "ends_unreadable"]);
+
 /** A run's tokens as the page draws them, oldest first. `paused` is the run's own
  *  state; the token list alone cannot say a run is paused.
  *
@@ -273,12 +276,15 @@ export function runTokenView(tokens: ADORunToken[], paused: boolean): RunTokenVi
   const lines = sorted.map((t, i) => {
     const created = formatClock(t.created_at);
     const expires = formatClock(t.valid_to);
-    const next = sorted[i + 1];
+    // A token that was minted and revoked before the run could use it replaced nothing.
+    const next = sorted.slice(i + 1).find((n) => !NEVER_HANDED_OUT.has(n.revoke_reason ?? ""));
     const revoked = !!t.revoked_at && t.revoke_reason !== "expired";
     const reason = (t.revoke_reason && ADO_PAT.REVOKE_REASON[t.revoke_reason]) || "";
     if (revoked && reason) {
       return { text: ADO_PAT.RUN_TOKEN_LINE_REVOKED(created, expires, formatClock(t.revoked_at!), reason), old: !!next || paused };
     }
+    // A reason this console has no words for is still a revoke: never drawn as a live token.
+    if (revoked) return { text: ADO_PAT.RUN_TOKEN_LINE_REVOKED_BARE(created, expires, formatClock(t.revoked_at!)), old: !!next || paused };
     if (next && !revoked) {
       const note = widened(t, next) ? ADO_PAT.RUN_TOKEN_NOTE.access_added : ADO_PAT.RUN_TOKEN_NOTE.renewed;
       return { text: ADO_PAT.RUN_TOKEN_LINE_NOTE(created, expires, note), old: true };
