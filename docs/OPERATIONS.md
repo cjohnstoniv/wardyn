@@ -4885,6 +4885,7 @@ curl -fsS -X PUT "$WARDYN_URL/api/v1/drives/<drive-id>?confirm=rehome" \
 - This whole collision does not
   exist for an `id`-scheme drive, by construction rather than by convention.
 - `GET /api/v1/drives/{id}` reports which scheme a drive is on.
+- A database that no longer holds a `slug` drive cannot get it back: `wardyn drive set` re-creates it as `id`, so its homes get new, empty objects and the old ones are left unused. `set` warns for each such drive.
 
 > [!NOTE]
 > Both refusals also cover the loser of a create race.
