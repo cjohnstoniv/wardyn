@@ -348,7 +348,7 @@ export function DecidedRow({ item }: { item: ApprovalRequest }) {
         className="font-mono text-xs text-muted-foreground hover:text-foreground"
         title={`Open run ${item.run_id}`}
       >
-        {item.run_id}
+        {item.run_id.slice(0, 8)}
       </Link>
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
