@@ -96,7 +96,8 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
     // never rejects (each item is pre-caught above) — fire-and-forget is safe.
     void Promise.all(
       Object.entries(stored).map(async ([demoId, runId]) => {
-        const r = await api.getRun(runId).catch(() => undefined);
+        // undefined is a real 404 (the run is gone); a failed read says nothing about the run.
+        const r = await api.getRun(runId).catch(() => "unreadable" as const);
         return [demoId, r] as const;
       }),
     ).then((results) => {
@@ -104,7 +105,11 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
       const next: Record<string, TrackedRun> = {};
       const keep: Record<string, string> = {};
       for (const [demoId, r] of results) {
-        if (r && !isTerminalRunState(r.state)) {
+        if (r === "unreadable") {
+          // Still tracked under a placeholder state: the poll below re-reads it and settles the real one.
+          next[demoId] = { id: stored[demoId], state: "PENDING" };
+          keep[demoId] = stored[demoId];
+        } else if (r && !isTerminalRunState(r.state)) {
           next[demoId] = { id: r.id, state: r.state };
           keep[demoId] = r.id;
         }
@@ -123,7 +128,9 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   const refresh = React.useCallback(async () => {
     for (const [demoId, tracked] of Object.entries(runsRef.current)) {
       if (isTerminalRunState(tracked.state)) continue;
-      const fresh = await api.getRun(tracked.id).catch(() => undefined);
+      // A failed read is a blip, not a gone run: keep the card and its stored resume entry, and read again next tick.
+      const fresh = await api.getRun(tracked.id).catch(() => "unreadable" as const);
+      if (fresh === "unreadable") continue;
       if (!fresh) {
         setRuns((m) => {
           const n = { ...m };
