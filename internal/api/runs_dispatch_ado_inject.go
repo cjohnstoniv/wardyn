@@ -962,9 +962,9 @@ func (s *Server) decideADOLane(ctx context.Context, run types.AgentRun, siteCfg 
 	return d
 }
 
-// declinedADOHosts is the sorted, lower-cased hosts (never addresses or paths) of the lane's Azure DevOps
-// repositories that went without the credential: those a present row claims, or, with the site config
-// unreadable, those on an Azure DevOps Services host.
+// declinedADOHosts is the sorted, lower-cased hosts (never addresses or paths, an ssh. host in both spellings) of
+// the lane's Azure DevOps repositories that went without the credential: those a present row claims, or, with
+// the site config unreadable, those on an Azure DevOps Services host.
 func declinedADOHosts(sc types.SiteConfig, siteCfgErr error, ws []types.WorkspaceRepo, repo, owner string) []string {
 	var hosts []string
 	for _, r := range presentRepos(append(repoLocatorsOf(ws), repo)) {
@@ -980,8 +980,6 @@ func declinedADOHosts(sc types.SiteConfig, siteCfgErr error, ws []types.Workspac
 		} else if a, why, isADO := adoEntraLaneForRepo(sc, r, owner); !isADO || (why == "" && a.rowID != "") {
 			continue
 		}
-		// Both spellings: agent-run compares the clone URL's own host, and an SSH clone
-		// keeps ssh.dev.azure.com where the lane folds it to dev.azure.com.
 		hosts = append(hosts, strings.ToLower(h), strings.ToLower(t.host))
 	}
 	slices.Sort(hosts)
