@@ -291,6 +291,7 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 | Machines | Linux desktop VM sandboxes | #2953 |
 | Machines | The proxy is the VM's only network, proved per guest OS | #2956 |
 | Machines | A governed local-model endpoint for the person's own GPU | #2957 |
+| Hybrid | Folders on your computer in remote sandboxes: pick one in New Run, seed before the agent starts, ignore files, deletes, git history, editors | #2981 |
 | Experience | Open desktop in the console | #2962 |
 | Experience | Needs you: the agent pauses, the person takes over and hands back | #2963 |
 | Controls | Clipboard and file transfer per direction | #2967 |
@@ -308,6 +309,7 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 | GPU in container sandboxes, and an opt-in GPU desktop for Linux VMs | #2958, #2959 |
 | Snapshots, fork, warm pools and sleep on disconnect | #2960 |
 | Per-setting delegation, personal walls, agent rules, place rules | #2947, #2948, #2949, #2950 |
+| Live two-way sync with a conflict view, and organisation controls for local folders | #2987, #2990 |
 | Preview URLs, in-browser approvals, action gates, watermark, browser lock-down, Record Mode for desktops | #2965, #2964, #2971, #2969, #2970, #2966 |
 
 **Also in 0.10:** the New Run items marked Coming soon in 0.9.
