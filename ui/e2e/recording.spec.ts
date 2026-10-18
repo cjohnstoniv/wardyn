@@ -414,7 +414,7 @@ test.describe("Recordings paging (#159)", () => {
     await openRecordings(page);
 
     await expect(page.getByText("All 2 recordings are loaded.")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Load .* more/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Search .* more runs/ })).toHaveCount(0);
   });
 
   test("more available — the note and the Load more text link appear, never a total", async ({ page }) => {
@@ -427,10 +427,28 @@ test.describe("Recordings paging (#159)", () => {
     // #159's binding decision: the board's existing text link, not a second
     // (outline-button) convention — same class the board's own "Load N more"
     // renders (runs.tsx#RunsTable).
-    const loadMore = page.getByRole("button", { name: "Load 100 more" });
+    const loadMore = page.getByRole("button", { name: "Search 100 more runs" });
     await expect(loadMore).toBeVisible();
     await expect(loadMore).toHaveClass(/text-info/);
     await expect(page.getByText(/of 1,000|100 of/)).toHaveCount(0);
+  });
+
+  test("#2519: a first page of runs with no recording still offers the next page", async ({ page }) => {
+    await gotoConsole(page);
+    await mockPagedRuns(page, (offset) => {
+      if (offset === 0) {
+        return {
+          runs: [fakeRun("bare-a", { has_recording: false }), fakeRun("bare-b", { has_recording: false })],
+          truncated: true,
+        };
+      }
+      return { runs: [fakeRun("rec-late", { task: "recorded late" })], truncated: false };
+    });
+    await navToRoute(page, "/admin/recordings");
+
+    await expect(page.getByText("No recordings in your newest 2 runs")).toBeVisible();
+    await page.getByRole("button", { name: "Search 100 more runs" }).click();
+    await expect(page.getByText("recorded late")).toBeVisible();
   });
 
   test("loading more — the control disables and swaps its label while the next page is in flight", async ({
@@ -442,7 +460,7 @@ test.describe("Recordings paging (#159)", () => {
       return { runs: [fakeRun("rec-c")], truncated: false, delayMs: 600 };
     });
     await navToRoute(page, "/admin/recordings");
-    await page.getByRole("button", { name: "Load 100 more" }).click();
+    await page.getByRole("button", { name: "Search 100 more runs" }).click();
 
     const loading = page.getByRole("button", { name: "Loading…" });
     await expect(loading).toBeVisible();
@@ -459,10 +477,10 @@ test.describe("Recordings paging (#159)", () => {
       return { runs: [fakeRun("rec-c")], truncated: false };
     });
     await navToRoute(page, "/admin/recordings");
-    await page.getByRole("button", { name: "Load 100 more" }).click();
+    await page.getByRole("button", { name: "Search 100 more runs" }).click();
 
     await expect(page.getByText("All 3 recordings are loaded.")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Load .* more/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Search .* more runs/ })).toHaveCount(0);
   });
 
   test("error mid-page — Retry recovers and keeps what already loaded", async ({ page }) => {
@@ -477,7 +495,7 @@ test.describe("Recordings paging (#159)", () => {
       return { runs: [fakeRun("rec-c")], truncated: false };
     });
     await navToRoute(page, "/admin/recordings");
-    await page.getByRole("button", { name: "Load 100 more" }).click();
+    await page.getByRole("button", { name: "Search 100 more runs" }).click();
 
     await expect(page.getByText("Couldn't load more recordings")).toBeVisible();
     await expect(
