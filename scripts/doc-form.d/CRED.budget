@@ -3,4 +3,5 @@
 # delivery refusals +59, ssh_key re-mint +42, model-key row +23, stored-key rows +16, file/ssh_key/sign-in/cloud_sts rows +41,
 # delivered-inside residual +32, "withheld at these doors" +3.
 # 3549 adds 7: the ssh_key bullet names the key file as what is wiped and the grant as what stays.
-docs/CREDENTIALS.md=3549 share=35
+# 0.9.4 L8: docs/CREDENTIALS.md 3684 adds 135 over 3549: the tool-approval credential row and the SigV4 wording.
+docs/CREDENTIALS.md=3684 share=35

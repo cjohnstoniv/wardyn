@@ -125,8 +125,9 @@ OFL-1.1, ISC and 0BSD only.
 
 The complete component inventory is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with verbatim licence texts in
-`licenses/texts/`. Both are generated, CI-verified against drift, and shipped
-inside every image at `/usr/share/doc/wardyn/`.
+`licenses/texts/`. Both are generated and CI-verified against drift. The images
+carry the notices at `/usr/share/doc/wardyn/` and the texts at
+`/usr/share/doc/wardyn/licenses/`.
 
 ## Components invoked as separate processes
 

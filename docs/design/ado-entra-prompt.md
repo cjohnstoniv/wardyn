@@ -414,7 +414,7 @@ change to the module and its test, in the same commit.
 | Key | Lives in | String |
 |---|---|---|
 | `PROVIDERS.TITLE` / `LEAD` | `workspace-providers-copy.ts` | Workspace providers / Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to. |
-| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all. |
+| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all. |
 | Settings Model provider card | `settings-screen.tsx` | Model provider / Agent runs need one. Governed commands don't. |
 | The two sentences §7.8 replaces | `approvals.tsx`, `secrets.tsx` | No backend component enforces a tool_call approval. · Wardyn cannot expire or down-scope a PAT. — quoted so the replacement can be diffed against the exact bytes |
 | `/approvals` header | `approvals.tsx` | Approvals / What runs asked for, and what was decided. — the screen's existing header, drawn for context. The implementation renders whatever ships there; this round does not re-freeze it. |

@@ -11,7 +11,8 @@
 | Tier | What runs on the laptop | Governed by | Named in the console and `wardyn setup status` as |
 | --- | --- | --- | --- |
 | Local only | A full `wardynd` with no org | The person at the keyboard | Local only — not governed by an organisation |
-| Client-mode runner | `wardyn-runnerd`, no control plane; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Runner for an organisation |
+| Client-mode runner | `wardyn-runnerd`, no control plane and no console of its own; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Nothing: the organisation's console shows "Organisation" |
+| Enrolled daemon (deprecated) | A full `wardynd` enrolled with `WARDYN_ORG_URL` | The org | Enrolled with an organisation (legacy) |
 | Org | The control plane itself, on a cluster or compose host | The org | Organisation |
 
 - Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
@@ -19,6 +20,8 @@
 ## Topology
 
 ![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
+
+The figure and the diagram below show the deprecated enrolled-daemon shape, where the laptop runs its own `wardynd` and takes policy from MDM. A client-mode runner runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)).
 
 ```
        MDM (Jamf / Intune / …)
@@ -615,13 +618,17 @@ sudo DOCKER_HOST=unix:///run/user/1000/docker.sock ./install.sh
 - **Upgrade is an MDM rewrite of two lines.**
   - `wardyn.env` pins `WARDYN_WARDYND_IMAGE` and `WARDYN_PROXY_IMAGE` by digest; push a new envelope with new digests and the next timer tick brings the stack up on them.
   - No tag moves under the fleet, and the launcher runs `--pull missing`, so a laptop that is offline keeps running what it already has instead of failing to start.
-- **Rollback is the previous digest** — push the old envelope back.
+- **Rollback is the previous digest plus a restore of the pre-upgrade database dump.**
+  - Push the old envelope back with the old digests, then restore the `pg_dump` you took before the upgrade.
 
 > [!WARNING]
-> **Rollback does not roll the database back.**
-> There are **zero** down migrations (`ls internal/db/migrations | grep -c down` → 0) and no version guard, so an older `wardynd` starts against a schema a newer one has already migrated **forward**, unguarded.
-> It generally serves, because migrations have been additive — but that is a property of the migrations so far, not a promise.
-> Treat a rollback across a migration boundary as untested, and capture `wardyn support-bundle` before you do it.
+> **Rollback does not roll the database back, and an older `wardynd` refuses a newer database.**
+> There are **zero** down migrations.
+> The older `wardynd` exits at boot with `this database records N migration(s) this wardynd does not ship`.
+> The 300s converge timer and `restart: unless-stopped` turn that into a crash loop on every laptop.
+>
+> Take a `pg_dump` before you push a digest that crosses a migration (`wardyn support-bundle` is not a dump), and restore it on rollback.
+> `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` starts the older build anyway; it is break-glass and one-way, so read [the upgrade section](OPERATIONS.md#upgrades) first.
 
 **Stopping.**
 

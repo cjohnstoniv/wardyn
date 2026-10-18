@@ -1906,7 +1906,9 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
 2. **Turn Dex on, and choose who's an admin.**
    - Dex is the `sso` compose profile.
    - Every other OIDC var already defaults to match the bundled [`deploy/compose/dex.yaml`](../deploy/compose/dex.yaml) client (defaults in the `wardynd` service's `environment` block in `docker-compose.yaml`), so the two you set are the issuer and the operator allowlist.
-   - With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot, so list yourself: everyone listed is an **admin**, everyone else who can sign in is a **member** (add `WARDYN_OIDC_ROLE_MAP` to derive admin/member from SSO roles/groups instead).
+   - With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot, so list yourself: everyone listed is an **admin**, everyone else who can sign in is a **user** (`WARDYN_OIDC_ROLE_MAP` derives admin/user from SSO roles/groups instead).
+   - A fresh `.env` from `make setup` already carries `WARDYN_OIDC_ROLE_MAP` (`demo@wardyn.local=admin,member@wardyn.local=user`).
+   - A non-empty role map is a hard switch: a person it does not name is denied unless `WARDYN_OIDC_DEFAULT_ROLE` is set.
 
    ```sh
    echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env
@@ -1939,7 +1941,7 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
        username: "member"
        userID: "member-0001"
-     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a member;
+     - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a user, once the role map or default role admits them;
        hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
        username: "reviewer2"
        userID: "reviewer2-0001"
@@ -1951,6 +1953,11 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
    ```sh
    docker compose -f deploy/compose/docker-compose.yaml restart dex
    ```
+
+   Then admit the new identity to Wardyn, or Dex authenticates it and Wardyn refuses the login with no role:
+   - add `reviewer2@wardyn.local=user` to the `WARDYN_OIDC_ROLE_MAP` already in `deploy/compose/.env`,
+   - or set `WARDYN_OIDC_DEFAULT_ROLE=user`,
+   - then `up -d wardynd` so it reads the new value.
 
 4. **Each person signs in on their own.**
    - The browser is redirected to Dex directly for the login leg.
@@ -2599,11 +2606,13 @@ The residuals an operator should plan for:
 - Every declared CIDR (once you have that evidence) must still lie entirely inside the liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
 - This lifts ONE thing: the SSRF builtin.
 - The run's own policy allowlist (`allowed_domains`) still has to name the host separately.
-- Two more exclusions apply automatically: an address on the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
-- On Kubernetes the sidecar's interface carries only the pod's own address and the control plane's neighbours are ClusterIP Services off that interface, so only the resolved `wardynd` address is excluded there.
+- Two more exclusions apply automatically: an address inside the subnet of one of the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
+- On Kubernetes the interface's subnet is whatever the CNI's mask makes it, often the pod CIDR, so a pod IP may be excluded. A ClusterIP is off that interface and is not, apart from the resolved `wardynd` address.
 - This IS the case where you, the cluster operator, have real sandbox-side evidence.
-- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster) and narrow `cidrs` to that workload's own Pod range.
+- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster).
+- For a ClusterIP Service, set `cidrs` to that Service's ClusterIP as a `/32`, not the whole Service range.
 - ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
+- A pod-range scope fits only a headless Service (its name resolves to pod IPs), and only where the pod CIDR is not on the sidecar's own interface subnet.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
@@ -2629,17 +2638,17 @@ The residuals an operator should plan for:
 }
 ```
 
-- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the ranges the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
+- Add `cidrs` only for the Kubernetes in-cluster case above, once you know the addresses the SANDBOX resolves into — and scope the suffix to the one workload, never to the whole cluster:
 
 ```json
 {
   "internal_hosts": [
-    { "host_suffix": "svc-a.apps.svc.cluster.local", "cidrs": ["10.244.3.0/24"] }
+    { "host_suffix": "svc-a.apps.svc.cluster.local", "cidrs": ["10.96.14.20/32"] }
   ]
 }
 ```
 
-(`10.244.3.0/24` stands for that workload's Pod range; a Service-range CIDR such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
+(`10.96.14.20/32` stands for that Service's ClusterIP; a Service-range CIDR such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
 
 ### Bedrock on a private endpoint
 
@@ -3048,7 +3057,7 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
   - The fake is addressed by its **Service** name, never a pod IP, and site-config `internal_hosts` must lift it **before the first sign-in**.
   - The sandbox's egress goes through the proxy sidecar, which denies any host resolving to a private address unless an `internal_hosts` rule lifts it — and the lift refuses the proxy's own interface subnets.
   - A pod IP is on the pod CIDR, which IS that subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is on the Service CIDR, which can.
-  - Scope the rule to the Service CIDR your cluster actually uses.
+  - The throwaway walk scopes the rule to the Service CIDR your cluster actually uses; on a cluster you keep, scope it to the fake's ClusterIP as a `/32`.
   - Read it off the apiserver's `--service-cluster-ip-range`, do not assume `10.96.0.0/16`.
   - [`scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh) reads it off the apiserver itself.
   - A set `WARDYN_KIND_SSO_SERVICE_CIDR` wins over that read, which is also how you rescue a failed one.

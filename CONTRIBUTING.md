@@ -27,8 +27,8 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 All contributors MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
-1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, except the named, bounded exceptions ARCHITECTURE.md invariant 1 enumerates (credentials that structurally cannot be proxy-injected). That enumeration is authoritative — do not restate a count here, it is what drifts.
-2. **Approval mints the credential** — Credential scope is verified atomically in the same transaction.
+1. **Keep credentials out of the sandbox wherever they can be brokered** — Late binding via the broker, except the exceptions in [THREAT-MODEL.md](./threatmodel/THREAT-MODEL.md) section 5.1a. Some are structural (`ssh_key`); others are coverage gaps or modes (`env_secret`, `file_secret`, PAT broker off). That enumeration is authoritative — do not restate a count here, it is what drifts.
+2. **Approval mints the credential** — For a grant with `requires_approval: true`, credential scope is verified atomically in the same transaction; a grant without it is policy-eligible and mints by design.
 3. **L0 structural egress** — Sandbox has no default route; only path out is wardyn-proxy.
 4. **Per-run identity with full attribution** — Every token carries `sub`, `act`, and `sponsor`.
 5. **Fail closed; never overclaim** — Drivers declare capabilities; policy refuses enforcement gaps.

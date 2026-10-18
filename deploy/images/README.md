@@ -273,18 +273,11 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 
 ### Git credential flow
 
-1. `git clone https://github.com/...` triggers the system credential helper.
-2. `wardyn-git-helper get` is called; it reads `WARDYN_GITHUB_GRANT_ID` from
-   the sandbox env (set by the driver at dispatch — this is the UUID of the
-   run's `github_token` CredentialGrant, not a secret).
-3. The helper calls `POST /wardyn/v1/credentials/mint` via the proxy (origin-
-   form URL — the proxy serves it locally, injecting the run token toward
-   `wardynd`).
-4. `wardynd` verifies the run token, checks the approval gate, and mints a
-   short-lived GitHub installation token (via the GitHub App).
-5. The helper emits the token to git's stdout in the credential protocol format.
-6. git uses the token for the clone/fetch; the token is never stored to disk
-   (git credential store is not configured in the sandbox image).
+1. `git clone https://github.com/...` on a brokered run is rewritten to the proxy's `/wardyn/gh/<org>/<repo>` route.
+2. The proxy terminates that request, asks `wardynd` to mint a short-lived GitHub installation token through the GitHub App, and sets it on the outbound request.
+3. The token never reaches `git`, the environment, args or disk.
+4. On a brokered run the system credential helper `wardyn-git-helper` refuses GitHub hosts, so it never emits a GitHub token.
+5. The helper path applies only to a `git_pat` with `WARDYN_GIT_PAT_BROKER=off`: it reads the grant ids from the sandbox env, calls `POST /wardyn/v1/credentials/mint` via the proxy and emits the PAT to git's stdout in the credential protocol format.
 
 - The run token itself NEVER appears in the sandbox environment.
 - The proxy holds it and injects it only when forwarding internal API calls.

@@ -440,7 +440,7 @@ test("V02 act 2 — first light through secrets", async () => {
   await caption(page, "Anything a run might need, but shouldn't own.");
   await beat(page, PACE.read);
 
-  await spotlight(page, page.getByText(/Only the GitHub App lane keeps its token/i).first());
+  await spotlight(page, page.getByText(/The GitHub App lane, and a PAT while the PAT broker is on/i).first());
   await caption(page, "Git is a good example.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Some credentials can be used without ever entering the sandbox.");

@@ -138,8 +138,8 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 // api_key (never leaves the broker) — an SSH key cannot be brokered without
 // becoming resident: the ssh client reads it from a file. The key material is
 // returned here and agent-run writes it 0400, agent-owned, then wipes it right
-// after the clone (deploy/images/*/agent-run). The readable window is the
-// clone only, but within it code running as the agent uid can read the key —
+// after the clone (deploy/images/*/agent-run). The file is readable for the
+// clone, and within that window code running as the agent uid can read the key —
 // the same residual as WARDYN_GIT_HELPER_SECRET. This is the accepted
 // exception the owner chose enabling the SSH SCM lane; there is no way to
 // down-scope or expire an SSH private key from Wardyn's side (out of scope,

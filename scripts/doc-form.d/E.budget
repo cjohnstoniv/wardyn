@@ -81,6 +81,8 @@
 # 0.9.4 L12 +52: WARDYN_GIT_APPROVAL_TIMEOUT forwarding and the DEFAULT_POLICY_AUTO marker path (#2356, #2221).
 # docs/ENV.md 39336 adds 29 over 39307, measured: 0.9.4 L4b, the image-build host-capacity line and the advisor CLI flags.
 # docs/ENV.md 39345 adds 9 over 39336, measured: 0.9.4 L4b review, the image-build sentence in the WARDYN_HOST_MAX_LOAD1 row.
-docs/ENV.md=39468 share=5
+# 0.9.4 L8: docs/ENV.md 39317 adds 10 over 39307: the git_pat broker wording in the resident-delivery rule.
+# 0.9.4 L8: docs/ENV.md 39329 adds 12 over 39317: ssh_key delivery claims bounded.
+docs/ENV.md=39490 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

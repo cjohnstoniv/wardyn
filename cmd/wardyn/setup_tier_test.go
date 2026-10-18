@@ -13,7 +13,7 @@ import (
 func TestSetupStatusNamesTheTier(t *testing.T) {
 	for tier, want := range map[string]string{
 		"local-only": "Tier: local only — not governed by an organisation",
-		"runner":     "Tier: client-mode runner for an organisation",
+		"runner":     "Tier: enrolled with an organisation (legacy)",
 		"org":        "Tier: organisation",
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

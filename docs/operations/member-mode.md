@@ -82,6 +82,10 @@ no admin route opens whatever the type.
   (`POST /policies/grade`, a read-only computation) still work. Viewing
   your own type launches as usual. The refusal is audited as `authz.denied`
   with the viewed and stamped types.
+- With `WARDYN_GOVERN_ADMIN_RUNS` off (the default), the picked type is the type the view's runs resolve against, for either admin tier.
+  - Your stamped type does not limit which type you pick.
+  - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
+  - Turn the switch on when an admin's own stamped type must bound the runs they launch.
 
 ## The no-credential preview — "Preview as a new user"
 

@@ -214,7 +214,7 @@ describe("TopBar — the tier", () => {
 
   it.each([
     ["org", "Organisation"],
-    ["runner", "Runner for an organisation"],
+    ["runner", "Enrolled with an organisation (legacy)"],
   ] as const)("%s: no chip, named in the menu", async (tier, label) => {
     renderTopBar("admin", tier);
     expect(within(screen.getByRole("banner")).queryByText(TIER.CHIP)).not.toBeInTheDocument();

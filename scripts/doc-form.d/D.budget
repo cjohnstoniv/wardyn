@@ -10,4 +10,6 @@
 # 0.9.4 L12 +37: secret.env is shell syntax; plain --uninstall exits 1 when nothing stopped the stack (#2161, #2163).
 # docs/DESKTOP.md 7412 adds 39 over 7373, measured: 0.9.4 L4b, the launcher refuses envelope files another account can write.
 # 0.9.4 W1 merge +3: L4b and L12 both edited the desktop doc; the merged text measures 3 over the sum.
-docs/DESKTOP.md=7452 share=35
+# 0.9.4 L8: docs/DESKTOP.md 7468 adds 95 over 7373: tier rows, the legacy-figure note and the rollback warning.
+# 0.9.4 W1 merge +3 again (L8): the merged text measures 3 over the sum.
+docs/DESKTOP.md=7550 share=35

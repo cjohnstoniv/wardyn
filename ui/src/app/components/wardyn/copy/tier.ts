@@ -9,7 +9,7 @@
 export const TIER = {
   LABEL: {
     "local-only": "Local only — not governed by an organisation",
-    runner: "Runner for an organisation",
+    runner: "Enrolled with an organisation (legacy)",
     org: "Organisation",
   },
   CHIP: "Local only",

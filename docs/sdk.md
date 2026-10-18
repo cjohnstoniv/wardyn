@@ -1155,7 +1155,7 @@ Beyond `run_id`, the audit query accepts server-side predicates:
 
 - `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
   `actor` and `target` (exact; under `WARDYN_AUDIT_SEAL=full` each also matches the subject a sealed row stores for that person),
-- `actor_type` (`human|agent|system`), `outcome`
+- `actor_type` (`human|agent|system|service`), `outcome`
   (`success|denied|failure`),
 - and `origin` (`device|organisation`: the rows an
   enrolled laptop forwarded, each carrying a top-level `device_id`, or the
