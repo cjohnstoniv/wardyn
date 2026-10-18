@@ -895,7 +895,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
-| `EMPTY_ACTION` | mock | Start a new run |
 | `NO_MATCH_TITLE` | mock | Nothing matches |
 | `NO_MATCH_BODY` | mock | Try another filter or search term. |
 | `CLEAR_FILTERS` | mock | Clear filters |

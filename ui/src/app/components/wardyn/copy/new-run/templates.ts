@@ -60,7 +60,6 @@ export const NR_TEMPLATES = {
   GROUPS_UNVERIFIED: "Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them.",
   EMPTY_TITLE: "No templates yet",
   EMPTY_BODY: "When you review a run, choose Save as template to start from the same setup next time.",
-  EMPTY_ACTION: "Start a new run",
   NO_MATCH_TITLE: "Nothing matches",
   NO_MATCH_BODY: "Try another filter or search term.",
   CLEAR_FILTERS: "Clear filters",

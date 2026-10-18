@@ -174,13 +174,16 @@ test.describe("Templates: filters and rows", () => {
     await expect(rowOf(page, ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
   });
 
-  test("an empty catalogue and a search with no match say so and offer the way on", async ({ page }) => {
+  test("an empty catalogue and a search with no match say so, and the header offers the way on", async ({ page }) => {
     const state: Catalogue = { rows: [], publish: ME_ONLY };
     await stubCatalogue(page, state);
     await openTemplates(page);
     await expect(page.getByText(T.EMPTY_TITLE)).toBeVisible();
     await expect(page.getByText(T.EMPTY_BODY)).toBeVisible();
-    await page.getByRole("link", { name: T.EMPTY_ACTION }).click();
+    // #2834: the empty card has no button of its own; the header's "New run from scratch" is the one way on.
+    await expect(page.getByTestId("empty-state-tile").locator("..").getByRole("link")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveCount(1);
+    await page.getByRole("link", { name: T.NEW_FROM_SCRATCH }).click();
     await expect(page.getByRole("heading", { name: NR_START.TITLE, level: 1 })).toBeVisible();
 
     await page.unrouteAll({ behavior: "ignoreErrors" });

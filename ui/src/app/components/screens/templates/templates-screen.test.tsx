@@ -189,11 +189,17 @@ describe("Templates screen: filters and empty states", () => {
     expect(within(screen.getByRole("group", { name: T.SCOPE_FILTER_ARIA })).getByRole("button", { name: T.SCOPE_ALL })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("no templates at all: the empty state carries the action that fills it", async () => {
+  // #2834: the header's "New run from scratch" is the one way on; the empty card no longer offers a second
+  // button to the same place.
+  it("no templates at all: the empty card has no button, and the header link is the way on", async () => {
     mount({ templates: [], publish: MEMBER });
     expect(await screen.findByText(T.EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(T.EMPTY_BODY)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: T.EMPTY_ACTION })).toHaveAttribute("href", "/runs/new");
+    const tile = screen.getByTestId("empty-state-tile");
+    expect(within(tile.parentElement!).queryByRole("link")).toBeNull();
+    expect(within(tile.parentElement!).queryByRole("button")).toBeNull();
+    expect(screen.getAllByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveAttribute("href", "/runs/new");
   });
 
   it("a failed read is an error with Retry, not an empty list", async () => {
