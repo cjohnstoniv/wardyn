@@ -1929,26 +1929,24 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Wardyn still reports `enforcement: none` on the wire (v1 does not detect an operator-applied quota), and the recipe is opt-in per deployment, not a default.
       - The residual is that byte enforcement remains something an operator must choose to set up, never something Wardyn verifies is in place.
 
-37. **Renaming a drive orphans every object already provisioned under it, on BOTH substrates, and the console still warns nobody at the write.**
-    - A managed claim's name folds the drive's slug, so a rename changes the name every FUTURE claim is created under.
+37. **Renaming a drive created before migration `0067` (object scheme `slug`) orphans every object already provisioned under it, on BOTH substrates; both the API and the console ask for a confirmation first.**
+    - A drive created since `0067` names its objects by its fixed-width id (residual 34), so renaming one moves nothing and is not flagged (`driveNameMovesTheObject` asks `DriveObjectName`).
+    - On a slug-scheme drive, a managed claim's name folds the drive's slug, so a rename changes the name every FUTURE claim is created under.
     - The claims already provisioned keep their old names, keep the member's data, and are never looked up again.
     - Each person's next run provisions a fresh, EMPTY claim under the new name, and the work looks lost to them.
-    - Nothing deletes the old claims, on purpose (Wardyn holds no `delete` verb, and a rename must never be able to destroy storage), and the reclaim is documented.
+    - Nothing deletes the old claims, on purpose (Wardyn holds no `delete` verb unless the operator turns on `drives.reclaim.enabled`, and a rename must never be able to destroy storage), and the reclaim is documented.
     - The claims carry the drive row's **id** rather than its name precisely so a label selector still finds them.
     - And [`docs/OPERATIONS.md`](../docs/OPERATIONS.md#user-drives-on-kubernetes) "User drives on Kubernetes" carries the `get pvc -l` and `delete pvc` recipe to move the data and reclaim the object.
     - **The API no longer performs it quietly.**
-    - A rename — like any change to `backend`, `home_template` or `host_root` — on a drive that already has grants is a **409** naming what changes and how many allocations move, unless the request carries `?confirm=rehome` (`driveRehomeGuard`).
+    - A rename of a slug-scheme drive — like any change to `backend`, `home_template` or `host_root` — on a drive that already has grants is a **409** naming what changes and how many allocations move, unless the request carries `?confirm=rehome` (`driveRehomeGuard`).
     - And the `drive.write` row carries `rehomed: true` so the log distinguishes a cosmetic edit from one that moved somebody's storage.
-    - What is NOT closed is the console.
-    - It has no confirm affordance, so an admin who means the rename carries it out through the API, and the runbook above is still how the orphaned objects are reclaimed afterwards.
+    - The console shows that 409 in a confirm dialog and retries with `?confirm=rehome` only on confirmation; the runbook above reclaims the orphans.
     - **Docker is no longer exempt.**
-      - A managed volume's name folds the drive's slug exactly as a claim's does, so a rename orphans volumes the same way.
+      - On a slug-scheme drive, a managed volume's name folds the drive's slug exactly as a claim's does, so a rename orphans volumes the same way.
       - The old ones keep the data, are never looked up again, and each person's next run creates a fresh empty volume under the new name.
       - They stay findable by the label the name does not carry (`docker volume ls --filter label=wardyn.drive=<drive id>`, "User drives on Docker"), which is why the id is labelled rather than the name.
-      - Before the naming change this residual was Kubernetes-only; nothing about the rename path changed, only the set of objects it orphans.
-      - Rename is the visible case of a wider gap: `PUT /drives/{id}` accepts EVERY field change on an allocated drive without a warning.
       - A `home_template` change hands each member a fresh, empty object at their next run (the old ones findable by `wardyn.drive` on managed backends only), and a `host_root` change binds a different tree under the same names.
-      - The 409 above covers all four columns, so the gap that remains is the console's, not the API's.
+      - The 409 above covers all five identity columns (`backend`, `home_template`, `host_root`, `name` and `object_scheme`; `driveIdentityFields`), so no such change is silent.
 
 38. **A per-user API token's role AND group snapshot are bounded-stale, not frozen — the residual narrows to a human who never signs in again, the same shape as the SSH analogue (#15).**
     - `0045_api_tokens.sql` stamps `role` and `groups` from the minting session ([`internal/api/apitokens.go`](../internal/api/apitokens.go)).
