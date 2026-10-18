@@ -11,13 +11,13 @@ import { Field } from "./form-primitives";
 
 // #2899: the required marker must not grow the label row, or the control under it drops against its neighbours.
 describe("Field — the required marker", () => {
-  it("is set with leading-none like the label beside it", () => {
+  it("is set at the label's size and line height like the label beside it", () => {
     render(
       <Field label="Host" htmlFor="host-input" required>
         <input id="host-input" />
       </Field>,
     );
-    expect(screen.getByText("*")).toHaveClass("leading-none");
+    expect(screen.getByText("*")).toHaveClass("leading-none", "text-sm");
     expect(screen.getByLabelText("Host")).toBeInTheDocument();
   });
 });

@@ -405,7 +405,7 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
     await expect(page.getByText(PROVIDERS_SUPER_ONLY.BODY, { exact: true })).toBeVisible();
     // No form of any kind — no heading, tabs, Save or rows.
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1, exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
