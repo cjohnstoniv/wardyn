@@ -294,19 +294,9 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		for _, wr := range spec.WorkspaceRepos {
 			ws, onboarded := idx.repo[wr.Repo]
 			if onboarded {
-				judged := []types.Workspace{ws}
-				if usable(ws) {
-					judged = slices.DeleteFunc(slices.Clone(idx.repoAll[wr.Repo]), func(c types.Workspace) bool { return !usable(c) })
-				}
-				ok := false
-				for _, c := range judged {
-					var err error
-					if ok, err = cap.allowed(ctx, capWorkspace, c.ID.String()); err != nil {
-						return nil, nil, err
-					}
-					if ok {
-						break
-					}
+				ok, err := anyCarrierGranted(ctx, cap, ws, idx.repoAll[wr.Repo], usable)
+				if err != nil {
+					return nil, nil, err
 				}
 				if !ok {
 					// Refused, not dropped (#1259) — see boundUserSpec.
@@ -319,6 +309,22 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 	}
 
 	return warns, drops, nil
+}
+
+// anyCarrierGranted reports whether capWorkspace is granted on one of the
+// carriers usable admits or, when held (the carrier the source is held to) is
+// not one of them, on held alone, judged as before.
+func anyCarrierGranted(ctx context.Context, cap *capBatch, held types.Workspace, carriers []types.Workspace, usable func(types.Workspace) bool) (bool, error) {
+	judged := []types.Workspace{held}
+	if usable(held) {
+		judged = slices.DeleteFunc(slices.Clone(carriers), func(c types.Workspace) bool { return !usable(c) })
+	}
+	for _, c := range judged {
+		if ok, err := cap.allowed(ctx, capWorkspace, c.ID.String()); err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }
 
 // dropUncoveredPrivateLiterals removes, from the allowlist of a spec a member
