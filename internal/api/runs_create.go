@@ -669,7 +669,9 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			// run.build failure row, so only the run is failed here.
 			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 			defer cancel()
-			s.failAndRevoke(failCtx, runID, types.RunPending, "the run's sandbox image could not be built: "+res.BaseErr.Error())
+			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
+			// run.build row carries it for the operator.
+			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
 			return "", true
 		}
 	}
