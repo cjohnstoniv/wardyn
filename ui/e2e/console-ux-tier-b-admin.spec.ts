@@ -75,10 +75,13 @@ test.describe("Tier B at desktop width", () => {
   test("Permissions: the required Host field sits level with the Who field beside it", async ({ page }) => {
     await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
-    const who = page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true });
+    // Compare with the Capability select: like Host it is a control directly under its label. (The Who control
+    // sits under a type switch, so its box is lower by design.)
+    const capability = page.locator("#grant-capability");
     const host = page.getByRole("textbox", { name: KIND.egress_host.valueLabel, exact: true });
     await expect(host).toBeVisible();
-    expect((await boxOf(host)).y).toBeCloseTo((await boxOf(who)).y, 0);
+    await expect(capability).toBeVisible();
+    expect((await boxOf(host)).y).toBeCloseTo((await boxOf(capability)).y, 0);
   });
 
   // #2892: Open and Delete… both lead with an icon, so their labels start at one x.
@@ -90,6 +93,8 @@ test.describe("Tier B at desktop width", () => {
     const del = page.getByRole("menuitem", { name: /^Delete/ });
     await expect(open).toBeVisible();
     await expect(open.locator("svg")).toHaveCount(1);
+    // The menu scales in; measure once it has settled, or the two icons are read mid-animation.
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
     expect((await boxOf(open.locator("svg"))).x).toBeCloseTo((await boxOf(del.locator("svg"))).x, 0);
   });
 });

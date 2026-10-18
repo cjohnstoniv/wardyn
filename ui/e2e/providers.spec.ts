@@ -19,7 +19,7 @@ import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, PROVIDERS, PROVIDERS_EXTRA } from "../s
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
-import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import { PROVIDERS_SUPER_ONLY, VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -346,27 +346,18 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
   });
 
-  // #217 — a disabled control states its reason BESIDE it, never only in a
-  // title tooltip. GET/PUT /workspace-providers are admin-only server-side
-  // (requireOperator), so a real security admin's read would 403 before this
-  // control ever paints — this spec's own documented ceiling (BROWSER VS API,
-  // top of file) is what makes the state reachable at all: the harness's
-  // bearer stays real admin, so the GET genuinely succeeds while the spliced
-  // client role reads !operator, exactly the race a stale /me can produce.
-  test("a security-admin session sees Save disabled WITH its reason beside it", async ({ page }) => {
+  // #2880 — a security admin is not a super admin, so /admin/providers refuses with the Settings-shaped card instead of
+  // drawing a page of disabled controls. The harness bearer stays real admin; the spliced /me role is what the page reads.
+  test("a security-admin session is refused the page, with the way back (#2880)", async ({ page }) => {
     await mockSecurityAdminRole(page);
-    // NOT gotoProviders(): the Settings card itself is operator-gated
-    // (ProvidersCard returns null for !operator — the sibling describe
-    // block's own test above), so that entry point is gone for this role.
-    // The GET still succeeds for real (the harness's bearer stays admin),
-    // so the route itself renders.
+    // NOT gotoProviders(): the Settings card itself is operator-gated (ProvidersCard returns null for
+    // !operator), so that entry point is gone for this role. A typed or bookmarked URL still reaches the route,
+    // and the page refuses it rather than drawing a disabled Save.
     await gotoConsole(page);
     await navToRoute(page, "/admin/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
-    await expect(saveBtn).toBeVisible();
-    await expect(saveBtn).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA, exact: true })).toBeVisible();
   });
 
   test("the funnel step badge and Settings card both read the real enabled-provider count", async ({ page }) => {

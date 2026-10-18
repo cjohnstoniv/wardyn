@@ -399,7 +399,9 @@ test.describe("governance — the resolved preview", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
-    await expect(page.getByText(GOV.PREVIEW_LEAD)).toBeVisible();
+    // Only the built-in user type exists here, so there is no picker and the lead does not tell the reader to use
+    // one (#2901). The with-types lead is pinned below, where a type is created.
+    await expect(page.getByText(GOV.PREVIEW_LEAD_NO_TYPES)).toBeVisible();
     // The People step's own field and hint, verbatim — one accepted shape.
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS, { exact: true })).toBeVisible();
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS_HINT)).toBeVisible();
