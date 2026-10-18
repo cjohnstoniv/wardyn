@@ -437,8 +437,9 @@ export const CHANGES = {
     set: "Set",
   } as Record<string, string>,
   EMPTY_TITLE: "Nothing is waiting for a second person",
-  EMPTY_BODY:
-    "When this deployment requires a second person for governance changes, they wait here until someone approves or rejects them. Decided changes are in the audit trail.",
+  EMPTY_BODY: "A covered governance change applies only when someone other than its proposer approves it. It waits here until then.",
+  // The empty state's one door: the decided changes are in the audit trail (#2907, owner option B).
+  EMPTY_CTA: "Open the audit trail →",
   META: (who: string, when: string, expires: string) => `Proposed by ${who} ${when} · expires ${expires}`,
   DIFF_FIELD: "Field",
   DIFF_BEFORE: "Before",
