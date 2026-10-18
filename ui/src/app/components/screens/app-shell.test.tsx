@@ -24,9 +24,9 @@ import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
 // is only the second, "user" is neither.
-function renderMobileNav(role: Role = "admin", memberMode = false) {
+function renderMobileNav(role: Role = "admin", memberMode = false, path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <UnsavedGuardProvider>
         <MobileNav
           pendingApprovals={2}
@@ -583,6 +583,22 @@ describe("SidebarNav (member role)", () => {
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
     const links = screen.getAllByRole("link");
     expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+  });
+
+  // #2872: Providers, Components and Drives are reached from Settings' cards and
+  // have no nav entry, so Settings stays lit on them instead of nothing.
+  it.each(["/admin/providers", "/admin/components", "/admin/drives"])("Settings stays lit on %s", async (path) => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, path);
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Settings/ })).toHaveClass("bg-sidebar-accent");
+  });
+
+  it("Settings is not lit on an unrelated admin page", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/runs");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Settings/ })).not.toHaveClass("bg-sidebar-accent");
   });
 
   it("Settings is absent from a member's sidebar", async () => {
