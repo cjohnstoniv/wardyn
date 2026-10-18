@@ -183,6 +183,26 @@ describe("WorkspaceDetailScreen — header: name, source line, and Start a run",
   });
 });
 
+describe("WorkspaceDetailScreen — header of a multi-source workspace (#2587)", () => {
+  it("names the composition, never 'empty — discarded after the run'", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        kind: "",
+        source: "",
+        ref: undefined,
+        sources: [
+          { type: "local_dir", path: "/src/app" },
+          { type: "repo", source: "org/lib" },
+        ],
+      }),
+    );
+    renderDetail();
+    await screen.findByRole("heading", { name: "payments" });
+    expect(screen.getByText("1 dir · 1 repo")).toBeInTheDocument();
+    expect(screen.queryByText(/discarded after the run/)).not.toBeInTheDocument();
+  });
+});
+
 // #922 (UT-7c), the person side: "Start a run" only NAVIGATES (it launches
 // nothing itself), so this is the one place on this page a member-facing
 // launch consequence belongs. Both reasons fold into the SAME generic

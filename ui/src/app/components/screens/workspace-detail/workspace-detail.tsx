@@ -34,6 +34,7 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
+import { compositionSummary } from "../new-run-flow/checks/workspace-availability";
 import { resolvedModelProviders, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
@@ -49,6 +50,9 @@ const POLL_MS = 2500;
 // Source column): this line always names the kind up front, matching the
 // approved mock verbatim for a repo (`repo · github.com/acme/api · main`).
 function detailSourceLine(ws: Workspace): string {
+  // A multi-source workspace leaves the derived kind/source mirror empty; the list's own summary names it.
+  const multi = compositionSummary(ws);
+  if (multi) return multi;
   if (!ws.source) return "empty — discarded after the run";
   const kindLabel = kindMetaOf(ws.kind)?.label ?? ws.kind;
   return ws.kind === "repo" && ws.ref ? `${kindLabel} · ${ws.source} · ${ws.ref}` : `${kindLabel} · ${ws.source}`;
