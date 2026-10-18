@@ -499,8 +499,10 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 			// pipe-backed conn shows up as a frozen UI.
 			FlushInterval: -1,
 			Transport: &http.Transport{
-				DialContext:     s.uiDial,
-				MaxIdleConns:    maxUIConnsPerRun * 4,
+				DialContext:  s.uiDial,
+				MaxIdleConns: maxUIConnsPerRun * 4,
+				// A host is one run's app (run:port): past the cap a request waits for a pooled conn, not acquireUIConn's 503.
+				MaxConnsPerHost: maxUIConnsPerRun, MaxIdleConnsPerHost: maxUIConnsPerRun,
 				IdleConnTimeout: uiIdleConnTimeout,
 				// No proxy, no TLS: the destination is a sandbox's own loopback
 				// reached over an exec, never a network address.
