@@ -16,8 +16,10 @@ package conformance_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -232,13 +234,45 @@ func dockerRouteProbe(t *testing.T, ref string) {
 	// produces garbled output because the binary frame headers are included.
 	var stdout, stderr bytes.Buffer
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, resp.Reader); err != nil && err != io.EOF {
-		t.Logf("dockerRouteProbe: stdcopy warning: %v (continuing)", err)
+		t.Fatalf("dockerRouteProbe: reading the exec stream: %v", err)
 	}
 
-	output := stdout.String() + stderr.String()
-	if strings.Contains(output, "default") {
-		t.Errorf("L0 structural-egress violated: agent container %q has a default route.\nip route output:\n%s", ref, output)
+	// The stream ending does not mean the daemon has recorded the exit yet.
+	var inspect dockerclient.ExecInspectResult
+	for range 50 {
+		inspect, err = cli.ExecInspect(ctx, created.ID, dockerclient.ExecInspectOptions{})
+		if err != nil {
+			t.Fatalf("dockerRouteProbe: exec inspect: %v", err)
+		}
+		if !inspect.Running {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
+	if err := routeProbeVerdict(stdout.String()+stderr.String(), inspect.Running, inspect.ExitCode); err != nil {
+		t.Errorf("%v (container %q)", err, ref)
+	}
+}
+
+// routeProbeLine is one `ip route` entry: a destination, then `dev <iface>`.
+var routeProbeLine = regexp.MustCompile(`(?m)^\S.* dev \S+`)
+
+// routeProbeVerdict is the L0 default-route verdict on one `ip route` run. The absence of the word
+// "default" only means something when the command ran and listed the table, so a non-zero exit
+// (ip missing, the exec refused) and output with no route line (an error string, an empty table)
+// are failures, not passes: an internal-only network always lists its own connected subnet.
+func routeProbeVerdict(output string, running bool, exitCode int) error {
+	switch {
+	case running:
+		return fmt.Errorf("the `ip route` exec was still running after the wait")
+	case exitCode != 0:
+		return fmt.Errorf("`ip route` exited %d, so the L0 structural-egress probe checked nothing; output:\n%s", exitCode, output)
+	case !routeProbeLine.MatchString(output):
+		return fmt.Errorf("`ip route` listed no route (not even the connected subnet), so the L0 structural-egress probe checked nothing; output:\n%s", output)
+	case strings.Contains(output, "default"):
+		return fmt.Errorf("L0 structural-egress violated: agent container has a default route.\nip route output:\n%s", output)
+	}
+	return nil
 }
 
 // ensureConformanceNetwork creates the named bridge network if it does not
@@ -261,5 +295,32 @@ func ensureConformanceNetwork(t *testing.T, name string) {
 		// Non-fatal: log and continue; the test will fail later if the
 		// network is truly absent and the driver cannot connect the proxy.
 		t.Logf("ensureConformanceNetwork %q: %v (may already exist)", name, err)
+	}
+}
+
+// TestRouteProbeVerdict pins the L0 default-route verdict without a daemon: only a clean
+// run that listed a route and shows no default passes.
+func TestRouteProbeVerdict(t *testing.T) {
+	const subnet = "172.20.0.0/16 dev eth0 proto kernel scope link src 172.20.0.2\n"
+	for _, tc := range []struct {
+		name     string
+		output   string
+		running  bool
+		exit     int
+		wantFail bool
+	}{
+		{"connected subnet only", subnet, false, 0, false},
+		{"a default route", "default via 172.20.0.1 dev eth0\n" + subnet, false, 0, true},
+		{"ip is not installed", "exec: \"ip\": executable file not found in $PATH", false, 127, true},
+		{"exec refused at runtime", "OCI runtime exec failed: unable to start container process", false, 126, true},
+		{"empty table", "", false, 0, true},
+		{"an error string with exit 0", "RTNETLINK answers: Operation not supported\n", false, 0, true},
+		{"still running", subnet, true, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := routeProbeVerdict(tc.output, tc.running, tc.exit); (err != nil) != tc.wantFail {
+				t.Errorf("routeProbeVerdict = %v, want failure %v", err, tc.wantFail)
+			}
+		})
 	}
 }

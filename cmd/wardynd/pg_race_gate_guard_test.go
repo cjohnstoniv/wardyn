@@ -5,8 +5,10 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,9 +17,9 @@ import (
 // `go launch(i)` — at the start of a line.
 var goroutineSpawn = regexp.MustCompile(`(?m)^\s+go [A-Za-z_(]`)
 
-// pgTestFunc matches the opening line of a top-level TestPG_ function; gofmt
-// puts its closing brace alone at column 0.
-var pgTestFunc = regexp.MustCompile(`(?m)^func (TestPG_\w*)\(`)
+// testFunc matches the opening line of a top-level Test function; gofmt puts
+// its closing brace alone at column 0.
+var testFunc = regexp.MustCompile(`(?m)^func (Test\w*)\(`)
 
 // raceLine is one `go test` line of test-race-pg's recipe.
 type raceLine struct {
@@ -185,14 +187,56 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 			"test they run would SKIP and the race shard would pass vacuously:\n%s", job)
 	}
 
-	// (d) every TestPG_ function that spawns a goroutine is actually raced: some
-	// recipe line both covers its package and matches its name with -run. A
-	// goroutine-spawning pg test in an un-raced package (I-3: internal/api held
-	// two), or one a narrowed -run filters out, would otherwise never run under
-	// the detector.
-	lines := raceLines(t, raceTarget)
+	// (d) every DSN-gated test that spawns a goroutine is actually raced: some
+	// recipe line both covers its package and matches its name with -run. Gated
+	// is what scripts/pg-test-select.sh selects for the PG shards (a test that
+	// names WARDYN_TEST_PG, or a gated helper, whatever it is called), plus every
+	// TestPG_ function. One in an un-raced package (I-3: internal/api held two),
+	// or one a narrowed -run filters out, would otherwise never run under the
+	// detector; a DSN-gated test not named TestPG_ was invisible to this check.
+	unraced := unracedGatedGoroutineTests(t, root, gatedTests(t, root), raceLines(t, raceTarget))
+	if len(unraced) > 0 {
+		t.Errorf("these DSN-gated tests spawn goroutines but no test-race-pg line races them "+
+			"(package not covered, or name filtered out by -run):\n%s\nrecipe:\n%s",
+			strings.Join(unraced, "\n"), raceTarget)
+	}
+}
+
+// gatedTests is the PG shards' selection, per package dir ("./internal/api"), read from
+// pg-test-select.sh so the guard and the shards cannot disagree about what is DSN-gated.
+func gatedTests(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	cmd := exec.Command("bash", "scripts/pg-test-select.sh", "--selection", "./...")
+	cmd.Dir = root
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("scripts/pg-test-select.sh --selection: %v\n%s", err, stderr.String())
+	}
+	const module = "github.com/cjohnstoniv/wardyn"
+	gated := map[string][]string{}
+	for _, ln := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 2 {
+			t.Fatalf("scripts/pg-test-select.sh --selection printed %q, want \"<import path> <Test>\"", ln)
+		}
+		dir := "." + strings.TrimPrefix(f[0], module)
+		gated[dir] = append(gated[dir], f[1])
+	}
+	if len(gated["./internal/api"]) == 0 || len(gated["./cmd/wardynd"]) == 0 {
+		t.Fatalf("the selection names no gated test in internal/api or cmd/wardynd: the selector stopped seeing the gates (%d packages)", len(gated))
+	}
+	return gated
+}
+
+// unracedGatedGoroutineTests walks root's _test.go files and returns "<pkg>.<Test>" for every
+// test that spawns a goroutine and is gated (named in gated[pkg], or a TestPG_ function) but is
+// selected by no race line.
+func unracedGatedGoroutineTests(t *testing.T, root string, gated map[string][]string, lines []raceLine) []string {
+	t.Helper()
 	var unraced []string
-	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -215,8 +259,11 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		}
 		pkg := "./" + filepath.ToSlash(rel)
 		code := string(src)
-		for _, m := range pgTestFunc.FindAllStringSubmatchIndex(code, -1) {
+		for _, m := range testFunc.FindAllStringSubmatchIndex(code, -1) {
 			name := code[m[2]:m[3]]
+			if !strings.HasPrefix(name, "TestPG_") && !slices.Contains(gated[pkg], name) {
+				continue
+			}
 			body := code[m[0]:]
 			if end := strings.Index(body, "\n}\n"); end >= 0 {
 				body = body[:end]
@@ -239,12 +286,37 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s for TestPG_ functions: %v", root, err)
+		t.Fatalf("walk %s for gated tests: %v", root, err)
 	}
-	if len(unraced) > 0 {
-		t.Errorf("these TestPG_ functions spawn goroutines but no test-race-pg line races them "+
-			"(package not covered, or name filtered out by -run):\n%s\nrecipe:\n%s",
-			strings.Join(unraced, "\n"), raceTarget)
+	return unraced
+}
+
+// TestRaceGateGuardSeesGatedTestsNamedOtherwise is the counterfactual for (d): a DSN-gated goroutine
+// test whose name is not TestPG_ is flagged when no race line selects it, and clean once one does.
+func TestRaceGateGuardSeesGatedTestsNamedOtherwise(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "fake")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const src = `package fake
+
+func TestTwoBootsEndOnOneKey(t *testing.T) {
+	_ = os.Getenv("WARDYN_TEST_PG")
+	go func() {}()
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "boot_test.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gated := map[string][]string{"./internal/fake": {"TestTwoBootsEndOnOneKey"}}
+	pgOnly := []raceLine{{run: regexp.MustCompile(`TestPG_`), pkgs: []string{"./internal/fake/..."}}}
+	if got := unracedGatedGoroutineTests(t, root, gated, pgOnly); !slices.Equal(got, []string{"./internal/fake.TestTwoBootsEndOnOneKey"}) {
+		t.Errorf("a gated, non-TestPG_ goroutine test under a TestPG_-only race line = %v, want it flagged", got)
+	}
+	named := []raceLine{{run: regexp.MustCompile(`TestPG_|TestTwoBootsEndOnOneKey`), pkgs: []string{"./internal/fake/..."}}}
+	if got := unracedGatedGoroutineTests(t, root, gated, named); len(got) != 0 {
+		t.Errorf("a race line that names the test still flags %v", got)
 	}
 }
 

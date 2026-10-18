@@ -183,13 +183,16 @@ classify() {
       }
       next
     }
-    # Phase 2: the union profile — inventory exported funcs at 0.0%.
-    FILENAME==unionfile && $2 ~ /^[A-Z]/ && $3=="0.0%" {
+    # Phase 2: the union profile — inventory exported funcs at 0.0%. The ordinal
+    # is taken over EVERY exported func first (as Phase 1 does), so a covered
+    # earlier sibling still counts toward the k-th position of a 0.0% later one.
+    FILENAME==unionfile && $2 ~ /^[A-Z]/ {
       loc=$1; sub(mod,"",loc); sub(/:$/,"",loc)     # relpath:line
       file=loc; sub(/:[0-9]+$/,"",file)             # relpath
       pkg=file; sub(/\/[^\/]+$/,"",pkg)             # dir
       key=file "\t" $2
       key=key "\t" ++uord[key]                    # k-th same-named func in this file
+      if ($3 != "0.0%") next
       if (key in pgcov && pgcov[key]) cat="PG"
       else if (pkg ~ dockerre)        cat="DOCKER"
       else if (pkg ~ k8sre)           cat="K8S"
@@ -276,6 +279,18 @@ self_test() {
     "UNTESTED	internal/store	UpdateRunState	internal/store/store.go:84" | LC_ALL=C sort)"
   if [ "$got" != "$want" ]; then
     echo "test-gaps: self-test FAIL (pg missing)" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    exit 1
+  fi
+  # ORDINALS COUNT COVERED SIBLINGS: the FIRST Close is covered in the union, the second is 0.0% in
+  # BOTH lanes. Numbering only the 0.0% union rows made the second look like ordinal 1 and match the
+  # PG lane's covered first Close, filing a func no lane runs under "PG-gated".
+  printf '%sinternal/egress/proxy/relay.go:20:\tClose\t80.0%%\n%sinternal/egress/proxy/relay.go:71:\tClose\t0.0%%\n' "$MODULE" "$MODULE" > "$d/u2"
+  printf '%sinternal/egress/proxy/relay.go:18:\tClose\t92.3%%\n%sinternal/egress/proxy/relay.go:64:\tClose\t0.0%%\n' "$MODULE" "$MODULE" > "$d/pg2"
+  got="$(classify "$d/u2" "$d/pg2")"
+  want="$(printf 'UNTESTED\tinternal/egress/proxy\tClose\tinternal/egress/proxy/relay.go:71')"
+  if [ "$got" != "$want" ]; then
+    echo "test-gaps: self-test FAIL (covered earlier sibling)" >&2
     diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
     exit 1
   fi

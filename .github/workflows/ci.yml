@@ -1393,6 +1393,10 @@ jobs:
         env:
           WARDYN_TEST_DOCKER: "1"
         run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
+      # The distinct-UID permission proofs skip on every non-root suite; this runs them as root in a
+      # throwaway container and fails if either does not run and pass (scripts/test-root-uid.sh).
+      - name: Distinct-UID recording permission proofs (root, throwaway container)
+        run: ./scripts/test-root-uid.sh
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

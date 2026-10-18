@@ -915,10 +915,9 @@ func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
 
 // TestCreateSandbox_DriveSurvivesTeardown is the other half of "no run label":
 // the run's whole sweep runs and the person's storage is still there. The
-// selector assertion is the load-bearing one — the fake's DeleteCollection
-// support does not filter by label, so the proof that the sweep CANNOT reach
-// the claim is that the claim carries no key the selector names, and that no
-// delete verb is ever issued against a claim at all (the chart grants none).
+// selector assertion is the load-bearing one: the proof that the sweep CANNOT
+// reach the claim is that the claim carries no key the selector names, and that
+// no delete verb is ever issued against a claim at all (the chart grants none).
 func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")

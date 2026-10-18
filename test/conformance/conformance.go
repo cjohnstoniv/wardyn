@@ -369,8 +369,8 @@ func testWaitExitCode(t *testing.T, r runner.Runner, opts Options) {
 // exec stream (Status still reports the sandbox RUNNING afterwards).
 //
 // The case is skipped when the driver declares no ConfinementClasses (honest
-// stub: it cannot create a sandbox) — drivers that return ErrNotImplemented from
-// Attach are also skipped gracefully. The shell is assumed to be /bin/sh (the
+// stub: it cannot create a sandbox); a driver that claims classes must Attach.
+// The shell is assumed to be /bin/sh (the
 // driver's documented default), present in every minimal SandboxImage.
 func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 	t.Helper()
@@ -389,8 +389,10 @@ func testInteractiveAttach(t *testing.T, r runner.Runner, opts Options) {
 
 	sess, err := r.Attach(ctx, sb.Ref, runner.AttachOptions{Cols: 80, Rows: 24})
 	if err != nil {
-		// A driver that has not implemented Attach yet skips rather than fails.
-		t.Skipf("Attach not available (driver %q): %v", r.Name(), err)
+		// Past the no-classes skip above the driver claims a substrate and created a sandbox on it,
+		// so a failing Attach is a defect, not an absent feature: skipping would take the substrate's
+		// interactive PTY contract out of the gate unnoticed.
+		t.Fatalf("Attach failed for driver %q, which claims confinement classes %v: %v", r.Name(), caps.ConfinementClasses, err)
 	}
 
 	// Read the PTY in the background so the shell's output (incl. our echoed
