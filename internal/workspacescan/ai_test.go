@@ -189,3 +189,33 @@ func TestBuildAdvisorMessage_DefangsForgedFence(t *testing.T) {
 		t.Error("real fence markers missing from message")
 	}
 }
+
+// TestRunAdvisorClaude_LocksTheToolSet: the advisor's CLI is started with no
+// tools and no MCP servers besides plan mode, so a sample's text has nothing
+// to call. Flag names checked against the resident CLI's --help.
+func TestRunAdvisorClaude_LocksTheToolSet(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '[%s]\\n' \"$a\"; done > " + argsFile + "\n" +
+		"printf '%s\\n' '" + wrapper(`{"needs_review":true}`) + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAdvisorClaude(context.Background(), bin, map[string]any{"type": "object"}, "user"); err != nil {
+		t.Fatalf("runAdvisorClaude: %v", err)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(raw)
+	for _, want := range []string{"[--tools]\n[]\n", "[--strict-mcp-config]\n", "[--permission-mode]\n[plan]\n"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("advisor args lack %q:\n%s", want, args)
+		}
+	}
+	if strings.Contains(args, "[--mcp-config]") {
+		t.Errorf("advisor args load an MCP config:\n%s", args)
+	}
+}
