@@ -181,7 +181,8 @@
 # docs/AUDIT-ACTIONS.md 48248 adds 11: the runner.connect row says it is written when the session reports its capabilities, after that session's action receipts.
 # docs/AUDIT-ACTIONS.md 48281 = 48237 + 33 + 11, measured: both sides after the AF2 merge
 # docs/AUDIT-ACTIONS.md 48304 = 48281 + 23, measured: measured after the AF1 and AF2 merges: the runner.recovery.request row, its deferred-recovery wording, and the runner.connect ordering
-docs/AUDIT-ACTIONS.md=48304 share=8
+# 0.9.4 L7a2 +10: the optional skipped field on workspace.egress.approve.
+docs/AUDIT-ACTIONS.md=48314 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
