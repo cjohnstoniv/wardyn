@@ -75,6 +75,7 @@ These are covered by tests against simulated parts only; check them on your esta
   `409` `revive_containment_recovering`, and the next revive, once the runner has reconnected, brings the run back.
   A killed or quarantined run is still never recovered. The new audit action is `runner.recovery.request`.
 - A policy apply is audited together with the run's creation, so a refused launch leaves no policy apply row, and a recording upload for a run that no longer exists answers 404.
+- A runner's version and last-seen time are recorded when it connects, so the runners list and its runner.connect audit rows show which release each runner runs.
 
 ## [0.9.3-rc.3] — 2026-10-17
 

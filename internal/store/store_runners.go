@@ -236,10 +236,10 @@ func (s PG) SetRunnerTrustClass(ctx context.Context, id uuid.UUID, class types.R
 	return before, after, err
 }
 
-// TouchRunner records an authenticated session: last_seen_at and the runner's version. Best effort in
-// the caller, like TouchDevice.
+// TouchRunner records an authenticated session: last_seen_at and the runner's version; a version of ""
+// keeps the one held. Best effort in the caller, like TouchDevice.
 func (s PG) TouchRunner(ctx context.Context, id uuid.UUID, version string, now time.Time) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET last_seen_at = $2, version = $3 WHERE id = $1`, id, now, version); err != nil {
+	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET last_seen_at = $2, version = COALESCE(NULLIF($3, ''), version) WHERE id = $1`, id, now, version); err != nil {
 		return fmt.Errorf("store: touch runner: %w", err)
 	}
 	return nil

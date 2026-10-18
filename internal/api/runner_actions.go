@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -174,13 +175,24 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 	}
 	id := rn.ID
 	ep := s.runnerEndpoint(id)
+	var session atomic.Pointer[string] // this connection's fresh session id, once BeginInventory has run
 	return remote.Admission{Substrate: ep.sub, Link: ep.link,
-		Pending:        func(ctx context.Context) ([]runnerwire.PendingAction, error) { return s.PendingFromRunner(ctx, id) },
-		BeginInventory: func(ctx context.Context, session string) error { return s.BeginInventoryFromRunner(ctx, id, session) },
+		Pending: func(ctx context.Context) ([]runnerwire.PendingAction, error) { return s.PendingFromRunner(ctx, id) },
+		BeginInventory: func(ctx context.Context, sessionID string) error {
+			session.Store(&sessionID)
+			s.noteRunnerSession(id, sessionID)
+			return s.BeginInventoryFromRunner(ctx, id, sessionID)
+		},
 		StatePage: func(ctx context.Context, session string, page runnerwire.StatePage) error {
 			return s.StatePageFromRunner(ctx, id, session, page)
 		},
-		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
+		Event: func(ctx context.Context, ev runnerwire.Event) error {
+			var sessionID string
+			if p := session.Load(); p != nil {
+				sessionID = *p
+			}
+			return s.eventFromRunner(ctx, id, sessionID, ev)
+		},
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
 		Ready: func() {
 			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
@@ -213,6 +225,12 @@ func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUI
 // events. caps and waiting are the substrate's own; a kind with no org
 // ingestion refuses rather than being acknowledged unrecorded.
 func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) error {
+	return s.eventFromRunner(ctx, runnerID, "", ev)
+}
+
+// eventFromRunner is EventFromRunner for the connection whose fresh session is session ("" when it has
+// none), so a caps event settles only that session's runner.connect row.
+func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
 	switch ev.Kind {
 	case runnerwire.EventActionResult:
 		return s.ActionResultFromRunner(ctx, runnerID, ev)
@@ -225,7 +243,7 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 	case runnerwire.EventResidentErase:
 		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
-		s.capsFromRunner(ctx, runnerID, ev)
+		s.capsFromRunner(ctx, runnerID, session, ev)
 		return nil
 	case runnerwire.EventWaiting:
 		return nil

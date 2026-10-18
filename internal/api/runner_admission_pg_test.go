@@ -43,6 +43,9 @@ type admissionFixture struct {
 	key  ed25519.PrivateKey
 	run  types.AgentRun
 	gen  uuid.UUID
+	// capsVersion, when set, makes each session send a `caps` event reporting that version, as a real
+	// runner does; "" sends none.
+	capsVersion string
 }
 
 func newAdmissionFixture(t *testing.T) *admissionFixture {
@@ -163,7 +166,16 @@ func (f *admissionFixture) connect(t *testing.T, during func(), rows ...runnerwi
 				after, runs = runs[n-1].RunID, runs[n:]
 			}
 		},
-		Replay:      func(context.Context, *runnerwire.Peer) error { return nil },
+		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
+			if f.capsVersion == "" {
+				return nil
+			}
+			data, err := runnerwire.Marshal(runnerwire.Caps{Version: f.capsVersion})
+			if err != nil {
+				return err
+			}
+			return peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		},
 		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
 		Lease:       func(context.Context, runnerwire.Lease) error { return nil },
 		Revoked:     func(context.Context) error { return nil },
