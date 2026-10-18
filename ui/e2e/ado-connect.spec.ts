@@ -33,6 +33,7 @@ import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { adoCapName } from "../src/app/lib/ado-access-copy";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 const ORG = "https://dev.azure.com/wardyn-e2e";
 const clock = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -519,5 +520,38 @@ test.describe("no horizontal scroll at 390px", () => {
     await continueNewRun(page, NR_TOOLS.TITLE);
     await expect(page.getByTestId("ado-launch-note")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
+  });
+});
+
+// #2146: /setup/status carries only the first Azure DevOps row; GET /me/scm-access returns every one. With
+// own-token rows for two organisations the account card has a section each, and a New Run missing one organisation's
+// token says which.
+test.describe("several own-token organisations", () => {
+  const own = { token_mode: "own_pat", kind: "azure_devops", max_days: 30 };
+  const acme = { ...own, state: "live", org: "https://dev.azure.com/acme", expires_on: aheadByHours(20 * 24).slice(0, 10) };
+  const beta = { ...own, state: "not_configured", org: "https://dev.azure.com/beta" };
+
+  test.beforeEach(async ({ page }) => {
+    await spliceAccess(page, () => acme);
+    await page.route("**/api/v1/me/scm-access", (route) => route.fulfill({ json: [acme, beta] }));
+  });
+
+  test("Settings: the Azure DevOps card has a section per organisation, with its own button", async ({ page }) => {
+    await openAccountCard(page);
+    const cards = page.getByTestId("ado-own-token-cards");
+    await expect(cards).toBeVisible();
+    await expect(cards.getByTestId("ado-org-acme").getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeVisible();
+    await expect(cards.getByTestId("ado-org-beta").getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toBeVisible();
+    await expect(cards.getByTestId("ado-org-acme").getByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).toHaveCount(0);
+  });
+
+  test("New Run Tools: the note names the organisation with no token", async ({ page }) => {
+    await spliceAdoRepository(page);
+    await gotoConsole(page);
+    await openNewRun(page);
+    await walkGuidedToFiles(page);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await expect(page.getByTestId("ado-own-token-note")).toHaveText(ADO_PAT.OWN_ORGS_ADD_FIRST("beta"));
   });
 });
