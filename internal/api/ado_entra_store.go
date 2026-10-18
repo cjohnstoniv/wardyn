@@ -699,8 +699,13 @@ func classifyADOEntraError(code, desc string) error {
 		return fmt.Errorf("%w: %s (%s)", ErrADOEntraConsentRequired, code, entraConsentRequiredCode)
 	case code == entraOAuthInteractionRequired:
 		return fmt.Errorf("%w: %s%s", ErrADOEntraInteractionRequired, code, aadstsSuffix(desc))
-	case code == "invalid_grant" || code == "invalid_client" || code == "unauthorized_client":
+	case code == "invalid_grant":
 		return fmt.Errorf("%w: %s", ErrADOEntraDeadCredential, code)
+	// invalid_client and unauthorized_client name the console's own application
+	// (an expired or mistyped secret, a disabled app), not this person's token,
+	// which is still valid once the administrator fixes it: unavailable, so the
+	// stored sign-in survives, as Entra's invalid_client does elsewhere in
+	// this tree (the Key Vault client).
 	default:
 		return fmt.Errorf("%w: the authority refused with %s", ErrADOEntraUnavailable, code)
 	}

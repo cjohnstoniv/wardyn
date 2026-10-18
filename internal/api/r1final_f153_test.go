@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -157,4 +159,50 @@ func TestRecordRouteStaysOnTheOperatorTier(t *testing.T) {
 			}
 		})
 	}
+}
+
+// f153ScanDoor serves the one repo source both scan handlers launch.
+type f153ScanDoor struct {
+	*f153ScanStore
+	src types.Source
+}
+
+func (s *f153ScanDoor) GetSource(context.Context, uuid.UUID) (types.Source, error) { return s.src, nil }
+func (s *f153ScanDoor) GetSourcesByIDs(context.Context, []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	return map[uuid.UUID]types.Source{s.src.ID: s.src}, nil
+}
+
+// A member at their run cap who scans is told the limit and the remedy (403),
+// never a 500 "launch scan run": both scan handlers answer through
+// writeScanLaunchRefusal, like the record and sign-in lanes.
+func TestScanHandlersAnswerTheRunCapWith403(t *testing.T) {
+	p := govProfile("two-at-a-time")
+	p.Limits = types.GovernanceLimits{MaxConcurrentRuns: 2}
+	srv, st, _ := govEscapeFixture(t, assignedStore(p))
+	srv.cfg.Runner = &fakeRunner{}
+	src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
+	srv.cfg.Store = &f153ScanDoor{f153ScanStore: &f153ScanStore{scanLaneStore: &scanLaneStore{govEscapeStore: st}, active: 2}, src: src}
+	req := func() *http.Request {
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", src.ID.String())
+		ctx := context.WithValue(govMemberCtx([]string{"eng"}, false), chi.RouteCtxKey, rctx)
+		return httptest.NewRequest(http.MethodPost, "/scan", nil).WithContext(ctx)
+	}
+	check := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusForbidden || reasonOf(t, w) != reasonRecordCeilingLimit || !strings.Contains(w.Body.String(), "Stop one first") {
+			t.Fatalf("= %d %s, want 403 %s naming the remedy", w.Code, w.Body.String(), reasonRecordCeilingLimit)
+		}
+	}
+	t.Run("workspace fan-out", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ws := types.Workspace{ID: uuid.New(), Attachments: []types.WorkspaceAttachment{{SourceID: &src.ID}}}
+		srv.scanAttachedSources(w, req(), ws)
+		check(t, w)
+	})
+	t.Run("single source", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		srv.handleScanSource(w, req())
+		check(t, w)
+	})
 }

@@ -154,11 +154,10 @@ func adoEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx context.Co
 			if row.ID != rowID || row.Kind != types.GitProviderAzureDevOps || row.Entra == nil {
 				continue
 			}
-			mode := row.Entra.TokenMode
-			if mode == "" {
-				mode = types.ADOTokenModeBearer
-			}
-			return adoEntraConfigFor(row, login, mode, adoscope.MintScopes()), true, nil
+			// minted_pat whatever the row says now: a token is only ever created
+			// through a minted_pat row, and a row switched to bearer or own_pat
+			// since would otherwise refuse to revoke the tokens it left behind.
+			return adoEntraConfigFor(row, login, types.ADOTokenModeMintedPAT, adoscope.MintScopes()), true, nil
 		}
 		return api.ADOEntraConfig{}, false, nil
 	}
