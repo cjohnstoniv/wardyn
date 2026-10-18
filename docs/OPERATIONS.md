@@ -1677,8 +1677,7 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
 drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
 
 - **Retries and failure.**
-  - Network errors, timeouts, HTTP 408, 429 and 5xx retry after about 30 s, 1 m, 2 m and 4 m, each spread by up to 20%
-    so rows that failed together do not retry together.
+  - Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m, 4 m (±20%).
   - A row goes dead on its fifth failure,
     - on any other 4xx or a 3xx (redirects are never followed: a redirect would hand the body and signature to a host
       you did not name),
