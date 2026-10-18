@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -201,17 +200,32 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	runs, err := s.cfg.Store.ListRuns(ctx)
-	if err != nil {
-		return fmt.Errorf("sweep orphaned sandboxes: list runs: %w", err)
+	// A store with the narrow read is asked about each container's run as the substrate reports it; any
+	// other store is listed once up front, as before.
+	var preloaded map[uuid.UUID]types.AgentRun
+	if _, narrow := s.cfg.Store.(store.RunSweepReader); !narrow {
+		var err error
+		if preloaded, err = s.runsByID(ctx, nil); err != nil {
+			return fmt.Errorf("sweep orphaned sandboxes: list runs: %w", err)
+		}
 	}
-	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
-	for _, run := range runs {
-		byID[run.ID] = run
+	var lookupErr error
+	lookup := func(runID uuid.UUID) (run types.AgentRun, known bool, err error) {
+		if preloaded != nil {
+			run, known = preloaded[runID]
+			return run, known, nil
+		}
+		byID, err := s.runsByID(ctx, []uuid.UUID{runID})
+		run, known = byID[runID]
+		return run, known, err
 	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	isOrphan := func(runID uuid.UUID) bool {
-		run, known := byID[runID]
+		run, known, err := lookup(runID)
+		if err != nil {
+			lookupErr = errors.Join(lookupErr, err)
+			return false // a run that cannot be read is never torn down
+		}
 		if !known {
 			return true // no run row owns these containers — pure leak
 		}
@@ -237,7 +251,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
 	}
-	if err != nil {
+	if err = errors.Join(err, lookupErr); err != nil {
 		return fmt.Errorf("sweep orphaned sandboxes: %w", err)
 	}
 	return nil
@@ -273,14 +287,11 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 // already-denied token/credential is a no-op), so re-running it on an
 // already-revoked run costs one wasted call, never a double-effect.
 func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	runs, err := s.terminalRunsWithSandbox(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile orphaned sandboxes: list runs: %w", err)
 	}
 	for _, run := range runs {
-		if !isTerminalRunState(run.State) || run.SandboxRef == "" {
-			continue
-		}
 		s.revokeRunCascade(ctx, run.ID)
 		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 		torn := false
@@ -424,7 +435,7 @@ const undispatchedGrace = 2 * imageBuildTimeout
 // how long a healthy run can legitimately sit here, so past it nothing on any
 // replica is still provisioning the run and only a dead process can explain it.
 func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	runs, err := s.undispatchedRuns(ctx)
 	if err != nil {
 		return err
 	}
@@ -432,9 +443,6 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
-		if !slices.Contains(types.SlotHoldingRunStates, run.State) || run.SandboxRef != "" {
-			continue
-		}
 		// A promoted run's dispatch window starts when it left the queue, not when it was requested.
 		started := run.CreatedAt
 		if run.AdmittedAt != nil {

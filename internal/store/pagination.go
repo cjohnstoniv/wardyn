@@ -109,12 +109,35 @@ func sponsoredServicePrincipalsSQL(sponsor string) string {
 	return "(SELECT '" + types.ServicePrincipalPrefix + "' || name FROM service_identities WHERE sponsor = " + sponsor + ")"
 }
 
+// runsByCreatorOrSponsorQuery is ListRunsPageByCreatorOrSponsor's SQL. Two created_by arms, each ordered and
+// limited on its own: `created_by = $1 OR created_by IN (subquery)` cannot use agent_runs_created_by_idx,
+// so the planner walked agent_runs_created_at_idx and filtered, reading the whole table for a member with
+// few runs. Each arm asks for offset+limit rows, which is all the outer page can need from it. The id
+// breaks a created_at tie, so the page boundary is the same on every read; the second arm skips the
+// caller's own rows, so a row never comes back twice.
+func runsByCreatorOrSponsorQuery(principal string, p Page) (string, []any) {
+	arm := func(where string) string {
+		q := `SELECT ` + runCols + ` FROM agent_runs WHERE ` + where + ` ORDER BY created_at DESC, id DESC`
+		if p.Limit > 0 {
+			q += ` LIMIT $2`
+		}
+		return `(` + q + `)`
+	}
+	args := []any{principal}
+	if p.Limit > 0 {
+		args = append(args, p.Limit+p.Offset)
+	}
+	q := `SELECT ` + runCols + ` FROM (` +
+		arm(`created_by = $1`) + ` UNION ALL ` +
+		arm(`created_by <> $1 AND created_by IN `+sponsoredServicePrincipalsSQL("$1")) +
+		`) u ORDER BY created_at DESC, id DESC`
+	return p.appendTo(q, args)
+}
+
 // ListRunsPageByCreatorOrSponsor is ListRunsPageByCreator plus the runs of the service identities principal
 // sponsors, same order.
 func (s PG) ListRunsPageByCreatorOrSponsor(ctx context.Context, principal string, p Page) ([]types.AgentRun, error) {
-	q, args := p.appendTo(`
-		SELECT `+runCols+`
-		FROM agent_runs WHERE created_by = $1 OR created_by IN `+sponsoredServicePrincipalsSQL("$1")+` ORDER BY created_at DESC`, []any{principal})
+	q, args := runsByCreatorOrSponsorQuery(principal, p)
 	return collect(ctx, s.Pool, "list", "runs by creator or sponsor", q, args, scanRun)
 }
 

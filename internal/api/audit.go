@@ -290,11 +290,20 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	served := s.auditRowsFor(r, scope)
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	wrote := false // a byte has reached the response: the 200 is committed
-	offset := 0
+	offset := 0    // rows read so far; the OFFSET of a store without keyset paging, the log's position otherwise
+	var after int64
+	keyset, _ := pager.(store.AuditKeysetPager)
 	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
 	for {
-		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
-			store.Page{Limit: auditExportPageSize, Offset: offset})
+		var page []types.AuditEvent
+		var err error
+		if keyset != nil {
+			// By position, not OFFSET: rows written while the export runs cannot move a later page.
+			page, after, err = keyset.QueryAuditEventsFilteredAfter(r.Context(), scope, filter, after, auditExportPageSize)
+		} else {
+			page, err = pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
+				store.Page{Limit: auditExportPageSize, Offset: offset})
+		}
 		if err != nil {
 			fail("page read", err)
 			return

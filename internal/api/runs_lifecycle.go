@@ -467,14 +467,10 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 	if len(held) == 0 && len(persisted) == 0 {
 		return 0, s.sweepCommittedMasks(lctx, lead, nil)
 	}
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	byID, err := s.runsByID(ctx, slices.Concat(held, persisted))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
 		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
-	}
-	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
-	for _, run := range runs {
-		byID[run.ID] = run
 	}
 	cutoff := time.Now().UTC().Add(-RunSecretGrace)
 	cold := func(id uuid.UUID) bool {
