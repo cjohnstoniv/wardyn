@@ -116,7 +116,7 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea, $5)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now()`,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now(), value_rev=DEFAULT`,
 		s.owner, name, extVersion, s.ext.Name()+":"+loc, expiresAt(ctx),
 	)
 	if err == nil {
