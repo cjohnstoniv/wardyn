@@ -3,7 +3,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { PERM } from "./permissions-copy";
+import { PERM, PERM_EXTRA } from "./permissions-copy";
 
 // PERM.HINT_ALL is quoted verbatim in three design docs' "Reused canon" tables,
 // which the governance/user-drives parity suites deliberately skip — so a
@@ -26,5 +26,13 @@ describe("permissions-copy: the exemption lines name the service_attach exceptio
   it("EXEMPT and HINT_ALL both mention service_attach", () => {
     expect(PERM.EXEMPT).toContain("service_attach");
     expect(PERM.HINT_ALL).toContain("service_attach");
+  });
+});
+
+// A re-save of an inert row inserts a canonical twin and leaves the inert row
+// in place, so the remedy must end with deleting it (permissions.go markInertGrants).
+describe("permissions-copy: the inert-row remedy", () => {
+  it("tells the admin to delete the old row", () => {
+    expect(PERM_EXTRA.INERT_REMEDY).toMatch(/then delete this row/);
   });
 });
