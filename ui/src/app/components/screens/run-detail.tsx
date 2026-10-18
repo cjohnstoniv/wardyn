@@ -472,6 +472,7 @@ function AuditTab({
               // One line from sm up; below sm the target drops to a second line of its own (#2917).
               <div key={e.id} data-testid="run-audit-row" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap">
                 <span
+                  data-testid="run-audit-time"
                   className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >

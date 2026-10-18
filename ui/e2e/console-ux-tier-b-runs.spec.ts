@@ -10,7 +10,7 @@ import type { Locator, Page } from "@playwright/test";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../src/app/components/wardyn/copy";
 import {
   test, expect, asRealMember, chooseFiles, chooseRunMode, chooseShape, consoleAPI, continueNewRun, firstHarness, gotoConsole,
-  mockPreflightClear, navToRoute, sidebarLink, sql, startGuided, walkGuidedToFiles,
+  mockPreflightClear, navToRoute, sidebarLink, sql, startGuided, walkGuidedToFiles, walkGuidedToReview,
 } from "./fixtures";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
@@ -108,7 +108,6 @@ const CAPACITY = {
 };
 
 test.describe("Tier B runs list at 390px", () => {
-  test.use({ viewport: PHONE });
 
   // #2915: the Fleet capacity summary is plain text under the header's truncate, so a line that does not fit
   // ends in an ellipsis instead of being cut mid-word by a flex wrapper.
@@ -269,7 +268,6 @@ test.describe("Tier B guided setup", () => {
 });
 
 test.describe("Tier B run tabs at 390px", () => {
-  test.use({ viewport: PHONE });
 
   // #2917: the time stays on one line and the target gets a second line of its own instead of vanishing.
   test("Audit tab: rows keep the time whole and show the target on a second line", async ({ page }) => {
@@ -281,7 +279,7 @@ test.describe("Tier B run tabs at 390px", () => {
     const row = page.getByTestId("run-audit-row").first();
     await expect(row).toBeVisible();
     const target = row.getByTestId("run-audit-target");
-    const [r, t, time] = [(await row.boundingBox())!, (await target.boundingBox())!, (await row.locator("span").first().boundingBox())!];
+    const [r, t, time] = [(await row.boundingBox())!, (await target.boundingBox())!, (await row.getByTestId("run-audit-time").boundingBox())!];
     expect(time.height).toBeLessThan(20);
     expect(t.y).toBeGreaterThan(time.y + time.height - 1);
     expect(t.width).toBeGreaterThan(100);
@@ -316,5 +314,45 @@ test.describe("Tier B run tabs at desktop width", () => {
     const card = page.getByTestId("run-approvals-empty");
     await expect(card).toBeVisible();
     expect((await card.boundingBox())!.width).toBeLessThanOrEqual(768 + 1);
+  });
+});
+
+test.describe("Tier B review footer", () => {
+  // #2864 Option B: at phone width Launch run stays on screen in a bottom bar and the Save actions sit behind More.
+  test.describe("at 390px", () => {
+    test("Review: Launch run is on screen without scrolling, and both Save actions are in More", async ({ page }) => {
+      await mockPreflightClear(page);
+      await gotoConsole(page);
+      await page.setViewportSize(PHONE);
+      await navToRoute(page, "/runs/new");
+      await walkGuidedToReview(page);
+      const launch = page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN });
+      await expect(launch).toBeVisible();
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.getByRole("main").evaluate((el) => el.scrollTo(0, 0));
+      const box = (await launch.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(PHONE.height);
+      expect(box.height).toBeGreaterThanOrEqual(40);
+      await expect(page.getByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE })).toHaveCount(0);
+      const more = page.getByRole("button", { name: NR_REVIEW.MORE_ARIA });
+      await more.click();
+      await expect(page.getByRole("menuitem", { name: NR_REVIEW.SAVE_TEMPLATE })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await more.click();
+      await expect(page.getByRole("menuitem", { name: NR_REVIEW.SAVE_POLICY })).toBeVisible();
+    });
+  });
+
+  // From sm up the footer is what it was: the Save buttons in the footer, no More, a regular-height Launch run.
+  test("Review at 1440: the Save buttons are in the footer, with no More menu", async ({ page }) => {
+    await mockPreflightClear(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await walkGuidedToReview(page);
+    await expect(page.getByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE })).toBeVisible();
+    await expect(page.getByRole("button", { name: NR_REVIEW.SAVE_POLICY })).toBeVisible();
+    await expect(page.getByRole("button", { name: NR_REVIEW.MORE_ARIA })).toHaveCount(0);
+    expect((await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).boundingBox())!.height).toBeLessThan(40);
+    expect(await page.getByTestId("step-footer").evaluate((el) => getComputedStyle(el).position)).toBe("static");
   });
 });

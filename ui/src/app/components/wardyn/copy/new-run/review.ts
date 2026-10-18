@@ -135,6 +135,9 @@ export const NR_REVIEW = {
   EDIT_FORMAT: (format: string | number) => `Edit ${format}`,
   SAVE_TEMPLATE: "Save as template",
   SAVE_POLICY: "Save as policy",
+  /** Below sm, Review keeps Save as template and Save as policy behind this menu. */
+  MORE: "More",
+  MORE_ARIA: "More actions",
   LAUNCH_RUN: "Launch run",
   DROPPED_HOST_ONE: (host: string | number) => `This run can't reach ${host}: your organisation doesn't allow it. Ask your admin to allow it.`,
   DROPPED_HOSTS_MANY: (hosts: string | number) => `This run can't reach ${hosts}: your organisation doesn't allow them. Ask your admin to allow them.`,
