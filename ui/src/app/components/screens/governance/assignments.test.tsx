@@ -70,6 +70,15 @@ beforeEach(() => {
   listUserTypesMock.mockReset().mockResolvedValue([STANDARD]);
 });
 
+describe("AssignmentsBlock — the add-a-grant row", () => {
+  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
+  it("sizes the Who column to its content at lg", async () => {
+    const { container } = renderBlock();
+    await screen.findByLabelText(PREVIEW.FIELD_CLAIMS);
+    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr]"]')).not.toBeNull();
+  });
+});
+
 describe("AssignmentsBlock — the resolved preview", () => {
   // `result` must clear when `claims` changes — otherwise the previous
   // group's resolved profile sits under new, unrun input as if it were the

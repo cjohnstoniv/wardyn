@@ -294,7 +294,7 @@ function AddAssignmentForm({
       <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.EFFECT_NOTE}</p>
       <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.SIGNIN_NOTE}</p>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr]">
         <Field label={PERM.FIELD_WHO} hint={whoHint}>
           <div className="space-y-2">
             <Segmented
