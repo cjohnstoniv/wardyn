@@ -8,7 +8,7 @@ strings below are frozen, byte-for-byte.
 
 | Key | Status | Home | Value |
 |---|---|---|---|
-| `RUN_STATUS.PENDING_NO_DETAIL` | New | `ui/src/app/components/screens/run-status-detail.ts` | `Queued — Wardyn is getting this run ready.` |
+| `RUN_STATUS.PENDING_NO_DETAIL` | New | `ui/src/app/components/screens/run-status-detail.ts` | `Pending — Wardyn is getting this run ready.` |
 | `RUN_DETAIL.LAUNCH_WARNING_TITLE` | Reused | `AGENTS.LAUNCH_WARNING_TITLE` (`ui/src/app/lib/workspace-providers-copy.ts`) | `Run launched with a warning` |
 | `RUN_DETAIL.LAUNCH_WARNING_EPHEMERAL` | New | `ui/src/app/components/wardyn/copy/run-cockpit.ts` | `This note goes when you reload. The run's audit trail keeps it.` |
 | `RUN_DETAIL.LAUNCH_WARNING_DISMISS` | New | `ui/src/app/components/wardyn/copy/run-cockpit.ts` | `Dismiss` |
@@ -50,8 +50,8 @@ different ways.
 - **Q125-1 — does the launch-advisory note say it won't survive a reload?** Yes. The note carries an
   explicit ephemeral-note line (`RUN_DETAIL.LAUNCH_WARNING_EPHEMERAL`) rather than silently vanishing
   on the next reload with no explanation, and points at the durable record (the audit trail).
-- **Q125-2 — what does a PENDING run with no status detail say?** The queued sentence
-  (`RUN_STATUS.PENDING_NO_DETAIL`, "Queued — Wardyn is getting this run ready."), not a blank header.
+- **Q125-2 — what does a PENDING run with no status detail say?** The pending sentence
+  (`RUN_STATUS.PENDING_NO_DETAIL`, "Pending — Wardyn is getting this run ready."), not a blank header.
   `STARTING`'s own empty-detail case stays silent (there is no ordinary wait worth naming before the
   pod is even scheduled) — `PENDING` is earlier still, and an all-blank header there reads as "nothing
   is happening" rather than "the request is in flight".

@@ -120,6 +120,8 @@ export const RUNS_ROW_WORD = {
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
   STARTING: "Starting",
+  /** PENDING, the word the run page's badge uses; QUEUED below is a separate state (waiting for a pool slot). */
+  PENDING: "Pending",
   QUEUED: "Queued",
   /** The queued row's place in line. The same sentence as NR_LAUNCH.IN_LINE (the Launched screen), kept here because that copy is lazy-only. */
   IN_LINE: (ordinal: string) => `${ordinal} in line`,

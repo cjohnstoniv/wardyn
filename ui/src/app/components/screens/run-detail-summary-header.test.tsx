@@ -546,6 +546,8 @@ describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
     );
     expect(screen.getByText("Pending")).toBeInTheDocument();
     expect(screen.queryByText("Queued")).toBeNull();
+    // The line under the badge uses the badge's word; Queued is the separate pool-slot wait (#2922).
+    expect(PENDING_NO_DETAIL).toMatch(/^Pending — /);
   });
 
   // SF-25: a tooltip alone cannot be read on a touch device — the mock
