@@ -5162,6 +5162,8 @@ What the switch needs, and refuses to render or boot without:
     ReadWriteOnce volume exists for the per-pod `fs` store.
   - Turning `persistence` off keeps the old claim and its `fs` recordings
     (`helm.sh/resource-policy: keep`); delete it with `kubectl delete pvc`.
+    A claim made before 0.9.4 lacks the annotation: run `kubectl annotate pvc
+    <fullname>-data helm.sh/resource-policy=keep` before turning `persistence` off.
 - **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
   `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
   set in `env` or `extraEnv` anywhere outside `/tmp`.

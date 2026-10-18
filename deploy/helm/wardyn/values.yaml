@@ -914,6 +914,9 @@ goMemLimit: "400MiB"
 # (as ha.enabled requires) or `helm uninstall` leaves it, and the recordings and
 # audit quarantine on it, in place; turning persistence back on re-attaches it.
 # Delete it deliberately: kubectl delete pvc <fullname>-data.
+# A claim created by a chart before 0.9.4 has no annotation yet: upgrade once
+# with persistence still on, or run kubectl annotate pvc <fullname>-data
+# helm.sh/resource-policy=keep, before turning it off.
 #
 # F199: this switch also decides where the audit spool and its quarantine
 # sidecar (audit-spool.jsonl / audit-spool.jsonl.quarantine, templates/deployment.yaml's

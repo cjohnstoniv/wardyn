@@ -4,7 +4,8 @@
 # deploy/helm/wardyn/README.md 11227 = 11204 + 23, measured: the recording-off sentence beside the setup status row.
 # deploy/helm/wardyn/README.md 11248 = 11227 + 21, measured: merge of the session-lifetime pointer beside the recording-off sentence.
 # deploy/helm/wardyn/README.md 11275 adds 27 over 11248, measured: the data claim is kept (helm.sh/resource-policy: keep) and how to delete it.
-deploy/helm/wardyn/README.md=11275 share=35
+# deploy/helm/wardyn/README.md 11293 = 11275 + 18, measured: #2160 pre-0.9.4 claims lack the keep annotation.
+deploy/helm/wardyn/README.md=11293 share=35
 # deploy/helm/wardyn/README.md 11225 adds 21 over 11204, measured: the Entra hour and the sliding-session pointer beside WARDYN_OIDC_SESSION_TTL (0.9.3 console session lifetime).
 deploy/kind/sso/README.md=557 share=35
 # deploy/azure-entra-sso/README.md 3138 adds 54 over 3084, itemised by the diff:

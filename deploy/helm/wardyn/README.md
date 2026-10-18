@@ -1046,6 +1046,7 @@ spec:
   - An operator who wants that anyway can opt in with one key: `env.WARDYN_RECORDING_STORE=pg` (leave `persistence` off — the `pg` store needs no PVC).
   - The `<fullname>-data` claim has `helm.sh/resource-policy: keep`: turning `persistence` off (as HA requires) or `helm uninstall` keeps it and its recordings.
     - Delete it deliberately: `kubectl delete pvc <fullname>-data`.
+    - A claim made before 0.9.4 lacks the annotation: run `kubectl annotate pvc <fullname>-data helm.sh/resource-policy=keep` before turning `persistence` off.
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
 - `drives.enabled`: adds `persistentvolumeclaims: get, create` to the k8s-runner Role so runs can mount per-person storage, off by default — see [User drives](#user-drives-drivesenabled) above.
