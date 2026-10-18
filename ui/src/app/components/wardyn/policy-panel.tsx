@@ -28,9 +28,9 @@
 //
 // instance="policies" is consumed by policies.tsx's PolicyEditor; instance="run"
 // by new-run-screen.tsx's "Policy" SectionCard.
-import type { OrgCeiling } from "../../lib/ado-ceilings";
 import * as React from "react";
 import { Globe, Plus, ShieldCheck, Timer } from "lucide-react";
+import type { OrgCeiling } from "../../lib/ado-ceilings";
 import type { PolicySourceEditResult } from "../../lib/policy-document";
 import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";

@@ -9,7 +9,6 @@
 // folder chosen from that list; the server's mount map; a sticky summary.
 
 import * as React from "react";
-import { withRefText } from "./typed-ref";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "../../../../ui/button";
 import { cn } from "../../../../ui/utils";
@@ -37,6 +36,7 @@ import { FilesGroup } from "./kind-visuals";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
 import { MountMap } from "./mount-map";
 import { cleanSubfolder, StartingFolder, SUBFOLDER_ID } from "./starting-folder";
+import { withRefText } from "./typed-ref";
 
 const STEP_LABELS = {
   shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
