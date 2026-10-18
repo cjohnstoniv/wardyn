@@ -126,22 +126,6 @@ export function CorpNetworkStep({
   const [innerTab, setInnerTab] = React.useState<"proxy" | "egress">("proxy");
   const tab = tabProp ?? innerTab;
   const setTab = onTabChange ?? setInnerTab;
-  // Probe results are keyed by address, not by what was tested. Every save of this step
-  // routes through here, so a landed save that changed the upstream or a redirect target
-  // drops the verdict it just made stale (#2557, #2573).
-  const saveAndInvalidate = async (next: SiteConfig) => {
-    await saveSiteConfig(next);
-    if (upstreamKey(next) !== upstreamKey(siteConfig)) {
-      onGateChange({ proxyProbe: undefined });
-      setTest({ kind: "idle" });
-    }
-    const kept = keepCurrentRedirects(siteConfig, next, redirectProbesRef.current);
-    if (kept) {
-      redirectProbesRef.current = kept;
-      onGateChange({ redirectProbes: kept });
-    }
-  };
-  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveAndInvalidate);
 
   // ---- The probe, owned HERE (not in HostProxyTab): the gate row can fire it
   // from either tab, and its UI state must survive tab switches. ----
@@ -224,6 +208,23 @@ export function CorpNetworkStep({
   // doesn't deep-merge). This ref sidesteps that: each call composes onto
   // whatever the ref most recently held, independent of render timing.
   const redirectProbesRef = React.useRef(gate.redirectProbes);
+
+  // Probe results are keyed by address, not by what was tested. Every save of this step
+  // routes through here, so a landed save that changed the upstream or a redirect target
+  // drops the verdict it just made stale (#2557, #2573).
+  const saveAndInvalidate = async (next: SiteConfig) => {
+    await saveSiteConfig(next);
+    if (upstreamKey(next) !== upstreamKey(siteConfig)) {
+      onGateChange({ proxyProbe: undefined });
+      setTest({ kind: "idle" });
+    }
+    const kept = keepCurrentRedirects(siteConfig, next, redirectProbesRef.current);
+    if (kept) {
+      redirectProbesRef.current = kept;
+      onGateChange({ redirectProbes: kept });
+    }
+  };
+  const { saving, mutate } = useSiteConfigStep(reloadSiteConfig, saveAndInvalidate);
 
   // Registered once; the handlers read the LATEST runTest/draft through refs,
   // so a keystroke in the custom field never re-registers anything.
