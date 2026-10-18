@@ -149,6 +149,8 @@ export const GOVERNANCE = {
   OVERLAY_NARROW: "Narrow",
   OVERLAY_LIMITS_MOVED:
     "This profile's own limits and rubric were moved into the narrowing rows below, so they still apply on top of the base. Review them before saving.",
+  PROFILE_FOLDED:
+    "This profile's base and narrowing rows were folded into its own policy and limits, so what binds today still binds. Review them before saving.",
   OVERLAY_INHERITED: (v: string) => `Inherited: ${v}`,
   EFFECTIVE_TITLE: "Effective ceiling and limits",
   EFFECTIVE_LEAD: "What runs under this profile are bounded by: the base, narrowed here. Read-only.",

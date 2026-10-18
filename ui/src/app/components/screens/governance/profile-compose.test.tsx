@@ -262,6 +262,28 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     expect(updateProfileMock.mock.calls[0][1].ceiling.min_confinement_class).toBeTruthy();
   });
 
+  it("choosing None keeps what bound the profile: the effective ceiling and limits are folded in (#2505)", async () => {
+    const child = row({
+      id: "pc",
+      name: "Team A",
+      ceiling: {} as RunPolicySpec,
+      base_profile_id: "pb",
+      overlay: {},
+      overlay_limits: { max_cpu_millis: 2000, deny_ui_apps: true },
+      effective: {
+        ceiling: { min_confinement_class: "CC2" } as RunPolicySpec,
+        limits: { deny_task_mode_exec: true, max_cpu_millis: 2000, deny_ui_apps: true },
+      },
+    });
+    renderEditor(child, [BASE, child]);
+    await pickBase("None");
+    expect(screen.getByTestId("governance-limits-folded")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    const sent = updateProfileMock.mock.calls[0][1];
+    expect(sent.limits).toEqual({ deny_task_mode_exec: true, max_cpu_millis: 2000, deny_ui_apps: true });
+    expect(sent.ceiling.min_confinement_class).toBe("CC2");
+  });
+
   it("a standalone profile saves with none of the composition fields", async () => {
     renderEditor(row({ id: "ps", name: "Solo" }), [BASE]);
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
