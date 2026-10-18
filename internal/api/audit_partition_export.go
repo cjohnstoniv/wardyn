@@ -123,6 +123,34 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 		_, err = w.Write(append(line, '\n'))
 		return err
 	}
+	// The readable form opens sealed personal fields, as the feed does; the raw form keeps the stored,
+	// hash-covered ciphertext. Rows are opened a page at a time, as the feed export does: one call per row
+	// rebuilt the key and subject lookups for every row while the export held its snapshot open.
+	var pending []partitionReadableLine
+	flushReadable := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		evs := make([]types.AuditEvent, len(pending))
+		for i := range pending {
+			evs[i] = pending[i].AuditEvent
+		}
+		evs, uerr := s.unsealed(r.Context(), evs, nil)
+		if uerr != nil {
+			return uerr
+		}
+		if len(evs) != len(pending) {
+			return errors.New("the audit unsealer returned a different number of rows than it was given")
+		}
+		for i := range pending {
+			pending[i].AuditEvent = evs[i]
+			if err := send(pending[i]); err != nil {
+				return err
+			}
+		}
+		pending = pending[:0]
+		return nil
+	}
 	err := exp.ExportAuditPartition(r.Context(), q.Get("partition"),
 		func(m store.PartitionManifest) error {
 			manifest, digest = m, store.NewPartitionDigest(m)
@@ -132,28 +160,23 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 		func(row store.AuditPartitionRow) error {
 			digest.Add(row.FoldHash)
 			rowsSent++
-			var line any
 			if form == auditFormRaw {
-				line = rawPartitionLine(row)
-			} else {
-				// The readable form opens sealed personal fields, as the feed does;
-				// the raw form keeps the stored, hash-covered ciphertext.
-				rl := readablePartitionLine(row)
-				evs, uerr := s.unsealed(r.Context(), []types.AuditEvent{rl.AuditEvent}, nil)
-				if uerr != nil {
-					return uerr
+				if err := send(rawPartitionLine(row)); err != nil {
+					return err
 				}
-				rl.AuditEvent = evs[0]
-				line = rl
-			}
-			if err := send(line); err != nil {
-				return err
+			} else if pending = append(pending, readablePartitionLine(row)); len(pending) == auditExportPageSize {
+				if err := flushReadable(); err != nil {
+					return err
+				}
 			}
 			if fl, ok := w.(http.Flusher); ok && rowsSent%auditExportPageSize == 0 {
 				fl.Flush()
 			}
 			return nil
 		})
+	if err == nil {
+		err = flushReadable()
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonAuditPartitionNotFound, "no such audit partition")
