@@ -143,7 +143,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const wrap = mine ? "mx-auto max-w-[900px] px-6 py-8" : "mx-auto max-w-[1200px] px-6 py-6";
   const title = pool ? POOL_FORM.TITLE_EDIT(pool.name) : POOL_FORM.TITLE_NEW;
   const backButton = (
-    <Button variant="ghost" size="sm" type="button" onClick={back}>
+    <Button variant="ghost" size="sm" type="button" className="-ml-3" onClick={back}>
       {mine ? POOL_FORM.BACK_MINE : POOL_FORM.BACK_POOLS}
     </Button>
   );
@@ -176,8 +176,8 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const topError = top || Object.values(errors)[0];
   return (
     <div className={wrap}>
-      <PageHeader title={title} description={<span className="block max-w-[68ch]">{POOL_FORM.LEDE}</span>} />
       <div className="mb-3">{backButton}</div>
+      <PageHeader title={title} description={<span className="block max-w-[68ch]">{POOL_FORM.LEDE}</span>} />
       {topError && (
         <div role="alert" id="f-top" className="mb-3 rounded-lg border border-danger bg-danger-subtle p-3 text-body">
           {topError}
