@@ -32,7 +32,7 @@ import { SIGNIN } from "../../lib/sign-in-copy";
 import { SIGNIN_HELP_REFUSALS } from "../../lib/sign-in-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
-import { appURL } from "../../lib/base-path";
+import { signInURL } from "../../lib/base-path";
 import { BrandSlot } from "../wardyn/branding-context";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
@@ -84,6 +84,8 @@ function authErrorMessage(code: string): string {
       return SIGNIN.OIDC_TRANSIENT;
     case "oidc_config":
       return SIGNIN.OIDC_CONFIG;
+    case "oidc_refused":
+      return SIGNIN.OIDC_REFUSED;
     default:
       return SIGNIN.AUTH_FAILED;
   }
@@ -333,7 +335,7 @@ export function SignIn({
                 variant="outline"
                 className="h-[41px] w-full border-[#8c8c8c] bg-[#ffffff] text-[#5e5e5e] hover:bg-[#f2f2f2] hover:text-[#5e5e5e] dark:border-0 dark:bg-[#2f2f2f] dark:text-[#ffffff] dark:hover:bg-[#3b3b3b] dark:hover:text-[#ffffff]"
               >
-                <a href={appURL("/auth/login")} aria-describedby="sso-hint">
+                <a href={signInURL()} aria-describedby="sso-hint">
                   <DoorOpen className="size-4" aria-hidden="true" />
                   {SIGNIN.SSO_MICROSOFT}
                 </a>
@@ -348,7 +350,7 @@ export function SignIn({
           ) : (
             showSso && (
               <Button asChild variant="outline" className="w-full">
-                <a href={appURL("/auth/login")}>
+                <a href={signInURL()}>
                   <DoorOpen className="size-4" aria-hidden="true" />
                   {SSO_SIGN_IN}
                 </a>

@@ -505,6 +505,59 @@ describe("App — a deliberate sign-out (#483)", () => {
     expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
   });
 
+  // #2100: signing out ends the Wardyn session only; an SSO person is told to leave the identity provider
+  // too, once the server has confirmed the sign-out.
+  describe("the identity-provider reminder", () => {
+    async function signOut(over: Partial<typeof ME> = {}) {
+      daemon.me = { ...ME, ...over };
+      render(
+        <MemoryRouter initialEntries={["/runs"]}>
+          <App />
+        </MemoryRouter>,
+      );
+      await screen.findByLabelText("Note");
+      const header = screen.getByRole("banner");
+      await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+      const headerButtons = within(header).getAllByRole("button");
+      await user.click(headerButtons[headerButtons.length - 1]);
+      await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+      await screen.findByText("Admin token", { exact: true });
+    }
+
+    it("an SSO sign-out says to sign out of the identity provider too", async () => {
+      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
+      await signOut({ method: "sso" });
+      expect(info).toHaveBeenCalledWith(SHELL.SIGN_OUT_SSO_TITLE, { description: SHELL.SIGN_OUT_SSO_BODY });
+    });
+
+    it("an admin-token sign-out says nothing about an identity provider", async () => {
+      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
+      await signOut();
+      expect(info).not.toHaveBeenCalled();
+    });
+
+    it("an SSO sign-out the server did not confirm shows the failure, not the reminder", async () => {
+      const info = vi.spyOn(toast, "info").mockImplementation(() => "id");
+      const error = vi.spyOn(toast, "error").mockImplementation(() => "id");
+      daemon.me = { ...ME, method: "sso" };
+      render(
+        <MemoryRouter initialEntries={["/runs"]}>
+          <App />
+        </MemoryRouter>,
+      );
+      await screen.findByLabelText("Note");
+      const header = screen.getByRole("banner");
+      await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+      daemon.dead = true;
+      const headerButtons = within(header).getAllByRole("button");
+      await user.click(headerButtons[headerButtons.length - 1]);
+      await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+      await screen.findByText("Admin token", { exact: true });
+      expect(error).toHaveBeenCalledWith(SHELL.SIGN_OUT_FAILED_TITLE, expect.anything());
+      expect(info).not.toHaveBeenCalled();
+    });
+  });
+
   it("a read that 401s while the logout is still in flight opens no dialog", async () => {
     render(
       <MemoryRouter initialEntries={["/runs"]}>
