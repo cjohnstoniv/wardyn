@@ -5,6 +5,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -133,7 +134,7 @@ func (ch Channel) sendMail(ctx context.Context, client *http.Client, body []byte
 		return smtpResult(err)
 	}
 	defer func() { _ = c.Close() }()
-	if err := c.Hello("localhost"); err != nil {
+	if err := c.Hello(cmp.Or(ch.Helo, "localhost")); err != nil {
 		return smtpResult(err)
 	}
 	if ok, _ := c.Extension("STARTTLS"); !ok {
