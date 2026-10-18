@@ -519,6 +519,8 @@ describe("My pools", () => {
     const mine = (await screen.findByText("My pools")).closest("section") as HTMLElement;
     expect(within(mine).getByText(MY_POOLS.ONLY_YOU)).toBeInTheDocument();
     expect(within(mine).getByText(MY_POOLS.LEDE)).toBeInTheDocument();
+    // #2856: the lede is body-size, not the 16px page default above the card's own title.
+    expect(within(mine).getByText(MY_POOLS.LEDE).className).toContain("text-body");
     expect(MY_POOLS.ONLY_YOU).toBe("Only you can change these. Administrators can see them.");
     expect(MY_POOLS.LEDE).toContain("You can have up to 10 pools, for example Laptop and Home server.");
     const laptop = within(mine).getByRole("button", { name: "Laptop" }).closest("li") as HTMLElement;
