@@ -19,3 +19,18 @@ describe("Review: an attachment row on a narrow screen", () => {
     expect(screen.getByText("/home/agent/work/web").nextElementSibling!.className).toContain("max-[520px]:justify-start");
   });
 });
+
+// #2107: a typed ref says it is not checked until the run starts; a picked or default ref says nothing new.
+describe("Review: a typed ref", () => {
+  const a = { kind: "repository" as const, name: "app", target: "/home/agent/work/app", read_only: false, starts_here: false, ref: "feature/x-typo" };
+
+  it("shows the muted not-checked line under the row", () => {
+    render(<AttachmentRow a={a} refNotChecked />);
+    expect(screen.getByTestId("attachment-ref-not-checked")).toHaveTextContent("Not checked until the run starts.");
+  });
+
+  it("shows nothing new for a ref that was picked or is the default", () => {
+    render(<AttachmentRow a={a} />);
+    expect(screen.queryByTestId("attachment-ref-not-checked")).not.toBeInTheDocument();
+  });
+});
