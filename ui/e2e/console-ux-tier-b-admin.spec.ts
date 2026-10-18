@@ -94,7 +94,10 @@ test.describe("Tier B at desktop width", () => {
     await expect(open).toBeVisible();
     await expect(open.locator("svg")).toHaveCount(1);
     // The menu scales in; measure once it has settled, or the two icons are read mid-animation.
-    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
+    // Scoped to the menu: a page-wide wait would never end on a spinner or a pulse elsewhere.
+    await page
+      .getByRole("menu")
+      .evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))));
     expect((await boxOf(open.locator("svg"))).x).toBeCloseTo((await boxOf(del.locator("svg"))).x, 0);
   });
 });
