@@ -1591,3 +1591,15 @@ func TestProbeFailureDetail_NonFatalEarlyFailureDoesNotShortCircuitTheWait(t *te
 		t.Fatalf("got neverRan=%v hasExitCode=%v exitCode=%d (%q), want the late run.complete's exit 7", res.neverRan, res.hasExitCode, res.exitCode, res.incompleteReason)
 	}
 }
+
+// TestCurlFailureDetail_ProxyConnectRefusalIsNotANetworkFault: curl exits 56 when
+// wardyn-proxy answers the CONNECT of an HTTPS target with a 403, so the verdict
+// must name the proxy's refusal, and exit 22 must not claim to be that deny.
+func TestCurlFailureDetail_ProxyConnectRefusalIsNotANetworkFault(t *testing.T) {
+	if got := curlFailureDetail(56); !strings.Contains(got, "refused the HTTPS tunnel") || !strings.Contains(got, "internal_hosts") {
+		t.Errorf("curlFailureDetail(56) = %q, want the proxy CONNECT refusal named", got)
+	}
+	if got := curlFailureDetail(22); strings.Contains(got, "looks like") || !strings.Contains(got, "plain-http") {
+		t.Errorf("curlFailureDetail(22) = %q, want the plain-http-only wording", got)
+	}
+}
