@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -118,19 +119,30 @@ func (f *Fanout) DropsByName() map[string]int64 {
 }
 
 // Close closes every child sink that implements io.Closer, returning the first
-// error after attempting all of them. Buffering sinks block in Close until
-// their final batch is flushed.
+// error (in child order) after attempting all of them. Buffering sinks block in
+// Close until their final batch is flushed, so the children close concurrently:
+// one stuck on its collector must not keep the others from flushing.
 func (f *Fanout) Close() error {
-	var firstErr error
-	for _, cs := range f.children {
+	errs := make([]error, len(f.children))
+	var wg sync.WaitGroup
+	for i, cs := range f.children {
 		if c, ok := cs.sink.(io.Closer); ok {
-			if err := c.Close(); err != nil {
-				slog.Error("sinks.fanout: closing child sink failed",
-					slog.String("child", cs.sink.Name()),
-					slog.Any("err", err))
-				if firstErr == nil {
-					firstErr = err
-				}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = c.Close()
+			}()
+		}
+	}
+	wg.Wait()
+	var firstErr error
+	for i, err := range errs {
+		if err != nil {
+			slog.Error("sinks.fanout: closing child sink failed",
+				slog.String("child", f.children[i].sink.Name()),
+				slog.Any("err", err))
+			if firstErr == nil {
+				firstErr = err
 			}
 		}
 	}
