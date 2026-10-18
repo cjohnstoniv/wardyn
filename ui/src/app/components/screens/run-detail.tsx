@@ -469,24 +469,31 @@ function AuditTab({
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="divide-y divide-border">
             {events.map((e) => (
-              <div key={e.id} className="flex items-center gap-3 px-4 py-2.5">
+              // One line from sm up; below sm the target drops to a second line of its own (#2917).
+              <div key={e.id} data-testid="run-audit-row" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap">
                 <span
-                  className="w-[68px] shrink-0 font-mono text-meta text-muted-foreground"
+                  className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >
                   {clockTime(e.time)}
                 </span>
-                <ActorTypeChip type={e.actor_type} />
-                <span className="w-[190px] shrink-0 truncate font-mono text-xs text-muted-foreground" title={e.action}>
+                {/* A fixed slot, so the action and target columns start at one x for every actor. */}
+                <span className="inline-flex w-[88px] shrink-0">
+                  <ActorTypeChip type={e.actor_type} />
+                </span>
+                <span
+                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                  title={e.action}
+                >
                   {e.action}
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
                     so the row says who decided, as the Audit screen does. */}
                 {toolRuleDecision(e) ? (
-                  <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
+                  <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
                 ) : (
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
                     {e.target === ERASED_VALUE ? (
                       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
                         {AUDIT.ERASED}

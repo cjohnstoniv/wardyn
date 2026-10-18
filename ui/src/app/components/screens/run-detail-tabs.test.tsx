@@ -342,6 +342,67 @@ describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
   });
 });
 
+// #2917: below sm a run's audit row is two lines, the target on its own line; from sm up it is one line.
+describe("RunDetailScreen — Audit tab row shape", () => {
+  it("keeps the target in the row but lets it wrap onto its own line below sm", async () => {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
+      Promise.resolve(
+        action
+          ? []
+          : [
+              {
+                id: "e1",
+                time: new Date().toISOString(),
+                actor_type: "system",
+                actor: "wardynd",
+                action: "run.create",
+                outcome: "success",
+                run_id: "run-1",
+                target: "ws-target-1",
+              },
+            ],
+      ),
+    );
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+
+    const row = await screen.findByTestId("run-audit-row");
+    const target = within(row).getByTestId("run-audit-target");
+    expect(target).toHaveTextContent("ws-target-1");
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("sm:flex-nowrap");
+    expect(target.className).toContain("basis-full");
+    expect(target.className).toContain("sm:basis-0");
+  });
+});
+
+// #2924: the requested scope of a pending tool call wraps, so the command being decided on is fully on screen.
+describe("RunDetailScreen — Approvals tab requested scope", () => {
+  it("wraps a long command instead of scrolling it out of sight", async () => {
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: "run-1",
+        kind: "tool_call",
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+        requested_scope: { tool: "Bash", command: "rm -rf node_modules && pnpm install --frozen-lockfile" },
+      },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    const pre = (await screen.findAllByText(/rm -rf node_modules/))
+      .map((el) => el.closest("pre"))
+      .find((el): el is HTMLPreElement => el !== null);
+    expect(pre).toBeDefined();
+    expect(pre!.parentElement!.className).toContain("[&_pre]:whitespace-pre-wrap");
+    expect(pre!.parentElement!.className).toContain("[&_pre]:break-all");
+  });
+});
+
 // W25-W25.2-3: /audit is run-scoped for a member (empty 200 without ?run_id=),
 // so the Audit tab's "open full Audit" link must carry the run — a bare /audit
 // drops a member on a feed that can never fill. M-1b: the full-page Audit
