@@ -78,3 +78,30 @@ func TestWarnSmallPool_BelowFourAndNoRotatorBranch(t *testing.T) {
 		t.Errorf("warnSmallPool is not called ahead of the rotator branch (call at %d, branch at %d)", call, branch)
 	}
 }
+
+// `docker compose exec wardynd wardynd -print-groundtruth-token` runs beside the
+// live daemon by design; it mints a token and exits without serving, so it must not
+// take (and be refused) the single-instance lock.
+func TestSingleInstanceExempt(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name         string
+		ha, printTok bool
+		want         bool
+	}{
+		{"plain serve", false, false, false},
+		{"ha", true, false, true},
+		{"print-groundtruth-token", false, true, true},
+	} {
+		f := &bootFlags{ha: &no, printGroundtruthToken: &no}
+		if tc.ha {
+			f.ha = &yes
+		}
+		if tc.printTok {
+			f.printGroundtruthToken = &yes
+		}
+		if got := singleInstanceExempt(f); got != tc.want {
+			t.Errorf("%s: singleInstanceExempt = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
