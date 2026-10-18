@@ -222,6 +222,13 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("QUEUED", { exact: true })).toHaveCount(0);
   });
 
+  test("a truncated page says the list is cut, never silently drops the rest", async ({ page }) => {
+    await mockRunsList(page, () => ({ runs: [baseRun("t1", "One of many", { state: "COMPLETED", ended_at: new Date().toISOString() })], truncated: true }));
+    await gotoConsole(page);
+    await expect(page.getByText("One of many")).toBeVisible();
+    await expect(page.getByText("Showing the newest 1000 runs. Narrow the filters to see the rest.")).toBeVisible();
+  });
+
   test("'Earlier this week' expands, aria-expanded toggles, and focus stays on the toggle", async ({ page }) => {
     await mockRunsList(page, () => ({
       runs: [
