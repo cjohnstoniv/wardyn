@@ -12,8 +12,11 @@ the code that makes it true; there is no separate "trust us" layer.
 - The route now 404s and nothing calls it, and [`internal/api/routes.go`](../internal/api/routes.go) has no telemetry endpoint.
 - Every destination `wardynd` itself dials is one of the operator-configured integrations below —
   - there is no hardcoded destination that isn't either a customer-supplied integration or bundled open-source infrastructure the operator runs themselves (compose's local registry/Dex/Postgres, all on the operator's own Docker network).
-- The one *literal* hostname in the daemon's own code is Microsoft Graph, in the identity-directory connector (`internal/directory`), and it is dialled only when an operator sets `WARDYN_DIRECTORY_PROVIDER` —
-  - the directory-connector row below, and [`docs/OPERATIONS.md`](OPERATIONS.md)'s "Directory autocomplete: the one path where the daemon dials out".
+- The daemon's own code names a few literal hostnames, each dialled only when an operator turns the matching feature on:
+  - Microsoft Graph and the Entra token endpoint, for the identity-directory connector (`internal/directory`) and the Entra sign-in paths;
+  - Azure DevOps (`dev.azure.com`, `vssps.dev.azure.com`), for the Azure DevOps PAT API;
+  - Azure Key Vault (`vault.azure.net`), when the key service or secret store is Azure Key Vault.
+- Each has its row below, and [`docs/OPERATIONS.md`](OPERATIONS.md)'s "Directory autocomplete: the one path where the daemon dials out" covers the directory connector.
 
 - The one telemetry source in the system that is *not* Wardyn's is the agent harness's own:
   - Claude Code ships its own Datadog usage telemetry (`http-intake.logs.us5.datadoghq.com`), which egress policy sees and can gate like any other host —
@@ -30,7 +33,11 @@ the code that makes it true; there is no separate "trust us" layer.
 | **Audit sinks** (`internal/audit/sinks`: `webhook.go`, `syslog.go`) | An operator-configured SIEM webhook URL or syslog endpoint (file sink is local-disk-only, no network) | The operator, opt-in per sink (off by default) | Streams the append-only audit log to the operator's own SIEM, with hashes only for events whose Postgres write succeeded; see [below](#audit-sinks-purpose). |
 | **Agent image pulls** (Docker daemon `docker pull`) | `ghcr.io/cjohnstoniv/agent-*` by default (Wardyn's own published OCI images — public, unauthenticated pulls, no data sent besides the standard registry protocol), or an operator-supplied registry via `WARDYN_AGENT_IMAGES` ([`docs/ENV.md`](ENV.md)) | Ships with a default; fully overridable by the operator | Pulls the agent runtime container image. No source code, secrets, or run data is part of this pull — it is a one-way image download. |
 | **Upstream corporate proxy** (optional, [`docs/OPERATIONS.md`](OPERATIONS.md)'s "upstream-proxy" section) | A URL the operator pastes in as a secret | The operator | Lets `wardyn-proxy` itself egress through a corporate forward proxy — this is the operator routing Wardyn's own egress through infrastructure *they* control, the reverse direction of a sub-processor relationship. |
-| **Identity-directory connector** (`internal/directory`, off unless `WARDYN_DIRECTORY_PROVIDER=entra`) | `graph.microsoft.com`, `login.microsoftonline.com` — the only literal hostnames in the daemon's own code ([`internal/directory/entra.go`](../internal/directory/entra.go)) | The operator, by setting `WARDYN_DIRECTORY_PROVIDER` (unset = the whole feature off, `503 directory_unconfigured`, no connector and no read) | Backs the console's "who" autocomplete by reading the operator's own Entra tenant over daemon-side outbound HTTPS, not sandbox egress; see [below](#identity-directory-connector-purpose). |
+| **Identity-directory connector** (`internal/directory`, off unless `WARDYN_DIRECTORY_PROVIDER=entra`) | `graph.microsoft.com`, `login.microsoftonline.com` ([`internal/directory/entra.go`](../internal/directory/entra.go)) | The operator, by setting `WARDYN_DIRECTORY_PROVIDER` (unset = the whole feature off, `503 directory_unconfigured`, no connector and no read) | Backs the console's "who" autocomplete by reading the operator's own Entra tenant over daemon-side outbound HTTPS, not sandbox egress; see [below](#identity-directory-connector-purpose). |
+| **Approval notifications** (`internal/notify`, off until an operator adds a channel) | The operator's webhook URL, or the SMTP relay the operator names | The operator, per channel | Tells approvers a request is waiting. The payload carries the requester's principal and email unless the channel sets `redact_requester`. |
+| **Key service and secret store** (`internal/secretstore`: Vault Transit, Azure Key Vault, AWS KMS) | The operator's Vault or Transit endpoint, Azure Key Vault (`vault.azure.net`), or AWS KMS in the operator's region | The operator, by choosing a `WARDYN_KEK` mode or a secret store | Wraps and unwraps data keys, so every row unwrap reaches the key service. Store mode also reads and writes secret values in Azure Key Vault. |
+| **Azure DevOps PAT and Entra sign-in** (`internal/api`) | `vssps.dev.azure.com` and `dev.azure.com` for the PAT API, and `login.microsoftonline.com` for Entra tokens | The operator, by enabling an Azure DevOps connection | Mints and validates the per-person Azure DevOps credential; see [`docs/AZURE-DEVOPS.md`](AZURE-DEVOPS.md). |
+| **Console demo player** (the operator's browser, not `wardynd`) | `github.com` and `release-assets.githubusercontent.com`, Wardyn's own release assets | Ships with a default; `WARDYN_DEMO_VIDEO_BASE_URL` points it at an air-gapped mirror | The browser fetches demo video from Wardyn's GitHub release; the page's content security policy allows exactly those hosts. |
 
 - Every row above is either
   - (a) a destination the operator explicitly configures (an integration, an IdP, a SIEM endpoint, a registry override, the directory connector),
@@ -69,7 +76,7 @@ the code that makes it true; there is no separate "trust us" layer.
   retention/erasure posture). Never leaves the deployment unless the operator
   wires an audit sink (above).
 - **Session recordings** (asciinema PTY capture) — Postgres, subject to the
-  age-based retention knob ([`docs/ENV.md:47`](ENV.md)). Never leaves the deployment.
+  age-based retention knob (`WARDYN_RECORDING_RETENTION_DAYS`, [`docs/ENV.md`](ENV.md)). Never leaves the deployment.
 - **Kernel ground-truth stream** (optional eBPF/Tetragon) — lands in the same
   Postgres audit table (`internal/groundtruth`), same retention, same
   non-export-by-default posture.
