@@ -423,7 +423,7 @@ describe("RecordingScreen — paging (#159)", () => {
     listRunsMock.mockRejectedValueOnce(new Error("boom"));
     renderScreen();
 
-    await screen.findByText("No recordings in your newest 1 runs");
+    await screen.findByText("No recordings in your newest run");
     fireEvent.click(screen.getByRole("button", { name: "Search 100 more runs" }));
     await screen.findByText("Couldn't load more recordings");
     expect(screen.queryByText(/The 0 already loaded/)).not.toBeInTheDocument();

@@ -15,9 +15,9 @@
 // The page is counted in runs, not recordings: a page of runs may hold none
 // with a recording, so "Load 100 more" would promise cards it cannot (#2519).
 export const RECORDINGS_LOAD_MORE = (n: number): string => `Search ${n} more runs`;
-export const RECORDINGS_NONE_SEARCHED_TITLE = (n: number): string => `No recordings in your newest ${n} runs`;
+export const RECORDINGS_NONE_SEARCHED_TITLE = (n: number): string => n === 1 ? "No recordings in your newest run" : `No recordings in your newest ${n} runs`;
 export const RECORDINGS_NONE_SO_FAR = (n: number): string =>
-  `No recording among the ${n} runs searched so far — there are more on the server.`;
+  `No recording among the ${n} run${n === 1 ? "" : "s"} searched so far — there are more on the server.`;
 export const RECORDINGS_LOADING = "Loading…";
 // #510-F9 — pluralise on n: "1 recordings"/"1 recordings are" read wrong for
 // the single-item page (the first page off a server with exactly one
