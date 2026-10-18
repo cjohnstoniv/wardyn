@@ -231,6 +231,14 @@ describe("MemberGettingStarted", () => {
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
   });
 
+  it("never offers a member 'always' on an approval: the server refuses it for a non-admin (#2595)", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "Approvals you can decide" });
+    const hint = await screen.findByText(/You decide —/);
+    expect(hint.textContent).not.toMatch(/always/i);
+    expect(hint.textContent).toMatch(/stay with your admin/);
+  });
+
   it("a redacted has_runs:true with an EMPTY own-runs list does NOT mark 'Your first run' done", async () => {
     getSetupStatusMock.mockResolvedValue(status({ has_runs: true }));
     listRunsMock.mockResolvedValue([]); // the member's own creator-scoped list
