@@ -36,8 +36,8 @@ const DEX_PASSWORD = "password";
  */
 export async function dexSignIn(page: Page, email: string): Promise<void> {
   await page
-    .getByRole("link", { name: "Sign in with SSO" })
-    .or(page.getByRole("button", { name: "Sign in with SSO" }))
+    .getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ })
+    .or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ }))
     .first()
     .click();
   await page.locator('input[type="password"]').waitFor({ timeout: 30_000 });

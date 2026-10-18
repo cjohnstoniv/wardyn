@@ -78,17 +78,17 @@ test.use({
  * Sign in through the fake Entra tenant's picker, in the browser — the same
  * three hops kind-sso-walk-ado.sh's `signin()` drives with curl
  * (/auth/login -> the picker -> the console callback), driven instead by
- * real navigation and a real click. The console's own login page is
- * provider-agnostic (dexSignIn in ./helpers.ts uses the identical "Sign in
- * with SSO" entry point against Dex); only the picker in between differs,
+ * real navigation and a real click. Against Entra the console's button reads
+ * "Sign in with Microsoft" (dexSignIn in ./helpers.ts uses the same entry point,
+ * "Sign in with SSO", against Dex); only the picker in between differs,
  * and it is plain HTML — one link per identity, text is the login (see
  * test/entrafake/server.go's pickIdentity).
  */
 async function entraSignIn(page: Page, email: string): Promise<void> {
   await page.goto("/");
   await page
-    .getByRole("link", { name: "Sign in with SSO" })
-    .or(page.getByRole("button", { name: "Sign in with SSO" }))
+    .getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ })
+    .or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ }))
     .first()
     .click();
   await page.getByRole("link", { name: email, exact: true }).click();

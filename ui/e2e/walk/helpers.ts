@@ -110,8 +110,8 @@ export async function dexSignIn(page: Page, email: string): Promise<void> {
   await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
   await page.goto("/");
   await page
-    .getByRole("link", { name: "Sign in with SSO" })
-    .or(page.getByRole("button", { name: "Sign in with SSO" }))
+    .getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ })
+    .or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ }))
     .first()
     .click();
   await page.locator('input[type="password"]').waitFor({ timeout: 60_000 });
@@ -155,7 +155,7 @@ export async function dexSignOut(page: Page): Promise<void> {
     .first()
     .click();
   await expect(
-    page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first(),
+    page.getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ }).or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ })).first(),
   ).toBeVisible({ timeout: 60_000 });
 }
 
