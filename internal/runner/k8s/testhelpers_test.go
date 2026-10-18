@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
@@ -177,7 +178,10 @@ var deleteCollectionGVKs = map[string]schema.GroupVersionKind{
 // delete each), so this reactor teaches the fake the same trick — using
 // cs.Tracker() directly, never the typed clientset, since calling back
 // through the clientset from inside a reactor re-enters Fake's non-reentrant
-// lock (see installCanaryReactor's doc for the deadlock that causes).
+// lock (see installCanaryReactor's doc for the deadlock that causes). The
+// tracker's List ignores the label selector, so the reactor applies it to the
+// listed items itself: a selector that names too much deletes too much here,
+// as it would on a real cluster.
 func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 	t.Helper()
 	cs.PrependReactor("delete-collection", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
@@ -191,6 +195,10 @@ func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 			return false, nil, nil
 		}
 		ns := dc.GetNamespace()
+		selector, err := labels.Parse(dc.GetListOptions().LabelSelector)
+		if err != nil {
+			return true, nil, err
+		}
 		listObj, err := cs.Tracker().List(gvr, gvk, ns, dc.GetListOptions())
 		if err != nil {
 			return true, nil, err
@@ -203,6 +211,9 @@ func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 			acc, err := meta.Accessor(item)
 			if err != nil {
 				return true, nil, err
+			}
+			if !selector.Matches(labels.Set(acc.GetLabels())) {
+				continue
 			}
 			if err := cs.Tracker().Delete(gvr, ns, acc.GetName(), dc.GetDeleteOptions()); err != nil {
 				return true, nil, err

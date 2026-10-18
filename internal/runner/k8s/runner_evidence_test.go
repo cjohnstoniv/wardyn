@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -913,6 +914,40 @@ func TestRunnerBootRefusesOverrides(t *testing.T) {
 
 // TestRunnerTeardownHoldsPolicies: runner-mode teardown drops nothing without evidence, and drops
 // pods, Secrets, then NetworkPolicies once both pods are proven stopped.
+// TestRunnerTeardownLeavesOtherObjects: the runner's sweep names its run AND its
+// runner id, so another run's Secret and NetworkPolicy, and the same run's under
+// another runner, are untouched. An emptied or widened selector deletes them.
+func TestRunnerTeardownLeavesOtherObjects(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.boundProxy(t)
+	h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+	ctx := context.Background()
+	other := uuid.New()
+	survivors := map[string]map[string]string{
+		"other-run":    wardynLabels(other, componentProxy, map[string]string{runner.LabelRunnerID: testRunnerID}),
+		"other-runner": wardynLabels(h.runID, componentProxy, map[string]string{runner.LabelRunnerID: "some-other-runner"}),
+	}
+	for name, l := range survivors {
+		if _, err := h.cs.CoreV1().Secrets(testNamespace).Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "secret-" + name, Namespace: testNamespace, Labels: l}}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.cs.NetworkingV1().NetworkPolicies(testNamespace).Create(ctx, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "netpol-" + name, Namespace: testNamespace, Labels: l}}, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.d.teardownByRunID(ctx, h.runID, nil); err != nil {
+		t.Fatalf("teardown with evidence: %v", err)
+	}
+	for name := range survivors {
+		if _, err := h.cs.CoreV1().Secrets(testNamespace).Get(ctx, "secret-"+name, metav1.GetOptions{}); err != nil {
+			t.Errorf("%s: the Secret did not survive the sweep: %v", name, err)
+		}
+		if _, err := h.cs.NetworkingV1().NetworkPolicies(testNamespace).Get(ctx, "netpol-"+name, metav1.GetOptions{}); err != nil {
+			t.Errorf("%s: the NetworkPolicy did not survive the sweep: %v", name, err)
+		}
+	}
+}
+
 func TestRunnerTeardownHoldsPolicies(t *testing.T) {
 	h := newRunnerHarness(t)
 	h.boundProxy(t)
