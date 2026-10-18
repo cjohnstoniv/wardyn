@@ -41,3 +41,22 @@ test.describe("Tier B at 390px", () => {
     expect(cut).toBe(0);
   });
 });
+
+test.describe("Tier B at desktop width", () => {
+  // #2848: the five "How it works" cards share one top and one height instead of centring at their own.
+  test("Setup intro: the five cards line up", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/setup");
+    await page.getByRole("button", { name: "Show intro" }).click();
+    const cards = page.getByTestId("how-it-works-card");
+    await expect(cards).toHaveCount(5);
+    const boxes = await cards.evaluateAll((els) =>
+      els.map((e) => {
+        const r = e.getBoundingClientRect();
+        return { top: Math.round(r.top), height: Math.round(r.height) };
+      }),
+    );
+    expect(new Set(boxes.map((b) => b.top)).size).toBe(1);
+    expect(new Set(boxes.map((b) => b.height)).size).toBe(1);
+  });
+});
