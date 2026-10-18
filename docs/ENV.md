@@ -630,6 +630,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`
 
 - Refuse every run launch (new run, record, harness sign-in, source scan, site-config probe) with 503 `host_capacity_refused`, a `reason` and `Retry-After`, while `/proc/meminfo` `MemAvailable` is below this many MiB; checked before any run row or identity exists.
+- A workspace image build (`POST /workspaces/{id}/build`) is refused the same way.
 - `0` (the default) disables it.
 - Read from the kernel wardynd runs on, never its own cgroup's `memory.max`: runs are sibling containers or pods, not children of wardynd's cgroup, so that limit says nothing about room for another run.
 - In a container this is the host (on WSL2, the whole VM); on Kubernetes it is the node the wardynd pod runs on, not the nodes run pods are scheduled to.

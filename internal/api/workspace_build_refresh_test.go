@@ -487,3 +487,21 @@ func TestChangedInputs(t *testing.T) {
 		t.Errorf("equal inputs changed = %#v, want an empty list", got)
 	}
 }
+
+// TestBuildWorkspace_HostCapacityRefusesBeforeBuilding: the build door answers
+// to the host-capacity limits every launch door does — a 503 with Retry-After,
+// one host_capacity.refuse row for door "build", and no build started.
+func TestBuildWorkspace_HostCapacityRefusesBeforeBuilding(t *testing.T) {
+	f := newBuildRefreshFixture(t, refreshDoneWorkspace(t), &refreshBuilder{})
+	f.srv.cfg.HostCapacity = hostAt(4096, 150)
+	w := f.post(t, `{"refresh":true}`)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "host_capacity_refused") || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("POST refresh over host capacity = %d %q, want 503 host_capacity_refused with Retry-After", w.Code, w.Body.String())
+	}
+	if rows := hostCapacityRefusals(t, f.h.audit); len(rows) != 1 || rows[0].Target != "build" {
+		t.Fatalf("host_capacity.refuse rows = %+v, want one for door build", rows)
+	}
+	if f.srv.builds.get(f.st.row().ID).Building || len(f.b.builtRefs()) != 0 {
+		t.Fatal("a refused build still started")
+	}
+}
