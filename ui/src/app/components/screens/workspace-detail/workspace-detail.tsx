@@ -483,7 +483,7 @@ export function WorkspaceDetailScreen() {
         name={confirmDelete ? ws.name : null}
         allowed={canMutate}
         entity="workspace"
-        description="Existing runs keep their history and audit trail. New runs can no longer attach it; its requirements and recorded sessions are removed."
+        description={WORKSPACE_COPY_EXTRA.DELETE_BODY}
         onOpenChange={(o) => !o && setConfirmDelete(false)}
         onDelete={() => workspacesApi.deleteWorkspace(ws.id)}
         onDeleted={() => navigate("/workspaces")}
