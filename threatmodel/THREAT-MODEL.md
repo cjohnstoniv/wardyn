@@ -3423,11 +3423,11 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
     - And the proxy sidecar has a hard 256 MiB cap.
   - Inspection takes the same process-wide slot and retained-bytes budget as LLM request scanning, and a push that cannot get them in time is refused, never forwarded unread.
   - The slot is one wide (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a time.
-  - One inspection is bounded beyond its body at about 264 MiB, as `internal/gitpack`'s package comment breaks down:
+  - One inspection is bounded beyond its body at about 296 MiB, as `internal/gitpack`'s package comment breaks down:
     - `maxInflatedBytes` (128 MiB) of inflated objects,
     - per-object bookkeeping held under 160 bytes an object by `maxObjects` (200,000; about 30 MiB),
     - a change set of at most `maxChanges` entries,
-    - at most `maxPathBytes` (32 MiB) of path text kept by the tree walk (tree entry names are capped at
+    - at most `maxPathBytes` (64 MiB) of path text kept by the tree walk (tree entry names are capped at
       `maxEntryNameBytes`, 4096 bytes, and a tree with more entries than the walk has left is refused before it is
       read into memory),
     - plus one delta result (up to `maxObjectBytes`) that is built before it is charged.

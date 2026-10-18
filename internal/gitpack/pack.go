@@ -20,7 +20,7 @@
 // delta bases); ErrTooLarge for a pack that costs more than the ceilings
 // below allow; a plain error for a malformed or hostile one.
 //
-// Ceilings bound one inspection's heap beyond the buffered body to about 264
+// Ceilings bound one inspection's heap beyond the buffered body to about 296
 // MiB total (maxInflatedBytes + per-object bookkeeping + maxChanges +
 // maxPathBytes of path text). How many inspections run at once is the
 // caller's to cap.
@@ -44,9 +44,11 @@ import (
 
 // maxPathBytes bounds the path text one walk keeps: every reported path and
 // every memo key. maxTreeNodes counts entries, not bytes, and long names
-// repeated down a DAG make each path long: 200,000 paths of 160 bytes fit. A
-// var only so a test of another ceiling can move it out of the way.
-var maxPathBytes = 32 << 20
+// repeated down a DAG make each path long. Each change is charged twice (its
+// path and its memo key), so maxChanges (200,000) changes with 160-byte paths
+// fit with room to spare (200,000 x 320 B = 61 MiB). A var only so a test of
+// another ceiling can move it out of the way.
+var maxPathBytes = 64 << 20
 
 // The ceilings. A hostile push is a small compressed body that asks for an
 // enormous amount of memory, so every one of these is a hard refusal rather
