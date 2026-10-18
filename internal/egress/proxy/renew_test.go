@@ -462,7 +462,7 @@ func TestRenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
 // already past, the backoff stands.
 func TestRenewer_RetryGapStopsShortOfTheHeldTokensExpiry(t *testing.T) {
 	tune := renewerTuning{firstRetry: 10 * time.Millisecond, expiryMargin: 2 * time.Minute}
-	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 	for _, tc := range []struct {
 		name    string
 		backoff time.Duration
