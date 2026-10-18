@@ -1044,6 +1044,8 @@ spec:
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.
   - Without the pin, wardynd's own process default (`pg`) would win instead, ignoring `WARDYN_RECORDING_DIR` and persisting every PTY asciicast into the control-plane database with `WARDYN_RECORDING_RETENTION_DAYS` defaulting to keep-forever.
   - An operator who wants that anyway can opt in with one key: `env.WARDYN_RECORDING_STORE=pg` (leave `persistence` off — the `pg` store needs no PVC).
+  - The `<fullname>-data` claim has `helm.sh/resource-policy: keep`: turning `persistence` off (as HA requires) or `helm uninstall` keeps it and its recordings.
+    - Delete it deliberately: `kubectl delete pvc <fullname>-data`.
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
 - `drives.enabled`: adds `persistentvolumeclaims: get, create` to the k8s-runner Role so runs can mount per-person storage, off by default — see [User drives](#user-drives-drivesenabled) above.

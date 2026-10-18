@@ -799,6 +799,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	pon=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set persistence.enabled=true); \
 	echo "$$pon" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "fs"' || { echo "chart with persistence on no longer selects the fs store"; exit 1; }; \
 	echo "$$pon" | grep -A1 "name: WARDYN_RECORDING_DIR" | grep -q 'value: "/data/recordings"' || { echo "chart with persistence on left WARDYN_RECORDING_DIR off the persistent mount"; exit 1; }; \
+	echo "$$pon" | grep -A15 "kind: PersistentVolumeClaim" | grep -q "helm.sh/resource-policy: keep" || { echo "the persistence PVC lost helm.sh/resource-policy: keep — turning persistence off (as HA requires) or uninstalling would delete every fs recording and the audit quarantine"; exit 1; }; \
 	echo "$$out" | grep -q "podSelector: {}" || { echo "chart ingress default is not same-namespace"; exit 1; }; \
 	echo "$$out" | grep -A4 "podSelector:" | grep -q "app.kubernetes.io/component: control-plane" || { echo "NetworkPolicy podSelector no longer pins to the control-plane pod — a sandbox pod with a matching name+instance label would inherit wardynd's own egress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }; \
