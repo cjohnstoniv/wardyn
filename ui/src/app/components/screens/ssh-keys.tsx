@@ -204,11 +204,14 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
       <>
         <CollapsibleCard title="Your SSH keys" summary={summary} testId="ssh-keys-pane">
           <p className="text-body leading-snug text-muted-foreground">{SSH_KEYS_DESCRIPTION}</p>
-          <div className="mt-3">
-            <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={addBlocked}>
-              <Plus className="size-4" /> Add key
-            </Button>
-          </div>
+          {/* The empty state carries its own Add key; two a few pixels apart read as a glitch (#2855). */}
+          {(status !== "ready" || keys.length > 0) && (
+            <div className="mt-3">
+              <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={addBlocked}>
+                <Plus className="size-4" /> Add key
+              </Button>
+            </div>
+          )}
           <div className="mt-3">{table}</div>
         </CollapsibleCard>
         {dialogs}

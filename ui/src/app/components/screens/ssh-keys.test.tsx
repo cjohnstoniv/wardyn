@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { expandCard } from "../../lib/test-dom";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { aheadByHours } from "../../lib/test-clock";
@@ -68,7 +69,34 @@ describe("SshKeysPane — empty state", () => {
     listKeysMock.mockResolvedValue([]);
     renderScreen();
     await screen.findByText("No keys yet.");
-    expect(screen.getByText("Add your public key to connect over SSH.")).toBeInTheDocument();
+    expect(screen.getByText("Add your public key to connect over SSH.")).toBeInTheDocument();  });
+});
+
+describe("SshKeysPane — Your account card", () => {
+  // #2855: the empty state's own button is the ONE Add key.
+  it("empty: one Add key; with a key: the card-level Add key is back", async () => {
+    listKeysMock.mockResolvedValue([]);
+    const { unmount } = render(
+      <MemoryRouter>
+        <SshKeysPane heading="h3" />
+      </MemoryRouter>,
+    );
+    await expandCard("Your SSH keys");
+    await screen.findByText("No keys yet.");
+    expect(screen.getAllByRole("button", { name: /add key/i })).toHaveLength(1);
+    unmount();
+
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: aheadByHours(-1) },
+    ]);
+    render(
+      <MemoryRouter>
+        <SshKeysPane heading="h3" />
+      </MemoryRouter>,
+    );
+    await expandCard("Your SSH keys");
+    await screen.findByText("laptop");
+    expect(screen.getAllByRole("button", { name: /add key/i })).toHaveLength(1);
   });
 });
 
