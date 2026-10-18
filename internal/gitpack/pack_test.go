@@ -1233,9 +1233,8 @@ func commandSection(caps string, cmds ...string) []byte {
 	return b.Bytes()
 }
 
-// TestPackTree_LongNamesAreChargedByBytes: the count ceilings let a few-KB DAG
-// of 255-byte names describe 2^15 paths of about 3.8 KB each, gigabytes of
-// path text across a deeper DAG. The walk keeps at most maxPathBytes of it.
+// TestPackTree_LongNamesAreChargedByBytes: long names repeated down a DAG make
+// each path long; the walk keeps at most maxPathBytes.
 func TestPackTree_LongNamesAreChargedByBytes(t *testing.T) {
 	idx := newIndex(sha1Format)
 	blob := []byte("x\n")
