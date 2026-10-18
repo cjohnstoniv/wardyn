@@ -73,6 +73,7 @@
 # docs/ENV.md 39236 = 39200 + 36, measured: merge of the run output source rows; the lane's lines land unchanged.
 # docs/ENV.md 39268 = 39236 + 32, measured: the WARDYN_ADO_LANE_DECLINED_HOSTS row
 # docs/ENV.md 39307 = 39268 + 39, measured: renewal never contacts the identity provider; the admin revoke that ends a session
-docs/ENV.md=39307 share=5
+# 0.9.4 L7a2 +2: the smtp helo field.
+docs/ENV.md=39309 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
