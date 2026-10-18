@@ -119,8 +119,10 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now(), value_rev=DEFAULT`,
 		s.owner, name, extVersion, s.ext.Name()+":"+loc, expiresAt(ctx),
 	)
+	commitFailed := false
 	if err == nil {
 		err = tx.Commit(ctx)
+		commitFailed = err != nil
 	}
 	newObject := secretstore.RefObject(loc) != secretstore.RefObject(prev)
 	if err == nil {
@@ -133,6 +135,23 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		// The object the row already points to now holds the new value, and
 		// the row reads it: the write took effect behind a failure.
 		return fmt.Errorf("pg secretstore: put %s: the new value is live in %s (the row already points to it), but updating the row failed: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
+	}
+	if commitFailed {
+		// A failed COMMIT may still have reached the server (its reply lost, or
+		// the bounded context ending mid-commit), so only the row can say
+		// whether loc is live. The recheck under the row's lock leaves an
+		// object the row names, as the migration's cleanup does.
+		named, _, derr := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, s.ext.Name(), loc)
+		switch {
+		case derr != nil:
+			return fmt.Errorf("pg secretstore: put %s: the value reached %s, but whether the row did is unknown (%w: %w) and checking it failed (%v), so the value was left in place — `wardynd -reconcile` lists it if the row does not point to it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
+		case named:
+			if prev != "" {
+				s.removeOld(ctx, name, prev)
+			}
+			return nil
+		}
+		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not, so it was removed again: %w: %w", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err)
 	}
 	if derr := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, loc); derr != nil {
 		return fmt.Errorf("pg secretstore: put %s: the value reached %s but the row did not (%w: %w), and removing the value failed too (%v) — `wardynd -reconcile` lists it", ref, s.ext.Name(), secretstore.ErrRowNotWritten, err, derr)
@@ -319,3 +338,4 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	}
 	return rep, nil
 }
+
