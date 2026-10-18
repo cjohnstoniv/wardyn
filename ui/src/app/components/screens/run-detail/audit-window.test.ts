@@ -41,6 +41,8 @@ describe("withNewestEvents", () => {
   it("keeps the first page and flags the gap when the newest page cannot be read", async () => {
     listAuditMock.mockRejectedValueOnce(new Error("boom"));
     const head = rows(0, 1000);
-    expect(await withNewestEvents("r", head)).toEqual({ events: head, gap: true });
+    const out = await withNewestEvents("r", head);
+    expect(listAuditMock).toHaveBeenCalledTimes(1);
+    expect(out).toEqual({ events: head, gap: true });
   });
 });
