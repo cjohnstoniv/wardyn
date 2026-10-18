@@ -383,6 +383,67 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 	}
 }
 
+// TestHealthzEbpfDegradedWhenHeartbeatStale: /healthz is the operator's only
+// liveness signal for ground truth, so a heartbeat older than ebpfHeartbeatTTL
+// must read "degraded" even when it carried real kernel events (a reordered
+// arm would let "healthy" win), a fresh one must not, and an hour-old beat is
+// degraded whatever the TTL constant says (a TTL raised to "never stale").
+func TestHealthzEbpfDegradedWhenHeartbeatStale(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+		want string
+	}{
+		{"just inside the TTL", ebpfHeartbeatTTL - time.Second, "healthy"},
+		{"just past the TTL", ebpfHeartbeatTTL + time.Second, "degraded"},
+		{"an hour old", time.Hour, "degraded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.srv.cfg.Now = func() time.Time { return now }
+			hb := groundtruth.HeartbeatEventWithDropped(0, 5, 0, nil) // events observed: healthy if fresh
+			hb.Time = now.Add(-tc.age)
+			h.srv.cfg.Store = stubHeartbeatStore{ev: hb}
+			if got := healthzEbpf(t, h)["state"]; got != tc.want {
+				t.Fatalf("ebpf_groundtruth.state = %v, want %s (heartbeat %s old)", got, tc.want, tc.age)
+			}
+		})
+	}
+}
+
+// TestHealthzEbpfFutureDatedHeartbeatStillDegrades ties the clamp to its stated
+// purpose: a heartbeat posted with a far-future Time is recorded at the
+// server's clock, so once that clock passes the TTL the stream reads "degraded"
+// instead of "healthy" forever.
+func TestHealthzEbpfFutureDatedHeartbeatStillDegrades(t *testing.T) {
+	h := newHarness(t)
+	tok := h.mintGroundtruthToken(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 5, 0, nil)
+	hb.Time = time.Now().Add(100 * 24 * time.Hour)
+	body, _ := json.Marshal(groundtruthBatch{Events: []types.AuditEvent{hb}})
+	if w := do(t, h.srv, http.MethodPost, "/api/v1/internal/groundtruth", tok, string(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	var recorded types.AuditEvent
+	for _, ev := range h.audit.events {
+		if ev.Action == groundtruth.ActionSensorHeartbeat {
+			recorded = ev
+		}
+	}
+	if recorded.Action == "" {
+		t.Fatal("the heartbeat was not recorded")
+	}
+	h.srv.cfg.Store = stubHeartbeatStore{ev: recorded}
+	if got := healthzEbpf(t, h)["state"]; got != "healthy" {
+		t.Fatalf("right after the post: state = %v, want healthy", got)
+	}
+	h.srv.cfg.Now = func() time.Time { return time.Now().Add(ebpfHeartbeatTTL + time.Minute) }
+	if got := healthzEbpf(t, h)["state"]; got != "degraded" {
+		t.Fatalf("past the TTL: state = %v, want degraded (a future-dated beat must not pin healthy)", got)
+	}
+}
+
 // TestHealthzEbpfPartialWhenOneKindNeverArrives: a sensor that has mapped
 // real events (observed_total>0) but only ever for one kind (a mis-scoped
 // TracingPolicy that never fires for network.connect, say) must not read
