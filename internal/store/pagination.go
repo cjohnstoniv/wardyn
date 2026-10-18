@@ -28,6 +28,9 @@ import (
 type Page struct {
 	Limit  int
 	Offset int
+	// Newest asks a per-run audit read for the newest window first (ORDER BY seq DESC) instead of
+	// the oldest. No other query reads it.
+	Newest bool
 }
 
 // appendTo appends " LIMIT $n [OFFSET $n+1]" to q, using positional args
@@ -485,12 +488,20 @@ func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalSta
 // order, bounded by p. audit_events_run_seq_idx makes WHERE run_id + ORDER
 // BY seq an indexed range scan with no sort; OFFSET pages forward without
 // flipping to DESC, so the per-run trail stays ASC (docs/sdk.md's exit-code
-// contract) and a caller pages to the newest events with ?offset=.
+// contract) and a caller reads the newest events with ?offset= or with Page.Newest.
 func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
 		SELECT `+auditCols+`
-		FROM audit_events WHERE run_id=$1 ORDER BY seq ASC`, []any{runID})
+		FROM audit_events WHERE run_id=$1 ORDER BY seq `+auditRunOrder(p), []any{runID})
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
+}
+
+// auditRunOrder is a per-run audit read's direction: chronological unless the caller asked for the newest window.
+func auditRunOrder(p Page) string {
+	if p.Newest {
+		return "DESC"
+	}
+	return "ASC"
 }
 
 // QueryRecentAuditEventsPage returns the newest-first global audit feed,

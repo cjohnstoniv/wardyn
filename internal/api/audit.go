@@ -138,6 +138,8 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// ?order=desc on a run's trail answers its newest window, newest first; the default stays oldest-first.
+	page.Newest = scope != nil && r.URL.Query().Get("order") == "desc"
 	var pageFn func(store.Page) ([]types.AuditEvent, error)
 	if pager != nil {
 		pageFn = func(p store.Page) ([]types.AuditEvent, error) {

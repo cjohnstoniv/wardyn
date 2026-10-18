@@ -1162,6 +1162,8 @@ or use `action_prefix` (`--action-prefix`).
 - The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
   trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
   reach the terminal `run.complete`.
+  Add `order=desc` to read the newest window first instead (newest event first;
+  `limit` and `offset` then count from the newest event).
 - `wardyn audit <run-id> --limit=N --offset=N`
   mirrors this on the CLI, and prints a `warning: audit trail truncated ...`
   line on stderr (never stdout, so `--json` stays a plain array) naming the next

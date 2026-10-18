@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -66,7 +68,12 @@ func (f *pagerFake) ListApprovalsPage(context.Context, types.ApprovalState, stor
 	return nil, nil
 }
 func (f *pagerFake) QueryAuditEventsPage(_ context.Context, runID uuid.UUID, p store.Page) ([]types.AuditEvent, error) {
-	return pagerSlice(f.auditByRun[runID], p), nil
+	src := f.auditByRun[runID]
+	if p.Newest {
+		src = slices.Clone(src)
+		slices.Reverse(src)
+	}
+	return pagerSlice(src, p), nil
 }
 func (f *pagerFake) QueryRecentAuditEventsPage(_ context.Context, p store.Page) ([]types.AuditEvent, error) {
 	return pagerSlice(f.recentAudit, p), nil
@@ -154,5 +161,42 @@ func TestPaginationDisclosure(t *testing.T) {
 				t.Errorf("len = %d, want %d", n, c.wantLen)
 			}
 		})
+	}
+}
+
+// TestAuditPerRunOrderDesc pins ?order=desc: a run's trail is oldest-first by default, and order=desc answers
+// its newest window newest-first, which is how the console reaches the events a long run's first page cuts off.
+func TestAuditPerRunOrderDesc(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	evs := makeEvents(4, &runID)
+	for i := range evs {
+		evs[i].Target = string(rune('a' + i))
+	}
+	srv := New(baseTestConfig(h, &pagerFake{auditByRun: map[uuid.UUID][]types.AuditEvent{runID: evs}}))
+	targets := func(q string) string {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/api/v1/audit?run_id="+runID.String()+q, adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d (%s)", w.Code, w.Body.String())
+		}
+		var out []types.AuditEvent
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, ev := range out {
+			b.WriteString(ev.Target)
+		}
+		return b.String()
+	}
+	if got := targets("&limit=2"); got != "ab" {
+		t.Errorf("default order = %q, want the oldest window ab", got)
+	}
+	if got := targets("&limit=2&order=desc"); got != "dc" {
+		t.Errorf("order=desc = %q, want the newest window dc", got)
+	}
+	if got := targets("&limit=2&order=desc&offset=2"); got != "ba" {
+		t.Errorf("order=desc offset=2 = %q, want ba", got)
 	}
 }

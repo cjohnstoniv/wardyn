@@ -227,6 +227,30 @@ describe("listAudit — action/action_prefix filter reaches the wire", () => {
   });
 });
 
+describe("listAudit — newest page of a run", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends order=desc for a run and hands the rows back oldest-first", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify([{ id: "c" }, { id: "b" }, { id: "a" }]), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await audit.listAudit("run_1", { newest: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("order=desc");
+    expect(out.map((e) => e.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("sends no order for the default read", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await audit.listAudit("run_1");
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("order=");
+  });
+});
+
 describe("exitCodeFromAudit", () => {
   it("reads the code off run.complete, including a legitimate exit 0", () => {
     expect(exitCodeFromAudit([ev({ action: "run.complete", data: { exit_code: 137 } })])).toBe(137);

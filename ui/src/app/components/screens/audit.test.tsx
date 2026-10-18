@@ -97,7 +97,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const drill = await screen.findByRole("button", { name: /111/ });
     fireEvent.click(drill);
 
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
   });
 
   // ui-auditRec-2 regression: the drill banner's "Open run" used to link to the
@@ -248,10 +248,12 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     fireEvent.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
-    expect(screen.getByText(/first 1000 events for this run/i)).toBeInTheDocument();
+    // The cut is at the START of a long run's trail, and the note says so.
+    expect(screen.getByText(/newest 1000 events for this run/i)).toBeInTheDocument();
+    expect(screen.queryByText(/older events for this run may have rolled off/i)).not.toBeInTheDocument();
   });
 
   it("does not show the truncation indicator for a run-filtered view below 1000", async () => {
@@ -262,7 +264,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     fireEvent.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await screen.findByText(/1 event/);
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
@@ -510,7 +512,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     // Egress facet item disappears from the Select entirely.
     listAuditMock.mockResolvedValueOnce([ev({ id: "e3", run_id: "run_111", action: "run.create" })]);
     await user.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     // The facet must fall back to "all" — not strand the operator on a
     // filter whose item no longer exists in the Select's own list, hiding

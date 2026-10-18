@@ -243,7 +243,7 @@ func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, 
 	if len(clauses) > 0 {
 		q += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	if runID != nil {
+	if runID != nil && !p.Newest {
 		q += " ORDER BY seq ASC"
 	} else {
 		q += " ORDER BY seq DESC"

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
 import type { Locator, Page } from "@playwright/test";
 
 // Audit screen e2e (src/app/components/screens/audit.tsx).
@@ -234,4 +234,32 @@ test("a cache-hit image row reads reused, a build reads built", async ({ page })
   await page.reload();
   await expect(verb(page, "Reused the cached sandbox image — ws-hit")).toBeVisible();
   await expect(verb(page, "Built the sandbox image — ws-miss")).toBeVisible();
+});
+
+// A long run's trail is served oldest-first, so the drill-in asks for its NEWEST page (order=desc): the events an
+// operator investigates are at the end, and the note names the cut as the start of the trail.
+test("a run drill-in over the page cap shows the newest events and says the earliest are cut", async ({ page }) => {
+  const asked: string[] = [];
+  const row = (n: number) => ({
+    id: `e2e-long-${n}`,
+    time: new Date(Date.now() - (2000 - n) * 1000).toISOString(),
+    actor_type: "system",
+    actor: "wardynd",
+    action: n === 1999 ? "run.kill" : "egress.allow",
+    target: n === 1999 ? "run_e2elong" : `host${n}.example.com:443`,
+    outcome: "success",
+    run_id: "run_e2elong",
+    data: {},
+  });
+  await page.route(/\/api\/v1\/audit(\?|$)/, (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("run_id") !== "run_e2elong") return route.fallback();
+    asked.push(url.searchParams.get("order") ?? "");
+    // The server's newest window, newest first.
+    return route.fulfill({ json: Array.from({ length: 1000 }, (_, i) => row(1999 - i)) });
+  });
+  await navToRoute(page, "/admin/audit?run_id=run_e2elong");
+  await expect(page.getByText(/Showing the newest 1000 events for this run/)).toBeVisible();
+  await expect(verb(page, "host1999.example.com:443").or(verb(page, "run_e2elong")).first()).toBeVisible();
+  expect(asked.every((o) => o === "desc")).toBe(true);
 });
