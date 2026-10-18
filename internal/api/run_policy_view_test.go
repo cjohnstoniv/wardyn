@@ -843,7 +843,7 @@ func TestExplainRunPolicy_DiskBasis(t *testing.T) {
 		wantDetail string
 	}{
 		{"policy: the policy's own size", client.MainDriveBasisPolicy, false, "", "", ""},
-		{"request: from the request", client.MainDriveBasisRequest, true, "", causeLaunch, "The disk size is from your request."},
+		{"request: from the request", client.MainDriveBasisRequest, true, "", causeLaunch, "The disk size is from the request that started this run."},
 		{"server default", client.MainDriveBasisDefault, true, types.LimitSourceDeployment, causeOrgDisk, "is this server's default."},
 		{"pool default", client.MainDriveBasisDefault, true, types.LimitSourcePool, causePoolDisk, "default of the pool this run started in"},
 		{"older run: the filled bit alone", "", true, "", causeOrgDisk, ""},
