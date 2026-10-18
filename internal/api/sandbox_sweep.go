@@ -96,27 +96,42 @@ func (s *Server) sweepTerminalSandboxRuns(ctx context.Context, runs []types.Agen
 			continue
 		}
 		scanned++
-		// KILLED rows get an extra, ref-independent check first: a tail that
-		// died before ever reaching KillSandbox leaves SandboxRef exactly as it
-		// was (possibly already empty), so the ref-probe below would never see
-		// it. A run this recovers still falls through to the ref-probe below on
-		// the NEXT pass only if it needs to — this pass counts it once.
-		if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
+		if s.sweepTerminalSandboxRun(ctx, run) {
 			swept++
-			continue
 		}
-		if run.SandboxRef == "" {
-			continue
-		}
-		st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
-		if serr != nil || st.State != types.RunRunning {
-			continue // already gone (or unprobeable) — the normal, settled case
-		}
-		s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
-		s.revokeRunCascade(ctx, run.ID)
-		swept++
 	}
 	return swept, scanned
+}
+
+// sweepTerminalSandboxRun probes/recovers one terminal run and reports whether
+// it swept it. It holds the run's lock, so only one sweep at a time works on a
+// run, across replicas: the operator route and the ticker (or two replicas'
+// tickers) would otherwise both tear the same run down and double its run.kill
+// rows. A run whose lock is held is skipped; a later pass decides.
+func (s *Server) sweepTerminalSandboxRun(ctx context.Context, run types.AgentRun) bool {
+	ctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
+	if !locked {
+		return false
+	}
+	defer unlock()
+	// KILLED rows get an extra, ref-independent check first: a tail that
+	// died before ever reaching KillSandbox leaves SandboxRef exactly as it
+	// was (possibly already empty), so the ref-probe below would never see
+	// it. A run this recovers still falls through to the ref-probe below on
+	// the NEXT pass only if it needs to — this pass counts it once.
+	if run.State == types.RunKilled && s.recoverAbandonedKillTail(ctx, run) {
+		return true
+	}
+	if run.SandboxRef == "" {
+		return false
+	}
+	st, serr := s.cfg.Runner.Status(ctx, run.SandboxRef)
+	if serr != nil || st.State != types.RunRunning {
+		return false // already gone (or unprobeable) — the normal, settled case
+	}
+	s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.sweep")
+	s.revokeRunCascade(ctx, run.ID)
+	return true
 }
 
 // killTailRecoveryGrace is how long a KILLED run's own kill tail
