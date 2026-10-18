@@ -182,7 +182,7 @@ got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
 
 # 5b) #2221: a value the operator edits after a pick is kept (the marker records the
 # path WE picked, and an edited value no longer equals it), and clears the marker.
-printf 'WARDYN_DEFAULT_POLICY=/examples/policies/demo.json\n' > "${dir}/.env-edit"
+: > "${dir}/.env-edit"
 resolve_default_policy "${dir}/.env-edit" "" '{}' "" >/dev/null
 env_set "${dir}/.env-edit" WARDYN_DEFAULT_POLICY /my/stricter.json
 got="$(resolve_default_policy "${dir}/.env-edit" "" '{}' "1")"
