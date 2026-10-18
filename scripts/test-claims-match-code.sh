@@ -203,7 +203,7 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # release needs every grant since, whichever release candidates came between.
 # When a final release is cut, set it to the first migration after that release
 # (RELEASING.md, step 1); the next release's tables then go in a new bullet.
-UNRELEASED_FROM=0180 # v0.9.2, the last final release, ships migrations up to 0179
+UNRELEASED_FROM=0191 # v0.9.3, the last final release, ships migrations up to 0190
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }
