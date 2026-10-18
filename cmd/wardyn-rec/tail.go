@@ -33,7 +33,12 @@ var (
 	// would be re-sent unchanged and stall every part behind it.
 	partMaxBytes int64 = 32 << 20
 	partInterval       = 24 * time.Hour
-	tailPoll           = 30 * time.Second
+	// firstPartInterval is how long the first part waits. A stop ends the recorder with no flush (the
+	// sandbox's idle process exits on TERM and the kernel ends the rest), so a run killed before a
+	// part went up lost its whole cast. Each part then waits twice as long as the last, up to
+	// partInterval: a short run loses minutes, and a long one stays far under the control plane's part cap.
+	firstPartInterval = 5 * time.Minute
+	tailPoll          = 30 * time.Second
 	// tailRetry spaces the attempts after a refused part, so an unreachable
 	// control plane is not re-sent up to partMaxBytes on every poll.
 	tailRetry = 10 * time.Minute
@@ -49,9 +54,14 @@ type tailUploader struct {
 	stop, done       chan struct{}
 }
 
+// partWait is how long part n waits for the interval trigger.
+func partWait(n int) time.Duration {
+	return min(partInterval, firstPartInterval<<min(max(n-1, 0), 16))
+}
+
 func startTailUploader(cast, url, token string) *tailUploader {
 	t := &tailUploader{
-		cast: cast, url: url, token: token, part: 1, due: time.Now().Add(partInterval),
+		cast: cast, url: url, token: token, part: 1, due: time.Now().Add(partWait(1)),
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go t.loop()
@@ -144,6 +154,6 @@ func (t *tailUploader) flush(final bool) error {
 		}
 		t.off += int64(len(body) - len(t.header))
 		t.part++
-		t.due = time.Now().Add(partInterval)
+		t.due = time.Now().Add(partWait(t.part))
 	}
 }
