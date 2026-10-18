@@ -199,10 +199,15 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
  && npm --version
 # Host-staged native binary (opt-in, gitignored). The README.md decoy makes the
 # COPY succeed when the corp-bin glob matches nothing (the npm default path).
+# A staged binary of the wrong arch (see stage-agent-binary.sh --arch) is refused below by its ELF
+# machine type (byte 18: 0x3e amd64, 0xb7 arm64), else it ships and fails only when the image starts.
 COPY deploy/images/README.md deploy/images/claude-code/claude-bin* /claude-stage/
 RUN set -eu; \
     if [ "$CLAUDE_INSTALL" = "native" ]; then \
         if [ -f /claude-stage/claude-bin ]; then \
+            want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+            case "$(od -An -tx1 -j18 -N1 /claude-stage/claude-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+            [ "$have" = "$want" ] || { echo "staged claude-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh claude-code <version> --arch $want" >&2; exit 1; }; \
             install -m 0755 /claude-stage/claude-bin /usr/local/bin/claude; \
             echo "installed host-staged native claude"; \
         else \
