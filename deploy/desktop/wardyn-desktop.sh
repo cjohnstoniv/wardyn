@@ -151,7 +151,10 @@ fi
 # per-user. docs/DESKTOP.md "Which Docker socket" has the matrix.
 _env_sock="$(env_get "${ENV_FILE}" WARDYN_DOCKER_SOCK)"
 if [ -n "${_env_sock}" ]; then
-  export WARDYN_DOCKER_SOCK="${_env_sock}"
+  # WARDYN_DOCKER_SOCK is left to wardyn_pick_docker_host (below), which derives it from
+  # DOCKER_HOST: a Colima/Rancher host-side socket is not bind-mountable, so the mount
+  # must be the in-VM /var/run/docker.sock. Exporting the envelope value verbatim skipped that.
+  unset WARDYN_DOCKER_SOCK
   export DOCKER_HOST="unix://${_env_sock}"
 fi
 unset _env_sock

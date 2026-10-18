@@ -492,6 +492,89 @@ for bad in 'abc' '"8097"' '0' '65536' '8097 ' '-1'; do
 done
 echo "test-desktop-profile: published-port resolution PASS"
 
+# ── #2161/#2162: what the launcher hands compose ────────────────────────────
+#
+# Stubs only: docker records the environment it was started with, curl answers.
+f21_run() { # MANAGED_DIR -> runs `up`; the stub's environment lands in MANAGED_DIR/env.log
+  local md="$1"
+  mkdir -p "${md}/bin"
+  cat > "${md}/bin/docker" <<'DOCKER_STUB'
+#!/usr/bin/env bash
+printf 'SOCK=%s\nHOST=%s\nSINKS=%s\n' "${WARDYN_DOCKER_SOCK-<unset>}" "${DOCKER_HOST-<unset>}" "${WARDYN_AUDIT_SINKS-<unset>}" >> "${ENVLOG}"
+exit 0
+DOCKER_STUB
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${md}/bin/curl"
+  chmod +x "${md}/bin/docker" "${md}/bin/curl"
+  printf '{}\n' > "${md}/site-config.json"
+  : > "${md}/env.log"
+  timeout 30 env -u WARDYN_DOCKER_SOCK -u WARDYN_AUDIT_SINKS PATH="${md}/bin:${PATH}" ENVLOG="${md}/env.log" \
+      DOCKER_HOST="unix:///nonexistent-f21.sock" WARDYN_MANAGED_DIR="${md}" "${DESKTOP_SH}" up >"${md}/out.log" 2>&1
+}
+f21_fixture() { # ENVELOPE_LINE [SECRET_FILE_BODY] -> managed dir
+  local md; md="$(mktemp -d -p "${F185_TMP}")"
+  printf 'WARDYN_WARDYND_IMAGE=ghcr.io/example/wardynd@sha256:aa\n%s\n' "$1" > "${md}/wardyn.env"
+  printf 'AGE-SECRET-KEY-1FAKE\n' > "${md}/age.key"
+  if [ -n "${2:-}" ]; then printf '%s\n' "$2" > "${md}/secret.env"; chmod 0600 "${md}/secret.env"; fi
+  printf '%s' "${md}"
+}
+
+# #2162: an envelope WARDYN_DOCKER_SOCK goes through the same Colima/Rancher
+# remap as an auto-detected one (the host-side socket is not bind-mountable);
+# any other socket is mounted as given.
+for pair in '/Users/dev/.colima/default/docker.sock=/var/run/docker.sock' \
+            '/Users/dev/.rd/docker.sock=/var/run/docker.sock' \
+            '/run/user/1000/docker.sock=/run/user/1000/docker.sock'; do
+  given="${pair%%=*}"; want="${pair#*=}"
+  md="$(f21_fixture "WARDYN_DOCKER_SOCK=${given}")"
+  f21_run "${md}" || fail "launcher failed with WARDYN_DOCKER_SOCK=${given} in the envelope (#2162): $(tail -1 "${md}/out.log")"
+  grep -qx "SOCK=${want}" "${md}/env.log" \
+    || fail "an envelope WARDYN_DOCKER_SOCK=${given} reached compose as '$(grep -m1 '^SOCK=' "${md}/env.log")', not ${want} (#2162)"
+  grep -qx "HOST=unix://${given}" "${md}/env.log" \
+    || fail "DOCKER_HOST no longer follows the envelope socket ${given} (#2162): $(grep -m1 '^HOST=' "${md}/env.log")"
+done
+echo "test-desktop-profile: envelope docker socket remap PASS"
+
+# #2161: secret.env is sourced as shell, so the envelopes' WARDYN_AUDIT_SINKS
+# example must survive that: sourced verbatim it has to reach compose as JSON.
+for envelope in "${DESK_DIR}"/wardyn.env*.example; do
+  line="$(grep -m1 '^# WARDYN_AUDIT_SINKS=' "${envelope}" | sed 's/^# //')"
+  [ -n "${line}" ] || fail "${envelope} no longer carries a WARDYN_AUDIT_SINKS example"
+  md="$(f21_fixture '# no sock' "${line}")"
+  f21_run "${md}" || fail "launcher failed on ${envelope}'s own WARDYN_AUDIT_SINKS example in secret.env (#2161): $(tail -1 "${md}/out.log")"
+  grep -m1 '^SINKS=' "${md}/env.log" | sed 's/^SINKS=//' | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null \
+    || fail "${envelope}: the WARDYN_AUDIT_SINKS example, copied into secret.env, reaches compose as '$(grep -m1 '^SINKS=' "${md}/env.log")' - not JSON, so wardynd would refuse to boot (#2161)"
+done
+echo "test-desktop-profile: audit-sinks example survives secret.env PASS"
+
+# ── #2163: a plain uninstall that cannot stop the stack says so ──────────────
+#
+# install.sh runs as root and removes init files, so it is exercised from a copy
+# in a scratch tree with `id`, `rm` and the init tools stubbed: nothing real is touched.
+f2163_run() { # LAUNCHER_RC DOCKER_RC -> runs install.sh --uninstall; docker argv in $t/docker.log
+  local t; t="$(mktemp -d -p "${F185_TMP}")"
+  mkdir -p "${t}/deploy/desktop" "${t}/scripts/lib" "${t}/bin"
+  cp "${DESK_DIR}/install.sh" "${t}/deploy/desktop/install.sh"
+  cp "${REPO_ROOT}/scripts/lib/common.sh" "${t}/scripts/lib/common.sh"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "${t}/deploy/desktop/wardyn-desktop.sh"
+  chmod +x "${t}/deploy/desktop/wardyn-desktop.sh"
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "${t}/bin/id"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit %s\n' "${t}" "$2" > "${t}/bin/docker"
+  for stub in rm launchctl systemctl; do printf '#!/usr/bin/env bash\nexit 0\n' > "${t}/bin/${stub}"; done
+  chmod +x "${t}/bin/"*
+  : > "${t}/docker.log"
+  F2163_DIR="${t}"
+  PATH="${t}/bin:${PATH}" timeout 30 bash "${t}/deploy/desktop/install.sh" --uninstall >"${t}/out.log" 2>&1
+}
+f2163_run 1 0 || fail "plain uninstall failed although 'docker compose -p wardyn-desktop down' stopped the stack (#2163): $(tail -2 "${F2163_DIR}/out.log")"
+grep -qx 'compose -p wardyn-desktop down' "${F2163_DIR}/docker.log" \
+  || fail "plain uninstall did not fall back to the project-label down when the launcher failed (#2163): $(cat "${F2163_DIR}/docker.log")"
+if f2163_run 1 1; then fail "plain uninstall exited 0 although nothing stopped the stack (#2163)"; fi
+grep -q 'docker compose -p wardyn-desktop down' "${F2163_DIR}/out.log" \
+  || fail "plain uninstall did not name the command that stops the stack (#2163): $(tail -3 "${F2163_DIR}/out.log")"
+f2163_run 0 1 || fail "plain uninstall failed although the launcher stopped the stack (#2163)"
+[ ! -s "${F2163_DIR}/docker.log" ] || fail "plain uninstall ran the fallback although the launcher stopped the stack (#2163)"
+echo "test-desktop-profile: plain uninstall stop fallback PASS"
+
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
