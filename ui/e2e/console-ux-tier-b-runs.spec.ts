@@ -6,8 +6,8 @@
 // 0.9.4 console UX Tier B, run and setup screens: the pins that need a real layout engine (widths,
 // wrapping, computed positions). Text-shaped fixes are pinned in vitest next to their screen.
 import { randomUUID } from "node:crypto";
-import type { Page } from "@playwright/test";
-import { test, expect, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
+import type { Locator, Page } from "@playwright/test";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
 
 const PHONE = { width: 390, height: 844 };
 
@@ -58,5 +58,23 @@ test.describe("Tier B at desktop width", () => {
     );
     expect(new Set(boxes.map((b) => b.top)).size).toBe(1);
     expect(new Set(boxes.map((b) => b.height)).size).toBe(1);
+  });
+});
+
+test.describe("Tier B runs list", () => {
+  // #2905: the member's empty card sits apart from the composer card above it instead of touching it.
+  test("Runs (member, no runs): the empty card does not butt against the composer", async ({ page }) => {
+    await asRealMember(page);
+    await page.route(/\/api\/v1\/runs(\?|$)/, (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.continue(),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+    const card = (l: Locator) => l.locator("xpath=ancestor-or-self::*[contains(@class,'rounded-xl')][1]");
+    const composer = card(page.getByRole("form", { name: "Start a run" }));
+    const empty = card(page.getByText("Runs you launch appear here"));
+    await expect(empty).toBeVisible();
+    const [c, e] = [(await composer.boundingBox())!, (await empty.boundingBox())!];
+    expect(e.y - (c.y + c.height)).toBeGreaterThanOrEqual(8);
   });
 });
