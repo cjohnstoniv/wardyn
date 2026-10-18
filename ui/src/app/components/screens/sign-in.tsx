@@ -399,15 +399,19 @@ export function SignIn({
                 />
               </div>
               <p className="text-xs text-muted-foreground">{SIGNIN.TOKEN_HINT}</p>
-              <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <label className="mt-1 flex items-start gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={remember}
                   onCheckedChange={(v) => setRemember(v === true)}
                   aria-label="Remember on this device"
                 />
-                Remember on this device
-                <span className="text-muted-foreground">
-                  (keeps the token after the browser closes)
+                {/* One text element: a bare text node beside a span is two flex
+                    items, which wrap as two columns (#2854). */}
+                <span>
+                  Remember on this device{" "}
+                  <span className="text-muted-foreground">
+                    (keeps the token after the browser closes)
+                  </span>
                 </span>
               </label>
               <Button
