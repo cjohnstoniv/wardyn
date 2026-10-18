@@ -52,6 +52,8 @@ import { stripCriWrapper } from "../run-status-detail";
 const HAPPENED = "What happened";
 const TODO = "What to do";
 const OPEN_AUDIT = "Open audit trail";
+/** An ending with no recognised cause and no server hint: say so rather than leave a card holding one button. */
+const NO_CAUSE = "Wardyn has no recorded cause for this failure. The audit trail has every step it took.";
 const PLATFORM_MESSAGE = "Platform message";
 
 type EndingCopy = {
@@ -332,6 +334,12 @@ export function RunFailureBlock({
       data-ending={ending.kind}
       data-evidence={ending.evidence}
     >
+      {!copy && !run.failure_hint && (
+        <>
+          <p className="label-eyebrow">{HAPPENED}</p>
+          <p className="mt-1 text-xs leading-relaxed text-foreground">{NO_CAUSE}</p>
+        </>
+      )}
       {(copy || run.failure_hint) && (
         <>
           <p className="label-eyebrow">{HAPPENED}</p>

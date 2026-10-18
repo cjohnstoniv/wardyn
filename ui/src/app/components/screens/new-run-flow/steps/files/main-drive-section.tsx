@@ -176,7 +176,7 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
   const life = lifecycleText(lifecycleOf(draft.intent, view));
 
   return (
-    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-warning">{NR_SHARED.REQUIRED}</span>}>
+    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} aside={<span className="text-meta font-semibold uppercase tracking-[0.08em] text-muted-foreground">{NR_SHARED.REQUIRED}</span>}>
       <div className="grid gap-3 px-[15px] py-3.5">
         <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
           <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>

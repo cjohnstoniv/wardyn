@@ -464,9 +464,9 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).not.toBeInTheDocument();
     });
 
-    // Every model credential is the person's own since 0.8 (#548), so the
-    // lede is CONNECTIONS.LEDE with or without a provider block.
-    it("the lede is CONNECTIONS.LEDE with a provider block and without one", async () => {
+    // Every model credential is the person's own since 0.8 (#548), so the lede is CONNECTIONS.LEDE for any
+    // provider block, and it is left out under the "Not set up by your admin" chip, which it would contradict (#2906).
+    it("the lede is CONNECTIONS.LEDE with a provider block, and absent when the chip says Not set up", async () => {
       const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
       getSetupStatusMock.mockResolvedValue(s);
       const { unmount } = renderPage(baseMe(), s);
@@ -474,7 +474,8 @@ describe("MemberGettingStarted", () => {
       unmount();
       getSetupStatusMock.mockResolvedValue(status());
       renderPage();
-      expect(await screen.findByText(CONNECTIONS.LEDE)).toBeInTheDocument();
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.LEDE)).not.toBeInTheDocument();
     });
   });
 

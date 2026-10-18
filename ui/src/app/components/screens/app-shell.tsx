@@ -336,7 +336,6 @@ function SidebarNav({
             <NavLink
               key={item.to}
               to={item.to}
-              end
               onClick={guardedClick(item.to, onNavigate)}
               className={({ isActive }) => navLinkClass(isActive)}
             >

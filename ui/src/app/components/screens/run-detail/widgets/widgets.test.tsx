@@ -69,6 +69,14 @@ describe("SandboxWidget", () => {
     expect(await screen.findByText(RUN_COCKPIT.execUnsupported)).toBeInTheDocument();
   });
 
+  // The same widgets render on a run that has ended, so the sentence must not say "while it's running" (#2914).
+  it("words the exec-unsupported copy for a run in any state", async () => {
+    getResourcesMock.mockRejectedValue(new HttpError(501, "no exec primitive"));
+    render(<SandboxWidget runId="r1" live={false} />);
+    const line = await screen.findByText(RUN_COCKPIT.execUnsupported);
+    expect(line.textContent).not.toMatch(/while it's running/);
+  });
+
   // RL-13 (long-holds design rev 4 §8): "a warning at 80% where the cap is
   // enforced" — the disk_cap_bytes backend sends ONLY when a driver actually
   // enforces one.

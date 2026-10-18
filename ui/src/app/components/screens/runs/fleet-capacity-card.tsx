@@ -116,16 +116,20 @@ export function FleetCapacityCard() {
 
   if (!securityOperator) return null;
 
+  // Plain inline text plus a trailing chip, so the card header's `truncate` ends the line with an ellipsis;
+  // an inline-flex wrapper clipped it mid-word at phone width.
   const summary = data ? (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span>
-        {data.totals.holding === 0
-          ? FC.SUMMARY_NONE
-          : FC.SUMMARY(data.totals.holding, cpu(data.totals.held_cpu_millis), gib(data.totals.held_memory_mib))}
-        {data.totals.unknown > 0 && ` ${FC.SUMMARY_UNKNOWN(data.totals.unknown)}`}
-      </span>
-      {data.unschedulable_total > 0 && <Chip tone="warning">{FC.WAITING_CHIP(data.unschedulable_total)}</Chip>}
-    </span>
+    <>
+      {data.totals.holding === 0
+        ? FC.SUMMARY_NONE
+        : FC.SUMMARY(data.totals.holding, cpu(data.totals.held_cpu_millis), gib(data.totals.held_memory_mib))}
+      {data.totals.unknown > 0 && ` ${FC.SUMMARY_UNKNOWN(data.totals.unknown)}`}
+      {data.unschedulable_total > 0 && (
+        <Chip tone="warning" className="ml-2">
+          {FC.WAITING_CHIP(data.unschedulable_total)}
+        </Chip>
+      )}
+    </>
   ) : undefined;
 
   const kind = data ? currentKind(data) : undefined;

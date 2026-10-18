@@ -233,10 +233,11 @@ describe("OutputTab — refusals", () => {
     expect(getMock).toHaveBeenCalledTimes(1);
   });
 
-  it("503 mask_state_unavailable: the load-error title and the mask line", async () => {
+  it("503 mask_state_unavailable: its own title, not the transient load error, and the mask line", async () => {
     refuse("mask_state_unavailable", 503);
     await mount();
-    expect(screen.getByText(RUN_COCKPIT.loadError)).toBeInTheDocument();
+    expect(screen.getByText(RUN_OUTPUT.maskTitle)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.loadError)).not.toBeInTheDocument();
     expect(screen.getByText(RUN_OUTPUT.maskUnavailable)).toBeInTheDocument();
   });
 

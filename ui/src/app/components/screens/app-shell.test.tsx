@@ -477,6 +477,14 @@ describe("MobileNav (below-md nav fallback)", () => {
     }
   });
 
+  it("keeps Runs lit on a run's own page, not only on the list (#2908)", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/runs/run-1");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /^Approvals/ })).not.toHaveAttribute("aria-current");
+  });
+
   it("Escape closes the drawer and returns aria-expanded to false", async () => {
     const user = userEvent.setup();
     renderMobileNav();

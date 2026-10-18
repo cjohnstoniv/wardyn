@@ -40,7 +40,7 @@ export function StartFrom({ startFrom, templateId, againRunId, onSource, onPickT
     <section className={QUESTION_BLOCK}>
       <div className="mb-3 flex items-center justify-between text-xs font-semibold">
         <span id={labelId}>{NR_SHAPE.START_FROM}</span>
-        <Chip tone="info">{NR_SHARED.OPTIONAL}</Chip>
+        <Chip>{NR_SHARED.OPTIONAL}</Chip>
       </div>
       <div role="group" aria-labelledby={labelId} className="flex rounded-[9px] border border-border bg-muted p-[3px] max-[350px]:flex-col">
         {SOURCES.map(([value, label]) => (

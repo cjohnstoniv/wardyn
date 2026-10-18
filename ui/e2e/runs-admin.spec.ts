@@ -162,8 +162,10 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByText("A running run")).toBeVisible();
 
     await page.getByRole("combobox", { name: "Status" }).click();
-    await page.getByRole("option", { name: "Failed", exact: true }).click();
+    await page.getByRole("option", { name: "Status · Failed", exact: true }).click();
     await expect(page).toHaveURL(/status=failed/);
+    // The trigger keeps saying which filter it is (#2927).
+    await expect(page.getByRole("combobox", { name: "Status" })).toHaveText("Status · Failed");
     await expect(page.getByText("A failed run")).toBeVisible();
 
     await page.getByRole("button", { name: "Save view" }).click();

@@ -437,11 +437,14 @@ export function MemberGettingStarted() {
               {status?.scm_access?.state === "shared_expired" && (
                 <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
               )}
-              <p className="mt-3 text-sm text-muted-foreground">
-                {/* Since 0.8 (#548) every model credential is the person's own —
-                    no install has a shared one to inherit. */}
-                {CONNECTIONS.LEDE}
-              </p>
+              {/* Not under "Not set up by your admin": the chip above already says there is nothing to connect. */}
+              {connectionsChip?.label !== CONNECTIONS.SUMMARY_NOT_SET_UP && (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  {/* Since 0.8 (#548) every model credential is the person's own —
+                      no install has a shared one to inherit. */}
+                  {CONNECTIONS.LEDE}
+                </p>
+              )}
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
               {governanceProfile && (

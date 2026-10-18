@@ -50,7 +50,7 @@ export const NR_REVIEW = {
   VALUE_ENVIRONMENT: "Environment sandbox",
   TIMING_APPLICATION: "Background automation · Runs when launched",
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
-  TIMING_NOW: "Autonomous · Run Now",
+  TIMING_NOW: "Autonomous · Run now",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
   WHERE_DETAIL: (kind: string | number, used: string | number, max: string | number) =>
     `${kind} · ${used} of ${max} running`,
@@ -73,8 +73,9 @@ export const NR_REVIEW = {
   TOOLS_STARTS: (name: string | number, provider: string | number) =>
     `${name} starts with the run · ${provider}`,
   TOOLS_NO_HARNESS: "No harness",
+  TOOLS_AUTO_ONE: "1 harness starts automatically",
   TOOLS_AUTO: (n: string | number, total: string | number) =>
-    `${n} of ${total} harnesses start automatically`,
+    `${n} of ${total} ${Number(total) === 1 ? "harness starts" : "harnesses start"} automatically`,
   HARNESS_STARTS: "Starts with run",
   HARNESS_AFTER: "Available after start",
   HARNESS_AUTO: "Starts automatically",
@@ -134,6 +135,9 @@ export const NR_REVIEW = {
   EDIT_FORMAT: (format: string | number) => `Edit ${format}`,
   SAVE_TEMPLATE: "Save as template",
   SAVE_POLICY: "Save as policy",
+  /** Below sm, Review keeps Save as template and Save as policy behind this menu. */
+  MORE: "More",
+  MORE_ARIA: "More actions",
   LAUNCH_RUN: "Launch run",
   DROPPED_HOST_ONE: (host: string | number) => `This run can't reach ${host}: your organisation doesn't allow it. Ask your admin to allow it.`,
   DROPPED_HOSTS_MANY: (hosts: string | number) => `This run can't reach ${hosts}: your organisation doesn't allow them. Ask your admin to allow them.`,

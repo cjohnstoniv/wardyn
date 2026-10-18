@@ -190,7 +190,8 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Starting up")).toBeVisible();
     await expect(page.getByText("Starting", { exact: true })).toBeVisible();
     await expect(page.getByText("Queued run")).toBeVisible();
-    await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+    // A PENDING run reads Pending, the run page's own word; Queued is the separate wait for a pool slot (#2922).
+    await expect(page.getByTestId("run-row").filter({ hasText: "Queued run" }).getByText("Pending", { exact: true })).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "Ended today" })).toBeVisible();
     await expect(page.getByText("Wrapped up fine")).toBeVisible();

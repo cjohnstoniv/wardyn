@@ -84,7 +84,7 @@ export const STARTING_RAW_PREFIX = "Waiting: ";
 // reads as "nothing is happening" rather than "the request is in flight".
 // Superseded the instant a real stage line lands: run-detail-summary-header.tsx
 // only reaches for this sentence while status_detail is still empty.
-export const PENDING_NO_DETAIL = "Queued — Wardyn is getting this run ready.";
+export const PENDING_NO_DETAIL = "Pending — Wardyn is getting this run ready.";
 
 // The short register. The header chip is `max-w-[160px]`, so the
 // sentences above truncate to a restatement of the starting badge — "Starting

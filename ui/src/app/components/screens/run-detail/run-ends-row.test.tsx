@@ -198,6 +198,8 @@ describe("RunEndsRow — Change… (F7: Save on the untouched default must still
     const run = detail({ run_limits: { user_changes_limits: true, allow_no_end: true } });
     renderRow(run, onChanged);
     await user.click(screen.getByRole("button", { name: "Set an end…" }));
+    // The heading says what is being set, not the button's own label (#2921).
+    expect(await screen.findByRole("dialog", { name: "When this run ends" })).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(setRunEndAndWaitMock).toHaveBeenCalledTimes(1));
     const [runId, body] = setRunEndAndWaitMock.mock.calls[0];

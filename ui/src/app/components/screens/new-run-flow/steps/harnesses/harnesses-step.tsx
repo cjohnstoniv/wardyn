@@ -86,7 +86,8 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           <span className="text-muted-foreground">{NR_HARNESSES.EMPTY_BODY}</span>
         </div>
       )}
-      <div className="flex flex-col gap-3">
+      {/* empty:hidden: with no cards the wrapper would still take a slot (and a second gap) in the step's column. */}
+      <div className="flex flex-col gap-3 empty:hidden">
         {ids.map((id, index) => (
           <HarnessCard
             key={id}

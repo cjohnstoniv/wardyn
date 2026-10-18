@@ -79,7 +79,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
       )}
       {mode === "interactive" && (
         <div className="mt-4 flex flex-col gap-3.5 border-t border-border pt-4">
-          <div className="flex items-center gap-[9px] text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-[9px] text-sm text-foreground">
             <Switch checked={started} label={NR_HARNESSES.START_IN_HARNESS} onChange={onStart} />
             <span aria-hidden="true">{NR_HARNESSES.START_IN_HARNESS}</span>
           </div>

@@ -125,9 +125,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MODE_AUTONOMOUS` | mock | Autonomous |
 | `MODE_AUTONOMOUS_BODY` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
 | `TIMING_LABEL` | mock | When should it run? |
-| `TIMING_NOW` | mock | Run Now |
+| `TIMING_NOW` | mock | Run now |
 | `TIMING_NOW_BODY` | mock | Start as soon as you launch the run. |
-| `TIMING_LATER` | mock | Schedule For Later |
+| `TIMING_LATER` | mock | Schedule for later |
 | `TIMING_LATER_BODY` | mock | Choose a future date and time for this run to start. |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
@@ -699,7 +699,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VALUE_ENVIRONMENT` | mock | Environment sandbox |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
-| `TIMING_NOW` | mock | Autonomous · Run Now |
+| `TIMING_NOW` | mock | Autonomous · Run now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
@@ -719,6 +719,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOOLS_NONE` | mock | Optional · none added |
 | `TOOLS_STARTS(name, provider)` | mock | {name} starts with the run · {provider} |
 | `TOOLS_NO_HARNESS` | mock | No harness |
+| `TOOLS_AUTO_ONE` | mock | 1 harness starts automatically |
 | `TOOLS_AUTO(n, total)` | mock | {n} of {total} harnesses start automatically |
 | `HARNESS_STARTS` | mock | Starts with run |
 | `HARNESS_AFTER` | mock | Available after start |
@@ -772,6 +773,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `EDIT_FORMAT(format)` | mock | Edit {format} |
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
+| `MORE` | deviation (approved 2026-10-18) | More |
+| `MORE_ARIA` | deviation (approved 2026-10-18) | More actions |
 | `LAUNCH_RUN` | mock | Launch run |
 | `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
 | `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |

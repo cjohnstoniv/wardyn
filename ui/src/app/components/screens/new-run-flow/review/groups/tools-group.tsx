@@ -47,7 +47,10 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
     const provider = providerOf(t);
     const starts = t ? name(t.id) : NR_REVIEW.TOOLS_NO_HARNESS;
     detail = provider ? NR_REVIEW.TOOLS_STARTS(starts, provider) : NR_SHARED.JOIN(starts, NR_REVIEW.HARNESS_STARTS_LONG);
-  } else detail = NR_REVIEW.TOOLS_AUTO(harnesses.filter((h) => startsAutomatically(intent, h.id, harnesses)).length, n);
+  } else {
+    const auto = harnesses.filter((h) => startsAutomatically(intent, h.id, harnesses)).length;
+    detail = n === 1 && auto === 1 ? NR_REVIEW.TOOLS_AUTO_ONE : NR_REVIEW.TOOLS_AUTO(auto, n);
+  }
 
   const value = command ? <code className="font-mono text-sm">{intent.workload?.command}</code> : n ? harnesses.map((h) => name(h.id)).reduce((all, next) => NR_SHARED.JOIN(all, next)) : NR_REVIEW.NO_HARNESSES;
 
