@@ -24,6 +24,7 @@ import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { coveredSuffixes } from "./egress-baseline-coverage";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
 
@@ -171,7 +172,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
               </p>
               {/* #2130: what each entry reaches, read live off the box, so the admin sees it before saving. */}
               <ul id="baseline-suffixes-covers" data-testid="baseline-suffixes-covers" className="space-y-0.5 text-xs text-muted-foreground">
-                {lines(draft.suffixes).map((entry, i) => (
+                {coveredSuffixes(lines(draft.suffixes)).map((entry, i) => (
                   <li key={`${i}:${entry}`}>{BASELINE.COVERS(entry)}</li>
                 ))}
               </ul>

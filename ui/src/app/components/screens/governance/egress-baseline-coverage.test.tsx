@@ -16,6 +16,7 @@ vi.mock("../../../lib/api/egress-baseline", () => ({
 import { setField } from "../../../../test/set-field";
 import { BASELINE } from "../../../lib/governance-copy";
 import { EgressBaselineTab } from "./egress-baseline";
+import { coveredSuffixes } from "./egress-baseline-coverage";
 
 beforeEach(() => {
   getMock.mockReset().mockResolvedValue({ baseline_hosts: [], internal_host_suffixes: ["corp.example"], etag: '"e1"' });
@@ -52,5 +53,21 @@ describe("EgressBaselineTab coverage notice", () => {
     );
     const list = await screen.findByTestId("baseline-suffixes-covers");
     expect(within(list).queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  it("describes only a line that can be a hostname: a wildcard, scheme, port, path or address is left out", async () => {
+    expect(coveredSuffixes(["corp.example", "*.corp.example", "https://corp.example", "corp.example:8443", "corp.example/x", "10.0.0.1", "Build.Internal"])).toEqual([
+      "corp.example",
+      "build.internal",
+    ]);
+    render(
+      <MemoryRouter>
+        <EgressBaselineTab />
+      </MemoryRouter>,
+    );
+    const list = await screen.findByTestId("baseline-suffixes-covers");
+    setField(screen.getByLabelText(BASELINE.SUFFIXES_LABEL), "*.corp.example");
+    expect(within(list).queryAllByRole("listitem")).toHaveLength(0);
+    expect(list).not.toHaveTextContent("*.*.");
   });
 });
