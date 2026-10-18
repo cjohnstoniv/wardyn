@@ -617,6 +617,10 @@ k8s:
   # templates/rbac.yaml documents.
   rbac:
     create: true
+  # The cluster's DNS domain (kubelet --cluster-domain). Only the Service FQDN the
+  # proxies dial for WARDYN_CONTROL_PLANE_URL uses it; change it on a cluster whose
+  # domain is not cluster.local, or those names do not resolve.
+  clusterDomain: cluster.local
   # Namespace every sandbox's Secret/NetworkPolicies/pods are created in.
   # Empty => the release namespace (no runs-namespace.yaml, no
   # createRunsNamespace — the chart never creates or labels one). A DIFFERENT,

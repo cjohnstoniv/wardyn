@@ -1016,6 +1016,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.local:8443"' || { echo "k8s.enabled did not render WARDYN_CONTROL_PLANE_URL as https on the internal port — wardynd refuses to boot on a non-loopback http URL, and the proxy would resolve credentials in cleartext"; exit 1; }; \
 	echo "$$out" | grep -q "http://wardyn.default.svc" && { echo "an http:// control-plane URL is still rendered"; exit 1; }; \
+	echo "$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml --set k8s.clusterDomain=cluster.example)" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.example:8443"' || { echo "k8s.clusterDomain no longer reaches WARDYN_CONTROL_PLANE_URL — proxies on a cluster whose DNS domain is not cluster.local dial a name that never resolves"; exit 1; }; \
 	rules=$$(echo "$$out" | awk '/^kind: NetworkPolicy/{n=1} n && /^  egress:/{n=0} n && /^    - from:/{i++} n && i {print i": "$$0}'); \
 	ir=$$(echo "$$rules" | awk -F': ' '/port: internal$$/{print $$1}' | sort -u); \
 	[ "$$(echo "$$ir" | wc -w)" = "1" ] || { echo "the internal TLS port must be granted by exactly ONE NetworkPolicy ingress rule (got rules: $$ir)"; exit 1; }; \

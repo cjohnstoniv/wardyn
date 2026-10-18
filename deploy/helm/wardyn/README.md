@@ -603,7 +603,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 ## Control-plane to proxy TLS
 
 - Every run's proxy resolves credential values from wardynd, so that hop is TLS.
-- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.cluster.local:<service.internalPort>` and passes `-internal-listen=:<service.internalPort>` (default 8443).
+- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.<k8s.clusterDomain>:<service.internalPort>` (`k8s.clusterDomain` defaults to `cluster.local`) and passes `-internal-listen=:<service.internalPort>` (default 8443).
 - The certificate comes from wardynd's **own** internal CA, minted on first boot into its secret store (age-encrypted in Postgres, beside the signing key) and kept across restarts and upgrades —
   - so there is no CA Secret, no cert-manager dependency and nothing to rotate by hand, and a GitOps render (`helm template`, Argo CD, Flux) cannot churn it the way a chart-generated certificate would.
 - Each proxy gets the CA certificate in its sealed per-run Secret and trusts it alone.
