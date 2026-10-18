@@ -8,7 +8,15 @@
 import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../src/app/components/wardyn/copy";
-import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute, sidebarLink, sql } from "./fixtures";
+import {
+  test, expect, asRealMember, chooseFiles, chooseRunMode, chooseShape, consoleAPI, continueNewRun, firstHarness, gotoConsole,
+  mockPreflightClear, navToRoute, sidebarLink, sql, startGuided, walkGuidedToFiles,
+} from "./fixtures";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 
 const PHONE = { width: 390, height: 844 };
 
@@ -190,5 +198,72 @@ test.describe("Tier B run layout editor", () => {
     await page.getByRole("button", { name: "Edit layout" }).click();
     const handle = page.getByTestId("run-terminal-pane").locator("[data-drag-handle]");
     await expect(handle).toContainText("Output");
+  });
+});
+
+test.describe("Tier B guided setup", () => {
+  const top = async (l: Locator) => Math.round((await l.boundingBox())!.y);
+
+  // #2862, #2863: the Folder and Subfolder fields start on one line, and Required and Optional share the
+  // neutral muted colour of the text beside them.
+  test("Files: Folder and Subfolder line up; Required and Optional are neutral", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await walkGuidedToFiles(page);
+    const main = page.getByRole("region", { name: NR_FILES.MAIN_TITLE });
+    const start = page.getByRole("region", { name: NR_FILES.START_TITLE });
+    await expect(start).toBeVisible();
+    expect(await top(page.locator("#nr-starts-here"))).toBe(await top(page.locator("#nr-start-subfolder")));
+    const color = (l: Locator) => l.evaluate((el) => getComputedStyle(el).color);
+    expect(await color(main.getByText(NR_SHARED.REQUIRED, { exact: true }).first())).toBe(await color(main.getByText(NR_FILES.MAIN_BODY)));
+    expect(await color(start.getByText(NR_SHARED.OPTIONAL, { exact: true }).first())).toBe(await color(start.getByText(NR_FILES.START_BODY)));
+  });
+
+  // #2869: the main switch's label is body size, not 11px.
+  test("Harnesses: the 'Start the run in this harness' label is body size", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await startGuided(page);
+    await chooseShape(page, "agent_task");
+    await chooseRunMode(page, "interactive");
+    await continueNewRun(page, NR_HARNESSES.TITLE);
+    await firstHarness(page);
+    const label = page.getByText(NR_HARNESSES.START_IN_HARNESS, { exact: true });
+    expect(await label.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(14);
+  });
+
+  // #2866: with no harness the empty box and the Add button sit one step gap apart, not two.
+  test("Harnesses (none added): the empty box and the Add button are one gap apart", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await startGuided(page);
+    await chooseShape(page, "environment");
+    await continueNewRun(page, NR_HARNESSES.TITLE);
+    const box = page.getByText(NR_HARNESSES.EMPTY_TITLE, { exact: true }).locator("xpath=..");
+    await expect(box).toBeVisible();
+    const b = (await box.boundingBox())!;
+    const add = (await page.locator("#nr-harness").boundingBox())!;
+    expect(add.y - (b.y + b.height)).toBeLessThan(32);
+  });
+
+  // #2867, #2868: sentence-case timing options, and the singular count line on Review.
+  test("Autonomous run: 'Run now' on the Run step, and one harness reads singular on Review", async ({ page }) => {
+    await mockPreflightClear(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await startGuided(page);
+    await chooseShape(page, "agent_task");
+    await chooseRunMode(page, "autonomous");
+    await expect(page.getByRole("radio", { name: "Run now", exact: true })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Schedule for later", exact: true })).toBeVisible();
+    await continueNewRun(page, NR_HARNESSES.TITLE);
+    await firstHarness(page, "e2e task");
+    await continueNewRun(page, NR_FILES.TITLE);
+    await chooseFiles(page);
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await continueNewRun(page, NR_REVIEW.TITLE);
+    await expect(page.getByText("Autonomous · Run now").first()).toBeVisible();
+    await expect(page.getByText("1 harness starts automatically").first()).toBeVisible();
+    await expect(page.getByText(/1 of 1 harnesses/)).toHaveCount(0);
   });
 });
