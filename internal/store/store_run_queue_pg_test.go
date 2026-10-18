@@ -183,9 +183,6 @@ func TestPG_FloodLimitCountsOnlyWaitingRows(t *testing.T) {
 	if _, err := enqueue(t, pg, p, "flood", now, limit); !errors.Is(err, store.ErrRunQueueFull) {
 		t.Fatalf("the %dst waiting run = %v, want ErrRunQueueFull", limit+1, err)
 	}
-	if n, err := pg.CountQueuedRunsByOwner(ctx, p.ID, "flood"); err != nil || n != limit {
-		t.Fatalf("waiting count = %d, %v; want %d", n, err, limit)
-	}
 	for _, who := range []struct {
 		pool  types.RunnerPool
 		owner string
@@ -204,9 +201,8 @@ func TestPG_FloodLimitCountsOnlyWaitingRows(t *testing.T) {
 	}
 }
 
-// Position is the number of rows ahead (oldest first, run id breaking a tie); the promoter's scan
-// is the same order, and a second scan passes over the rows the first holds.
-func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
+// Position is the number of rows ahead (oldest first, run id breaking a tie).
+func TestPG_QueueOrderPosition(t *testing.T) {
 	ctx := context.Background()
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
@@ -227,32 +223,6 @@ func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
 	}
 	if _, err := pg.RunQueuePosition(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("position of a run that is not waiting = %v, want ErrNotFound", err)
-	}
-
-	a, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer a.Rollback(ctx) //nolint:errcheck
-	// The second transaction is on a pool of its own: one goroutine holding two connections of one
-	// pool is what WARDYN_TEST_POOL_GUARD refuses.
-	other, err := pgxpool.New(ctx, pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	b, err := other.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer b.Rollback(ctx) //nolint:errcheck
-	first, err := store.ListRunQueueForUpdate(ctx, a, p.ID, 1)
-	if err != nil || len(first) != 1 || first[0].RunID != ids[0] {
-		t.Fatalf("first scan = %+v, %v; want the oldest run %s", first, err, ids[0])
-	}
-	second, err := store.ListRunQueueForUpdate(ctx, b, p.ID, 0)
-	if err != nil || len(second) != 2 || second[0].RunID != ids[2] || second[1].RunID != ids[1] {
-		t.Fatalf("a second scan = %+v, %v; want to skip the locked head and see %s then %s", second, err, ids[2], ids[1])
 	}
 }
 

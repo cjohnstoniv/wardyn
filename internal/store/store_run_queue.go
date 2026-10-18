@@ -174,15 +174,6 @@ func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, 
 	return moved > 0, nil
 }
 
-// CountQueuedRunsByOwner is how many runs owner has waiting for poolID: the flood limit's one read.
-func (s PG) CountQueuedRunsByOwner(ctx context.Context, poolID uuid.UUID, owner string) (int, error) {
-	var n int
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM run_queue WHERE pool_id = $1 AND owner = $2`, poolID, owner).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count queued runs by owner: %w", err)
-	}
-	return n, nil
-}
-
 // RunQueuePosition is how many runs wait ahead of run id in its pool (a count, never whose), or
 // ErrNotFound when the run is not waiting.
 func (s PG) RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error) {
@@ -197,30 +188,6 @@ func (s PG) RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error) {
 		return 0, fmt.Errorf("store: run queue position: %w", err)
 	}
 	return ahead, nil
-}
-
-// ListRunQueueForUpdate is the promoter's scan: poolID's waiting runs oldest first (queued_at, then
-// run_id), each row locked FOR UPDATE SKIP LOCKED so a second promoter passes over what the first holds.
-// q must be a transaction that already holds the pool row's lock. limit <= 0 is every row.
-func ListRunQueueForUpdate(ctx context.Context, q Querier, poolID uuid.UUID, limit int) ([]RunQueueEntry, error) {
-	if limit <= 0 {
-		limit = 1 << 30
-	}
-	rows, err := q.Query(ctx, `SELECT `+runQueueCols+` FROM run_queue WHERE pool_id = $1
-		ORDER BY queued_at, run_id LIMIT $2 FOR UPDATE SKIP LOCKED`, poolID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("store: list run queue: %w", err)
-	}
-	defer rows.Close()
-	var out []RunQueueEntry
-	for rows.Next() {
-		e, err := scanRunQueueEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
 }
 
 // countPoolSlotHolders counts the runs holding one of poolID's slots: a slot-holding state whose
