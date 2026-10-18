@@ -1405,6 +1405,29 @@ func TestWaitMainProcess_TolerantOfTransientProbeErrors(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_PullsAnAbsentProxyImage: the proxy sidecar's image is fetched
+// by nothing else, so a host holding only the agent image pulls the proxy's before
+// the first run, and says so. The agent image being resident must not make the
+// proxy's tag read present.
+func TestCreateSandbox_PullsAnAbsentProxyImage(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	var pulled, said []string
+	f.onPull = func(ref string) { pulled = append(pulled, ref) }
+	spec := testSpec()
+	spec.OnWaiting = func(msg string) { said = append(said, msg) }
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if !slices.Equal(pulled, []string{"wardyn-proxy:dev"}) {
+		t.Errorf("pulled %v, want only the proxy image (the agent image was resident)", pulled)
+	}
+	if !slices.Equal(said, []string{"image: Pulling: wardyn-proxy:dev"}) {
+		t.Errorf("OnWaiting said %v, want the proxy image's pull reported once", said)
+	}
+}
+
 // TestEnsureImage_ReportsPullingOnlyWhenAbsent is the one place a FIRST PULL can
 // be ASSERTED rather than hedged: imagePresent has just said the host does not
 // have this image, so the wait the person is sitting through IS the download.
