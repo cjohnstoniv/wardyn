@@ -520,7 +520,8 @@ test.describe("governance — the security admin's console (real per-person toke
     );
 
     await gotoConsole(page);
-    await navToRoute(page, "/approvals");
+    // The Admin view's queue: /approvals is the User view, which the server narrows to the caller's own runs.
+    await navToRoute(page, "/admin/approvals");
 
     // authorizeUserDecision early-returns for isSecurityOperator
     // (approvals.go:392), so this tier decides ANY kind on ANY run org-wide —
