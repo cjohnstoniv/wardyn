@@ -489,7 +489,7 @@ if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 
   # process and fail to bind ("address already in use").
   for _ in $(seq 1 10); do kill -0 "$WPID" 2>/dev/null || break; sleep 1; done
   if ! stale_secrets_wipe_consent "$AGE_ENV"; then
-    warn "Skipped. To clear them yourself: make stop-host && docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c 'TRUNCATE secrets;' (or set WARDYN_FORCE_RESET=1 and re-run)."
+    warn "Skipped, and wardynd stays down. To clear them by hand: make stop-host && docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c 'TRUNCATE secrets;'"
   elif docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
        psql -U wardyn -d wardyn -c 'TRUNCATE secrets;' >/dev/null 2>&1; then
     ok "Cleared the undecryptable secrets table (audit log, runs, and recordings preserved) — retrying once…"

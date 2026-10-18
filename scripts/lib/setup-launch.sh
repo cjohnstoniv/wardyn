@@ -65,12 +65,14 @@ stale_secrets_wipe_consent() {
   _ssw_envkey=$(grep -E '^WARDYN_AGE_KEY=' "$1" 2>/dev/null | head -1 | cut -d= -f2-) || true
   if [ -n "${WARDYN_AGE_KEY_FILE:-}${WARDYN_PLATFORM_KEY_FILE:-}" ] || { [ -n "${WARDYN_AGE_KEY:-}" ] && [ "${WARDYN_AGE_KEY}" != "${_ssw_envkey}" ]; }; then
     warn "Your shell sets WARDYN_AGE_KEY, WARDYN_AGE_KEY_FILE or WARDYN_PLATFORM_KEY_FILE to a key other than the one in $1; wardynd used it, so the stored secrets may be fine under that file's key."
-    warn "Nothing was cleared. Unset those variables and run make setup again."
+    warn "Nothing was cleared (WARDYN_FORCE_RESET=1 does not override this). Fix: unset those variables, or export the WARDYN_AGE_KEY from $1, then run make setup again."
     unset _ssw_envkey
     return 1
   fi
   unset _ssw_envkey
   if [ "${WARDYN_FORCE_RESET:-}" = 1 ]; then warn "WARDYN_FORCE_RESET=1 - clearing the secrets table."; return 0; fi
   warn "Clearing the secrets table DESTROYS every stored credential (model providers, SCM) and the boot keys."
-  [ -t 0 ] && ask_yn "Clear the secrets table (audit log, runs and recordings are kept)?" n
+  [ -t 0 ] && ask_yn "Clear the secrets table (audit log, runs and recordings are kept)?" n && return 0
+  warn "Nothing was cleared. To clear them: run make setup in a terminal and answer y, or set WARDYN_FORCE_RESET=1 and run make setup again."
+  return 1
 }

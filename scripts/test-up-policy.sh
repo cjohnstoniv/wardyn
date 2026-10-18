@@ -40,6 +40,7 @@ env_file="${dir}/.env"
 : > "${env_file}"
 
 # 1) First run, no model signal: demo.json, marked auto.
+# (#2221: the old assert pinned the marker's FORMAT, a bare 1, which is exactly what could not tell a hand edit from our pick; the behaviour it stood for is kept: the pick is marked, and cases 2-5b still pin re-pick and not clobbering.)
 got="$(resolve_default_policy "${env_file}" "" '{}' "")"
 [ "$got" = "/examples/policies/demo.json" ] || fail "first pick got '$got', want demo.json"
 [ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "/examples/policies/demo.json" ] || fail "first pick did not record its path in WARDYN_DEFAULT_POLICY_AUTO"
