@@ -51,6 +51,7 @@ CALLS="$STUB/calls.log"
 cat > "$STUB/docker" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALLS"
+env | grep -E '^WARDYN_(UP|PG|REGISTRY|SSH|UI_SANDBOX)_PORT=' >> "$STUB/ports.log" || true
 case "$1" in
   ps) cat "$STUB/running" 2>/dev/null || true ;;
   context) exit 1 ;;
@@ -101,6 +102,14 @@ case "$out_free" in
     *"wardyn-ci-selftest"*already*) bad "ci-run.sh refused an UNUSED project name" ;;
     *) ok "an unused project name proceeds" ;;
 esac
+
+# 2c. (#2184) every host port the stack publishes is OS-assigned: wardynd also
+# publishes SSH (2222) and the UI-sandbox relay (8081), so leaving either at its
+# fixed default makes the second concurrent job's `up` fail on the bind.
+for v in WARDYN_UP_PORT WARDYN_PG_PORT WARDYN_REGISTRY_PORT WARDYN_SSH_PORT WARDYN_UI_SANDBOX_PORT; do
+    if grep -qx "${v}=0" "$STUB/ports.log" 2>/dev/null; then ok "ci-run.sh binds ${v} ephemerally"
+    else bad "ci-run.sh leaves ${v} at its fixed default - two concurrent jobs on one Docker socket collide on that host port"; fi
+done
 
 # ── 3. the admin bearer is not on the host docker argv (F199) ────────────────
 # Behavioural: the REAL shim is extracted from the live script and called with a
@@ -160,7 +169,27 @@ case "$1 ${2:-}" in
   "run get") printf '{"id":"%s"}\n' "$RUN_UUID" ;;
   "run recording") exit 1 ;;
   "audit "*) echo '[]' ;;
-  "run "*) case " $* " in *" --wait "*) printf '{"id":"%s"}\n' "$RUN_UUID" ;; esac ;;
+  "run "*)
+    case " $* " in *" --wait "*)
+      mode="$(cat "$WSTUB/wait_mode" 2>/dev/null || true)"
+      if [ -n "$mode" ]; then
+        # The real CLI prints this on stderr before it blocks; --json prints only when the wait returns.
+        echo "waiting for run $RUN_UUID (timeout 30m0s)" >&2
+        if [ "$mode" = cancel ]; then
+          # A job cancel: SIGTERM the OUTERMOST ci-run.sh ancestor (the pipeline's forked subshells
+          # share its command line); it handles the signal once this CLI has exited.
+          p=$PPID; top=""
+          while [ "$p" -gt 1 ]; do
+            if tr '\0' ' ' < "/proc/$p/cmdline" | grep -q 'scripts/ci-run.sh'; then top=$p; fi
+            p="$(awk '/^PPid/{print $2}' "/proc/$p/status")"
+          done
+          [ -z "$top" ] || kill -TERM "$top"
+          exit 0
+        fi
+        exit 124
+      fi
+      printf '{"id":"%s"}\n' "$RUN_UUID" ;;
+    esac ;;
 esac
 exit 0
 WEOF
@@ -206,6 +235,23 @@ else
 fi
 if grep -o 'ARGV=.*' "$WCALLS" | grep -qF 'wdn_ci-principal-token'; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
 if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(head -2 "$CALLS" | tr '\n' ' ')"; else ok "remote mode starts no stack"; fi
+
+# 4a'. (#2185) a --wait that times out (124) does not stop the run: ci-run.sh must kill it, and still exit 124.
+status '{"provider_access":[{"provider":"corp-bedrock","state":"live"}]}'
+printf 'timeout' > "$WSTUB/wait_mode"
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 124 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: exit 124 kills the still-running run and keeps exit 124"
+else bad "remote mode left the run alive after exit 124 (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
+# ...and a job cancel (SIGTERM) kills it too, exiting 143.
+printf 'cancel' > "$WSTUB/wait_mode"
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 143 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: a cancelled job kills its run"
+else bad "remote mode left the run alive after a job cancel (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
+# ...but a run that finished normally is never killed.
+rm -f "$WSTUB/wait_mode"
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q 'run kill' "$WCALLS"; then ok "remote mode: a finished run is not killed"
+else bad "remote mode killed a run that completed (rc=$rc)"; fi
 
 # 4b. expiring is usable (the server counts it), with a warning.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"expiring"}]}'

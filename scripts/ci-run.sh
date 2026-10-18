@@ -74,15 +74,18 @@ CI_OVERLAY="${REPO_ROOT}/deploy/compose/docker-compose.ci.yaml"
 CI_PROJECT="${WARDYN_CI_PROJECT:-wardyn-ci-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
 export COMPOSE_PROJECT_NAME="${CI_PROJECT}"
 export WARDYN_NS="${CI_PROJECT}"
-# Host UI/postgres/registry ports are unused in CI (the CLI runs in-container
-# and health is read from the container): bind them to OS-assigned ephemeral
-# ports so two jobs never fight over 8080/5432/5010. Registry included because
-# `up -d ... wardynd` always starts it too (a wardynd dependency, docs/CI.md
-# "Concurrent jobs on a shared host") — left at its fixed default, two
-# concurrent jobs collide on the bind and the second job's wardynd never starts.
+# Host UI/postgres/registry/SSH/UI-sandbox ports are unused in CI (the CLI runs
+# in-container and health is read from the container): bind them to OS-assigned
+# ephemeral ports so two jobs never fight over 8080/5432/5010/2222/8081. Registry
+# included because `up -d ... wardynd` always starts it too (a wardynd dependency,
+# docs/CI.md "Concurrent jobs on a shared host"), and wardynd itself publishes SSH
+# and the UI-sandbox relay — left at a fixed default, two concurrent jobs collide
+# on the bind and the second job's wardynd never starts.
 export WARDYN_UP_PORT="${WARDYN_UP_PORT:-0}"
 export WARDYN_PG_PORT="${WARDYN_PG_PORT:-0}"
 export WARDYN_REGISTRY_PORT="${WARDYN_REGISTRY_PORT:-0}"
+export WARDYN_SSH_PORT="${WARDYN_SSH_PORT:-0}"
+export WARDYN_UI_SANDBOX_PORT="${WARDYN_UI_SANDBOX_PORT:-0}"
 COMPOSE=(docker compose -p "${CI_PROJECT}" -f "${COMPOSE_FILE}" -f "${CI_OVERLAY}")
 
 TASK="${WARDYN_CI_TASK:-}"
@@ -342,8 +345,29 @@ run_log="${OUT_DIR}/run.log"
 # --json contract keeps the structured stdout clean, with no progress mixed in.
 # PIPESTATUS[0] rather than $? because $? is now tee's: this script's whole
 # contract is exiting with the RUN's code.
+#
+# Remote mode: --wait does not stop the run on a timeout (124) or a cancel, and the run keeps
+# working under the CI identity until its own auto_stop. The CLI prints the id on stderr
+# ("waiting for run <id>") before it blocks, so run.log has it though --json does not yet.
+# A trap runs once the foreground CLI exits, which a job cancel that signals the process group
+# does at once; a cancel before that line prints has no id to kill (nothing exists to kill yet).
+remote_kill_run() { # REASON
+  local rid
+  rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p' "${run_log}" 2>/dev/null | head -1)"
+  [[ -n "${rid}" ]] || return 0
+  warn "$1: killing run ${rid}"
+  wardyn run kill "${rid}" >/dev/null 2>&1 || warn "could not kill run ${rid}: kill it by hand with 'wardyn run kill ${rid}'"
+}
+if [[ -n "${REMOTE_URL}" ]]; then
+  trap 'remote_kill_run "job cancelled"; exit 143' TERM
+  trap 'remote_kill_run "job interrupted"; exit 130' INT
+fi
 wardyn "${run_args[@]}" 2>&1 >"${run_json}" | tee "${run_log}" >&2
 run_code=${PIPESTATUS[0]}
+if [[ -n "${REMOTE_URL}" ]]; then
+  trap - TERM INT
+  [[ "${run_code}" -ne 124 ]] || remote_kill_run "wait timed out (exit 124)"
+fi
 
 # --json's structured stdout survives a --wait run cleanly; the old scrape of a
 # "created run <id>..." text line broke the moment anything else printed first.
