@@ -609,9 +609,12 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 			finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
 			return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
 		})
-		if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {
-			writeServerError(w, r, "list api tokens", err)
-			return
+		// Only the still-work view: include_revoked keeps finished rows visible whoever owns them.
+		if !withRevoked {
+			if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {
+				writeServerError(w, r, "list api tokens", err)
+				return
+			}
 		}
 		for i := range tokens {
 			tokens[i].Token = ""

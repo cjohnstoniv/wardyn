@@ -222,4 +222,9 @@ func TestListAllAPITokens_MintedForOthersDropsDeactivatedOwners(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), live.ID.String()) || strings.Contains(w.Body.String(), gone.ID.String()) {
 		t.Fatalf("inventory = %d %s, want the live owner's token and not the deactivated owner's", w.Code, w.Body.String())
 	}
+	// include_revoked keeps finished rows visible whoever owns them: the deactivated owner's token stays.
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true&include_revoked=true", sec, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), live.ID.String()) || !strings.Contains(w.Body.String(), gone.ID.String()) {
+		t.Fatalf("include_revoked inventory = %d %s, want both owners' tokens", w.Code, w.Body.String())
+	}
 }
