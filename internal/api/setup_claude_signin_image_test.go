@@ -6,9 +6,14 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -134,5 +139,88 @@ func TestClaudeSignInImageCheck(t *testing.T) {
 				t.Errorf("detail = %q, want it to contain %q", chk.Detail, tc.want)
 			}
 		})
+	}
+}
+
+// wedgedImageRunner answers no image question until its context ends: a dockerd that
+// accepts the connection and never replies.
+type wedgedImageRunner struct{ *fakeRunner }
+
+func (wedgedImageRunner) ImagePresent(ctx context.Context, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+func (wedgedImageRunner) DescribeImage(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// /setup/status polls this check on every console tab. A wedged daemon must cost it
+// storePingTimeout and then the inconclusive (fail-open) arm, never the request's life.
+func TestSetupStatusImageProbesAreBoundedAgainstAWedgedDaemon(t *testing.T) {
+	prev := storePingTimeout
+	storePingTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { storePingTimeout = prev })
+	// The request's own context is the unbounded one a client that never hangs up carries.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	rnr := wedgedImageRunner{&fakeRunner{}}
+
+	start := time.Now()
+	st := resolveClaudeSignInImage(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr)
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("resolveClaudeSignInImage took %s on a wedged daemon; want about storePingTimeout", took)
+	}
+	if !st.resolved || st.verified || st.checkErr == nil {
+		t.Errorf("state = %+v, want resolved, unverified, with the timeout as the inconclusive error", st)
+	}
+
+	start = time.Now()
+	got := describeLocalImage(ctx, rnr.DescribeImage, "wardyn/agent-claude-code:local")
+	if took := time.Since(start); took > 4*time.Second {
+		t.Errorf("describeLocalImage took %s on a wedged daemon; want about storePingTimeout", took)
+	}
+	if !strings.Contains(got, "cannot tell") {
+		t.Errorf("describeLocalImage = %q, want the cannot-tell sentence", got)
+	}
+}
+
+// countingImageRunner counts the substrate presence probes /setup/status makes.
+type countingImageRunner struct {
+	*fakeRunner
+	probes atomic.Int32
+}
+
+func (r *countingImageRunner) ImagePresent(context.Context, string) (bool, error) {
+	r.probes.Add(1)
+	return true, nil
+}
+
+// A member's checks are discarded, so their poll must not wait on the Docker daemon
+// for a row nobody reads; an operator's still carries the row.
+func TestSetupStatus_ClaudeSignInImageProbeIsOperatorOnly(t *testing.T) {
+	h := newHarness(t)
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
+	rnr := &countingImageRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rnr
+	cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	code, st := decodeSetupSSO(t, srv, ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin))
+	if code != http.StatusOK {
+		t.Fatalf("admin GET /setup/status: code = %d", code)
+	}
+	if rnr.probes.Load() == 0 || !slices.ContainsFunc(st.Checks, func(c SetupCheck) bool { return c.ID == "claude_signin_image" }) {
+		t.Fatalf("the operator's status lost the claude_signin_image row (probes=%d)", rnr.probes.Load())
+	}
+	rnr.probes.Store(0)
+	if code, _ := decodeSetupSSO(t, srv, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)); code != http.StatusOK {
+		t.Fatalf("member GET /setup/status: code = %d", code)
+	}
+	if n := rnr.probes.Load(); n != 0 {
+		t.Errorf("a member's poll made %d image presence probe(s); it must not wait on the substrate", n)
 	}
 }

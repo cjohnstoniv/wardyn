@@ -301,11 +301,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
 	// they cannot clear. Each granted provider's own row follows LLM access.
-	checks := append([]SetupCheck{
-		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
-		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
-		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(providerAccess),
-	}, providerChecks...)
+	checks := []SetupCheck{runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages)}
+	checks = append(checks, s.claudeSignInImageRows(ctx)...)
+	checks = append(checks, envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(providerAccess))
+	checks = append(checks, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {

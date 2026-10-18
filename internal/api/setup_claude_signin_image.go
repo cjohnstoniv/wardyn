@@ -49,7 +49,11 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 	if !ok {
 		return claudeSignInImageState{ref: ref, resolved: true}
 	}
-	present, err := ic.ImagePresent(ctx, ref)
+	// Bounded like Capabilities on the same page: a wedged daemon must not hang
+	// every setup-status poll. A timeout is the inconclusive arm below.
+	pctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+	defer cancel()
+	present, err := ic.ImagePresent(pctx, ref)
 	if err != nil {
 		// Fail-open on an inconclusive check — the same posture
 		// cachedImageStillPresent already takes for the same reason: an
@@ -72,6 +76,15 @@ func claudeSignInImageResolves(ctx context.Context, images map[string]string, rn
 // on (introduced against nothing) — the only block E4 can refuse.
 func (s *Server) claudeSignInImageOK(ctx context.Context, block *types.ModelProviders) bool {
 	return introducedSubscription(block, nil) == "" || claudeSignInImageResolves(ctx, s.cfg.AgentImages, s.cfg.Runner)
+}
+
+// claudeSignInImageRows is the row for operator callers only: a member's Checks are
+// discarded, and a member's poll must not wait on a substrate call.
+func (s *Server) claudeSignInImageRows(ctx context.Context) []SetupCheck {
+	if !s.isOperator(ctx) {
+		return nil
+	}
+	return []SetupCheck{claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner)}
 }
 
 // claudeSignInImageCheck is the /setup/status row. Never Blocking: the kind is
