@@ -15,7 +15,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { NO_BARRIER } from "../wardyn/copy";
-import { TIER } from "../wardyn/copy";
+import { SHELL, TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -234,7 +234,7 @@ export function TopBar({
                   : meta.method === "token"
                     ? meta.operator
                       ? "admin token"
-                      : "signed in with a token"
+                      : SHELL.SIGNED_IN_WITH_TOKEN
                     : meta.method === "local"
                       ? "local mode — no login on this install"
                       : ""}
