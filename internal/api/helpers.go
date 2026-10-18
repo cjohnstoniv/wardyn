@@ -566,7 +566,7 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, id.String(), "success", auditWorkspaceData(r, updated.OwnedBy, data(val))))
-	writeJSON(w, http.StatusOK, s.workspaceForResponse(r, updated))
+	writeJSON(w, http.StatusOK, s.workspaceWriteEcho(r, updated))
 }
 
 // maxJSONBody caps a control-plane JSON request body. Nothing this package
