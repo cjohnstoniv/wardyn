@@ -125,9 +125,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MODE_AUTONOMOUS` | mock | Autonomous |
 | `MODE_AUTONOMOUS_BODY` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
 | `TIMING_LABEL` | mock | When should it run? |
-| `TIMING_NOW` | mock | Run Now |
+| `TIMING_NOW` | mock | Run now |
 | `TIMING_NOW_BODY` | mock | Start as soon as you launch the run. |
-| `TIMING_LATER` | mock | Schedule For Later |
+| `TIMING_LATER` | mock | Schedule for later |
 | `TIMING_LATER_BODY` | mock | Choose a future date and time for this run to start. |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
@@ -698,7 +698,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VALUE_ENVIRONMENT` | mock | Environment sandbox |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
-| `TIMING_NOW` | mock | Autonomous · Run Now |
+| `TIMING_NOW` | mock | Autonomous · Run now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |

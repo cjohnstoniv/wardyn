@@ -50,7 +50,7 @@ export const NR_REVIEW = {
   VALUE_ENVIRONMENT: "Environment sandbox",
   TIMING_APPLICATION: "Background automation · Runs when launched",
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
-  TIMING_NOW: "Autonomous · Run Now",
+  TIMING_NOW: "Autonomous · Run now",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
   WHERE_DETAIL: (kind: string | number, used: string | number, max: string | number) =>
     `${kind} · ${used} of ${max} running`,

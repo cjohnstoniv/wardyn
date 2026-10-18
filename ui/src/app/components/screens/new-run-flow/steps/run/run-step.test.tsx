@@ -374,12 +374,15 @@ describe("Run step: barrier", () => {
 });
 
 describe("Run step: mode, timing and command", () => {
-  it("offers Interactive and Autonomous for an agent, and Schedule For Later only as Coming soon", async () => {
+  it("offers Interactive and Autonomous for an agent, and Schedule for later only as Coming soon", async () => {
     show({ shape: "agent_task", experience: "background", workload: { kind: "agent_task", task: "x" } });
     await poolSelect();
     expect(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS })).toBeChecked();
     expect(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW })).toBeChecked();
     const later = screen.getByRole("radio", { name: NR_RUN.TIMING_LATER });
+    // Sentence case like every other option in the flow (#2867).
+    expect(screen.getByRole("radio", { name: "Run now" })).toBe(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW }));
+    expect(later).toHaveAccessibleName("Schedule for later");
     expect(later).toBeDisabled();
     expect(within(later.closest("label") as HTMLElement).getByText(NR_SHARED.COMING_SOON)).toBeInTheDocument();
   });
