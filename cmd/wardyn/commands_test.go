@@ -1208,7 +1208,7 @@ func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
 // lock, so seq order can run against time order. The earlier-time event that
 // follows must still be emitted, now and on a later poll.
 func TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime(t *testing.T) {
-	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC().Truncate(time.Second)
 	b := types.AuditEvent{ID: uuid.New(), Time: t0.Add(2 * time.Millisecond), Action: "credential.mint"}
 	a := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.deny"} // higher seq, earlier time
 
