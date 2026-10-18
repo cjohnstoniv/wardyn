@@ -57,7 +57,7 @@ import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
 import { ViewNotice } from "../../wardyn/console-view";
-import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
+import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -301,7 +301,7 @@ export function AdminSettingsScreen() {
 
   if (refused) {
     return (
-      <ViewNotice title={VIEW_REFUSAL.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
+      <ViewNotice title={SETTINGS_SUPER_ONLY.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
         <Button size="sm" onClick={() => navigate("/admin/runs")}>
           {SETTINGS_SUPER_ONLY.CTA}
         </Button>

@@ -74,8 +74,9 @@ test.describe("Admin Settings — S-5, a security admin is refused", () => {
 
     await navToRoute(page, "/admin/settings");
 
-    await expect(page.getByRole("heading", { name: "Admin view" })).toBeVisible();
-    await expect(page.getByText("Settings is for super admins. You're signed in as a security admin.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Settings is for super admins" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Admin view" })).toHaveCount(0);
+    await expect(page.getByText("You're signed in as a security admin.")).toBeVisible();
     const back = page.getByRole("button", { name: "Back to Runs" });
     await expect(back).toBeVisible();
     expect(setupStatusCalls, "navigating into Settings must add no further GET /setup/status").toBe(0);

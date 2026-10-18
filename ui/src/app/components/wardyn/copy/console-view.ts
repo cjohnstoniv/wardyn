@@ -52,11 +52,13 @@ export const YOUR_ACCOUNT = {
 // M-5 (#636, packet S-5, approved 2026-09-27): a security admin reaches
 // /admin/settings from a stale link — that tier has no Settings in its nav
 // (app-shell.tsx's navItemsForView), so this only ever renders from a typed
-// or bookmarked URL. Same shape as VIEW_REFUSAL: title "Admin view", a body
-// naming the tier, one CTA back to the caller's own Runs. Nothing behind the
+// or bookmarked URL. Same shape as VIEW_REFUSAL: a title, a body naming the
+// tier, one CTA back to the caller's own Runs. The title says what happened;
+// VIEW_REFUSAL's "Admin view" names the page the user is already on (#2881). Nothing behind the
 // page is fetched (AdminSettingsScreen checks this before its first read).
 export const SETTINGS_SUPER_ONLY = {
-  BODY: "Settings is for super admins. You're signed in as a security admin.",
+  TITLE: "Settings is for super admins",
+  BODY: "You're signed in as a security admin.",
   CTA: "Back to Runs",
 } as const;
 

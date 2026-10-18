@@ -193,7 +193,8 @@ describe("AdminSettingsScreen", () => {
 describe("AdminSettingsScreen — S-5, a security admin is refused (nothing fetched)", () => {
   it("shows the refusal, names the tier, and asks neither /setup/status nor /site-config", async () => {
     renderScreen(/* operator */ false, /* operatorResolved */ true);
-    expect(await screen.findByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: SETTINGS_SUPER_ONLY.TITLE })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: VIEW_REFUSAL.TITLE })).not.toBeInTheDocument();
     expect(screen.getByText(SETTINGS_SUPER_ONLY.BODY)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: SETTINGS_SUPER_ONLY.CTA })).toBeInTheDocument();
     expect(getSetupStatusMock).not.toHaveBeenCalled();
