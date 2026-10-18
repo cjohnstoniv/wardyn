@@ -9,11 +9,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
 import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../../lib/unsaved-copy";
@@ -84,13 +86,20 @@ vi.mock("react-router-dom", async () => {
 // so every existing assertion below is unaffected, and it's what the tab-
 // switch-guard tests need to see the real confirm dialog rather than the
 // context's own no-provider fallback (which would proceed silently).
+function Where() {
+  return <p data-testid="where">{useLocation().pathname}</p>;
+}
+
 function renderScreen(operator = true) {
   return render(
-    <UnsavedGuardProvider>
-      <OperatorProvider operator={operator} principal="alice">
-        <ProvidersScreen />
-      </OperatorProvider>
-    </UnsavedGuardProvider>,
+    <MemoryRouter initialEntries={["/admin/providers"]}>
+      <UnsavedGuardProvider>
+        <OperatorProvider operator={operator} principal="alice">
+          <ProvidersScreen />
+          <Where />
+        </OperatorProvider>
+      </UnsavedGuardProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -107,6 +116,20 @@ beforeEach(() => {
   getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
   putAgentProvidersMock.mockReset();
   whoamiMock.mockReset();
+});
+
+describe("ProvidersScreen — a security admin", () => {
+  // #2880: not a super admin, so the page refuses with the Settings card, fetches nothing, and offers the way back.
+  it("is refused with the super-admin card and a way back to Runs, and nothing is fetched", async () => {
+    renderScreen(false);
+    expect(await screen.findByText(PROVIDERS_SUPER_ONLY.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(PROVIDERS_SUPER_ONLY.BODY)).toBeInTheDocument();
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: PROVIDERS.TITLE })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/runs");
+  });
 });
 
 describe("ProvidersScreen", () => {

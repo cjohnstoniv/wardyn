@@ -6,9 +6,10 @@
 // 0.9.4 console UX Tier B (admin, settings, governance, workspaces screens): the pins that need a real layout
 // engine. Everything text- or class-shaped is pinned in vitest next to its screen.
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, asRealSecurityAdmin, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
 import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { PROVIDERS_SUPER_ONLY } from "../src/app/components/wardyn/copy/console-view";
 import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
@@ -165,6 +166,20 @@ test.describe("Tier B owner options at desktop width", () => {
       "devcontainer builds and --image wraps are unavailable",
     );
     await expect(page.getByTestId("host-state-pill")).toHaveText(HOST_CARD.CANT_LAUNCH);
+  });
+});
+
+test.describe("Owner-approved refusal and empty states", () => {
+  // #2880: a security admin who opens Workspace providers is told it is for super admins, with the way back.
+  test("a security admin opening Workspace providers gets the super-admin card and a way back to Runs", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/providers");
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.BODY, { exact: true })).toBeVisible();
+    await expect(page.getByText("Requires the admin role.")).toHaveCount(0);
+    await page.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA, exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/runs/);
   });
 });
 

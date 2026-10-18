@@ -11,6 +11,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { MemoryRouter } from "react-router-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
@@ -79,11 +80,13 @@ vi.mock("react-router-dom", async () => {
 // context's own no-provider fallback (which would proceed silently).
 function renderScreen(operator = true) {
   return render(
-    <UnsavedGuardProvider>
-      <OperatorProvider operator={operator}>
-        <ProvidersScreen />
-      </OperatorProvider>
-    </UnsavedGuardProvider>,
+    <MemoryRouter>
+      <UnsavedGuardProvider>
+        <OperatorProvider operator={operator}>
+          <ProvidersScreen />
+        </OperatorProvider>
+      </UnsavedGuardProvider>
+    </MemoryRouter>,
   );
 }
 

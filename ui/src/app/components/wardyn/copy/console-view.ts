@@ -62,6 +62,14 @@ export const SETTINGS_SUPER_ONLY = {
   CTA: "Back to Runs",
 } as const;
 
+// #2880: the same refusal for Workspace providers, which a security admin can also reach by a typed or bookmarked
+// URL. It was a page header over an 11px "Requires the admin role." to someone who is an admin, with no way back.
+export const PROVIDERS_SUPER_ONLY = {
+  TITLE: "Workspace providers is for super admins",
+  BODY: "You're signed in as a security admin.",
+  CTA: "Back to Runs",
+} as const;
+
 // The no-credential preview (0.7.5), now entered from the Permissions header.
 // Its band is the one kept: sign-in is refused there, which is abnormal.
 export const USER_PREVIEW = {
