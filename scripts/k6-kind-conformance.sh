@@ -367,6 +367,11 @@ for image in $NODE_IMAGES; do
   kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s >/dev/null
   kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s >/dev/null
   kubectl wait --for=condition=Ready nodes --all --timeout=180s >/dev/null
+  # Cluster DNS on the control plane too: a case that stops a worker's kubelet must not take away the
+  # organisation's only way to resolve postgres.
+  kubectl -n kube-system patch deployment coredns --type merge -p \
+    '{"spec":{"template":{"spec":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""}}}}}' >/dev/null
+  kubectl -n kube-system rollout status deployment/coredns --timeout=180s >/dev/null
   for node in $(kind get nodes --name "$CLUSTER"); do
     for img in "$RUNNERD_IMAGE" "$PROXY_IMAGE" "$AGENT_IMAGE"; do
       load_image "$img" "$node"
