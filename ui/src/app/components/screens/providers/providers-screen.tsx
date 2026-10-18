@@ -69,7 +69,11 @@ export function ProvidersScreen() {
   const navigate = useNavigate();
   // #2880: a security admin is not a super admin, so this page is not theirs. The page refuses, as Settings does,
   // and nothing behind it is fetched.
-  const refused = useOperatorResolved() && !operator;
+  const operatorResolved = useOperatorResolved();
+  const refused = operatorResolved && !operator;
+  // Same fail-open rationale as Settings: before /me resolves `operator` reads the default TRUE, so the admin reads
+  // wait for a real answer rather than firing on a default that might still flip to "refused".
+  const adminReads = operatorResolved && operator;
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
   const [draft, setDraft] = React.useState<WorkspaceProviders>(EMPTY);
@@ -118,8 +122,8 @@ export function ProvidersScreen() {
       .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(() => {
-    if (!refused) load();
-  }, [load, refused]);
+    if (adminReads) load();
+  }, [load, adminReads]);
 
   const discard = useDiscardReload(load);
 

@@ -87,11 +87,11 @@ vi.mock("react-router-dom", async () => {
 // so every existing assertion below is unaffected, and it's what the tab-
 // switch-guard tests need to see the real confirm dialog rather than the
 // context's own no-provider fallback (which would proceed silently).
-function renderScreen(operator = true) {
+function renderScreen(operator = true, operatorResolved = true) {
   return render(
     <MemoryRouter initialEntries={["/admin/providers"]}>
       <UnsavedGuardProvider>
-        <OperatorProvider operator={operator} principal="alice">
+        <OperatorProvider operator={operator} operatorResolved={operatorResolved} principal="alice">
           <ProvidersScreen />
         </OperatorProvider>
       </UnsavedGuardProvider>
@@ -126,6 +126,16 @@ describe("ProvidersScreen — a security admin", () => {
     expect(screen.queryByRole("heading", { name: PROVIDERS.TITLE })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA }));
     expect(navigateMock).toHaveBeenCalledWith("/admin/runs");
+  });
+});
+
+describe("ProvidersScreen — before /me has answered", () => {
+  // Cold-load window: `operator` reads the fail-open default TRUE, so the admin reads must wait for a real answer.
+  it("fires no admin read while the operator tier is unresolved", async () => {
+    renderScreen(true, false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
   });
 });
 
