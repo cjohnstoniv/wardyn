@@ -168,6 +168,42 @@ test.describe("Tier B owner options at desktop width", () => {
   });
 });
 
+test.describe("Page header (#2831)", () => {
+  const header = (page: Page) => ({
+    title: page.getByRole("heading", { name: "Policies", level: 1 }),
+    actions: page.getByTestId("page-header-actions").first(),
+    description: page.getByTestId("page-header-description").first(),
+  });
+
+  // Option B at 390: the action stays on the title's row, pinned right, and the description drops under both.
+  test("at 390 the action is level with the title and the description sits below both at full width", async ({ page }) => {
+    await phoneAt(page, "/admin/policies");
+    const h = header(page);
+    await expect(h.actions).toBeVisible();
+    const [t, a, d] = [await boxOf(h.title), await boxOf(h.actions), await boxOf(h.description)];
+    expect(Math.abs(a.y - t.y), "action top is not level with the title's first line").toBeLessThanOrEqual(4);
+    expect(a.x + a.width, "action runs past the viewport").toBeLessThanOrEqual(PHONE.width);
+    expect(a.x, "action is not on the right").toBeGreaterThan(PHONE.width / 2);
+    expect(d.y, "description is not below the title").toBeGreaterThanOrEqual(t.y + t.height - 1);
+    expect(d.y, "description is not below the action").toBeGreaterThanOrEqual(a.y + a.height - 1);
+    expect(d.width, "description is squeezed").toBeGreaterThan(PHONE.width - 80);
+  });
+
+  // From sm up the header is the one it always was: description under the title, the action to its right.
+  test("at 1440 the description sits under the title and the action beside it, as before", async ({ page }) => {
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    const h = header(page);
+    await expect(h.actions).toBeVisible();
+    const [t, a, d] = [await boxOf(h.title), await boxOf(h.actions), await boxOf(h.description)];
+    expect(Math.abs(a.y - t.y)).toBeLessThanOrEqual(4);
+    expect(Math.abs(d.x - t.x)).toBeLessThanOrEqual(1);
+    expect(d.y).toBeGreaterThanOrEqual(t.y + t.height - 1);
+    expect(a.x).toBeGreaterThan(d.x + d.width - 1);
+  });
+});
+
 test.describe("Tier B at 390px", () => {
   // #2891: the count drops whole to one line instead of wrapping between the search box and Refresh.
   test("Workspaces: the list count stays on one line inside the viewport", async ({ page }) => {
