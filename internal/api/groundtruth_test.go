@@ -389,7 +389,7 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 // arm would let "healthy" win), a fresh one must not, and an hour-old beat is
 // degraded whatever the TTL constant says (a TTL raised to "never stale").
 func TestHealthzEbpfDegradedWhenHeartbeatStale(t *testing.T) {
-	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 	for _, tc := range []struct {
 		name string
 		age  time.Duration
