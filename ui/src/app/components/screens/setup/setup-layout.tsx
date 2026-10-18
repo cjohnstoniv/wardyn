@@ -8,8 +8,8 @@
 // it, a single host-status strip, the step heading + optional badge, the
 // step body (children), and the footer nav — it computes NO readiness itself
 // (that comes from the caller). Reads the step data layer (./steps.ts) and
-// the StatusChip API. #11: the last step's own launch CTA lives in its body
-// (step-bodies.tsx's LaunchStep) — this shell's footer does not duplicate it.
+// the StatusChip API. Review is the last step and has no launch CTA of its own
+// (step-bodies.tsx): the top bar's New run button is the one launch point.
 import { type ReactNode, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, X } from "lucide-react";
 import { Button } from "../../ui/button";
