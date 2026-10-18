@@ -788,34 +788,10 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// wantHosts is what THIS request actually promotes: the full promotable
-	// set, unless the operator narrowed it to a validated subset.
-	var wantHosts, skipped []string
-	if req.Hosts != nil {
-		// The console's bulk promote sends every checked host, plumbing included: a model
-		// provider row's host is never promoted, and is skipped rather than refused.
-		providerHosts := s.modelProviderRowHostSet(r.Context())
-		for _, h := range req.Hosts {
-			h = strings.ToLower(strings.TrimSpace(h))
-			if h == "" {
-				continue
-			}
-			if _, plumbing := providerHosts[h]; plumbing {
-				if !slices.Contains(skipped, h) {
-					skipped = append(skipped, h)
-				}
-				continue
-			}
-			if _, ok := promotable[h]; !ok {
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+h+" was not observed+allowed in this recording — cannot promote")
-				return
-			}
-			wantHosts = append(wantHosts, h)
-		}
-	} else {
-		for h := range promotable {
-			wantHosts = append(wantHosts, h)
-		}
+	wantHosts, skipped, notPromotable := s.selectPromoteHosts(r.Context(), req.Hosts, promotable)
+	if notPromotable != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+notPromotable+" was not observed+allowed in this recording — cannot promote")
+		return
 	}
 
 	// One contract, one place: promotion writes egress: REQUIREMENT rows on
@@ -914,6 +890,37 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		w.Header().Set(recordSkippedHostsHeader, strings.Join(skipped, ","))
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// selectPromoteHosts is what a promote request actually promotes: the full promotable set, unless the
+// operator narrowed it to a subset. The console's bulk promote sends every checked host, plumbing included:
+// a model provider row's host is never promoted, and is skipped (and returned) rather than refused. The
+// third result is the first requested host outside the promotable set, "" when every host is fine.
+func (s *Server) selectPromoteHosts(ctx context.Context, requested []string, promotable map[string]struct{}) (want, skipped []string, notPromotable string) {
+	if requested == nil {
+		for h := range promotable {
+			want = append(want, h)
+		}
+		return want, nil, ""
+	}
+	providerHosts := s.modelProviderRowHostSet(ctx)
+	for _, h := range requested {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if _, plumbing := providerHosts[h]; plumbing {
+			if !slices.Contains(skipped, h) {
+				skipped = append(skipped, h)
+			}
+			continue
+		}
+		if _, ok := promotable[h]; !ok {
+			return nil, nil, h
+		}
+		want = append(want, h)
+	}
+	return want, skipped, ""
 }
 
 // recordSkippedHostsHeader lists, comma-separated, the requested hosts a bulk promote skipped
