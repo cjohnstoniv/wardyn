@@ -163,12 +163,18 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
                 rows={6}
                 value={draft.suffixes}
                 disabled={disabled}
-                aria-describedby="baseline-suffixes-hint"
+                aria-describedby="baseline-suffixes-hint baseline-suffixes-covers"
                 onChange={(e) => edit({ suffixes: e.target.value })}
               />
               <p id="baseline-suffixes-hint" className="text-xs text-muted-foreground">
                 {BASELINE.SUFFIXES_HINT}
               </p>
+              {/* #2130: what each entry reaches, read live off the box, so the admin sees it before saving. */}
+              <ul id="baseline-suffixes-covers" data-testid="baseline-suffixes-covers" className="space-y-0.5 text-xs text-muted-foreground">
+                {lines(draft.suffixes).map((entry, i) => (
+                  <li key={`${i}:${entry}`}>{BASELINE.COVERS(entry)}</li>
+                ))}
+              </ul>
             </div>
           </div>
 

@@ -40,4 +40,21 @@ test.describe("Governance: the baseline hosts", () => {
     await expect(page.getByText(BASELINE.REFUSED_TITLE)).toBeVisible();
     await expect(page.getByText(/must be an exact hostname — no wildcard/)).toBeVisible();
   });
+
+  // #2130: the reach of each suffix entry is shown live from the box, before anything is saved.
+  test("each internal host suffix typed names what it covers, live, without saving", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    await page.getByRole("tab", { name: BASELINE.TAB }).click();
+
+    const coverage = page.getByTestId("baseline-suffixes-covers");
+    await expect(coverage.getByRole("listitem")).toHaveCount(0);
+    await page.getByLabel(BASELINE.SUFFIXES_LABEL, { exact: true }).fill("corp.example\nbuild.internal");
+    await expect(coverage.getByText(BASELINE.COVERS("corp.example"), { exact: true })).toBeVisible();
+    await expect(coverage.getByText(BASELINE.COVERS("build.internal"), { exact: true })).toBeVisible();
+    await expect(page.getByText(BASELINE.HOSTS_HINT)).toBeVisible();
+    await page.getByLabel(BASELINE.SUFFIXES_LABEL, { exact: true }).fill("corp.example");
+    await expect(coverage.getByRole("listitem")).toHaveCount(1);
+  });
 });

@@ -387,9 +387,11 @@ export const BASELINE = {
   TAB: "Baseline hosts",
   LEAD: "Hosts your organisation vouches for. Wardyn grades a run's egress and its API keys against a built-in list of public model, code and package hosts, plus the hosts here: allowlisting only these doesn't make a run's egress open, and an API key sent to one of them isn't a powerful secret. Nothing is listed until you add it, so grading doesn't change on its own.",
   HOSTS_LABEL: "Exact hosts",
-  HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses.",
+  HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses. Covers only the host named, not its subdomains.",
   SUFFIXES_LABEL: "Internal host suffixes",
   SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host and every host under it.",
+  // Under the suffixes box, one line per entry as typed: the reach an entry has before it is saved (#2130).
+  COVERS: (entry: string) => `${entry} covers ${entry} and every host under it (*.${entry}).`,
   SAVE: "Save",
   SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
   REFUSED_TITLE: "This can't be saved as written",
