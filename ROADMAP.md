@@ -46,6 +46,7 @@
 | **v0.9.3-rc.1** | rc.1: laptop runners in a locked-down enterprise: a corporate CA bundle, errors an SDK can read, disk on VM engines, and images for both architectures. | **Shipped (pre-alpha)** — `v0.9.3-rc.1`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.3-rc.2** | rc.2: session recordings follow the organisation, the Azure DevOps credential follows the run's own repository, and a dropped runner link no longer stops a run's egress. | **Shipped (pre-alpha)** — `v0.9.3-rc.2`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.3-rc.3** | rc.3: organisation runners in Kubernetes, AWS SSO sessions renewed mid-run, laptop audit decisions that no longer cross a VM file share, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3-rc.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.3** | Organisation runners in Kubernetes, runner-resident credentials, laptop runners fit for a locked-down enterprise, and runner recovery after a control-plane restart. | **Shipped (pre-alpha)** — `v0.9.3`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

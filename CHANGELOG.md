@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-10-17
+
 Organisation runners in Kubernetes, runner-resident credentials, and laptop runners fit for a locked-down
 enterprise. This is the final release of the three 0.9.3 candidates: upgrading from 0.9.2, read this section with the
 rc.3, rc.2 and rc.1 notes below, which carry every change and each "Before you upgrade" step.
