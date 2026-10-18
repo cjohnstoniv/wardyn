@@ -339,7 +339,7 @@ export const DRIVES = {
   // The Workspaces header's outline button is TITLE. The card and the button
   // render for SUPER only.
   CARD_LEAD: "Persistent storage people can mount into a run — separate from any workspace.",
-  CARD_EMPTY: "No drives yet.",
+  CARD_EMPTY: "No drives yet",
   CARD_DRIVES: (n: number) => `${n} drive${n === 1 ? "" : "s"}`,
   CARD_ALLOCATIONS: (n: number) => `${n} allocation${n === 1 ? "" : "s"}`,
   CARD_SUMMARY: (drives: string, allocations: string) => `${drives} · ${allocations}`,

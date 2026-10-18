@@ -815,7 +815,7 @@ it strands the allocated people's work if confirmed.
 | Key | String |
 |---|---|
 | `CARD_LEAD` | Persistent storage people can mount into a run — separate from any workspace. |
-| `CARD_EMPTY` | No drives yet. |
+| `CARD_EMPTY` | No drives yet |
 | `CARD_DRIVES(n)` | {n} drive / {n} drives |
 | `CARD_ALLOCATIONS(n)` | {n} allocation / {n} allocations |
 | `CARD_SUMMARY(drives, allocations)` | {drives} · {allocations} |
