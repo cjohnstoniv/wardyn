@@ -461,7 +461,7 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	// The same human is presence for the pause, and thaws a paused run.
 	_ = s.markPresent(ctx, runID, types.ActorHuman, sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
+	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
 // uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
@@ -501,7 +501,7 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 			Transport: &http.Transport{
 				DialContext:  s.uiDial,
 				MaxIdleConns: maxUIConnsPerRun * 4,
-				// A host is one run's app (run:port): past the cap a request waits for a pooled conn, not acquireUIConn's 503.
+				// A host is one run's app (run:port); a request past the cap waits for a pooled conn (serveUIRelay).
 				MaxConnsPerHost: maxUIConnsPerRun, MaxIdleConnsPerHost: maxUIConnsPerRun,
 				IdleConnTimeout: uiIdleConnTimeout,
 				// No proxy, no TLS: the destination is a sandbox's own loopback
@@ -737,6 +737,7 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 // loopback through the exec lane. addr is "<run-id>:<port>" — there is no IP
 // anywhere in this path.
 func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
+	uiConnWaitDone(ctx) // a dial means the transport gave this request a connection slot
 	sess, ok := uiSessionFromContext(ctx)
 	if !ok {
 		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this connection")
@@ -778,8 +779,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
-		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached,
-			fmt.Sprintf("too many open UI connections for this run (max %d) — close a tab and retry", maxUIConnsPerRun))
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
 	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
 		release()
