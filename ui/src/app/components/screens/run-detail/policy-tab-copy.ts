@@ -122,6 +122,9 @@ export const SUMMARY = {
   // Reused from the policy editor's push-rule sections (policy-push-rules.tsx).
   pushDeny: "Deny",
   pushHold: "Hold for review",
+  pushMaxFile: "Largest file",
+  pushHoldFor: "Hold waits",
+  pushInspectPack: "Largest push inspected",
   anyBranch: "Any branch",
   ownBranch: "Only this run's own branch",
   // S-44
@@ -133,6 +136,7 @@ export const SUMMARY = {
   standardLimit: "Standard limit",
   cpuValue: (n: string) => `${n} CPU`,
   mibValue: (n: number) => `${n} MiB`,
+  secondsValue: (n: number) => `${n} seconds`,
   // S-45
   off: "Off",
   on: "On",
