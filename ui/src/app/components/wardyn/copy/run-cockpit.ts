@@ -80,9 +80,10 @@ export const RUN_COCKPIT = {
   // --- Evidence widgets ---
   // Same eligibility framing as the full Credential grants card, tightened for
   // a 400px rail. Grants are what the run MAY request — never live credentials.
-  // It names no delivery: an ssh_key or resident git_pat is readable in the
-  // sandbox, so a "minted, never seen" line would be false for those grants.
-  credentialsEligibility: "Eligibility — what this run may request, not credentials it holds.",
+  // It names no single delivery: an ssh_key or resident git_pat is readable in
+  // the sandbox, so a "minted, never seen" line would be false for those grants.
+  credentialsEligibility:
+    "Eligibility — what this run may request, not credentials it holds. Most credentials are added at the proxy; the grant's kind says whether one enters the sandbox.",
   // A metric the sandbox did not report. gVisor (Vault) presents a synthetic
   // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
   // honest answer; rendering 0 would claim the sandbox is using no memory.
