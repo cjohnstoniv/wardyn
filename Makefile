@@ -705,6 +705,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
+	./scripts/test-reset-all-stack-scope.sh
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
