@@ -718,6 +718,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOOLS_NONE` | mock | Optional · none added |
 | `TOOLS_STARTS(name, provider)` | mock | {name} starts with the run · {provider} |
 | `TOOLS_NO_HARNESS` | mock | No harness |
+| `TOOLS_AUTO_ONE` | mock | 1 harness starts automatically |
 | `TOOLS_AUTO(n, total)` | mock | {n} of {total} harnesses start automatically |
 | `HARNESS_STARTS` | mock | Starts with run |
 | `HARNESS_AFTER` | mock | Available after start |

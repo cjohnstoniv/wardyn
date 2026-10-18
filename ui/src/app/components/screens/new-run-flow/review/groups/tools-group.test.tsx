@@ -29,3 +29,27 @@ describe("Review: a harness tile on a narrow screen", () => {
     expect(tile.className).toContain("max-[520px]:justify-items-start");
   });
 });
+
+describe("Review: the count line for Autonomous harnesses", () => {
+  const AUTO: RunIntent = {
+    shape: "agent_task",
+    experience: "background",
+    workload: { kind: "agent_task", task: "fix it" },
+    tools: [{ id: "claude-code", kind: "harness" }],
+  };
+  const show = (intent: RunIntent) => {
+    const draft = { ...initialDraft("alice"), intent };
+    render(<ToolsGroup draft={draft} pre={null} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+  };
+
+  it("says '1 harness starts automatically' for the only harness, not '1 of 1 harnesses'", () => {
+    show(AUTO);
+    expect(screen.getByText("1 harness starts automatically")).toBeInTheDocument();
+    expect(screen.queryByText(/1 of 1 harnesses/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the plural count when there are several", () => {
+    show({ ...AUTO, tools: [...(AUTO.tools ?? []), { id: "codex-cli", kind: "harness" }] });
+    expect(screen.getByText("1 of 2 harnesses start automatically")).toBeInTheDocument();
+  });
+});

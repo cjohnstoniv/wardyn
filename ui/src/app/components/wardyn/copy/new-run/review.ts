@@ -73,6 +73,7 @@ export const NR_REVIEW = {
   TOOLS_STARTS: (name: string | number, provider: string | number) =>
     `${name} starts with the run · ${provider}`,
   TOOLS_NO_HARNESS: "No harness",
+  TOOLS_AUTO_ONE: "1 harness starts automatically",
   TOOLS_AUTO: (n: string | number, total: string | number) =>
     `${n} of ${total} harnesses start automatically`,
   HARNESS_STARTS: "Starts with run",
