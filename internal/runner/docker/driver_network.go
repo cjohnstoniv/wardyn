@@ -70,7 +70,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// (1) Per-run internal network. Internal=true => Docker provisions no gateway, so the network
 	// cannot route off-host: this is what upholds L0 even though the agent is *connected* to it.
-	intNetID, err := d.createRunNetwork(ctx, spec.RunID, wardynLabels(spec.RunID, "network", spec.Labels))
+	intNetID, err := d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, "network", spec.Labels))
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -90,7 +90,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return fail(err)
 	}
-	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
+	proxyID, err := d.startProxy(ctx, spec.RunID, d.labels(spec.RunID, componentProxy, spec.Labels),
 		proxyEnvs, proxyCfg, netip.Addr{})
 	if err != nil {
 		// startProxy's own exit-watch failure deliberately leaves the container behind so its logs
@@ -158,7 +158,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   withRecordLabel(wardynLabels(spec.RunID, componentAgent, spec.Labels), record),
+		Labels:   withRecordLabel(d.labels(spec.RunID, componentAgent, spec.Labels), record),
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}
@@ -543,7 +543,7 @@ func (d *Driver) sweepDriveSeeds(ctx context.Context, lister containerListerAPI,
 	var errs []error
 	for _, c := range res.Items {
 		if c.Labels[labelComponent] != componentDriveSeed || c.Labels[labelManaged] != "true" || c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID ||
-			time.Unix(c.Created, 0).After(cutoff) {
+			d.otherDeployment(c.Labels) || time.Unix(c.Created, 0).After(cutoff) {
 			continue
 		}
 		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
@@ -598,8 +598,8 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		if perr != nil {
 			continue // not a wardyn agent container we can key teardown on
 		}
-		if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID {
-			continue // another runner's sandbox, or one this runner did not create
+		if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID || d.otherDeployment(c.Labels) {
+			continue // another runner's or deployment's sandbox, or one this runner did not create
 		}
 		if time.Unix(c.Created, 0).After(cutoff) {
 			continue // too young: a dispatch may still be about to SetSandboxRef
