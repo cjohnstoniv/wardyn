@@ -368,6 +368,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(switchViewMock).not.toHaveBeenCalled();
   });
 
+  it("'Switch to user view' stays disabled on a host with no barrier, like Finish setup (#214)", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen(<SetupScreen onDone={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: /^next:/i })); // -> people
+    await screen.findAllByText("Single-user");
+    await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
+    await clearCorpNetworkGate();
+    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+    expect(screen.getByRole("button", { name: /^finish setup$/i })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Switch to user view" }));
+    expect(screen.getByRole("button", { name: "Switch to user view" })).toBeDisabled();
+    expect(completeOnboardingMock).not.toHaveBeenCalled();
+  });
+
   it("'Switch to user view' for an SSO admin switches the session itself, with no second confirmation", async () => {
     await switchToUserFromReview("session-admin");
     await waitFor(() => expect(switchViewMock).toHaveBeenCalledWith("user", "/setup"));

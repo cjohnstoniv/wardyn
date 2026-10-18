@@ -915,6 +915,7 @@ export function SetupScreen({
             lastCheckedAt={lastCheckedAt}
             onJump={selectStep}
             onSwitchToUser={() => void finishSwitchToUser()}
+            switchDisabled={!!finishGate}
           />
         )}
       </SetupLayout>
