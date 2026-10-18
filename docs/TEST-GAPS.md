@@ -26,8 +26,8 @@ Refresh: `make cover-check` (+ `make test-report-pg` for the PG cross-check), th
 | **Docker-gated** (needs `WARDYN_TEST_DOCKER=1`) | 14 |
 | **Kubernetes-gated** (needs a real cluster) | 3 |
 | **Pass-through** (delegating method, covered by its caller) | 30 |
-| **Untested** (no test in the tree reaches it) | 104 |
-| Total 0.0% exported | 837 |
+| **Untested** (no test in the tree reaches it) | 103 |
+| Total 0.0% exported | 836 |
 | _(of 2728 exported funcs in the union)_ | |
 
 ## Untested — no test in the tree reaches these
@@ -60,7 +60,7 @@ Postgres lane ALSO leaves them at 0.0%.
 - **internal/scim**: `Error`
 - **internal/secretstore/pg**: `ExternalName`
 - **internal/secretstore/vaultkv**: `NewDomainTransit`
-- **internal/store**: `ClearSourceActiveRun`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `ReopenDeprovisionJob`, `SetRunnerMachineName`, `SetWorkspaceImportState`, `TouchRunner`, `UpdateSourceConfig`
+- **internal/store**: `ClearSourceActiveRun`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `Error`, `ReopenDeprovisionJob`, `SetWorkspaceImportState`, `TouchRunner`, `UpdateSourceConfig`
 - **internal/testlive**: `DefaultEndpoints`, `Errorf`, `Fatalf`, `LoadIdentities`, `LoadSSOToken`, `Logf`, `ReadSecretFile`, `Require`, `Skipf`
 - **internal/types**: `Valid`, `Valid`, `Valid`, `Valid`, `ValidRunnerMaxRuns`
 - **pkg/client**: `ApplyDrives`, `CreateMyDrive`, `DeleteMyDrive`, `DeletePreset`, `MintRunnerToken`
