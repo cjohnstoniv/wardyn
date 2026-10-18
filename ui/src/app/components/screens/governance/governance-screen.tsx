@@ -198,7 +198,8 @@ export function GovernanceScreen() {
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
           className="mt-6"
         >
-          <TabsList>
+          {/* Scrolls inside itself at phone width; justify-start so the first tab is never clipped (#2896). */}
+          <TabsList className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
             {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
             {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
