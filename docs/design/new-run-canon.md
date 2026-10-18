@@ -852,7 +852,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 |---|---|---|
 | `EYEBROW` | mock | Saved starting points |
 | `TITLE` | mock | Templates |
-| `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organisation's current policy and availability are checked again. A template never stores a run's title. |
+| `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title. |
 | `NEW_FROM_SCRATCH` | mock | New run from scratch |
 | `SCOPE_FILTER_ARIA` | mock | Who it's available to |
 | `KIND_FILTER_ARIA` | mock | Kind |
@@ -862,11 +862,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SCOPE_ALL` | mock | All |
 | `SCOPE_ME` | mock | Only me |
 | `SCOPE_GROUPS` | mock | Groups |
-| `SCOPE_ORG` | mock | Organisation |
+| `SCOPE_ORG` | mock | Organization |
 | `KIND_ALL` | mock | All kinds |
 | `KIND_TEMPLATES` | mock | Templates |
 | `KIND_POLICIES` | mock | Policies |
-| `NOTE` | mock | Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organisation's defaults. |
+| `NOTE` | mock | Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organization's defaults. |
 | `COL_NAME` | mock | Name |
 | `COL_AVAILABLE` | mock | Available to |
 | `COL_INCLUDES` | mock | Includes |
@@ -875,7 +875,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BADGE` | mock | Policy |
 | `NEEDS_SETUP(label)` | mock | Needs setup: {label} |
 | `GROUP_LABEL(group)` | mock | {group} group |
-| `ORG_ADMINS` | mock | Organisation admins |
+| `ORG_ADMINS` | mock | Organization admins |
 | `TEMPLATE_MANAGERS` | pending (W-24) | Template managers |
 | `PART_RUN` | mock | Run |
 | `PART_WHERE` | mock | Where it runs |
