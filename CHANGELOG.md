@@ -8,6 +8,40 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+Organisation runners in Kubernetes, runner-resident credentials, and laptop runners fit for a locked-down
+enterprise. This is the final release of the three 0.9.3 candidates: upgrading from 0.9.2, read this section with the
+rc.3, rc.2 and rc.1 notes below, which carry every change and each "Before you upgrade" step.
+
+### Defaults changed by this upgrade
+
+Setup status lists the ones that reach your deployment ("Defaults changed by this upgrade", admins only).
+
+- **Recording defaults to `preferred`.** A run a non-recording laptop runner takes goes ahead unrecorded and says why
+  (`runner_declined`). For the old behaviour, set `"recording": "required"` with `PUT /api/v1/runner-pool-defaults`
+  (read it first: a write that leaves `barrier` out clears it).
+- **A laptop runner records a run only when its organisation keeps recordings.** With `WARDYN_RECORDING_STORE=off`,
+  runs are marked `org_off` and nothing is uploaded. For the old behaviour, turn the recording store on.
+
+### Before you upgrade
+
+- Upgrade the organisation before its laptop runners: the proxy image of 0.9.2 refuses a 0.9.3 runner's
+  configuration, so an unpinned runner's runs do not start until the organisation serves the new image.
+- Migrations `0180` to `0190` run on the first start. On a split-role install, grant the app role what the rc.3 and
+  rc.2 notes list.
+
+### Not tested here
+
+These are covered by tests against simulated parts only; check them on your estate.
+
+- The macOS runner's spool fix, on a real Mac with your container engine. The macOS package ships unsigned.
+- Recovery after a control-plane restart, on a laptop fleet.
+- The proxy NetworkPolicy's cluster-DNS peer, on a network plugin that selects pods by identity.
+- The proxy's memory limit under production load in a real cluster.
+- The AWS KMS key service with IRSA or EKS Pod Identity on a live EKS cluster.
+- The console's admin and member view switch, and the terminal walks, under a live single sign-on session.
+- Two embedded third-party bundles (the Mermaid CLI's browser bundle, and code-server's bundled dev-containers CLI)
+  still carry older dependency versions, pending their upstream releases.
+
 ### Changed
 
 - A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
