@@ -611,7 +611,12 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	default:
 		return refuseRecord("unknown attestation")
 	}
+	// Compared again under the run's lock: an observer that latched a reuse since the comparison
+	// above changed the tuple the approvers saw.
 	_, err = d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		if !sameTuple(*ev.tuple(runID), rec.Tuple) {
+			return false, refuseRecord("the run's own record no longer matches the approved tuple; the approvals lapse")
+		}
 		r := rec
 		ev.Record = &r
 		return true, nil
