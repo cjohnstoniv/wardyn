@@ -583,3 +583,12 @@ describe("MEMBER_DRIVE_DOOR", () => {
     expect(MEMBER_DRIVE_DOOR.LABEL).toBe("Can't create drives");
   });
 });
+
+// The resolver ranks user > group > user_type > all (internal/api/select_by_tier.go),
+// and the Assignments editor offers a user-type subject: the one precedence line
+// must name that tier.
+describe("governance-copy: PRECEDENCE names the user-type tier", () => {
+  it("places a user type between a group and everyone", () => {
+    expect(GOVERNANCE.PRECEDENCE).toContain("a group beats a user type, and a user type beats everyone");
+  });
+});

@@ -571,7 +571,7 @@ is what an operator can actually do.
 |---|---|
 | `ASSIGN_TITLE` | Assignments |
 | `ASSIGN_LEAD` | Who runs under which profile. One profile applies to a person — never two merged together. |
-| `PRECEDENCE` | The most specific assignment wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name. |
+| `PRECEDENCE` | The most specific assignment wins: a person beats a group, a group beats a user type, and a user type beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name. |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps the ceiling it started with. |
 | `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted. |
 | `COL_PROFILE` | Profile |
