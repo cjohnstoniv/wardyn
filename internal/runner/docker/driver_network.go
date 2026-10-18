@@ -319,8 +319,10 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 
 // EndSandbox is the lease end (runner.SandboxEnder): stop the agent as StopSandbox does but leave
 // the container in place, so its writable layer survives, then stop and remove the proxy sidecar.
-// Agent first, so a recorder flushing on SIGTERM still delivers through the proxy. Fails closed: a
-// run id it cannot resolve is an error, never a success that left the proxy up.
+// Agent first, so anything the stop lets it deliver still goes through the proxy. The stop signals
+// only the idle script (runner.AgentIdleScript), which exits and takes the exec'd recorder with it
+// unflushed; what a stop keeps of a recording is the parts wardyn-rec already uploaded on its interval.
+// Fails closed: a run id it cannot resolve is an error, never a success that left the proxy up.
 func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {

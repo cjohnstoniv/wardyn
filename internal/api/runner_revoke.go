@@ -209,6 +209,7 @@ func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) error {
 	}
 	now := s.cfg.Now()
 	due := s.revokedEndRetry.due(entries, now)
+	var errs []error
 	for _, e := range entries {
 		if !due[e.RunID] {
 			continue
@@ -217,11 +218,12 @@ func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) error {
 			wait := s.revokedEndRetry.failed(e.RunID, now)
 			slog.WarnContext(ctx, "wardynd: end a run waiting for a revoked runner", slog.String("run_id", e.RunID.String()),
 				slog.Duration("retry_in", wait), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("end run %s, waiting for a revoked runner: %w", e.RunID, err))
 			continue
 		}
 		s.revokedEndRetry.forget(e.RunID)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // revokedEndRetry spaces out the sweep's retries of a waiting run it could not end: the next try is

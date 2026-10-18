@@ -37,7 +37,7 @@ func runnerListCmd(client clientFn) *cobra.Command {
 		case state != "":
 			return fmt.Errorf("--state applies to --all; your own list is your unclaimed and claimed runners, plus any revoked by someone else in the last 7 days")
 		default:
-			rows, err = client().ListMyRunners(cmd.Context())
+			rows, truncated, err = client().ListMyRunnersPage(cmd.Context(), listPageOptsAt(limit, offset)...)
 		}
 		if err != nil {
 			return err
@@ -67,8 +67,8 @@ func runnerListCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&state, "state", "", "with --all: active (default), revoked or all")
 	cmd.Flags().BoolVar(&noLimits, "no-limits", false, "only the runners with no limits set, which take no run until their limits are set")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
-	cmd.Flags().IntVar(&limit, "limit", 0, "with --all: max rows (0 = server default page)")
-	cmd.Flags().IntVar(&offset, "offset", 0, "with --all: skip this many rows")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = server default page)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "skip this many rows")
 	return cmd
 }
 

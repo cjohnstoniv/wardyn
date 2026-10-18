@@ -155,6 +155,16 @@ func TestTailUploader_SizeTriggerCutsWholeLinesUnderTheCap(t *testing.T) {
 	}
 }
 
+// TestPartWait_RampsToTheDailyCap: a run killed early has delivered its first minutes, and a long run
+// still makes about one part a day once the wait reaches partInterval.
+func TestPartWait_RampsToTheDailyCap(t *testing.T) {
+	for n, want := range map[int]time.Duration{1: 5 * time.Minute, 2: 10 * time.Minute, 3: 20 * time.Minute, 9: 1280 * time.Minute, 10: partInterval, 2048: partInterval} {
+		if got := partWait(n); got != want {
+			t.Errorf("partWait(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+
 // TestTailUploader_IntervalTrigger: under the size cap, waiting lines go up
 // once the interval is due, and not before.
 func TestTailUploader_IntervalTrigger(t *testing.T) {
@@ -172,8 +182,8 @@ func TestTailUploader_IntervalTrigger(t *testing.T) {
 	if ups := ps.uploads(); len(ups) != 1 || ups[0].body != tailHeader+eventLines(2) {
 		t.Fatalf("interval upload = %+v", ups)
 	}
-	if !tu.due.After(time.Now().Add(partInterval - time.Minute)) {
-		t.Errorf("the next interval was not re-armed: due %v", tu.due)
+	if d := time.Until(tu.due); d > partWait(2) || d < partWait(2)-time.Minute {
+		t.Errorf("the next interval was not re-armed to part 2's wait %v: due in %v", partWait(2), d)
 	}
 	if err := tu.flush(true); err != nil || len(ps.uploads()) != 1 {
 		t.Fatalf("final flush with nothing new sent a part: err=%v parts=%d", err, len(ps.uploads()))

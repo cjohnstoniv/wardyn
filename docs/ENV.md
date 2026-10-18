@@ -1748,6 +1748,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - It becomes every proxy's `trusted_ca_pem` (create and revive, on stdin) and is written to `<state dir>/trusted-ca.pem`, which every sandbox mounts read-only at `/etc/wardyn-trusted-ca.pem`.
 - Over 64 KiB refuses startup: with nothing staged, the sandbox trusts it only through `WARDYN_MITM_CA_PEM`.
 - Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
+- A CA trust variable the organisation staged for the run keeps its value on every runner substrate, Docker and Kubernetes alike; the runner sets only the ones left unset.
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
 - `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
 

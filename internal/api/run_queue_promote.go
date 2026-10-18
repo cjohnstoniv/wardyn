@@ -28,11 +28,12 @@ import (
 
 // promoteQueue runs one bounded promotion pass for a pool and starts what it promoted, detached. On the
 // bound the transaction rolls back and the runs stay QUEUED for the next pass. ctx is the caller's, for
-// the log lines only.
-func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.Duration) {
+// the log lines only. The error is what the pass could not do (a failed read or write, or the bound); a
+// pool at capacity, or a run that cannot be placed yet, is a wait and not an error.
+func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.Duration) error {
 	qs, ok := s.queueStore()
 	if !ok {
-		return
+		return nil
 	}
 	// The pass judges other people's runs, so it works on the daemon's own context: a caller's identity
 	// on ctx must never reach it.
@@ -42,13 +43,15 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
 		AtCapacityDetail: statusDetailQueuePrefix + string(runnerpool.WaitAtCapacity),
 	}, s.queueAdmit)
+	var errs []error
 	switch {
 	case err != nil && len(promoted) == 0:
 		slog.WarnContext(ctx, "wardynd: queue promotion deferred", slog.String("pool_id", poolID.String()), slog.Any("err", err))
-		return
+		return fmt.Errorf("promote the queue of pool %s: %w", poolID, err)
 	case err != nil:
 		slog.WarnContext(ctx, "wardynd: queue promotion judged part of the queue", slog.String("pool_id", poolID.String()),
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
+		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
 	for _, h := range held {
 		if h.Wait == "" {
@@ -56,12 +59,14 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 		}
 		if err := qs.SetQueueWait(ctx, h.RunID, statusDetailQueuePrefix+h.Wait); err != nil {
 			slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", h.RunID.String()), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("record queue wait of run %s: %w", h.RunID, err))
 		}
 	}
 	for _, p := range promoted {
 		s.runEvents.moved(p.Run.ID, types.RunQueued, types.RunPending)
 		s.goBackground(func() { s.startQueuedRun(context.WithoutCancel(s.cfg.BaseCtx), p) })
 	}
+	return errors.Join(errs...)
 }
 
 // queueAdmit is the verdict on one waiting run, asked before the pass takes any lock: the run must be
@@ -239,20 +244,21 @@ func (s *Server) promoteWaitingPools(ctx context.Context) error {
 		slog.WarnContext(ctx, "wardynd: list pools with waiting runs", slog.Any("err", err))
 		return fmt.Errorf("list pools with waiting runs: %w", err)
 	}
+	var errs []error
 	for _, id := range pools {
 		if ctx.Err() != nil {
-			return nil
+			break
 		}
-		s.promoteQueue(ctx, id, queueSweepBound)
+		errs = append(errs, s.promoteQueue(ctx, id, queueSweepBound))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // SweepRunQueue is one tick of the leader's queue sweep: end the waiting runs whose deadline passed and
 // the ones whose named runner is revoked, fail the promoted runs whose start died, and promote for every
 // pool that has waiting runs (a slot may have freed with no commit this replica saw). Every write is a
-// CAS under the pool lock, so a second leader for a moment is harmless. A list read that fails is
-// returned (joined), so the sweeper's health shows it; a failed write on one row stays a log line.
+// CAS under the pool lock, so a second leader for a moment is harmless. A list read or a per-run write
+// that fails is returned (joined), so the sweeper's health shows it; the other rows are still done.
 func (s *Server) SweepRunQueue(ctx context.Context) error {
 	if _, ok := s.queueStore(); !ok {
 		return nil
@@ -274,9 +280,15 @@ func (s *Server) expireQueued(ctx context.Context) error {
 		slog.WarnContext(ctx, "wardynd: list expired queue entries", slog.Any("err", err))
 		return fmt.Errorf("list expired queue entries: %w", err)
 	}
+	var errs []error
 	for _, e := range expired {
 		reason := types.RunEndQueueTimeout
-		if !s.exitQueued(ctx, e.RunID, types.RunFailed, statusDetailQueuePrefix+string(reason), reason.Sentence()) {
+		applied, err := s.exitQueued(ctx, e.RunID, types.RunFailed, statusDetailQueuePrefix+string(reason), reason.Sentence())
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !applied {
 			continue
 		}
 		waited := now.Sub(e.QueuedAt)
@@ -284,7 +296,7 @@ func (s *Server) expireQueued(ctx context.Context) error {
 		s.recordAudit(ctx, s.auditEvent(&e.RunID, types.ActorSystem, "wardynd", "run.queue.expire", e.RunID.String(), "success",
 			mustJSON(map[string]any{"waited_sec": int(waited.Seconds()), "deadline_at": e.DeadlineAt, "pool_id": e.PoolID})))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // queueLeaseStale is how long a promoted run's start may go without touching its lease before the
@@ -301,14 +313,23 @@ func (s *Server) failStalePromoted(ctx context.Context) error {
 		slog.WarnContext(ctx, "wardynd: list stale promoted runs", slog.Any("err", err))
 		return fmt.Errorf("list stale promoted runs: %w", err)
 	}
+	var errs []error
 	for _, run := range runs {
 		if !s.failAndRevoke(ctx, run.ID, types.RunPending, queueStartLostHint) {
+			// false is also "a concurrent kill or start won", which is no failure: only a run still PENDING
+			// (or unreadable) means the transition itself failed, and failAndRevoke has only logged that.
+			switch cur, gerr := s.cfg.Store.GetRun(ctx, run.ID); {
+			case gerr != nil:
+				errs = append(errs, fmt.Errorf("read the stale promoted run %s: %w", run.ID, gerr))
+			case cur.State == types.RunPending:
+				errs = append(errs, fmt.Errorf("fail the stale promoted run %s: the transition did not apply", run.ID))
+			}
 			continue
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.queue.start", run.ID.String(), "failure",
 			mustJSON(map[string]any{"reason": "start_lost", "pool_id": run.RunnerPoolID})))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.

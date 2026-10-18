@@ -31,7 +31,7 @@ type RunnerStore interface {
 	GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
 	ListRunners(ctx context.Context) ([]types.Runner, error)
 	ListRunnersByOwner(ctx context.Context, owner string) ([]types.Runner, error)
-	ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error)
+	ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p Page) ([]types.Runner, error)
 	ClaimRunner(ctx context.Context, id uuid.UUID, owner, fingerprint string, now time.Time) (types.Runner, error)
 	TouchRunner(ctx context.Context, id uuid.UUID, version string, now time.Time) error
 	RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.RunnerPosture, now time.Time) (changed bool, err error)
@@ -130,16 +130,16 @@ func (s PG) ListRunnersByOwner(ctx context.Context, owner string) ([]types.Runne
 // ListVisibleRunnersByOwner is owner's own list as the console shows it: ListRunnersByOwner without a
 // lapsed unclaimed runner (older than types.RunnerUnclaimedTTL at now), and without a revoked one unless
 // someone other than owner revoked it within revokedShown. The filter runs in the query, so the history
-// the list leaves out is never read.
-func (s PG) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error) {
-	const q = `SELECT ` + runnerCols + ` FROM runners
+// the list leaves out is never read. p windows the answer; a Limit of 0 or less is every row.
+func (s PG) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p Page) ([]types.Runner, error) {
+	const base = `SELECT ` + runnerCols + ` FROM runners
 		WHERE owner = $1
 		  AND NOT (state = 'unclaimed' AND created_at <= $2::timestamptz - $3 * interval '1 second')
 		  AND (state <> 'revoked' OR (revoked_at IS NOT NULL AND COALESCE(revoked_by, '') <> $1
 		       AND revoked_at >= $2::timestamptz - $4 * interval '1 second'))
 		ORDER BY created_at DESC, id`
-	return collect(ctx, s.Pool, "list", "runners", q,
-		[]any{owner, now, types.RunnerUnclaimedTTL.Seconds(), revokedShown.Seconds()}, scanRunner)
+	q, args := p.appendTo(base, []any{owner, now, types.RunnerUnclaimedTTL.Seconds(), revokedShown.Seconds()})
+	return collect(ctx, s.Pool, "list", "runners", q, args, scanRunner)
 }
 
 // ClaimRunner moves an unclaimed person's runner to claimed in one conditional UPDATE, only for its owner

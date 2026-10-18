@@ -20,7 +20,7 @@ import (
 // A refused claim of the owner's own runner names why (R2-0012). Another person's runner and an absent
 // one stay one indistinguishable answer.
 func TestRunnerClaimRefusalNamesTheCause(t *testing.T) {
-	const generic = "runner claim does not match the owner or fingerprint"
+	const generic = "not claimed within 24 hours is removed"
 	for _, tc := range []struct {
 		name, sub, fp, orgURL string
 		state                 types.RunnerState
