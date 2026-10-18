@@ -83,6 +83,8 @@ type AuditSpool struct {
 	// again, which would only record those lines twice. Guarded by mu.
 	poisonProven bool
 	retireFailed bool
+	// retireBlocked counts the passes retireFailed has held back since the last probe pass.
+	retireBlocked int
 }
 
 // spoolPoisonAttempts is how many consecutive Drain attempts one line gets
@@ -96,6 +98,11 @@ type AuditSpool struct {
 // re-proves the same rejection while the events BEHIND it wait, and
 // docs/OPERATIONS.md promises the trail "becomes complete again automatically".
 const spoolPoisonAttempts = 3
+
+// spoolRetireProbeEvery bounds how long a failed rewrite blocks the drain behind a poison line the
+// sidecar will not take: every this-many blocked passes the spool volume is probed for a write, and a
+// writable one lifts the block.
+const spoolRetireProbeEvery = 10
 
 // spoolDrainDeadline bounds ONE Drain pass, and with it how long the spool lock
 // can be held. Half the 30-second drain tick (auditSpoolDrainInterval,
@@ -365,6 +372,15 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			}
 			suspectIdx, suspect = i, ev
 			if a.poisonProven && a.retireFailed {
+				// Nothing is recorded behind the line while the rewrite is down, or those lines
+				// would land again every pass. Every spoolRetireProbeEvery passes the volume is
+				// probed without recording; on a pass that finds it writable the block lifts, and
+				// the next pass records the lines behind the line once and rewrites.
+				a.retireBlocked++
+				if a.retireBlocked >= spoolRetireProbeEvery {
+					a.retireBlocked = 0
+					a.retireFailed = !a.volumeWritable()
+				}
 				break
 			}
 			continue
@@ -406,7 +422,7 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		} else {
 			drop[suspectIdx] = true
 			replayErr = errSpoolLineQuarantined
-			a.poisonProven = false
+			a.poisonProven, a.retireBlocked = false, 0
 		}
 	}
 
@@ -475,7 +491,7 @@ func (a *AuditSpool) retire(lines [][]byte, drop []bool, ends []int64, chunkLen,
 		a.retireFailed = true
 		return err
 	}
-	a.retireFailed = false
+	a.retireFailed, a.retireBlocked = false, 0
 	a.lines.Add(-int64(dropped - prefix))
 	return nil
 }
@@ -611,6 +627,21 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	return nil
 }
 
+// volumeWritable reports whether the spool's directory takes a synced write at the path compact
+// stages its rewrite at, without touching the spool itself. Caller must hold a.mu.
+func (a *AuditSpool) volumeWritable() bool {
+	tmp := a.path + ".tmp"
+	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		return false
+	}
+	_, werr := tf.Write([]byte{'\n'})
+	serr := tf.Sync()
+	cerr := tf.Close()
+	rerr := os.Remove(tmp)
+	return werr == nil && serr == nil && cerr == nil && rerr == nil
+}
+
 // strikeLine records one more consecutive rejection of exactly this line and
 // returns the running count. A line different from the last rejected one resets
 // the counter to 1: whatever was being retried has drained, been quarantined,
@@ -622,7 +653,7 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 func (a *AuditSpool) strikeLine(line []byte) int {
 	key := sha256.Sum256(line)
 	if key != a.poisonKey {
-		a.poisonKey, a.poisonHits, a.poisonProven = key, 0, false
+		a.poisonKey, a.poisonHits, a.poisonProven, a.retireBlocked = key, 0, false, 0
 	}
 	a.poisonHits++
 	return a.poisonHits
