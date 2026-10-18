@@ -18,6 +18,7 @@ import {
 import { useMyCapabilities } from "../../lib/capabilities";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
+import { WORKSPACE_DETAIL_EXTRA } from "../../lib/workspace-copy";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -379,7 +380,7 @@ export function WorkspacesScreen() {
         name={toDelete?.name ?? null}
         allowed={canDeleteSelected}
         entity="workspace"
-        description="Runs can no longer attach this source. Any run already using it is unaffected — this only gates NEW runs. This cannot be undone."
+        description={WORKSPACE_DETAIL_EXTRA.DELETE_BODY}
         onOpenChange={(o) => !o && setToDelete(null)}
         onDelete={() => api.deleteWorkspace(toDelete!.id)}
         onDeleted={() => {

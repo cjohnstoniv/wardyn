@@ -72,8 +72,9 @@ declare -A ALLOWLIST=(
   ["internal/store/auditpartition_pg_test.go"]=1
   # ar-l1.6's retention tab test: the partition bounds and the pending date are display data the
   # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
-  # strings so the canon wording is pinned. Nothing compares them against the clock.
-  ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
+  # strings so the canon wording is pinned. Nothing compares them against the clock. +2: the
+  # Not-started row's bounds; its state comes from the fixture, not the date.
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=15
   ["ui/src/app/components/screens/runners/remote-runner-drawer.test.tsx"]=2 # passthrough only: the runner fixture's created_at and updated_at, never compared to the clock
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1

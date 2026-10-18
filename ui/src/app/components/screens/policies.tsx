@@ -64,6 +64,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
+import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { useOperator } from "../wardyn/operator-context";
 import {
   AvailabilityControl,
@@ -605,9 +606,7 @@ function PolicyEditor({
       >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
-          <DialogDescription>
-            Wardyn checks the spec when you save and shows any problem here.
-          </DialogDescription>
+          <DialogDescription>{POLICY_DIALOG.LEDE}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">

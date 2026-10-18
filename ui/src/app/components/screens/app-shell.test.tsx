@@ -259,8 +259,8 @@ describe("AppShell — account-menu role chip gating", () => {
     await user.click(headerButtons[headerButtons.length - 1]);
 
     const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
-    expect(within(menu).queryByText("user", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("Admin", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("User", { exact: true })).toBeNull();
   });
 });
 

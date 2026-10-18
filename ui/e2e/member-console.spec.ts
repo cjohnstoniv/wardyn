@@ -59,7 +59,7 @@ test.describe("member console — real member navigation", () => {
     await page.locator("header").getByRole("button").last().click();
     const menu = page.getByRole("menu");
     // The non-admin side is a user (packet B, D6).
-    await expect(menu.getByText("user", { exact: true })).toBeVisible();
+    await expect(menu.getByText("User", { exact: true })).toBeVisible();
   });
 
   test("admin (unmocked, today's default): the full nine-item nav in the Admin view", async ({ page }) => {

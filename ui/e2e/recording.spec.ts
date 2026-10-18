@@ -32,7 +32,7 @@ const CAST =
   `{"version":2,"width":80,"height":24,"title":"e2e-cast"}\n` +
   `[0.5,"o","hello from the recording\\r\\n"]\n`;
 
-const EMPTY_TITLE = "None of your runs have a recording yet";
+const EMPTY_TITLE = "No run has a recording yet";
 const RUNS_ERROR = "Couldn't load the list of runs.";
 
 async function openRecordings(page: Page): Promise<void> {
@@ -135,10 +135,9 @@ test.describe("Recordings — disabled-recording reasons are visible text (#459)
 test.describe("Recordings library", () => {
   test("renders the header, the run-list-alone description and a refresh action", async ({ page }) => {
     await openRecordings(page);
-    await expect(page.getByText(/Captured terminal sessions, replayed byte-for-byte/i)).toBeVisible();
-    // The description no longer names the run list or a "cast" (#2858 dropped the recorder jargon); what it must
-    // still say is that nothing is fetched until play, which is what the probe-free test below proves.
-    await expect(page.getByText(/A recording is fetched only when you press play/i)).toBeVisible();
+    await expect(page.getByText(/Replays of the terminal sessions recorded during runs/i)).toBeVisible();
+    // How has_recording is derived (the run list, no per-run probe) is pinned
+    // by the probes assertion in the empty-library test below, not by the lede.
     await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
   });
 
@@ -157,7 +156,7 @@ test.describe("Recordings library", () => {
     await openRecordings(page);
 
     await expect(page.getByRole("heading", { name: EMPTY_TITLE })).toBeVisible();
-    await expect(page.getByText(/A recording appears once an agent runs in its sandbox terminal/i)).toBeVisible();
+    await expect(page.getByText(/A run is recorded when its agent runs in a terminal/i)).toBeVisible();
     await expect(page.getByRole("link", { name: /Go to Runs/ })).toBeVisible();
     await expect(page.locator("main svg.animate-spin")).toHaveCount(0);
 

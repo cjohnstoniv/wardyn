@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { C } from "./workspace-copy";
+import { C, WORKSPACE_DETAIL_EXTRA } from "./workspace-copy";
 
 // Sentinel byte-exact pins against the approved mock export
 // (mockup/wardyn-workspaces.js `C`) — a hand-retyped copy could silently
@@ -44,5 +45,21 @@ describe("workspace-copy — no exported string leaks the word 'harness'", () =>
     for (const s of allStrings) {
       expect(s.toLowerCase()).not.toContain("harness");
     }
+  });
+});
+
+// Both delete confirms reach Store.DeleteWorkspace, which removes the workspace
+// with its requirements and recorded sessions: one description, said at both.
+describe("workspace-copy — the delete confirm", () => {
+  it("names the recorded sessions and requirements it removes", () => {
+    expect(WORKSPACE_DETAIL_EXTRA.DELETE_BODY).toContain("recorded sessions");
+    expect(WORKSPACE_DETAIL_EXTRA.DELETE_BODY).toContain("requirements");
+  });
+
+  it.each([
+    ["../components/screens/workspaces.tsx", "WORKSPACE_DETAIL_EXTRA.DELETE_BODY"],
+    ["../components/screens/workspace-detail/workspace-detail.tsx", "WORKSPACE_COPY_EXTRA.DELETE_BODY"],
+  ])("%s renders it", (rel, ref) => {
+    expect(readFileSync(new URL(rel, import.meta.url), "utf8")).toContain(`description={${ref}}`);
   });
 });

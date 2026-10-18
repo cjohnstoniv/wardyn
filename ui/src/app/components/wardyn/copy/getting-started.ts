@@ -78,3 +78,9 @@ export const RUNS_MEMBER_EMPTY = {
 // groups by need then time, not by title), and it was RUNS_WAIT's only
 // consumer.
 
+// The operator welcome's closing note (onboarding-screen.tsx). The setup funnel
+// is the Admin view's "Setup" entry in the sidebar's lower nav (app-shell.tsx);
+// "Getting started" there is the User view's member page, not the funnel.
+export const WELCOME = {
+  NOTE: "A quick guided setup — the barrier is the only requirement; a model or agent is optional. You can revisit anytime under “Setup” in the sidebar.",
+} as const;

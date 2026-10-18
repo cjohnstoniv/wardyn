@@ -14,6 +14,7 @@ import { ArrowRight, BrickWall, KeyRound, Shield } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
+import { WELCOME } from "../../wardyn/copy/getting-started";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { lsGet, lsSet } from "../../../lib/storage";
@@ -228,11 +229,7 @@ export function OnboardingScreen({
         </Button>
       </div>
 
-      <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
-        A quick guided setup — the barrier is the only requirement; a model or
-        agent is optional. You can revisit anytime under “Getting started” in
-        the account menu.
-      </p>
+      <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">{WELCOME.NOTE}</p>
 
       <EpisodeList mode={known && deploymentMode(known) === "multi-user" ? "multi" : "single"} />
     </div>

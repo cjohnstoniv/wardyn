@@ -5,10 +5,10 @@
 
 // The per-person Azure DevOps token routes (#1428, #1430). The organisation
 // check and the own-token doors are the server lanes' (internal/api
-// ado_pat_orgcheck.go, ado_own_pat.go). Disconnect and a run's token list have
-// no server route yet: their paths and shapes are this console's assumption,
-// spliced at the route in the e2e specs, and a daemon without them fails like
-// any missing route, leaving the card that asked as it was.
+// ado_pat_orgcheck.go, ado_own_pat.go). Disconnect and a run's token list are
+// served by ado_pat_console.go (handleADODisconnect, handleListRunADOTokens); a
+// daemon without them fails like any missing route, leaving the card that asked
+// as it was.
 import type { ADOOrgCheck, ADOOwnTokenBody, ADOPATRefusal, ADORunToken } from "../types/ado-pat";
 import { asJson, errText, HttpError, wfetch } from "./core";
 
@@ -56,7 +56,7 @@ export const adoPat = {
     return res.status === 204 ? null : asJson<ADOPATRefusal>(res);
   },
 
-  // DELETE /api/v1/scm/azure-devops/connection (no server route yet): forgets
+  // DELETE /api/v1/scm/azure-devops/connection (handleADODisconnect): forgets
   // this person's stored sign-in and revokes the tokens of their runs in
   // progress. 204.
   async disconnect(): Promise<void> {
@@ -64,7 +64,7 @@ export const adoPat = {
     if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 
-  // GET /api/v1/runs/{id}/ado-tokens (no server route yet): every token the run
+  // GET /api/v1/runs/{id}/ado-tokens (handleListRunADOTokens): every token the run
   // held, oldest first ([] for a run that holds none). The owner and admins only.
   async runTokens(runId: string): Promise<ADORunToken[]> {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/ado-tokens`, { method: "GET" });

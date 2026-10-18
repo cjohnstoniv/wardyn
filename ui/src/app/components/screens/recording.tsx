@@ -260,7 +260,7 @@ export function RecordingScreen() {
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
         title="Recordings"
-        description="Captured terminal sessions, replayed byte-for-byte. A recording is fetched only when you press play."
+        description={RECORDINGS.LEDE}
         actions={
           <Button variant="outline" size="sm" onClick={load}>
             <RotateCw className="size-3.5" /> Refresh
@@ -302,12 +302,12 @@ export function RecordingScreen() {
                 ? RECORDING_DISABLED_TITLE
                 : truncated
                   ? RECORDINGS_NONE_SEARCHED_TITLE(runs.length)
-                  : "None of your runs have a recording yet"
+                  : RECORDINGS.NONE_TITLE
             }
             description={
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
-                : "A recording appears once an agent runs in its sandbox terminal."
+                : RECORDINGS.NONE_BODY
             }
             action={
               recordingDisabled ? undefined : (

@@ -194,8 +194,9 @@ export const PERM = {
   // capAllowed (internal/api/capabilities.go) exempts RoleAdmin only — a
   // security admin (useSecurityOperator, gated to THIS screen) is bounded
   // like anyone else, so the wording must not say "Admins" over a screen a
-  // security admin also reaches.
-  EXEMPT: "Super admins, the admin token, and local mode are never bounded by these rules. A security admin is bounded like a member.",
+  // security admin also reaches. capAllowedAsMember binds super admins, the
+  // admin token and local mode to service_attach grants too.
+  EXEMPT: "Super admins, the admin token, and local mode are never bounded by these rules, except by service_attach grants. A security admin is bounded like a member.",
 
   // ---- enforcement switch ----
   ENFORCEMENT_TITLE: "Enforcement",
@@ -265,7 +266,7 @@ export const PERM = {
   HINT_GROUP: "A group or app-role name exactly as your identity provider sends it in the token.",
   // 0.8 (user-types design, UT-7a): pick one of the org's user types.
   HINT_USER_TYPE: "Everyone stamped with this user type at sign-in.",
-  HINT_ALL: "Every signed-in member. Super admins are exempt; a security admin is not.",
+  HINT_ALL: "Every signed-in member. Super admins are exempt, except for service_attach; a security admin is not.",
   // user-types-design.md rev 4 §7: a deny at the user_type tier is a wall, so
   // adding one asks first. Title + body are the design's one sentence pair.
   TYPE_DENY_TITLE: "This blocks everyone of this type.",
@@ -298,8 +299,10 @@ export const PERM_EXTRA = {
   // Reuses the substance of the server's own WARN-log remedy (permissions.go's
   // markInertGrants — "re-save each row through POST /api/v1/permissions/grants
   // — the write boundary canonicalizes it into the form the resolver compares,
-  // or refuses it by name") rather than inventing a second diagnosis.
-  INERT_REMEDY: "This row predates the value rule and can never match anything the resolver compares — re-save it to canonicalize it, or find out why it's refused.",
+  // or refuses it by name") rather than inventing a second diagnosis, plus the
+  // delete the server's remedy ends with: the re-save inserts a twin and leaves
+  // the inert row raising its WARN until it is removed.
+  INERT_REMEDY: "This row predates the value rule and can never match anything the resolver compares — add it again in canonical form, or find out why it's refused, then delete this row — the re-save leaves it in place.",
 } as const;
 
 // Member why-denied

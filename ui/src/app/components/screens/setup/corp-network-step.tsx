@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Corporate network — Getting Started step 2 of 12, BEFORE Integrations (see
+// Corporate network — Getting Started step 3 of 4 (REQUIRED_STEPS in steps.ts), BEFORE Integrations (see
 // steps.ts for why the order itself is the fix). Two sub-tabs: Host proxy
 // (evidence read from this host, over the config sandboxes actually use, over
 // a real Test probe) and Egress redirection (the SiteConfig.egress_redirects

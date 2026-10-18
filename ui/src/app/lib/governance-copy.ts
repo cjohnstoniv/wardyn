@@ -210,7 +210,7 @@ export const GOVERNANCE = {
   ASSIGN_TITLE: "Assignments",
   ASSIGN_LEAD: "Who runs under which profile. One profile applies to a person — never two merged together.",
   PRECEDENCE:
-    "The most specific assignment wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name.",
+    "The most specific assignment wins: a person beats a group, a group beats a user type, and a user type beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name.",
   // EFFECT_NOTE and SIGNIN_NOTE are two halves of ONE fact and render
   // together; their subjects differ and getting them backwards is the trap.
   // An ASSIGNMENT is a row the resolver re-reads on every run, so a new one

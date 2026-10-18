@@ -258,7 +258,16 @@ describe("TopBar — the switch, New run and the slimmed avatar menu (M-2)", () 
     const user = userEvent.setup();
     renderTopBar("user");
     await user.click(screen.getAllByRole("button").at(-1)!);
-    expect(within(screen.getByRole("menu")).getByText("user", { exact: true })).toBeInTheDocument();
+    expect(within(screen.getByRole("menu")).getByText("User", { exact: true })).toBeInTheDocument();
+  });
+
+  it("the role chip shows a security admin by its canon label, not the wire id", async () => {
+    const user = userEvent.setup();
+    renderTopBar("security_admin");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getByText("Security admin", { exact: true })).toBeInTheDocument();
+    expect(menu.queryByText("security_admin")).toBeNull();
   });
 });
 

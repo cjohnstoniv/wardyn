@@ -29,6 +29,7 @@ import {
 } from "../ui/dropdown-menu";
 import { useShellView, ViewSwitch } from "../wardyn/view-switch";
 import { viewHome } from "../wardyn/console-view";
+import { roleLabel } from "./people/people-format";
 import {
   isCustomIdentityProvider,
   isCustomTrustDomain,
@@ -213,7 +214,7 @@ export function TopBar({
                     tone="neutral"
                     className="shrink-0 uppercase tracking-wide"
                   >
-                    {meta.role}
+                    {roleLabel(meta.role)}
                   </Chip>
                 )}
               </div>

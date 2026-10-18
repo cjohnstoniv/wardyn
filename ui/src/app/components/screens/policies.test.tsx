@@ -45,6 +45,7 @@ vi.mock("../../lib/api/setup", () => ({
 
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
+import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -134,6 +135,17 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
 
     expect(screen.getByLabelText(/^name/i)).toBeRequired();
     expect(screen.getByLabelText(/^spec/i)).toBeRequired();
+  });
+
+  it("describes what a policy is for in the dialog, not how the server handles the spec", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+
+    expect(
+      screen.getByText(POLICY_DIALOG.LEDE),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/admin-gated|validated server-side/i)).not.toBeInTheDocument();
   });
 
   it("announces a rejected save via role=alert and wires it to the Save button", async () => {
@@ -338,7 +350,7 @@ describe("PoliciesScreen — plain copy and one primary action (#2833, #2834)", 
     expect(await screen.findByText(/Default \(ceiling\) policy — applied to runs that name no policy/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Wardyn checks the spec when you save and shows any problem here.")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Wardyn checks the spec when you save and shows any problem here\./)).toBeInTheDocument();
     expect(dialog.textContent).not.toMatch(/server-side|admin-gated/);
   });
 
