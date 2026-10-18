@@ -232,11 +232,11 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
   // #2852: chips differ in width (HUMAN vs SYSTEM, success vs failure); the cells that hold them do not.
   it("holds the actor chip and the outcome in fixed-width cells", async () => {
     listAuditMock.mockResolvedValue([
-      ev({ id: "e1", actor_type: "human", action: "authz.denied", outcome: "denied" }),
-      ev({ id: "e2", actor_type: "system", action: "run.complete", outcome: "failure", run_id: "run_333" }),
+      ev({ id: "e1", actor_type: "human", action: "cell.one", outcome: "denied" }),
+      ev({ id: "e2", actor_type: "system", action: "cell.two", outcome: "failure", run_id: "run_333" }),
     ]);
     renderScreen();
-    await screen.findByText("authz.denied");
+    await screen.findByText("cell.one");
     const actors = screen.getAllByTestId("audit-actor-cell");
     const outcomes = screen.getAllByTestId("audit-outcome-cell");
     expect(actors).toHaveLength(2);
