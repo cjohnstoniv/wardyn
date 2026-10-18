@@ -341,6 +341,13 @@ describe("RunLifetimeBanner — ending soon (M1: Change end… joins Extend 1 da
     expect(screen.queryByText("This run ends in 10 minutes")).not.toBeInTheDocument();
   });
 
+  it("#2596: the warning does not promise a number of days the admin may have changed", () => {
+    renderBanner(detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString() }));
+    const banner = screen.getByTestId("run-lifetime-warning");
+    expect(banner).toHaveTextContent("your admin sets how long");
+    expect(banner).not.toHaveTextContent(/\d+ days/);
+  });
+
   it("M1: Change end… opens the SAME Change… dialog the Ends row uses, and Save PATCHes", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const run = detail({ ends_at: new Date(NOW + 9 * 60_000).toISOString(), run_limits: { user_changes_limits: true } });

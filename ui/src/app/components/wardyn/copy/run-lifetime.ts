@@ -96,7 +96,7 @@ export function warnTitle(stage: EndsWarningStage): string {
   return `This run ends in ${WARNING_REL_TEXT[stage]}`;
 }
 export function warnBody(dateText: string): string {
-  return `At ${dateText} the run stops. Its files are kept for 7 days; push or save anything you need before then.`;
+  return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
