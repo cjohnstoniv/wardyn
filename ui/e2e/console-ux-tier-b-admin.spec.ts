@@ -10,7 +10,7 @@ import { test, expect, asRealSecurityAdmin, expandCard, gotoConsole, navTo, navT
 import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { PROVIDERS_SUPER_ONLY } from "../src/app/components/wardyn/copy/console-view";
-import { IMAGES } from "../src/app/lib/availability-copy";
+import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
@@ -244,6 +244,54 @@ test.describe("Quiet empty states inside cards (#2873)", () => {
     await expect(tile).toBeVisible();
     expect(await tile.evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColour(page, "color", "--muted-foreground"));
     await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+});
+
+// Class names are not outcomes: these read what the engine resolved for the elements the Tier B rows restyled.
+// (#2888 is pinned in credentials.spec.ts, where its dialog is already reached.)
+test.describe("Tier B computed styles", () => {
+  // #2875: the no-runner icon keeps its size at phone width instead of being squeezed by the text beside it.
+  test("Host card: the no-runner icon does not shrink at 390", async ({ page }) => {
+    await phoneAt(page, "/admin/settings");
+    await expandCard(page, "Host");
+    const icon = page.getByTestId("host-card").locator("svg.text-danger").first();
+    await expect(icon).toBeVisible();
+    await expect(icon).toHaveCSS("flex-shrink", "0");
+    expect(Math.round((await boxOf(icon)).width)).toBe(20);
+  });
+
+  // #2891: the count never wraps between the search box and Refresh.
+  test("Workspaces: the list count does not wrap", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Workspaces");
+    await expect(page.getByText(/^\d+ of \d+ workspaces?$/)).toHaveCSS("white-space", "nowrap");
+  });
+
+  // #2890: Save secret is the teal primary, not the info blue it was.
+  test("Secrets: Save secret is filled with the primary colour", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Secrets");
+    await page.getByRole("button", { name: "Add secret" }).first().click();
+    const dialog = page.getByRole("dialog").filter({ hasText: "stored write-only" });
+    const save = dialog.getByRole("button", { name: "Save secret" });
+    await expect(save).toBeVisible();
+    const fill = await save.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(fill).toBe(await tokenColour(page, "backgroundColor", "--primary"));
+  });
+
+  // #2874: the Available to placeholder is in the sans face; the typed value stays mono.
+  test("Policies: the Available to placeholder is not in the mono face", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    const input = page.getByRole("dialog").filter({ hasText: "New policy" }).getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER);
+    await expect(input).toBeVisible();
+    const faces = await input.evaluate((el) => ({
+      value: getComputedStyle(el).fontFamily,
+      placeholder: getComputedStyle(el, "::placeholder").fontFamily,
+    }));
+    expect(faces.value.toLowerCase()).toContain("mono");
+    expect(faces.placeholder.toLowerCase()).not.toContain("mono");
   });
 });
 
