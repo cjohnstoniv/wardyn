@@ -87,14 +87,14 @@ describe("Templates screen: rows", () => {
     expect(screen.queryByText(T.GROUPS_UNVERIFIED)).toBeNull();
   });
 
-  // DR-0057: teal is for the one primary action, so a row's Use is an outline
-  // button and the "Only me" chip is as neutral as the other scopes.
   it("spells organization one way across the screen's strings (#2835)", () => {
-    const strings = Object.values(T).filter((v): v is string => typeof v === "string");
+    const strings = Object.values(T).filter((v) => typeof v === "string") as string[];
     expect(strings.filter((v) => /organisation/i.test(v))).toEqual([]);
     expect(T.SCOPE_ORG).toBe("Organization");
   });
 
+  // DR-0057: teal is for the one primary action, so a row's Use is an outline
+  // button and the "Only me" chip is as neutral as the other scopes.
   it("keeps a single teal action: Use is outline and the Only me chip is neutral", async () => {
     mount({ templates: [MINE], publish: MEMBER });
     const row = within(await screen.findByText("Nightly tests").then((n) => n.closest("li") as HTMLElement));
