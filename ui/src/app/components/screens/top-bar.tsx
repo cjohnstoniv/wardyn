@@ -196,7 +196,7 @@ export function TopBar({
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel>
               <div className="flex items-center gap-1.5">
                 <span className="min-w-0 truncate text-xs" title={display}>
@@ -232,7 +232,9 @@ export function TopBar({
                 {meta.method === "sso"
                   ? "signed in via SSO"
                   : meta.method === "token"
-                    ? "admin token"
+                    ? meta.operator
+                      ? "admin token"
+                      : "signed in with a token"
                     : meta.method === "local"
                       ? "local mode — no login on this install"
                       : ""}
