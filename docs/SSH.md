@@ -633,6 +633,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
   - The close writes no audit row and no log line.
+- **Connections.** At most 64 connections handshake at once (each within 15 seconds) and, counted apart, 64 authenticated ones stay open.
+  - Over the handshake bound a connection is closed before any byte; over the other, once it authenticates.
+  - Either refusal logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
