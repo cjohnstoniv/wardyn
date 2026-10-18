@@ -106,9 +106,10 @@ test.describe("Workspace detail — the member delete gate", () => {
     const deleteBtn = page.getByRole("button", { name: "Delete this workspace" });
     await expect(deleteBtn).toBeEnabled();
     await expect(deleteBtn).toHaveText("");
-    // The reason is a paragraph beside the icon button (#2885), not text inside it. Sibling cards carry
-    // their own hints, so only the non-owner case below asserts it, and as "at least one visible".
+    // The reason is a paragraph beside the icon button (#2885), not text inside it. Only the delete gate
+    // renders it as p.mt-2.text-xs; sibling cards use p.text-meta, so the owner has none and the non-owner one.
     const reason = page.locator("p.mt-2.text-xs", { hasText: "Requires the admin role." }).first();
+    await expect(reason).toHaveCount(0);
 
     // Same row, a DIFFERENT member — not its owner.
     principal = OTHER;
