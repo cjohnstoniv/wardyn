@@ -141,7 +141,7 @@ test.beforeEach(async ({ page }) => {
 test("renders the Policies screen header, description and primary action", async ({ page }) => {
   await expect(
     page.getByText(
-      "Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created.",
+      "Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own.",
     ),
   ).toBeVisible();
   // The create action is always present. The search/Refresh toolbar is gated

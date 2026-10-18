@@ -79,7 +79,7 @@ operator decides. Nothing in this round adds an approvals surface.
 
 **`/policies` — the ceiling, read-only for members.** `PoliciesScreen`
 (`ui/src/app/components/screens/policies.tsx:130-142`) already discloses the default ceiling
-in a `<details>` labelled "Default (ceiling) policy — applied to runs with no policy_id, and
+in a `<details>` labelled "Default (ceiling) policy — applied to runs that name no policy, and
 to every member's inline policy" (`:134`). `PolicyPanel` (`policy-panel.tsx:6-27`) is ONE
 spec-JSON authoring surface with two instances — `instance="policies"` (the admin editor body)
 and `instance="run"` (the New Run card) — carrying the template row, the JSON editor, the

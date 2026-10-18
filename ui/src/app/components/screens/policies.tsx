@@ -122,7 +122,7 @@ export function PoliciesScreen() {
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Policies"
-        description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created."
+        description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own."
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
@@ -142,13 +142,13 @@ export function PoliciesScreen() {
         <details className="group mb-4 rounded-lg border border-border">
           <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
             <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-            Default (ceiling) policy — applied to runs with no policy_id, and to every member's inline policy
+            Default (ceiling) policy — applied to runs that name no policy, and to every member's inline policy
           </summary>
           <PolicyDocumentView className="m-3 mt-1" spec={defaultPolicy} />
         </details>
       ) : (
         <p className="mb-4 text-xs text-muted-foreground">
-          A run created without a policy_id falls back to the control plane's configured default.
+          A run that names no policy falls back to the control plane's configured default.
         </p>
       )}
 
@@ -198,7 +198,7 @@ export function PoliciesScreen() {
                   Clear filters
                 </Button>
               ) : (
-                <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
+                <Button variant="outline" onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
                   <Plus className="size-4" /> Create your first policy
                 </Button>
               )
@@ -589,8 +589,7 @@ function PolicyEditor({
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
           <DialogDescription>
-            Policies are admin-gated config. The spec is validated server-side before it is saved —
-            an invalid spec is rejected and shown here.
+            Wardyn checks the spec when you save and shows any problem here.
           </DialogDescription>
         </DialogHeader>
 
