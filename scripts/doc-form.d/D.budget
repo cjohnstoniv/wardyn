@@ -7,4 +7,5 @@
 # docs/DESKTOP.md 7312 adds 106: the Tiers table (local-only, client-mode runner, org) and the one-line deprecation notes for WARDYN_ORG_URL.
 # 7368 adds 56 (#475), one bullet under "Enrolling into an org control plane": the member-mode SSO-only sentence 18; the enrolment sentence 25; the runner registration sentence 13.
 # 0.9 DS3-S2 fix r1: docs/DESKTOP.md 7373 adds 5 over 7368 for disk_mib_basis and the soft-size wording.
-docs/DESKTOP.md=7373 share=35
+# 0.9.4 L8: docs/DESKTOP.md 7468 adds 95 over 7373: tier rows, the legacy-figure note and the rollback warning.
+docs/DESKTOP.md=7468 share=35

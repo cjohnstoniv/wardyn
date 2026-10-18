@@ -5,7 +5,8 @@
 # README.md 2227 adds 12: the architecture bullet about decision logs and masked casts became two.
 # README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
 # README.md 2281 = 2253 + 28, measured: the how-Wardyn-is-built paragraph
-README.md=2281 share=35
+# 0.9.4 L8: README.md 2329 adds 48 over 2281: honest credential posture lines and the token export before the first run.
+README.md=2329 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -22,4 +23,5 @@ docs/README.md=810 share=35
 # docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
-docs/TRY-IT.md=3309 share=35
+# 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
+docs/TRY-IT.md=3371 share=35
