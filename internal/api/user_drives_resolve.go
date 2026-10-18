@@ -45,6 +45,16 @@ import (
 // The wrapped cause names the field an admin has to fix.
 var errDriveUnmountable = errors.New("drive_unmountable")
 
+// errDriveSubjectUnsupported is errDriveUnmountable for a subject no home is
+// derived from (types.DriveSubjectFoldsOntoASCII): every errDriveUnmountable
+// answer still applies, and the launch and preview doors name it with
+// driveRefusalSubjectUnsupported.
+var errDriveSubjectUnsupported = fmt.Errorf("%w", errDriveUnmountable)
+
+// driveSubjectUnsupportedMsg is the member sentence for errDriveSubjectUnsupported.
+const driveSubjectUnsupportedMsg = "drive: your sign-in name contains a character this deployment cannot name a drive directory from — " +
+	"ask an admin to set your directory name"
+
 // errDrivesDisabled is the ORG SWITCH (storage.user_drive.disabled) reaching the
 // resolver, so the three surfaces a drive is answered on cannot disagree about
 // whether this deployment offers drives at all.
@@ -182,6 +192,9 @@ func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 	case errors.Is(err, errUserTypeUnknown):
 		writeErrorReason(w, http.StatusForbidden, driveUnavailableUserType, userTypeUnknownMsg)
+	case errors.Is(err, errDriveSubjectUnsupported):
+		writeErrorReason(w, http.StatusUnprocessableEntity, driveRefusalSubjectUnsupported,
+			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	case errors.Is(err, errDriveUnmountable):
 		// The sentinel's own name is stripped: what is left is the frozen
 		// MEMBER sentence (docs/design/user-drives-prompt.md's DRIVE_MEMBER
@@ -572,6 +585,13 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		override = g.HomeOverride
 	}
 	subject := driveHomeSubject(d.HomeTemplate, users)
+	// An admin's override names the home without the subject; a derived home needs a subject that
+	// cannot fold onto another one.
+	if strings.TrimSpace(override) == "" && types.DriveSubjectFoldsOntoASCII(d.HomeTemplate, subject) {
+		slog.Warn("wardynd: user drive: no home is derived from this principal's subject; a home override names one",
+			slog.String("drive", d.Name), slog.String("home_template", string(d.HomeTemplate)))
+		return nil, fmt.Errorf("%w: %s", errDriveSubjectUnsupported, driveSubjectUnsupportedMsg)
+	}
 	home, err := types.DriveHomeName(*d, subject, override)
 	if err != nil {
 		// The BODY is the frozen member sentence and NOTHING ELSE. What this

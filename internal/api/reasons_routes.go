@@ -830,6 +830,11 @@ const reasonSynthesizedProfileInvalid = "synthesized_profile_invalid"
 const (
 	driveUnavailableUserType    = "user_type_unknown" // the caller's stamped user type no longer exists. 403 at launch.
 	driveUnavailableUnmountable = "unmountable"       // an allocation EXISTS and cannot be mounted — a home name that cannot name a directory, a share that is not there. 422 at launch, and the one state whose remedy is an admin's, not the member's.
+
+	// driveRefusalSubjectUnsupported is unmountable for a sign-in subject no home is derived from
+	// (types.DriveSubjectFoldsOntoASCII); an admin's home override is the remedy. 422 at launch and
+	// preview, 400 at the admin reclaim.
+	driveRefusalSubjectUnsupported = "drive_subject_unsupported"
 )
 
 // Moved here from beside their own call sites (#656 final review round):
