@@ -588,6 +588,7 @@ is what an operator can actually do.
 | `EMPTY_ASSIGN_BODY` | A profile with no assignment bounds nobody. Assign one to a group to start. |
 | `PREVIEW_TITLE` | Resolved profile |
 | `PREVIEW_LEAD` | Paste the roles, groups, or email a person's token would carry, choose their user type, and see which profile would bind their runs. |
+| `PREVIEW_LEAD_NO_TYPES` | Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs. |
 | `PREVIEW_USER_TYPE_LABEL` | User type |
 | `PREVIEW_USER_TYPE_HINT` | The type the person signs in as. Most people sign in as Standard user. |
 | `PREVIEW_RUN_CTA` | Resolve |

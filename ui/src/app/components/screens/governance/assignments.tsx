@@ -402,7 +402,7 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
   return (
     <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
       <h2 className="text-sm font-medium text-foreground">{GOV.PREVIEW_TITLE}</h2>
-      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{GOV.PREVIEW_LEAD}</p>
+      <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{showUserType ? GOV.PREVIEW_LEAD : GOV.PREVIEW_LEAD_NO_TYPES}</p>
       <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
         {/* The People step's own field and hint, verbatim: two labels for one
             accepted shape is how they drift apart (§7.3). */}

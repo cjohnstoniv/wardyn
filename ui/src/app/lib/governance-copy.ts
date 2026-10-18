@@ -240,6 +240,8 @@ export const GOVERNANCE = {
   PREVIEW_TITLE: "Resolved profile",
   PREVIEW_LEAD:
     "Paste the roles, groups, or email a person's token would carry, choose their user type, and see which profile would bind their runs.",
+  // The same lead when no user-type picker is shown (no custom user type exists), so it does not point at a control that is not there.
+  PREVIEW_LEAD_NO_TYPES: "Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs.",
   PREVIEW_USER_TYPE_LABEL: "User type",
   PREVIEW_USER_TYPE_HINT: "The type the person signs in as. Most people sign in as Standard user.",
   PREVIEW_RUN_CTA: "Resolve",

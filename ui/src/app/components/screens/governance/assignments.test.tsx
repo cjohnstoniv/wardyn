@@ -95,6 +95,9 @@ describe("AssignmentsBlock — the resolved preview", () => {
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "eng");
     expect(listUserTypesMock).toHaveBeenCalled();
     expect(screen.queryByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL })).not.toBeInTheDocument();
+    // #2901: with no picker the lead does not tell the reader to use one.
+    expect(screen.getByText(GOV.PREVIEW_LEAD_NO_TYPES)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_LEAD)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }));
     expect(previewGovernanceMock).toHaveBeenCalledWith(expect.objectContaining({ user_type: "standard" }));
   });
@@ -106,6 +109,8 @@ describe("AssignmentsBlock — the resolved preview", () => {
     const picker = await screen.findByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
     expect(picker).toHaveTextContent("Standard user");
     expect(screen.getByText(GOV.PREVIEW_USER_TYPE_HINT)).toBeInTheDocument();
+    expect(screen.getByText(GOV.PREVIEW_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_LEAD_NO_TYPES)).not.toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "eng");
     await userEvent.click(picker);
