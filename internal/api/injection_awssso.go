@@ -655,6 +655,26 @@ func (s *Server) settleReauth(ctx context.Context, ap types.ApprovalRequest, res
 	return nil
 }
 
+// reauthScopeForApproval is the scope whose stored session answers ap: the
+// AWS CLI row the hold names, while the run still carries it, else the run's
+// own Bedrock provider scope. ok=false: nothing can answer it.
+func (s *Server) reauthScopeForApproval(ctx context.Context, siteCfg types.SiteConfig, run types.AgentRun, ap types.ApprovalRequest) (awsSSOScope, bool) {
+	owner := runIdentitySubject(ctx, run.CreatedBy)
+	var sc struct {
+		ComponentID string `json:"component_id"`
+	}
+	_ = json.Unmarshal(ap.RequestedScope, &sc)
+	if sc.ComponentID == "" {
+		return reauthScopeForRun(siteCfg, run, owner)
+	}
+	cs, isCS := s.cfg.Store.(store.ComponentStore)
+	id, err := uuid.Parse(sc.ComponentID)
+	if !isCS || err != nil || !runCarriesCLIComponent(ctx, cs, run, id) {
+		return awsSSOScope{}, false
+	}
+	return cliAWSScope(sc.ComponentID, owner), true
+}
+
 // reconcileReauthOnRead repairs a resolution that did not land.
 //
 // The capture and the resolution are two writes. A daemon crash between them —
@@ -681,7 +701,7 @@ func (s *Server) reconcileReauthOnRead(ctx context.Context, ap types.ApprovalReq
 	if scErr != nil {
 		return ap // never derive a scope from a read that failed
 	}
-	scope, ok := reauthScopeForRun(siteCfg, run, runIdentitySubject(ctx, run.CreatedBy))
+	scope, ok := s.reauthScopeForApproval(ctx, siteCfg, run, ap)
 	if !ok {
 		return ap
 	}
