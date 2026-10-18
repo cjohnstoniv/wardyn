@@ -142,8 +142,8 @@ The script stages the binary for **this host's** architecture. To stage the othe
 example the arm64 binary from an amd64 build host, pass `--arch amd64|arm64` or set
 `WARDYN_AGENT_ARCH` (`x86_64` and `aarch64` also work). The flag beats the variable, and
 the variable beats `uname -m`. Checksum verification is unchanged: the release manifest
-already lists a sha256 per platform. The build refuses a staged binary whose architecture
-differs from the image's target and names the `--arch` fix.
+already lists a sha256 per platform. The build refuses a staged binary built for the other architecture
+and names the `--arch` fix.
 
 ```
 scripts/stage-agent-binary.sh claude-code <version> --arch arm64

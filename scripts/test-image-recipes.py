@@ -214,11 +214,12 @@ class ImageRecipes(unittest.TestCase):
         result = self.run_recipe("claude-code", TARGETARCH="arm64")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_claude_staged_not_elf(self):
+    def test_claude_staged_not_elf_installs(self):
+        # Only a recognised ELF machine type for the other arch is refused; 0.9.3 installed anything else.
         (self.root / "claude-stage/claude-bin").write_bytes(b"staged native")
         result = self.run_recipe("claude-code")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("is unknown but this image builds for amd64", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "claude").read_bytes(), b"staged native")
 
     def test_claude_npm_channel(self):
         result = self.run_recipe("claude-code", CLAUDE_INSTALL="npm", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="")
