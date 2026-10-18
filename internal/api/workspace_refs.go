@@ -230,6 +230,9 @@ type userMountPosture struct {
 	// strings a WorkspaceMount.Source carries for them, so buildRunMounts can
 	// stamp runner.Mount.MemberAuthored by lookup. Nil for an operator run.
 	Sources map[string]bool
+	// Writable is runner.SandboxSpec.UserWritable: the writable ceiling a
+	// read-write member bind is held to again at bind time. Nil for an operator run.
+	Writable *runner.UserWritableCeiling
 }
 
 // userMountPosture resolves a run's member-mount posture, or the zero value
@@ -261,6 +264,8 @@ func (s *Server) userMountPosture(wsRefs []types.Workspace) userMountPosture {
 				// than silently degrading to the operator path.
 				p.Roots = []string{}
 			}
+			w := s.cfg.UserMounts.Writable()
+			p.Writable = &w
 		}
 		for _, src := range ws.Sources {
 			if src.Type == types.WorkspaceSourceTypeLocalDir {

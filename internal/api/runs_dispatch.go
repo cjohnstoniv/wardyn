@@ -519,6 +519,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// binds (stamped above by buildRunMounts) the driver re-checks against
 		// these roots — see runner/member_mount.go.
 		UserMountRoots: p.UserMounts.Roots,
+		UserWritable:   p.UserMounts.Writable,
 		// Interactive runs come up idle for `wardyn run attach`; the driver prepares the
 		// workspace (clones the repo into ~/work) on the idle process so the attach
 		// shell isn't empty. A non-interactive run's task exec does this itself.

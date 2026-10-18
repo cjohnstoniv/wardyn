@@ -98,6 +98,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "Env", Variant: "an org component's config: operator-authored, so a value there may be a secret the org never meant to send", Class: ClassOperator, Rule: RuleStrip},
 	{Struct: StructSandboxSpec, Field: "Labels", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "UserMountRoots", Class: ClassExempt, Rule: RuleExempt, Variant: "re-checked against allowed_roots"},
+	{Struct: StructSandboxSpec, Field: "UserWritable", Class: ClassExempt, Rule: RuleExempt, Variant: "narrows member binds only"},
 	{Struct: StructSandboxSpec, Field: "RunID", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "RunnerID", Class: ClassExempt, Rule: RuleExempt, Variant: "routing carrier"},
 	{Struct: StructSandboxSpec, Field: "RunnerMaxRuns", Class: ClassExempt, Rule: RuleExempt, Variant: "runner limit carrier"},

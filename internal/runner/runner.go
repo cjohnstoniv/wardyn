@@ -85,6 +85,10 @@ type SandboxSpec struct {
 	// and carries the roots those mounts must resolve inside, re-checked at
 	// BIND time. Nil elsewhere — never narrows an operator mount.
 	UserMountRoots []string
+	// UserWritable, on a member run, is the writable ceiling a read-write
+	// member bind is re-checked against at BIND time. Nil skips that re-check
+	// (a control plane that sends none).
+	UserWritable *UserWritableCeiling
 	// Drives are the acting principal's drives, already resolved by the
 	// control plane, each at its own server-derived Target (DriveTargetFor) —
 	// empty if none was asked for. NOT Mounts: the request carried drive ids

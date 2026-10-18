@@ -36,9 +36,10 @@ import (
 //     reserved-target rule.
 //   - DEFAULT READ-ONLY unless the policy explicitly set ReadOnly=false.
 //   - MEMBER MOUNTS (memberRoots non-nil): additionally runs
-//     ValidateUserMountSource against operator/MDM-set roots, but only for
-//     binds the MEMBER authored — checked right before the bind is appended,
-//     since a symlink benign at onboarding can be repointed before the run.
+//     ValidateUserMountSource against operator/MDM-set roots (and, for a
+//     read-write bind, the writable ceiling), but only for binds the MEMBER
+//     authored — checked right before the bind is appended, since a symlink
+//     benign at onboarding can be repointed before the run.
 //   - DRIVES (spec.Drives): appended LAST by driveMount, each arriving as a
 //     types.DriveMount rather than a specMounts entry.
 //
@@ -82,7 +83,11 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
 		if memberRoots != nil && m.MemberAuthored {
-			if err := runner.ValidateUserMountSource(m.Source, memberRoots); err != nil {
+			var writable *runner.UserWritableCeiling
+			if !m.ReadOnly {
+				writable = spec.UserWritable
+			}
+			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable); err != nil {
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}
 		}
