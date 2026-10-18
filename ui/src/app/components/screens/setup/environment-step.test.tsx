@@ -309,6 +309,21 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     }
   });
 
+  // #2839/#2840: the read-only matrix is not dimmed to illegibility, shows no
+  // selection, and its scroller contains the sr-only labels (no sideways page).
+  it("(11b2) no runner: the matrix is readable, nothing looks selected, the scroller is positioned", () => {
+    const status = baseStatus({ runner: { driver: "none", confinement_classes: [] } });
+    renderStep({ status, selected: "CC1" });
+    const group = screen.getByRole("radiogroup", { name: "Barrier tier" });
+    expect(group.className).toContain("relative");
+    expect(group.className).not.toContain("opacity-60");
+    expect(group.className).not.toContain("pointer-events-none");
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toHaveAttribute("aria-checked", "false");
+    }
+    expect(group.querySelector(".border-primary")).toBeNull();
+  });
+
   it("(11c) ArrowRight moves selection to the next selectable tier (Fence → Wall)", async () => {
     const { onSelect } = renderStep();
     screen.getByRole("radio", { name: /Fence/ }).focus();

@@ -328,7 +328,7 @@ export function EnvironmentStep({
   // Column cell classes — the selected column gets a teal (--primary) ring built
   // from cell borders; non-selectable columns dim.
   const col = (cc: ConfinementClass, pos: "head" | "mid" | "foot") => {
-    const sel = selected === cc;
+    const sel = !noRunner && selected === cc;
     return cn(
       "px-4 align-top",
       pos === "head" ? "pt-4 pb-3" : "py-3",
@@ -362,10 +362,10 @@ export function EnvironmentStep({
       <div
         role="radiogroup"
         aria-label="Barrier tier"
-        className={cn(
-          "overflow-x-auto rounded-xl border",
-          noRunner && "pointer-events-none opacity-60",
-        )}
+        // `relative` contains the sr-only (absolute) TierIllustration labels, which
+        // otherwise widen the page at 390px (#2839). No extra dim for noRunner: the
+        // radios are already disabled and the cells carry their own opacity (#2840).
+        className="relative overflow-x-auto rounded-xl border"
       >
         <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
           <thead>
@@ -377,7 +377,7 @@ export function EnvironmentStep({
               </th>
               {CC_ORDER.map((cc) => {
                 const st = tierState(cc);
-                const sel = selected === cc;
+                const sel = !noRunner && selected === cc;
                 const canSelect = selectable(cc);
                 const meta = CC_META[cc];
                 return (
