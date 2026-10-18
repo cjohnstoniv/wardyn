@@ -14,4 +14,20 @@ describe("cn", () => {
     expect(cn("text-xs", "text-meta")).toBe("text-meta");
     expect(cn("text-meta", "text-sm")).toBe("text-sm");
   });
+
+  // M1: these rungs set a size only, so a line-height passed beside them (Chip's leading-5,
+  // Label's leading-none) must survive, as it did before #2590.
+  it.each(["text-meta", "text-body", "text-display"])("keeps leading-* beside %s", (size) => {
+    expect(cn("leading-5", size)).toBe(`leading-5 ${size}`);
+    expect(cn(size, "leading-none")).toBe(`${size} leading-none`);
+    expect(cn("leading-5", "text-danger", size)).toBe(`leading-5 text-danger ${size}`);
+  });
+
+  it("still drops leading-* for a built-in size, which carries its own line-height", () => {
+    expect(cn("leading-5", "text-xs")).toBe("text-xs");
+  });
+
+  it("a token and another token replace each other", () => {
+    expect(cn("text-meta", "text-body")).toBe("text-body");
+  });
 });
