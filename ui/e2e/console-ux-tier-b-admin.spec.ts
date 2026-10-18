@@ -6,9 +6,10 @@
 // 0.9.4 console UX Tier B (admin, settings, governance, workspaces screens): the pins that need a real layout
 // engine. Everything text- or class-shaped is pinned in vitest next to its screen.
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navTo, navToRoute } from "./fixtures";
 import { KIND, PERM } from "../src/app/lib/permissions-copy";
-import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
 const PHONE = { width: 390, height: 844 };
@@ -126,6 +127,46 @@ test.describe("Tier B layout rulings at desktop width", () => {
   });
 });
 
+test.describe("Tier B owner options at desktop width", () => {
+  // #2907 (option B): with nothing waiting, the card is one block whose button opens the audit trail.
+  test("Governance Changes: one empty block, and its button opens the audit trail", async ({ page }) => {
+    await page.route(/\/api\/v1\/governance\/changes(\?|$)/, (route) => route.fulfill({ json: [] }));
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+    await page.getByRole("tab", { name: CHANGES.TAB, exact: true }).click();
+    const block = page.getByTestId("changes-empty");
+    await expect(block).toBeVisible();
+    await expect(block.getByText(CHANGES.EMPTY_TITLE, { exact: true })).toBeVisible();
+    await expect(block.getByText(CHANGES.EMPTY_BODY, { exact: true })).toBeVisible();
+    await expect(page.getByText(CHANGES.LEAD, { exact: true })).toHaveCount(0);
+    await block.getByTestId("changes-empty-audit").click();
+    await expect(page).toHaveURL(/\/admin\/audit/);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  // #2876 (option A): the three facts are tiles in one row; the dash splits a status word from its sub-line.
+  test("Settings Host card: three tiles in one row, the word before the dash in the pill and the rest under it", async ({ page }) => {
+    await page.setViewportSize(WIDE);
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Host");
+    const tiles = ["image-builder", "recording-store", "internet"].map((id) => page.getByTestId(`host-tile-${id}`));
+    for (const t of tiles) await expect(t).toBeVisible();
+    const boxes = [await boxOf(tiles[0]), await boxOf(tiles[1]), await boxOf(tiles[2])];
+    expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(boxes[1].y - boxes[2].y)).toBeLessThanOrEqual(1);
+    expect(boxes[1].x).toBeGreaterThan(boxes[0].x + boxes[0].width - 1);
+    expect(boxes[2].x).toBeGreaterThan(boxes[1].x + boxes[1].width - 1);
+    // scripts/e2e-backend.sh boots -runner none with no image builder wired.
+    await expect(page.getByTestId("host-tile-image-builder-pill")).toHaveText("Off");
+    await expect(page.getByTestId("host-tile-image-builder-sub")).toHaveText(
+      "devcontainer builds and --image wraps are unavailable",
+    );
+    await expect(page.getByTestId("host-state-pill")).toHaveText(HOST_CARD.CANT_LAUNCH);
+  });
+});
+
 test.describe("Tier B at 390px", () => {
   // #2891: the count drops whole to one line instead of wrapping between the search box and Refresh.
   test("Workspaces: the list count stays on one line inside the viewport", async ({ page }) => {
@@ -135,5 +176,19 @@ test.describe("Tier B at 390px", () => {
     const box = await boxOf(count);
     expect(box.height).toBeLessThan(26);
     expect(box.x + box.width).toBeLessThanOrEqual(PHONE.width);
+  });
+
+  // #2876: below the width for three, the tiles stack in one column.
+  test("Settings Host card: the tiles stack in one column", async ({ page }) => {
+    await phoneAt(page, "/admin/settings");
+    await expandCard(page, "Host");
+    const tiles = ["image-builder", "recording-store", "internet"].map((id) => page.getByTestId(`host-tile-${id}`));
+    for (const t of tiles) await expect(t).toBeVisible();
+    const boxes = [await boxOf(tiles[0]), await boxOf(tiles[1]), await boxOf(tiles[2])];
+    expect(Math.abs(boxes[0].x - boxes[1].x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(boxes[1].x - boxes[2].x)).toBeLessThanOrEqual(1);
+    expect(boxes[1].y).toBeGreaterThanOrEqual(boxes[0].y + boxes[0].height - 1);
+    expect(boxes[2].y).toBeGreaterThanOrEqual(boxes[1].y + boxes[1].height - 1);
+    for (const b of boxes) expect(b.x + b.width).toBeLessThanOrEqual(PHONE.width);
   });
 });
