@@ -464,11 +464,10 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
-// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
-// ReverseProxy copies an interim response's headers straight onto the writer
-// and never runs ModifyResponse for it, so without this uiStripOutbound's
-// rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and
-// hijack reachable through http.ResponseController.
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say). ReverseProxy copies an interim
+// response's headers straight onto the writer and never runs ModifyResponse for it, so without this
+// uiStripOutbound's rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and hijack
+// reachable through http.ResponseController.
 type uiInterimWriter struct{ http.ResponseWriter }
 
 func (w uiInterimWriter) WriteHeader(code int) {
@@ -587,12 +586,11 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	}
 }
 
-// uiStripOutbound is the browser-ward half: an app in the sandbox must not be
-// able to set, overwrite or delete a wardyn_* cookie in the operator's browser
-// (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
-// would be an authentication attack, not a rendering quirk), nor set one that
-// escapes its own host (uiSetCookieAllowed), nor register a service worker
-// that controls more than its own app (uiConfineServiceWorker), nor clear site data.
+// uiStripOutbound is the browser-ward half: an app in the sandbox must not be able to set, overwrite or
+// delete a wardyn_* cookie in the operator's browser (cookie tossing — a sandbox-set wardyn_ui_sess or
+// console session cookie would be an authentication attack, not a rendering quirk), nor set one that
+// escapes its own host (uiSetCookieAllowed), nor register a service worker that controls more than its
+// own app (uiConfineServiceWorker), nor clear site data.
 func (s *Server) uiStripOutbound(resp *http.Response) error {
 	uiFilterSetCookie(resp.Header)
 	resp.Header.Del("Clear-Site-Data")
