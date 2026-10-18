@@ -102,10 +102,10 @@ func TestDockerCorrelator_OnMissRefreshThrottled(t *testing.T) {
 	}
 }
 
-// TestDockerListerReadsLabelsByKey: docker's Labels column joins labels with ","
-// unescaped, so an agent label value carrying ",wardyn.run-id=<other run>" read
-// as a second run-id. The fake docker answers each format the way docker does:
-// the joined column (forged pair last) or the per-key fields.
+// TestDockerListerReadsLabelsByKey: docker's Labels column is a comma-joined
+// list; the keys the index needs are read as their own fields. The fake docker
+// answers each format the way docker does: the joined column or the per-key
+// fields.
 func TestDockerListerReadsLabelsByKey(t *testing.T) {
 	const own, other = "33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444"
 	dir := t.TempDir()

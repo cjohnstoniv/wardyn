@@ -254,10 +254,8 @@ var _ groundtruth.Correlator = (*dockerCorrelator)(nil)
 type cliDockerLister struct{}
 
 // dockerPSLine is one row of managedContainers' `docker ps` format: the id and
-// the two labels the index needs, each read by key. docker's own Labels column
-// joins every label with "," and escapes nothing, so a label VALUE holding
-// ",wardyn.run-id=..." would read as a second key; per-key reads have no such
-// seam.
+// the two labels the index needs. docker's Labels column is a comma-joined
+// list; the keys the index needs are read as their own fields.
 type dockerPSLine struct {
 	ID        string `json:"ID"`
 	Component string `json:"Component"`
