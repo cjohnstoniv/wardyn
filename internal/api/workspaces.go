@@ -776,6 +776,9 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		updated, err = s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
 		if errors.Is(err, store.ErrWorkspaceStale) && attempt < workspaceEditAttempts {
 			if fresh, gerr := s.cfg.Store.GetWorkspace(r.Context(), id); gerr == nil {
+				if fresh.OwnedBy != ws.OwnedBy {
+					break // the owner changed mid-edit: the authorization above no longer holds, so 409
+				}
 				ws = fresh
 				continue
 			}

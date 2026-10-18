@@ -173,7 +173,8 @@ func TestRepairStaleWorkspaceRuns_ClearsAPointerToATerminalRunWithNoEntry(t *tes
 // next read returns.
 type staleStore struct {
 	*workspaceStoreFake
-	stale int // how many updates to refuse
+	stale int    // how many updates to refuse
+	owner string // when set, the concurrent writer also hands the row to this owner
 	calls int
 	run   uuid.UUID
 }
@@ -182,6 +183,9 @@ func (s *staleStore) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types
 	s.calls++
 	if s.calls <= s.stale {
 		s.ws.ActiveRunID = &s.run // the concurrent claim, visible to the next read
+		if s.owner != "" {
+			s.ws.OwnedBy = s.owner
+		}
 		return types.Workspace{}, store.ErrWorkspaceStale
 	}
 	return s.workspaceStoreFake.UpdateWorkspace(ctx, id, ws, stamp)
@@ -189,9 +193,14 @@ func (s *staleStore) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types
 
 func staleEdit(t *testing.T, stale int) (code int, st *staleStore, rr *imageRemoverRunner) {
 	t.Helper()
+	return staleEditOwner(t, stale, "")
+}
+
+func staleEditOwner(t *testing.T, stale int, owner string) (code int, st *staleStore, rr *imageRemoverRunner) {
+	t.Helper()
 	h := newHarness(t)
 	id := uuid.New()
-	st = &staleStore{stale: stale, run: uuid.New(), workspaceStoreFake: &workspaceStoreFake{ws: types.Workspace{
+	st = &staleStore{stale: stale, owner: owner, run: uuid.New(), workspaceStoreFake: &workspaceStoreFake{ws: types.Workspace{
 		ID: id, Name: "w", Status: types.WorkspaceScanned,
 		Sources:  []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/old"}},
 		ImageRef: "wardyn/ws:abc", BuiltProfileHash: "abc",
@@ -239,5 +248,22 @@ func TestUpdateWorkspace_StaleEveryTimeIs409AfterThreeAttempts(t *testing.T) {
 	defer rr.mu.Unlock()
 	if len(rr.removed) != 0 {
 		t.Errorf("a refused edit reclaimed an image the row still points at: %v", rr.removed)
+	}
+}
+
+// An owner change between the read and the retry voids the authorization the edit was
+// admitted under: the retry stops and the caller gets the 409, with nothing written.
+func TestUpdateWorkspace_OwnerChangedMidEditIs409WithoutRetry(t *testing.T) {
+	code, st, rr := staleEditOwner(t, 1, "someone-else")
+	if code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409", code)
+	}
+	if st.calls != 1 {
+		t.Errorf("UpdateWorkspace calls = %d, want 1 (no retry across an owner change)", st.calls)
+	}
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if len(rr.removed) != 0 {
+		t.Errorf("a refused edit reclaimed an image: %v", rr.removed)
 	}
 }
