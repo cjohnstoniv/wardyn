@@ -49,7 +49,7 @@ export function StartingFolder({ items, text, onText, onStart }: {
     <FilesGroup titleId="nr-start-title" title={NR_FILES.START_TITLE} body={NR_FILES.START_BODY}>
       <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-3 px-[15px] py-3.5 max-[520px]:grid-cols-1">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={STARTS_FOCUS_ID} className="text-xs font-semibold">{NR_FILES.START_FOLDER_LABEL}</label>
+          <label htmlFor={STARTS_FOCUS_ID} className="flex min-h-[26px] items-center text-xs font-semibold">{NR_FILES.START_FOLDER_LABEL}</label>
           <select
             id={STARTS_FOCUS_ID}
             className={SELECT_CLASS}
