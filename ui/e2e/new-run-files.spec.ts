@@ -345,6 +345,17 @@ test.describe("New Run, Files: repositories", () => {
     await expect(page.getByRole("status").filter({ hasText: summary })).toBeVisible();
   });
 
+  for (const how of ["a real click", "Space on the focused radio"]) {
+    test(`the lone No extra files radio shows checked after ${how}`, async ({ page }) => {
+      await stub(page, { branches: ["main"] });
+      await toFiles(page);
+      await expect(noExtra(page)).not.toBeChecked();
+      if (how === "a real click") await noExtra(page).click();
+      else { await noExtra(page).focus(); await page.keyboard.press("Space"); }
+      await expect(noExtra(page)).toBeChecked();
+    });
+  }
+
   test("No extra files is a choice: only the main drive, and a repository added later replaces it", async ({ page }) => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);

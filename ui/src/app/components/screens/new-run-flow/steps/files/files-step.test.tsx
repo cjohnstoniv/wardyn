@@ -677,8 +677,11 @@ describe("choices and Continue", () => {
 
   it("'No extra files' writes the choice and says what is lost; adding something takes it back", async () => {
     show(BACKGROUND);
-    await userEvent.click(await screen.findByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    const radio = await screen.findByRole("radio", { name: NR_FILES.NO_EXTRA });
+    expect(radio).not.toBeChecked();
+    await userEvent.click(radio);
     expect(drawn().no_repositories_or_drives).toBe(true);
+    expect(radio).toBeChecked();
     expect(await screen.findByText(NR_FILES.NO_EXTRA_DELETED)).toBeInTheDocument();
     await add(NR_FILES.REPOSITORY_BADGE, "payments");
     expect(drawn().no_repositories_or_drives).toBeUndefined();
