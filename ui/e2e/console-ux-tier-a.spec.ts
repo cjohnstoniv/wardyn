@@ -164,9 +164,10 @@ for (const theme of ["light", "dark"] as const) {
       const frame = page.getByTestId("run-pane-frame").first();
       await expect(frame).toBeVisible();
       const card = await frame.evaluate((n) => getComputedStyle(n).getPropertyValue("--card").trim());
-      const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(card);
+      // The token may be written #111 or #111111; read either as three channels.
+      const hex = /^#([0-9a-f]{1,2})([0-9a-f]{1,2})([0-9a-f]{1,2})$/i.exec(card);
       expect(hex, `--card was "${card}"`).not.toBeNull();
-      const [r, g, b] = [hex![1], hex![2], hex![3]].map((h) => parseInt(h, 16));
+      const [r, g, b] = [hex![1], hex![2], hex![3]].map((h) => parseInt(h.length === 1 ? h + h : h, 16));
       expect((r + g + b) / 3).toBeLessThan(60);
     });
   });
