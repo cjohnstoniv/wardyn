@@ -283,3 +283,42 @@ func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T
 		}
 	}
 }
+
+// orphanDeadlineRunner records whether each substrate call of the orphan passes carried a deadline.
+type orphanDeadlineRunner struct {
+	*fakeRunner
+	stopBounded, sweepBounded bool
+}
+
+func (r *orphanDeadlineRunner) StopSandbox(ctx context.Context, _ string) error {
+	_, r.stopBounded = ctx.Deadline()
+	return nil
+}
+
+func (r *orphanDeadlineRunner) SweepOrphanedSandboxes(ctx context.Context, _ time.Duration, _ func(uuid.UUID) bool) (int, error) {
+	_, r.sweepBounded = ctx.Deadline()
+	return 0, nil
+}
+
+// A substrate that accepts the call and never answers must not hold boot (the control plane would never
+// serve) or the single-threaded sweeper: the boot teardown of an orphan and the orphan sweep each run
+// under a deadline of their own, whatever the caller's context.
+func TestOrphanPassesBoundTheirSubstrateCalls(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC()
+	st := &orphanSweepStore{runs: []types.AgentRun{{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed, RunnerTarget: "docker", SandboxRef: "local"}}}
+	rn := &orphanDeadlineRunner{fakeRunner: &fakeRunner{}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	srv := testServer(t, cfg)
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !rn.stopBounded || !rn.sweepBounded {
+		t.Fatalf("orphan teardown bounded %v, orphan sweep bounded %v; want both", rn.stopBounded, rn.sweepBounded)
+	}
+}
