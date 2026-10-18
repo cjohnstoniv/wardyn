@@ -774,6 +774,7 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 	ws.Requirements = redactRequirementsForRead(ws.Requirements, tier)
 	ws.EffectiveRequirements = redactRequirementsForRead(ws.EffectiveRequirements, tier)
 	ws.Profile = redactProfileForRead(ws.Profile, tier)
+	ws.RecordResults = redactRecordResultsForRead(ws.RecordResults, tier)
 	return ws
 }
 
