@@ -639,6 +639,10 @@ func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []typ
 	return ""
 }
 
+// workspaceEditAttempts bounds how often handleUpdateWorkspace redoes an edit
+// the store refused as stale.
+const workspaceEditAttempts = 3
+
 // handleUpdateWorkspace replaces a workspace's editable identity fields (name,
 // sources, base_image), round-tripping the fetched row so the scan-owned
 // fields survive (the store UPDATE replaces every column — the old
@@ -692,76 +696,103 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// only while updated_at still matches the snapshot read here (ErrWorkspaceStale
 	// below): a run claim, record result or build that landed in between is
 	// never reverted.
-	sourcesChanged := !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
-	stampEgressEdit := false
-	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
-	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
-	// Three-tier: the edited composition upserts+attaches through the library
-	// exactly as create does — the hydrated read makes attachments
-	// authoritative, so they must track every composition edit. existing
-	// (the PRE-edit attachments) carries any per-source Overrides forward by
-	// SourceID — must be read before the next line overwrites
-	// ws.Attachments.
-	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
-	if aerr != nil {
-		writeServerError(w, r, "attach sources", aerr)
-		return
+	var (
+		sourcesChanged, imageChanged, resetBuild bool
+		staleImage                               string
+		updated                                  types.Workspace
+		err                                      error
+	)
+	// A concurrent writer of a scoped column (a run claim, a record result, a
+	// build) stamps updated_at between our read and this write, and the store then
+	// refuses the snapshot rather than revert it. The request carries no
+	// precondition and every derived field is recomputed from the row, so redo the
+	// edit on the fresh row; only a writer that keeps winning gets the 409.
+	for attempt := 1; ; attempt++ {
+		resetBuild, staleImage = false, ""
+		sourcesChanged = !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
+		stampEgressEdit := false
+		imageChanged = !baseImageEqual(ws.BaseImage, req.BaseImage)
+		ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
+		// Three-tier: the edited composition upserts+attaches through the library
+		// exactly as create does — the hydrated read makes attachments
+		// authoritative, so they must track every composition edit. existing
+		// (the PRE-edit attachments) carries any per-source Overrides forward by
+		// SourceID — must be read before the next line overwrites
+		// ws.Attachments.
+		atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
+		if aerr != nil {
+			writeServerError(w, r, "attach sources", aerr)
+			return
+		}
+		ws.Attachments, ws.BaseImageID = atts, baseImageID
+		if sourcesChanged {
+			// New CONTENT: everything reviewed against the old sources is stale.
+			// (Tier-1 contracts are untouched — they live on the sources.)
+			//
+			// Profile and Status are NOT reset here: every workspace
+			// reaching this handler now has a non-empty Attachments (upsertAndAttach
+			// always attaches at least the composition floor's ephemeral source), so
+			// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
+			// the fresh sources on every read — a write here is provably discarded
+			// before this request's own response leaves the store.
+			ws.ApprovedEgress = nil
+			ws.Requirements = nil
+			// A session still recording is not "reviewed against the old sources": it
+			// is a live run whose capture lands in this map, so dropping its entry
+			// loses the recording and strands active_run_id.
+			ws.RecordResults = inFlightRecordResults(ws.RecordResults)
+			// Stamp the clear (0055) — asked for here, written by the database. This
+			// handler is the THIRD durable writer of approved_egress, beside the two
+			// scoped setters migration 0055 named. The boot heal
+			// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
+			// approval and its ONLY newer-action guard is egress_edited_at — so a
+			// clear that leaves the stamp untouched is re-widened on the next
+			// restart, silently and fail-OPEN, exactly the loss the column exists
+			// to prevent. The operator changing the composition IS the newer action;
+			// record that it happened.
+			//
+			// The stamp was taken from wardynd's clock here and compared against
+			// approvals.decided_at; both are now the database's own now(), because a
+			// guard that is an inequality between two clocks fails open by exactly
+			// the skew. UpdateWorkspace writes it when told to.
+			stampEgressEdit = true
+		}
+		if sourcesChanged || imageChanged {
+			// The build cache keys on the old profile/base — a different base
+			// image alone invalidates it, but does NOT wipe the contract: in the
+			// three-tier model requirements come from the sources + integrations,
+			// and the wizard persists its step-② image choice through here — a
+			// first-time pick must not destroy the overlay it just helped shape.
+			//
+			// The docker tag this row was pointing at is about
+			// to become unreachable from the store (no run will ever resolve
+			// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
+			// — reclaim it now rather than leaking it forever.
+			// Reclaimed after the row is written (below): an edit that is refused or
+			// retried must not have removed the image the row still points at.
+			staleImage, resetBuild = ws.ImageRef, true
+			ws.ImageRef = ""
+			ws.BuiltProfileHash = ""
+		}
+		updated, err = s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
+		if errors.Is(err, store.ErrWorkspaceStale) && attempt < workspaceEditAttempts {
+			if fresh, gerr := s.cfg.Store.GetWorkspace(r.Context(), id); gerr == nil {
+				ws = fresh
+				continue
+			}
+		}
+		break
 	}
-	ws.Attachments, ws.BaseImageID = atts, baseImageID
-	if sourcesChanged {
-		// New CONTENT: everything reviewed against the old sources is stale.
-		// (Tier-1 contracts are untouched — they live on the sources.)
-		//
-		// Profile and Status are NOT reset here: every workspace
-		// reaching this handler now has a non-empty Attachments (upsertAndAttach
-		// always attaches at least the composition floor's ephemeral source), so
-		// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
-		// the fresh sources on every read — a write here is provably discarded
-		// before this request's own response leaves the store.
-		ws.ApprovedEgress = nil
-		ws.Requirements = nil
-		// A session still recording is not "reviewed against the old sources": it
-		// is a live run whose capture lands in this map, so dropping its entry
-		// loses the recording and strands active_run_id.
-		ws.RecordResults = inFlightRecordResults(ws.RecordResults)
-		// Stamp the clear (0055) — asked for here, written by the database. This
-		// handler is the THIRD durable writer of approved_egress, beside the two
-		// scoped setters migration 0055 named. The boot heal
-		// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
-		// approval and its ONLY newer-action guard is egress_edited_at — so a
-		// clear that leaves the stamp untouched is re-widened on the next
-		// restart, silently and fail-OPEN, exactly the loss the column exists
-		// to prevent. The operator changing the composition IS the newer action;
-		// record that it happened.
-		//
-		// The stamp was taken from wardynd's clock here and compared against
-		// approvals.decided_at; both are now the database's own now(), because a
-		// guard that is an inequality between two clocks fails open by exactly
-		// the skew. UpdateWorkspace writes it when told to.
-		stampEgressEdit = true
+	if err == nil {
+		s.removeStaleImage(r.Context(), staleImage, "")
+		if resetBuild {
+			// Forget what this process remembers about that build: the cleared row
+			// already stops the tracker claiming `done`, but its Error arm is
+			// consulted BEFORE the row, so an edit after a failed build otherwise
+			// reported that build's reason against a composition it never saw.
+			s.builds.drop(id)
+		}
 	}
-	if sourcesChanged || imageChanged {
-		// The build cache keys on the old profile/base — a different base
-		// image alone invalidates it, but does NOT wipe the contract: in the
-		// three-tier model requirements come from the sources + integrations,
-		// and the wizard persists its step-② image choice through here — a
-		// first-time pick must not destroy the overlay it just helped shape.
-		//
-		// The docker tag this row was pointing at is about
-		// to become unreachable from the store (no run will ever resolve
-		// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
-		// — reclaim it now rather than leaking it forever.
-		s.removeStaleImage(r.Context(), ws.ImageRef, "")
-		ws.ImageRef = ""
-		ws.BuiltProfileHash = ""
-		// And forget what this process remembers about that build: the
-		// cleared row already stops the tracker claiming `done`, but its Error
-		// arm is consulted BEFORE the row, so an edit after a failed build
-		// otherwise reported that build's reason against a composition it never
-		// saw.
-		s.builds.drop(id)
-	}
-	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
 	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}

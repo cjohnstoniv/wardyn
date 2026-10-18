@@ -167,3 +167,77 @@ func TestRepairStaleWorkspaceRuns_ClearsAPointerToATerminalRunWithNoEntry(t *tes
 		t.Errorf("a pointer whose run still owns a recording entry was cleared directly (%s): the reconcile owns that path", c)
 	}
 }
+
+// staleStore refuses the first stale UpdateWorkspace calls as the PG store does when a
+// concurrent writer stamped updated_at, and lands that writer's change in the row the
+// next read returns.
+type staleStore struct {
+	*workspaceStoreFake
+	stale int // how many updates to refuse
+	calls int
+	run   uuid.UUID
+}
+
+func (s *staleStore) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace, stamp bool) (types.Workspace, error) {
+	s.calls++
+	if s.calls <= s.stale {
+		s.ws.ActiveRunID = &s.run // the concurrent claim, visible to the next read
+		return types.Workspace{}, store.ErrWorkspaceStale
+	}
+	return s.workspaceStoreFake.UpdateWorkspace(ctx, id, ws, stamp)
+}
+
+func staleEdit(t *testing.T, stale int) (code int, st *staleStore, rr *imageRemoverRunner) {
+	t.Helper()
+	h := newHarness(t)
+	id := uuid.New()
+	st = &staleStore{stale: stale, run: uuid.New(), workspaceStoreFake: &workspaceStoreFake{ws: types.Workspace{
+		ID: id, Name: "w", Status: types.WorkspaceScanned,
+		Sources:  []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/old"}},
+		ImageRef: "wardyn/ws:abc", BuiltProfileHash: "abc",
+	}}}
+	cfg := baseTestConfig(h, st)
+	rr = &imageRemoverRunner{fakeRunner: &fakeRunner{}}
+	cfg.Runner = rr
+	w := do(t, New(cfg), http.MethodPut, "/api/v1/workspaces/"+id.String(), adminToken,
+		`{"name":"w","kind":"local_dir","source":"/home/u/new"}`)
+	return w.Code, st, rr
+}
+
+// One concurrent stamp between the read and the write is not the caller's problem: the
+// edit is redone on the fresh row, lands, keeps the concurrent write, and the superseded
+// image is reclaimed exactly once.
+func TestUpdateWorkspace_OneConcurrentStampIsRetriedAndKept(t *testing.T) {
+	code, st, rr := staleEdit(t, 1)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 after one retry", code)
+	}
+	if st.calls != 2 {
+		t.Errorf("UpdateWorkspace calls = %d, want 2", st.calls)
+	}
+	if st.updated.ActiveRunID == nil || *st.updated.ActiveRunID != st.run {
+		t.Errorf("the concurrent claim was reverted: active_run_id = %v, want %s", st.updated.ActiveRunID, st.run)
+	}
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if len(rr.removed) != 1 || rr.removed[0] != "wardyn/ws:abc" {
+		t.Errorf("ImageRemove calls = %v, want exactly [wardyn/ws:abc]", rr.removed)
+	}
+}
+
+// A writer that wins every time gets the 409 after the bounded attempts, and the image
+// the row still points at is left alone.
+func TestUpdateWorkspace_StaleEveryTimeIs409AfterThreeAttempts(t *testing.T) {
+	code, st, rr := staleEdit(t, 99)
+	if code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409", code)
+	}
+	if st.calls != workspaceEditAttempts {
+		t.Errorf("UpdateWorkspace calls = %d, want %d", st.calls, workspaceEditAttempts)
+	}
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if len(rr.removed) != 0 {
+		t.Errorf("a refused edit reclaimed an image the row still points at: %v", rr.removed)
+	}
+}
