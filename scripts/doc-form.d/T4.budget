@@ -35,6 +35,8 @@
 # threatmodel/THREAT-MODEL.md 63510 = 63480 + 30, measured: merge of the AWS SSO renewal row beside the session-renewal rows.
 # threatmodel/THREAT-MODEL.md 63587 = 63510 + 77, measured: merge of the Docker runner decision sink rows.
 # threatmodel/THREAT-MODEL.md 63625 = 63587 + 38, measured: an Azure DevOps token row still live at an erasure.
-threatmodel/THREAT-MODEL.md=63625 share=20
+# threatmodel/THREAT-MODEL.md 63965 adds 378 over 63587, measured: 0.9.4 L4b, Clear-Site-Data, the push path-byte bound, the SSH connection bounds, the node record re-check and residuals 92-93.
+# threatmodel/THREAT-MODEL.md 63972 adds 7 over 63965, measured: 0.9.4 L4b review, residual 93's proxy-caller sentence.
+threatmodel/THREAT-MODEL.md=64010 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

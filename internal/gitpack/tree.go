@@ -50,8 +50,23 @@ func (e treeEntry) isTree() bool {
 // parseTree reads a tree object: "<mode> <name>\0<object-id>" repeated. The
 // name checks are not decoration: a slash or "." segment would let a
 // crafted tree describe a path other than the one it occupies.
-func parseTree(data []byte, hashLen int) ([]treeEntry, error) {
-	var out []treeEntry
+//
+// The entries are counted before any is allocated, so a tree over limit is
+// refused without materialising it; a malformed tail ends the count and is
+// named by the parse below.
+func parseTree(data []byte, hashLen, limit int) ([]treeEntry, error) {
+	n := 0
+	for rest := data; len(rest) > 0; n++ {
+		nul := bytes.IndexByte(rest, 0)
+		if nul < 0 || len(rest) < nul+1+hashLen {
+			break
+		}
+		rest = rest[nul+1+hashLen:]
+	}
+	if n > limit {
+		return nil, fmt.Errorf("%w: the push walks more than %d tree entries", ErrTooLarge, maxTreeNodes)
+	}
+	out := make([]treeEntry, 0, n)
 	for len(data) > 0 {
 		sp := bytes.IndexByte(data, ' ')
 		if sp <= 0 {
@@ -81,15 +96,19 @@ func checkEntry(mode, name string) error {
 	if _, err := strconv.ParseUint(mode, 8, 32); err != nil || mode == "" || len(mode) > 6 {
 		return fmt.Errorf("gitpack: tree entry has a mode of %q", mode)
 	}
+	if len(name) > maxEntryNameBytes {
+		return fmt.Errorf("%w: a tree entry name is longer than %d bytes", ErrTooLarge, maxEntryNameBytes)
+	}
 	if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
 		return fmt.Errorf("gitpack: tree entry names a path component of %q", name)
 	}
 	return nil
 }
 
-// tree returns the entries of the tree oid names. ok is false when the pack does
-// not carry that tree, which means the receiving side already stores it.
-func (i *index) tree(oid string) (entries []treeEntry, ok bool, err error) {
+// tree returns the entries of the tree oid names, refusing one with more than
+// limit. ok is false when the pack does not carry that tree, which means the
+// receiving side already stores it.
+func (i *index) tree(oid string, limit int) (entries []treeEntry, ok bool, err error) {
 	o, held := i.byOID[oid]
 	if !held {
 		return nil, false, nil
@@ -97,7 +116,7 @@ func (i *index) tree(oid string) (entries []treeEntry, ok bool, err error) {
 	if o.typ != objTree {
 		return nil, false, fmt.Errorf("gitpack: %s is a %s where a tree was expected", oid, o.typ.label())
 	}
-	entries, err = parseTree(o.data, i.format.size)
+	entries, err = parseTree(o.data, i.format.size, limit)
 	return entries, err == nil, err
 }
 
@@ -350,7 +369,10 @@ type walker struct {
 	// nodes counts the tree ENTRIES walked, against maxTreeNodes, charged
 	// per entry since every entry costs a lookup regardless of expansion.
 	nodes int
-	out   []Change
+	// pathBytes counts the path text kept (reported paths and memo keys),
+	// against maxPathBytes.
+	pathBytes int
+	out       []Change
 	// bases are the parents the pack's commits name and the pack does not
 	// carry, or that held marks (Result.Bases).
 	bases map[string]bool
@@ -366,6 +388,19 @@ func newWalker(i *index) *walker {
 func (w *walker) charge(n int) error {
 	if w.nodes += n; w.nodes > maxTreeNodes {
 		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrTooLarge, maxTreeNodes)
+	}
+	return nil
+}
+
+// tree is idx.tree held to the entries the walk has left.
+func (w *walker) tree(oid string) ([]treeEntry, bool, error) {
+	return w.idx.tree(oid, maxTreeNodes-w.nodes)
+}
+
+// keep accounts for n bytes of path text the walk is about to keep.
+func (w *walker) keep(n int) error {
+	if w.pathBytes += n; w.pathBytes > maxPathBytes {
+		return fmt.Errorf("%w: the push's paths come to more than %d bytes", ErrTooLarge, maxPathBytes)
 	}
 	return nil
 }
@@ -409,18 +444,21 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if w.diffed[key] {
 		return nil
 	}
+	if err := w.keep(len(key)); err != nil {
+		return err
+	}
 	w.diffed[key] = true
 	if depth > maxTreeDepth {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
 	}
-	next, ok, err := w.idx.tree(newOID)
+	next, ok, err := w.tree(newOID)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return w.uncarried(prefix, newOID)
 	}
-	prev, ok, err := w.idx.tree(oldOID)
+	prev, ok, err := w.tree(oldOID)
 	if err != nil {
 		return err
 	}
@@ -462,12 +500,15 @@ func (w *walker) walk(prefix, oid string, depth int) error {
 	if w.walked[key] {
 		return nil
 	}
-	entries, ok, err := w.idx.tree(oid)
+	entries, ok, err := w.tree(oid)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return w.uncarried(prefix, oid)
+	}
+	if err := w.keep(len(key)); err != nil {
+		return err
 	}
 	w.walked[key] = true
 	return w.walkEntries(prefix, entries, depth)
@@ -511,6 +552,9 @@ func (w *walker) record(c Change) error {
 	}
 	if len(w.out) >= maxChanges {
 		return fmt.Errorf("%w: the push touches more than %d paths", ErrTooLarge, maxChanges)
+	}
+	if err := w.keep(len(c.Path)); err != nil {
+		return err
 	}
 	w.seen[c] = true
 	w.out = append(w.out, c)

@@ -5,7 +5,7 @@
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading, sql } from "./fixtures";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
-import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
+import { RUN, RUN_COCKPIT, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
 import { RUN_SYNC } from "../src/app/components/wardyn/copy/runners";
@@ -659,5 +659,18 @@ test.describe("Run detail — the Azure DevOps decline", () => {
     await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
     await expect(page.getByText("Credentials", { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId("ado-lane-declined")).toHaveCount(0);
+  });
+});
+
+// The Credentials panel's eligibility line holds for every grant kind: it names
+// what the run may request and promises no delivery (an ssh_key or a resident
+// git_pat is readable inside the sandbox).
+test.describe("Run detail — the Credentials eligibility line", () => {
+  test("says what the run may request and claims no minted token", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+    await expect(page.getByText(RUN_COCKPIT.credentialsEligibility)).toBeVisible();
+    await expect(page.getByText(/never sees your real keys/)).toHaveCount(0);
   });
 });

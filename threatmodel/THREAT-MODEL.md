@@ -546,7 +546,7 @@ is not the deployment described above.**
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
-| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and a bounded concurrent-connection count (a connection over the cap is closed before any handshake byte). | B9 |
+| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and bounded concurrent counts: 64 connections handshaking (one over it is closed before any handshake byte) and, counted apart, 64 authenticated connections; a refusal at either writes a throttled warning. **Residual:** the handshake bound is shared by every source, so connections that hold it until their deadline delay other people's new connections. | B9 |
 | | `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. | |
 | | A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. | |
 | | These bounds are load-bearing rather than belt-and-braces: the DAEMON default is off (`WARDYN_SSH_LISTEN` unset), but the one-line installer and the desktop envelope both ship it ON at `:2222` (see B9). | |
@@ -685,6 +685,10 @@ is not the deployment described above.**
   (Early Hints) as well as the final response —
   - so the app's SERVER cannot plant a cookie on sibling hosts under a shared parent domain, nor
     smuggle a nameless one whose value the browser sends back as `wardyn_ui_sess`.
+- Every `Clear-Site-Data` header is DROPPED, on a `1xx` and on the final response: the browser
+  applies it to the whole registrable domain, so the app's server leaves the browser state of the
+  console, other relay sessions and sibling sites alone — pinned by
+  [`internal/api/uigateway_cookies_test.go`](../internal/api/uigateway_cookies_test.go).
 - Inbound, `WARDYN_UI_SANDBOX_STRIP_COOKIES` (`allow:`/`deny:` cookie names, unset = every
   non-`wardyn_*` cookie forwarded; `allow:__Host-*` is the browser-guaranteed host-only choice)
   keeps a sibling host's **HttpOnly** `Domain=` cookies away from the app
@@ -2809,7 +2813,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A force delete, a missing pod or a deleted Node object is not proof that anything stopped. Without terminal evidence from the same execution, or an infrastructure fence, the run stays held as containment pending: it keeps its lease, its NetworkPolicies and its runner's offline record, for as long as the node stays partitioned. Run detail shows "Containment pending; egress bounded until T", then "Egress bound passed; termination unknown".
     - A security operator can release it with a node record: "node powered off", or "no prior holder" for a run the runner could not tie to one machine. runnerd decides each record against its own acceptance list; the organisation adds the two-person rule. A record is only as true as the people who make it, and two people who collude defeat it.
     - Reusing a node name for another machine while a run's pods or holds remain is unsupported. runnerd records a reuse it sees before release, and then only a "node powered off" record made by two people releases the run. A reuse that none of its lists samples before release is not caught, and a holder acting on a stale snapshot can start the pod after release, with the runs namespace's ambient egress and no renewable identity.
+    - **[0.9.4]** An accepted record releases the run only for the tuple it was approved for. runnerd compares the tuple again as it stores the record and again before the record releases the run, so a holder of the node name latched after approval lapses the record; the run stays held until a record for the new tuple is accepted ([`internal/runner/k8s/evidence.go`](../internal/runner/k8s/evidence.go)).
     - Owner acceptance is pending; listing the residual here is not acceptance.
+
+92. **With local mode on, `WARDYN_LOCAL_TRUST_FORWARDER` (compose default `true`) treats every peer on the `wardyn-internal` network as the local operator [0.9.4].** ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), [`internal/api/http.go`](../internal/api/http.go).)
+    - The setting exists because traffic on the published port reaches wardynd from the bridge gateway, not from loopback. wardynd cannot tell that hop apart from another member of the network.
+    - The members are Wardyn's own containers: the per-run proxy sidecars, the registry and relay probes. The desktop tier inherits the compose default.
+    - Narrowing the trust to the gateway address is planned for 0.10, once the desktop and compose flows are proven with it on Docker and Podman. The variable and its default stay as they are.
+
+93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go).)
+    - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
+    - The run's sandbox reaches it over the run's own network; the proxy does not yet restrict callers to its own sandbox's address.
+    - A check that serves only the run's sandbox address, with no change to how the proxy is addressed, is planned for 0.10 once proven on Docker and Podman.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3409,10 +3424,13 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
     - And the proxy sidecar has a hard 256 MiB cap.
   - Inspection takes the same process-wide slot and retained-bytes budget as LLM request scanning, and a push that cannot get them in time is refused, never forwarded unread.
   - The slot is one wide (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a time.
-  - One inspection is bounded beyond its body at about 232 MiB, as `internal/gitpack`'s package comment breaks down:
+  - One inspection is bounded beyond its body at about 296 MiB, as `internal/gitpack`'s package comment breaks down:
     - `maxInflatedBytes` (128 MiB) of inflated objects,
     - per-object bookkeeping held under 160 bytes an object by `maxObjects` (200,000; about 30 MiB),
-    - and a change set of at most `maxChanges` entries,
+    - a change set of at most `maxChanges` entries,
+    - at most `maxPathBytes` (64 MiB) of path text kept by the tree walk (tree entry names are capped at
+      `maxEntryNameBytes`, 4096 bytes, and a tree with more entries than the walk has left is refused before it is
+      read into memory),
     - plus one delta result (up to `maxObjectBytes`) that is built before it is charged.
   - Before #250 the object ceiling was 1,048,576, and a legal 16.8 MB pack of that many near-empty blobs was inspected while holding 656 MiB; it is now refused as uninspectable.
   - The residual is that the ceilings are not sized jointly to the sidecar:

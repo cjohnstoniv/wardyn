@@ -208,6 +208,15 @@ describe("CredentialsWidget", () => {
     render(<CredentialsWidget grants={grants} audit={audit} />);
     expect(await screen.findByText("brokered")).toBeInTheDocument();
   });
+
+  it("claims no delivery for an ssh_key grant, whose key the sandbox can read", async () => {
+    const grants: CredentialGrant[] = [
+      { id: "g1", scope: "ssh_key:git.example.com", audience: "git.example.com", state: "active" },
+    ];
+    render(<CredentialsWidget grants={grants} audit={[]} />);
+    expect(await screen.findByText(RUN_COCKPIT.credentialsEligibility)).toBeInTheDocument();
+    expect(screen.queryByText(/mints a short-lived|never sees your real keys/)).not.toBeInTheDocument();
+  });
 });
 
 describe("EgressWidget", () => {

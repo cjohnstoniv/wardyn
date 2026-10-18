@@ -3965,7 +3965,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - The permission error itself has no way forward except giving the migrator
   ownership; do that on the restored database, not on the half-upgraded one.
 
-Run this as the role you have today, the one in `WARDYN_PG_DSN`:
+Run this as the role you have today, the one in `WARDYN_PG_DSN`, with
+`psql -v ON_ERROR_STOP=1` so the first failed statement stops the script rather
+than leaving the later grants half-applied:
 
 ```sql
 -- 1. The new LEAST-PRIVILEGE app role. Migrations create no roles by design
@@ -3988,10 +3990,11 @@ REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn
 --     (0111) does this once for every role that held INSERT at the upgrade;
 --     run it yourself for a role you create after that. The same GRANT ALL
 --     TABLES in step 2 also reached the table's partitions and its bookkeeping
---     tables, so take their write privileges back too.
+--     tables, so take their write privileges back too. The loop below reaches
+--     every partition, audit_events_legacy included while it exists.
 REVOKE INSERT ON audit_events FROM wardyn_app;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
-  ON audit_partition_meta, audit_chain_anchors, audit_events_legacy FROM wardyn_app;
+  ON audit_partition_meta, audit_chain_anchors FROM wardyn_app;
 DO $$
 DECLARE p regclass;
 BEGIN

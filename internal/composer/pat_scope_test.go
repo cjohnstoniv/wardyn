@@ -5,9 +5,11 @@ package composer
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -314,5 +316,90 @@ func TestClampGitPATAxes(t *testing.T) {
 				t.Fatalf("scope %s still contains %s", got, tc.absent)
 			}
 		})
+	}
+}
+
+// TestPATIntersectReposMatchesThePairwiseRule pins the indexed intersection to
+// the rule written pairwise with types.PATRepoCovers, over lists that mix exact
+// entries, wildcards at two depths, duplicates and malformed entries.
+func TestPATIntersectReposMatchesThePairwiseRule(t *testing.T) {
+	within := func(e string, list []string) bool {
+		k, ok := types.PATRepoKey("", e)
+		return ok && slices.ContainsFunc(list, func(c string) bool {
+			ck, cok := types.PATRepoKey("", c)
+			return cok && types.PATRepoCovers(ck, k)
+		})
+	}
+	pairwise := func(a, b []string) []string {
+		var out []string
+		for _, e := range a {
+			if within(e, b) {
+				out = append(out, e)
+			}
+		}
+		for _, e := range b {
+			if within(e, a) {
+				out = append(out, e)
+			}
+		}
+		slices.Sort(out)
+		out = slices.Compact(out)
+		return slices.DeleteFunc(slices.Clone(out), func(e string) bool {
+			return slices.ContainsFunc(out, func(o string) bool { return o != e && within(e, []string{o}) })
+		})
+	}
+	pool := []string{"g/*", "g/a", "g/b", "g/a/*", "g/a/x", "h/*", "h/c", "solo", "g", "bad//x", "../x", "g/*/*", "g/a"}
+	for i := range 1 << 7 {
+		var a, b []string
+		for j, e := range pool {
+			if (i>>(j%7))&1 == 1 {
+				a = append(a, e)
+			} else {
+				b = append(b, e)
+			}
+		}
+		for _, pair := range [][2][]string{{a, b}, {b, a}, {a, a}} {
+			got, want := patIntersectRepos("", pair[0], pair[1]), pairwise(pair[0], pair[1])
+			if !slices.Equal(got, want) {
+				t.Fatalf("intersect(%q, %q) = %q, want %q", pair[0], pair[1], got, want)
+			}
+		}
+	}
+}
+
+// TestPATScopeMeetLargeReposListIsLinear: a request-sized repos list (the 1 MiB
+// body holds about 70k entries) under a "group/*" ceiling is met in well under
+// a second; a pairwise scan of it ran for minutes.
+func TestPATScopeMeetLargeReposListIsLinear(t *testing.T) {
+	repos := make([]string, 70000)
+	for i := range repos {
+		repos[i] = fmt.Sprintf("group/r%d", i)
+	}
+	body, err := json.Marshal(repos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []string, 1)
+	go func() {
+		var warns []string
+		got, keep := PATScopeMeet(patScope(`"repos":`+string(body)), []json.RawMessage{patScope(`"repos":["group/*"]`)}, &warns)
+		if !keep {
+			done <- nil
+			return
+		}
+		sc, err := types.DecodeGitPATScope(got)
+		if err != nil || sc.Repos == nil {
+			done <- nil
+			return
+		}
+		done <- *sc.Repos
+	}()
+	select {
+	case r := <-done:
+		if len(r) != len(repos) {
+			t.Fatalf("met repos has %d entries, want %d", len(r), len(repos))
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("PATScopeMeet on 70k repos entries did not finish in 20s")
 	}
 }

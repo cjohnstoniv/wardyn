@@ -536,7 +536,8 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 // scan's profile/status is never clobbered, audit, and return the updated
 // workspace. Callers supply only what genuinely differs: normalize, the store
 // setter, and the audit payload — which stays count/shape-only, never
-// value-shaped, for anything that could carry repo content.
+// value-shaped, for anything that could carry repo content. The echo is
+// projected for the caller's tier exactly as a read of the row is.
 func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Request, action string,
 	normalize func(T) (V, string, string),
 	set func(context.Context, uuid.UUID, V) (types.Workspace, error),
@@ -565,7 +566,7 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, id.String(), "success", auditWorkspaceData(r, updated.OwnedBy, data(val))))
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, s.workspaceWriteEcho(r, updated))
 }
 
 // maxJSONBody caps a control-plane JSON request body. Nothing this package

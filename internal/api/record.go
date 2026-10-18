@@ -933,7 +933,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	if len(skipped) > 0 {
 		w.Header().Set(recordSkippedHostsHeader, strings.Join(skipped, ","))
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, s.workspaceWriteEcho(r, updated))
 }
 
 // selectPromoteHosts is what a promote request actually promotes: the full promotable set, unless the

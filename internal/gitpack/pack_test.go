@@ -867,7 +867,8 @@ func absentSubtrees(n int) []byte {
 
 // emptySubtrees is a tree whose every entry names the empty tree, which the
 // pack carries: a fan-out that bottoms out here resolves to no Change at all,
-// so maxChanges is never reached and only the node ceiling can stop the walk.
+// so maxChanges is never reached and only the node (or path-byte) ceiling can
+// stop the walk.
 // It returns the tree and the empty tree's object id.
 func emptySubtrees(idx *index, n int) (tree []byte, emptyOID string) {
 	emptyOID = idx.put(objTree, mkTree())
@@ -891,6 +892,10 @@ func emptySubtrees(idx *index, n int) (tree []byte, emptyOID string) {
 // The assertion is the work done, not the time taken: a wall clock would only
 // say this machine was fast today.
 func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
+	// The memo keys of this walk pass maxPathBytes first; move it so the node
+	// ceiling is the one under test.
+	defer func(was int) { maxPathBytes = was }(maxPathBytes)
+	maxPathBytes = 1 << 40
 	for _, width := range []int{2, 256} {
 		t.Run(fmt.Sprintf("bottom of %d", width), func(t *testing.T) {
 			idx := newIndex(sha1Format)
@@ -1226,4 +1231,65 @@ func commandSection(caps string, cmds ...string) []byte {
 	}
 	b.WriteString("0000")
 	return b.Bytes()
+}
+
+// TestPackTree_LongNamesAreChargedByBytes: long names repeated down a DAG make
+// each path long; the walk keeps at most maxPathBytes.
+func TestPackTree_LongNamesAreChargedByBytes(t *testing.T) {
+	idx := newIndex(sha1Format)
+	blob := []byte("x\n")
+	idx.put(objBlob, blob)
+	long := strings.Repeat("n", 254)
+	bottom := mkTree(treeLine{"100644", "f", hashObject("blob", blob)})
+	root := fanOut(idx, bottom, 15, long+"a", long+"b")
+	w := newWalker(idx)
+	if err := w.walk("", root, 0); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("walk = %v (%d paths kept), want ErrTooLarge", err, len(w.out))
+	}
+	if w.pathBytes > maxPathBytes+16*256+64 {
+		t.Errorf("kept %d bytes of path text, want the walk stopped near %d", w.pathBytes, maxPathBytes)
+	}
+}
+
+// TestPackTree_EntryNameIsBounded: a name past maxEntryNameBytes is refused as
+// too large; one at it is read.
+func TestPackTree_EntryNameIsBounded(t *testing.T) {
+	blob := []byte("x\n")
+	for _, c := range []struct {
+		n    int
+		want error
+	}{{maxEntryNameBytes, nil}, {maxEntryNameBytes + 1, ErrTooLarge}} {
+		idx := newIndex(sha1Format)
+		idx.put(objBlob, blob)
+		root := idx.put(objTree, mkTree(treeLine{"100644", strings.Repeat("n", c.n), hashObject("blob", blob)}))
+		if err := newWalker(idx).walk("", root, 0); !errors.Is(err, c.want) {
+			t.Errorf("a %d-byte name: walk = %v, want %v", c.n, err, c.want)
+		}
+	}
+}
+
+// TestPackTree_TreeOverTheNodeCeilingIsNotMaterialised: a tree with more
+// entries than the walk has left is refused before its entries are built, so
+// one large tree costs no more than the refusal.
+func TestPackTree_TreeOverTheNodeCeilingIsNotMaterialised(t *testing.T) {
+	idx := newIndex(sha1Format)
+	blob := []byte("x\n")
+	idx.put(objBlob, blob)
+	lines := make([]treeLine, 0, 64)
+	for i := range 64 {
+		lines = append(lines, treeLine{"100644", fmt.Sprintf("f%02d", i), hashObject("blob", blob)})
+	}
+	root := idx.put(objTree, mkTree(lines...))
+	var err error
+	allocs := testing.AllocsPerRun(5, func() {
+		w := newWalker(idx)
+		w.nodes = maxTreeNodes - 63
+		err = w.walk("", root, 0)
+	})
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("walk = %v, want ErrTooLarge", err)
+	}
+	if allocs > 32 {
+		t.Errorf("refusing a 64-entry tree allocated %.0f times; its entries were built first", allocs)
+	}
 }

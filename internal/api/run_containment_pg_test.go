@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -374,5 +375,34 @@ func TestPG_NodeRecordNoAssociationNeedsTwoAndLapses(t *testing.T) {
 	}
 	if len(e.recordActions()) != 0 {
 		t.Fatal("a stale record went out")
+	}
+}
+
+// TestPG_NodeRecordRefusesAPITokens: a node record is proposed and approved from a signed-in session.
+// A personal API token is refused on both sides, as the admin token is, and the change stays pending.
+func TestPG_NodeRecordRefusesAPITokens(t *testing.T) {
+	e := newContainmentEnv(t, false)
+	reuse := runner.NodeSample{Name: "n1", UID: "uid-n1-new", MachineID: "m7", SystemUUID: "s7"}
+	e.mustPage(&runnerwire.ContainmentPending{Kind: runner.ContainmentPendingDelete, Since: time.Now().Add(-time.Hour), NameReused: true, Tuple: e.tuple(reuse)}, nil)
+	tuple := e.containment(e.alice).Pending.Tuple
+	body, _ := json.Marshal(types.RunNodeRecordRequest{Attestation: types.NodeRecordPoweredOff, Source: types.NodeRecordSourceProviderConsole, SourceID: "i-0abc123", Tuple: tuple})
+
+	_, aliceRaw := e.mintToken(govSubAlice, "alice@corp.example", oidc.RoleSecurityAdmin)
+	if w := do(t, e.srv, http.MethodPost, "/api/v1/runs/"+e.run.ID.String()+"/node-record", aliceRaw, string(body)); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), reasonNodeRecordHumanOnly) {
+		t.Fatalf("a node record by API token = %d %s, want 403 %s", w.Code, w.Body, reasonNodeRecordHumanOnly)
+	}
+	ch := e.pending(e.recordW(e.alice, types.NodeRecordPoweredOff, tuple))
+	_, bobRaw := e.mintToken(govSubBob, "bob@corp.example", oidc.RoleSecurityAdmin)
+	if w := do(t, e.srv, http.MethodPost, "/api/v1/governance/changes/"+ch.ID.String()+"/approve", bobRaw, ""); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), reasonNodeRecordHumanOnly) {
+		t.Fatalf("an approval by API token = %d %s, want 403 %s", w.Code, w.Body, reasonNodeRecordHumanOnly)
+	}
+	if len(e.recordActions()) != 0 || e.changeState(ch.ID) != string(types.GovernanceChangePending) {
+		t.Fatal("a refused token applied the record")
+	}
+	e.approve(ch.ID) // control: the same change approved from a session applies
+	if len(e.recordActions()) != 1 {
+		t.Fatal("the session approval did not apply the record")
 	}
 }

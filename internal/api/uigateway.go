@@ -474,6 +474,7 @@ type uiInterimWriter struct{ http.ResponseWriter }
 func (w uiInterimWriter) WriteHeader(code int) {
 	if code >= 100 && code < 200 {
 		uiFilterSetCookie(w.Header())
+		w.Header().Del("Clear-Site-Data")
 	} else {
 		// ReverseProxy clears the header map after each 1xx, which takes the
 		// gateway's own Referrer-Policy with it; put it back on the final response.
@@ -589,9 +590,10 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 // (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
 // would be an authentication attack, not a rendering quirk), nor set one that
 // escapes its own host (uiSetCookieAllowed), nor register a service worker
-// that controls more than its own app (uiConfineServiceWorker).
+// that controls more than its own app (uiConfineServiceWorker), nor clear site data.
 func (s *Server) uiStripOutbound(resp *http.Response) error {
 	uiFilterSetCookie(resp.Header)
+	resp.Header.Del("Clear-Site-Data")
 	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
 		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
 	} else {

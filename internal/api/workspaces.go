@@ -428,16 +428,27 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	// they see, and the two are separate because the same getter feeds
 	// workspace_build.go and workspace_envcode.go, which need the real host
 	// paths and image refs to do their work.
+	writeJSON(w, http.StatusOK, s.workspaceForResponse(r, ws))
+}
+
+// workspaceForResponse is the single-workspace read: the write echo's
+// projection (workspaceWriteEcho), plus the server-owned `admitted` flag the
+// list also carries and #1267's available_to_you.
+func (s *Server) workspaceForResponse(r *http.Request, ws types.Workspace) types.Workspace {
 	out := redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws))
-	// The single-row read carries the same server-owned `admitted` flag the list
-	// does — one document, one projection (the list route learned that lesson for
-	// redaction one release ago).
 	if stamp := s.admissionStamper(r.Context()); stamp != nil {
 		out = stamp(out)
 	}
-	// #1267: the same per-row available_to_you the list carries.
-	out = s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
-	writeJSON(w, http.StatusOK, out)
+	return s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
+}
+
+// workspaceWriteEcho is what a write returns of the updated row: the reader's
+// tier (redactWorkspaceForRead) and the provider-pin projection, so a write
+// shows no field the same caller's GET would hide. It adds no read-only
+// stamps: a write response carries no `admitted` and no available_to_you key
+// (the console would read an absent-turned-false flag as a refusal).
+func (s *Server) workspaceWriteEcho(r *http.Request, ws types.Workspace) types.Workspace {
+	return s.pinStamper(r.Context())(redactWorkspaceForRead(ws, s.workspaceReadTierFor(r, ws)))
 }
 
 // pinStamper projects a workspace's model-provider pin for this caller: a pin

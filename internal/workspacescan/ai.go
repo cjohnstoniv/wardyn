@@ -11,8 +11,9 @@ package workspacescan
 // e.g. an unrecognized build system captured in ScanFacts.UnrecognizedSamples.
 //
 // Trust model (mirrors internal/composer/backends/cli): the child runs
-// least-privilege via `--permission-mode plan`, so a prompt-injected sample
-// cannot make the host CLI take a mutating action. ANTHROPIC_API_KEY is
+// least-privilege via `--permission-mode plan` with no tools (`--tools ""`) and
+// no MCP servers (`--strict-mcp-config` with no `--mcp-config`), so a
+// prompt-injected sample has no tool to call. ANTHROPIC_API_KEY is
 // scrubbed so claude uses the resident subscription, never an API key. The
 // UnrecognizedSamples content is scrubbed + fence-defanged before the model
 // sees it.
@@ -270,8 +271,8 @@ func runAdvisor(ctx context.Context, facts ScanFacts, opts AIOptions) (adviceWir
 }
 
 // runAdvisorClaude runs Claude Code headless with inline strict structured
-// output and extracts .structured_output from the JSON wrapper. Read-only via
-// --permission-mode plan; ANTHROPIC_API_KEY scrubbed.
+// output and extracts .structured_output from the JSON wrapper. No tools, no MCP
+// servers, plan mode; ANTHROPIC_API_KEY scrubbed.
 func runAdvisorClaude(ctx context.Context, bin string, schema map[string]any, user string) ([]byte, error) {
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
@@ -284,6 +285,11 @@ func runAdvisorClaude(ctx context.Context, bin string, schema map[string]any, us
 		"--append-system-prompt", advisorSystemPrompt,
 		"--permission-mode", "plan",
 		"--max-turns", aiMaxTurns,
+		// No tools and no MCP servers: the advice is the structured reply
+		// alone, so the sampled repo content reaches a model with nothing to
+		// call. Plan mode stays as defence in depth.
+		"--tools", "",
+		"--strict-mcp-config",
 	}
 
 	out, err := execAdvisor(ctx, bin, cliutil.ScrubChildEnv(os.Environ()), args...)

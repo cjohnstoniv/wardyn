@@ -112,10 +112,16 @@ const (
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
 	// so the bound is self-documenting here, not implicit in a zero value.
 	sshMaxAuthTries = 6
-	// maxSSHConnections bounds total concurrent SSH connections this process
-	// will handshake at once. A connection accepted over the cap is closed
-	// immediately — before any handshake byte is read or written — so the
-	// bound bites before a goroutine or a NewServerConn call is spent on it.
+	// maxSSHHandshakes bounds connections this process is handshaking at
+	// once, from Accept until NewServerConn returns. A connection accepted
+	// over it is closed immediately — before any handshake byte is read or
+	// written — so the bound bites before a goroutine or a NewServerConn call
+	// is spent on it.
+	maxSSHHandshakes = 64
+	// maxSSHConnections bounds established (authenticated) SSH connections.
+	// It is counted apart from maxSSHHandshakes, so long-lived sessions never
+	// use up the handshake bound and connections still handshaking never use
+	// up this one; a connection authenticated over it is closed.
 	maxSSHConnections = 64
 	// defaultSSHSessionsPerRun is Config.SSHMaxSessionsPerRun's fallback
 	// (WARDYN_SSH_MAX_SESSIONS_PER_RUN). It bounds concurrent SSH channels —
@@ -203,7 +209,7 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
-	sem := make(chan struct{}, maxSSHConnections)
+	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, maxSSHConnections)}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -213,19 +219,42 @@ func (s *Server) ServeSSHGateway(ctx context.Context) error {
 			return fmt.Errorf("ssh gateway: accept: %w", err)
 		}
 		select {
-		case sem <- struct{}{}:
-			sshGo(func() {
-				defer func() { <-sem }()
-				s.handleSSHConn(ctx, conn, cfg)
-			})
+		case lim.handshakes <- struct{}{}:
+			sshGo(func() { s.handleSSHConn(ctx, conn, cfg, lim) })
 		default:
-			// Over the concurrent-connection cap: reject before any handshake
-			// byte is read/written — the DoS bound has to bite here, not after
-			// a goroutine and a NewServerConn call are already spent on it.
+			// Over the handshake cap: reject before any handshake byte is
+			// read/written — the DoS bound has to bite here, not after a
+			// goroutine and a NewServerConn call are already spent on it.
+			lim.refused("handshake", maxSSHHandshakes)
 			_ = conn.Close()
 		}
 	}
 }
+
+// sshConnLimits is the gateway's two connection bounds (maxSSHHandshakes,
+// maxSSHConnections) and the throttled warning a refusal at either writes.
+type sshConnLimits struct {
+	handshakes, established chan struct{}
+	lastWarn                atomic.Int64 // unix nanos of the last warning
+	quiet                   atomic.Int64 // refusals since it
+}
+
+// refused records one connection closed at a cap: a warning at most every
+// sshCapWarnEvery, carrying how many were refused since the last one.
+func (l *sshConnLimits) refused(bound string, limit int) {
+	n := l.quiet.Add(1)
+	now, last := time.Now().UnixNano(), l.lastWarn.Load()
+	if now-last < int64(sshCapWarnEvery) || !l.lastWarn.CompareAndSwap(last, now) {
+		return
+	}
+	l.quiet.Add(-n)
+	slog.Warn("ssh gateway: connection refused at a cap", slog.String("bound", bound),
+		slog.Int("limit", limit), slog.Int64("refused", n))
+}
+
+// sshCapWarnEvery spaces the cap-refusal warnings, so a flood writes a line a
+// minute rather than a line a connection.
+const sshCapWarnEvery = time.Minute
 
 // sshServerConfig builds the gateway's auth posture: registered public keys
 // only (no PasswordCallback / KeyboardInteractiveCallback is set, so neither
@@ -316,8 +345,8 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 // pre-auth net.Conn deadline (sshHandshakeTimeout, handleSSHConn) only fires
 // on the NEXT socket I/O, so it does nothing while this function is blocked
 // on a store call or an audit write. Without its own bound, a slow/stuck
-// backend call here lets an UNAUTHENTICATED client park a connection slot
-// (one of maxSSHConnections) indefinitely.
+// backend call here lets an UNAUTHENTICATED client park a handshake slot
+// (one of maxSSHHandshakes) indefinitely.
 func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 	ctx, cancel := context.WithTimeout(s.cfg.BaseCtx, sshAuthTimeout)
 	defer cancel()
@@ -505,11 +534,22 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 // this one (sshgateway_channels.go). connCtx is cancelled the moment this
 // function returns (the connection died, one way or another), so no channel
 // handler outlives its connection.
-func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
+func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig, lim *sshConnLimits) {
 	defer nc.Close()
 	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout()))
 
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
+	<-lim.handshakes
+	if err == nil {
+		select {
+		case lim.established <- struct{}{}:
+			defer func() { <-lim.established }()
+		default:
+			lim.refused("established", maxSSHConnections)
+			_ = sconn.Close()
+			return
+		}
+	}
 	if err != nil {
 		// sshAuth already audited a specific reason when PublicKeyCallback was
 		// reached; a pure transport failure (bad version string, KEX failure)

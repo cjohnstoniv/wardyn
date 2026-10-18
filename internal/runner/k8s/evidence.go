@@ -400,6 +400,12 @@ func (ev *runEvidence) evaluate(pe *podEvidence, pod *corev1.Pod, post *nodeHold
 		return verdict{arm: armUnbound}
 	}
 	if ev.Record != nil {
+		// An accepted record releases the run only while the tuple it was approved for still holds:
+		// a later list that latched another holder of the node name changed it, and the run stays
+		// contained until a record for the new tuple is accepted.
+		if !sameTuple(*ev.tuple(ev.Record.Tuple.RunID), ev.Record.Tuple) {
+			return verdict{why: "the node record's approved tuple no longer matches the run's: a new record is needed"}
+		}
 		return verdict{arm: armRecord}
 	}
 	if len(ev.Reuse) > 0 {
