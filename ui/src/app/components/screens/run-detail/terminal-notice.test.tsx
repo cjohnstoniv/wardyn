@@ -123,8 +123,8 @@ describe("TerminalPane — a QUEUED run", () => {
     );
   });
 
-  it("gives the recording-store sentence without needing the pool", () => {
+  it("gives the recording-store sentence without needing the pool", async () => {
     renderPane(queued(RUN_WAIT_REASON.RECORDING_STORE_OFF));
-    expect(screen.getByText(RUN_WAIT.RECORDING_STORE_OFF())).toBeInTheDocument();
+    expect(await screen.findByText(RUN_WAIT.RECORDING_STORE_OFF())).toBeInTheDocument();
   });
 });
