@@ -136,11 +136,9 @@ test.describe("Recordings library", () => {
   test("renders the header, the run-list-alone description and a refresh action", async ({ page }) => {
     await openRecordings(page);
     await expect(page.getByText(/Captured terminal sessions, replayed byte-for-byte/i)).toBeVisible();
-    // The description is honest about WHERE has_recording comes from now: the
-    // run list itself, not a per-run probe — the exact sentence VL-15 exists
-    // because the OLD one ("this library is built by checking each run") no
-    // longer describes what the screen does.
-    await expect(page.getByText(/Built from the run list alone/i)).toBeVisible();
+    // The description no longer names the run list or a "cast" (#2858 dropped the recorder jargon); what it must
+    // still say is that nothing is fetched until play, which is what the probe-free test below proves.
+    await expect(page.getByText(/A recording is fetched only when you press play/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
   });
 
@@ -159,7 +157,7 @@ test.describe("Recordings library", () => {
     await openRecordings(page);
 
     await expect(page.getByRole("heading", { name: EMPTY_TITLE })).toBeVisible();
-    await expect(page.getByText(/A recording is produced once an agent process runs in the sandbox/i)).toBeVisible();
+    await expect(page.getByText(/A recording appears once an agent runs in its sandbox terminal/i)).toBeVisible();
     await expect(page.getByRole("link", { name: /Go to Runs/ })).toBeVisible();
     await expect(page.locator("main svg.animate-spin")).toHaveCount(0);
 
