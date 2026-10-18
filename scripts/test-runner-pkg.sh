@@ -96,6 +96,11 @@ build "${WORK}/unsigned.pkg"
 for p in ./Library/LaunchAgents/com.wardyn.runnerd.managed.plist ./usr/local/wardyn/bin/runnerd-managed-start ./usr/local/wardyn/bin/wardyn-runnerd ./usr/local/wardyn/share/wardyn-runnerd.mobileconfig; do
   grep -qx "payload $p" "$STUB_LOG" || fail "the payload lacks $p"
 done
+for p in LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md; do
+  grep -qx "payload ./usr/local/wardyn/share/doc/$p" "$STUB_LOG" || fail "the payload lacks the $p notice"
+done
+[ "$(grep -c '^payload ./usr/local/wardyn/share/doc/licenses/' "$STUB_LOG")" -eq "$(find "${REPO_ROOT}/licenses/texts" -type f | wc -l)" ] \
+  || fail "the payload does not carry every licenses/texts file"
 grep -q -- '--version 0.9.3 ' "$STUB_LOG" || fail "pkgbuild was not given the numeric version"
 grep -q -- '--identifier com.wardyn.runnerd.pkg' "$STUB_LOG" && grep -q -- "--scripts ${SRC}/pkg-scripts" "$STUB_LOG" || fail "pkgbuild lost its identifier or scripts"
 grep -Eq '^(codesign|productsign|xcrun|security)' "$STUB_LOG" && fail "an unsigned build ran a signing tool"

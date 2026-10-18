@@ -1034,7 +1034,10 @@ jobs:
             --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
-          grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$(pkgutil --payload-files wardyn-runnerd.pkg)"
+          payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
+          grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$payload"
+          grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
+          grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: runner-pkg

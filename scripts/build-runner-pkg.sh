@@ -84,6 +84,11 @@ install -m 0755 "${SRC}/runnerd-managed-start.sh" "${BIN}/runnerd-managed-start"
 install -m 0644 "${SRC}/com.wardyn.runnerd.managed.plist" "${ROOT}/Library/LaunchAgents/"
 install -m 0644 "${SRC}/wardyn-runnerd.mobileconfig" "${ROOT}/usr/local/wardyn/share/"
 chmod 0755 "${BIN}/wardyn-runnerd"
+# The licence and notices travel with the binary, in the images' /usr/share/doc/wardyn/ layout.
+DOC="${ROOT}/usr/local/wardyn/share/doc"
+mkdir -p "${DOC}/licenses"
+install -m 0644 "${REPO_ROOT}/LICENSE" "${REPO_ROOT}/NOTICE" "${REPO_ROOT}/THIRD-PARTY-NOTICES.md" "${REPO_ROOT}/LICENSING.md" "$DOC/"
+cp -R "${REPO_ROOT}/licenses/texts/." "${DOC}/licenses/"
 
 BIN_SIGNED=0 PKG_SIGNED=0
 if secret_set "${APP_SECRETS[@]}"; then

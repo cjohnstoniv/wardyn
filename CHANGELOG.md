@@ -30,6 +30,9 @@ Setup status lists the ones that reach your deployment ("Defaults changed by thi
   configuration, so an unpinned runner's runs do not start until the organisation serves the new image.
 - Migrations `0180` to `0190` run on the first start. On a split-role install, grant the app role what the rc.3 and
   rc.2 notes list.
+- Split-role installs whose app role does not pick up new grants through `ALTER DEFAULT PRIVILEGES`: also grant
+  `DELETE` on `runner_registration_tokens`. Minting a runner token now deletes its owner's expired tokens, and fails
+  without it.
 
 ### Not tested here
 
