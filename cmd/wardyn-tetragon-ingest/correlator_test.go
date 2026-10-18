@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -100,19 +102,27 @@ func TestDockerCorrelator_OnMissRefreshThrottled(t *testing.T) {
 	}
 }
 
-func TestParseLabels(t *testing.T) {
-	m := parseLabels("wardyn.managed=true,wardyn.run-id=33333333-3333-3333-3333-333333333333,wardyn.component=agent")
-	if m["wardyn.component"] != "agent" {
-		t.Errorf("component = %q, want agent", m["wardyn.component"])
+// TestDockerListerReadsLabelsByKey: docker's Labels column joins labels with ","
+// unescaped, so an agent label value carrying ",wardyn.run-id=<other run>" read
+// as a second run-id. The fake docker answers each format the way docker does:
+// the joined column (forged pair last) or the per-key fields.
+func TestDockerListerReadsLabelsByKey(t *testing.T) {
+	const own, other = "33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444"
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncase \"$*\" in\n" +
+		"*'.Label \"wardyn.run-id\"'*) printf '%s\\n' '{\"ID\":\"c1\",\"Component\":\"agent\",\"RunID\":\"" + own + "\"}' ;;\n" +
+		"*) printf '%s\\n' '{\"ID\":\"c1\",\"Labels\":\"wardyn.run-id=" + own +
+		",wardyn.component=agent,wardyn.managed=true,wardyn.agent=x,wardyn.run-id=" + other + "\"}' ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if m["wardyn.run-id"] != "33333333-3333-3333-3333-333333333333" {
-		t.Errorf("run-id = %q", m["wardyn.run-id"])
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := cliDockerLister{}.managedContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m["wardyn.managed"] != "true" {
-		t.Errorf("managed = %q, want true", m["wardyn.managed"])
-	}
-	if got := parseLabels(""); len(got) != 0 {
-		t.Errorf("empty labels = %v, want empty", got)
+	if len(got) != 1 || got[0].ID != "c1" || got[0].RunID.String() != own {
+		t.Fatalf("managed = %+v, want c1 attributed to its own run %s", got, own)
 	}
 }
 

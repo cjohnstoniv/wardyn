@@ -253,12 +253,19 @@ var _ groundtruth.Correlator = (*dockerCorrelator)(nil)
 // keeping only agent containers.
 type cliDockerLister struct{}
 
-// dockerPSLine is one row of `docker ps --format '{{json .}}'`. We only need
-// the id and the labels string.
+// dockerPSLine is one row of managedContainers' `docker ps` format: the id and
+// the two labels the index needs, each read by key. docker's own Labels column
+// joins every label with "," and escapes nothing, so a label VALUE holding
+// ",wardyn.run-id=..." would read as a second key; per-key reads have no such
+// seam.
 type dockerPSLine struct {
-	ID     string `json:"ID"`
-	Labels string `json:"Labels"`
+	ID        string `json:"ID"`
+	Component string `json:"Component"`
+	RunID     string `json:"RunID"`
 }
+
+// dockerPSFormat prints one dockerPSLine per container.
+const dockerPSFormat = `{"ID":{{json .ID}},"Component":{{json (.Label "wardyn.component")}},"RunID":{{json (.Label "wardyn.run-id")}}}`
 
 func (cliDockerLister) managedContainers(ctx context.Context) ([]managedContainer, error) {
 	// --no-trunc so we get full ids; filter to wardyn-managed at the daemon.
@@ -267,7 +274,7 @@ func (cliDockerLister) managedContainers(ctx context.Context) ([]managedContaine
 	// down the tail. The label filter keeps this to wardyn's own containers.
 	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--no-trunc",
 		"--filter", "label=wardyn.managed=true",
-		"--format", "{{json .}}")
+		"--format", dockerPSFormat)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -282,7 +289,8 @@ func (cliDockerLister) managedContainers(ctx context.Context) ([]managedContaine
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			continue
 		}
-		if mc, ok := managedFromLabels(row.ID, parseLabels(row.Labels)); ok {
+		labels := map[string]string{"wardyn.component": row.Component, "wardyn.run-id": row.RunID}
+		if mc, ok := managedFromLabels(row.ID, labels); ok {
 			managed = append(managed, mc)
 		}
 	}
@@ -346,23 +354,6 @@ func (cliDockerLister) watchContainers(ctx context.Context, add func(managedCont
 		}
 	}
 	return cmd.Wait()
-}
-
-// parseLabels parses docker's "k1=v1,k2=v2" Labels string into a map.
-func parseLabels(s string) map[string]string {
-	out := map[string]string{}
-	for _, kv := range strings.Split(s, ",") {
-		kv = strings.TrimSpace(kv)
-		if kv == "" {
-			continue
-		}
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
-	}
-	return out
 }
 
 // ── unmapped-event forwarding gate (W24-S1-1) ───────────────────────────────
