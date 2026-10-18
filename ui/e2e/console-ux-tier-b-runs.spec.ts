@@ -91,3 +91,43 @@ test.describe("Tier B run pages", () => {
     });
   }
 });
+
+const CAPACITY = {
+  holding: 14, unknown: 3,
+  agent_cpu_request_millis: 30000, agent_cpu_limit_millis: 30000, agent_memory_request_mib: 53248, agent_memory_limit_mib: 53248,
+  proxy_cpu_millis: 6000, proxy_memory_mib: 9216, proxy_cpu_uncapped: 0, held_cpu_millis: 36000, held_memory_mib: 62464,
+};
+
+test.describe("Tier B runs list at 390px", () => {
+  test.use({ viewport: PHONE });
+
+  // #2915: the Fleet capacity summary is plain text under the header's truncate, so a line that does not fit
+  // ends in an ellipsis instead of being cut mid-word by a flex wrapper.
+  test("Fleet capacity: the summary line is truncatable text", async ({ page }) => {
+    await page.route("**/api/v1/admin/runs/capacity", (route) =>
+      route.fulfill({
+        json: {
+          generated_at: new Date().toISOString(),
+          basis: "configured_reservations",
+          states: { RUNNING: 9, PENDING: 3 },
+          paused: 0, kept: 0,
+          totals: { basis: "requests", ...CAPACITY },
+          age_buckets: [],
+          by_runner: { k8s: { basis: "requests", ...CAPACITY } },
+          by_owner: [],
+          by_owner_truncated: false,
+          unschedulable: [],
+          unschedulable_total: 0,
+        },
+      }),
+    );
+    await phoneAt(page, "admin", "/admin/runs");
+    const summary = page.getByTestId("fleet-capacity-card").locator("span.truncate").first();
+    await expect(summary).toContainText("configured reservations");
+    const direct = await summary.evaluate((el) =>
+      [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").includes("configured reservations")),
+    );
+    expect(direct).toBe(true);
+    expect(await summary.evaluate((el) => getComputedStyle(el).textOverflow)).toBe("ellipsis");
+  });
+});
