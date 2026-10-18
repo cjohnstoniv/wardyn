@@ -1946,6 +1946,10 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 		policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
 			{Source: "/srv/legacy", Target: runner.DriveTarget, ReadOnly: &ro},
 			{Source: "/srv/legacy2", Target: runner.DriveTarget + "/shared", ReadOnly: &ro},
+			{Source: "/srv/legacy3", Target: runner.DrivesRoot, ReadOnly: &ro},
+			{Source: "/srv/legacy4", Target: runner.DrivesRoot + "/x", ReadOnly: &ro},
+			{Source: "/srv/legacy5", Target: runner.SharedRoot, ReadOnly: &ro},
+			{Source: "/srv/legacy6", Target: runner.SharedRoot + "/y", ReadOnly: &ro},
 			{Source: "/srv/work", Target: "/home/agent/work", ReadOnly: &ro},
 		}}
 		mounts := buildRunMounts(policy, userMountPosture{})
