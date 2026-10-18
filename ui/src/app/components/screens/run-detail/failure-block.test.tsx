@@ -293,6 +293,11 @@ describe("RunFailureBlock", () => {
       expect(screen.getByText(ENV_SECRET_LINE)).toBeInTheDocument();
     });
 
+    it("a file secret gets its own rotation line", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "file_secret" }]));
+      expect(screen.getByText("Wardyn can't revoke a secret this run received as a file — rotate it where it was issued.")).toBeInTheDocument();
+    });
+
     it("no held credential of those kinds: no per-kind line at all", () => {
       withHeld("KILLED", kill("success"), held([]));
       expect(screen.queryByText(/stays valid until it expires|can't revoke|rotate/)).not.toBeInTheDocument();
