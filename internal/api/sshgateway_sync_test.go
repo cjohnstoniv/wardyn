@@ -586,3 +586,47 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 		})
 	}
 }
+
+// A substrate that starts the exec lazily (Kubernetes) reports a missing sftp-server only after
+// launch: an sftp-server that ends having sent nothing, with exit 126 or 127 or a stream error, is
+// told the image contract on stderr instead of ending with a bare exit 1. Any other end is not.
+func TestSSHGateway_SFTPLaunchFailureAfterStartNamesTheImageContract(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		code int
+		err  error
+		want bool
+	}{
+		{"exit 127", 127, nil, true},
+		{"stream error", 0, errors.New("command terminated: exec: no such file or directory"), true},
+		{"exit 1", 1, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st, run, principal := sshOwnedRunningRun(t)
+			priv, pub := mustSSHKeypair(t)
+			st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+			fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+				return &runner.ExecSession{Stdout: strings.NewReader(""), Wait: func() (int, error) { return c.code, c.err }}, nil
+			}}
+			h := newSSHTestHarness(t, st, fr)
+			client, err := sshDial(t, h, run.ID.String(), priv)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			sess, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sess.Close()
+			stderr, _ := sess.StderrPipe()
+			if err := sess.RequestSubsystem("sftp"); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := io.ReadAll(stderr)
+			if strings.Contains(string(got), sftpServerMissing) != c.want {
+				t.Fatalf("stderr = %q, want the image contract named: %v", got, c.want)
+			}
+		})
+	}
+}
