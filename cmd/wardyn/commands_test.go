@@ -833,11 +833,24 @@ func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 // "time left" hint; blank cells would leave the CLI decide loop unable to
 // tell a live 30s hold from an ordinary up-to-24h pendency.
 func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
-	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
-		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
-		State: types.ApprovalPending, RequestedAt: time.Now(),
-		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
-	}})
+	until := time.Now().Add(255 * time.Second)
+	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+			State: types.ApprovalPending, RequestedAt: time.Now().Add(-45 * time.Second),
+			RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
+			Held:           true, HeldUntil: &until,
+		},
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalToolCall,
+			State: types.ApprovalPending, RequestedAt: time.Now(), Held: true,
+		},
+		{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+			State: types.ApprovalPending, RequestedAt: time.Now().Add(-time.Hour),
+			RequestedScope: json.RawMessage(`{"host":"cold.example.com"}`),
+		},
+	})
 	gotBuf := &strings.Builder{}
 	root := rootCmd()
 	root.SetArgs([]string{"approval", "list", "--url", srv.URL, "--token", "tok"})
@@ -850,8 +863,15 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	if !strings.Contains(got, "pkg.example.com") {
 		t.Errorf("output = %q, want it to contain the requested host", got)
 	}
-	if !strings.Contains(got, "left") {
-		t.Errorf("output = %q, want a live-hold time-left hint", got)
+	if !strings.Contains(got, "live hold, ~25") {
+		t.Errorf("output = %q, want the 300s hold's server-side time left (~25x s)", got)
+	}
+	if strings.Contains(got, "timed out") {
+		t.Errorf("output = %q, must not guess a timeout the server did not report", got)
+	}
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 4 || !strings.HasSuffix(strings.TrimSpace(lines[2]), "held") || strings.Contains(lines[3], "held") {
+		t.Errorf("output = %q, want tool_call row to end \"held\" and the unheld row to have an empty HOLD", got)
 	}
 }
 

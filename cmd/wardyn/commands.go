@@ -539,34 +539,23 @@ func runFailureReason(ctx context.Context, c *sdk.Client, runID uuid.UUID) strin
 // without the CLI needing to know which kind it is decoding.
 type approvalScopePeek struct {
 	Host string `json:"host,omitempty"`
-	Mode string `json:"mode,omitempty"`
 }
 
-// approvalHoldWindow mirrors internal/egress/proxy/approvals.go's
-// defaultHoldTimeout: a wait_for_review egress approval blocks the sandbox
-// for at most this long, so a still-PENDING row older than this has almost
-// certainly already timed out on the proxy side even though nobody decided
-// it yet.
-const approvalHoldWindow = 30 * time.Second
-
-// approvalHoldHint reports whether a is a live wait_for_review hold and, if
-// so, how much of its window is left — the CLI decide loop otherwise has no
-// way to tell a live 30s hold apart from an ordinary up-to-24h pendency.
+// approvalHoldHint renders the server's own hold projection (ApprovalRequest.Held
+// and HeldUntil, from approval.Hold), so the CLI agrees with the console and the
+// proxy for every hold kind and every first_use_hold_seconds, with no clock or
+// window of its own. Empty for a row that is not held.
 func approvalHoldHint(a types.ApprovalRequest) string {
-	// PENDING only: every terminal state (APPROVED/DENIED/EXPIRED/CANCELLED) has
-	// no live hold left to describe, so the hint is empty rather than a window
-	// counted from a decided row's requested_at.
-	if a.State != types.ApprovalPending {
+	if !a.Held {
 		return ""
 	}
-	var s approvalScopePeek
-	if json.Unmarshal(a.RequestedScope, &s) != nil || s.Mode != "wait_for_review" {
-		return ""
+	if a.HeldUntil == nil {
+		return "held"
 	}
-	if left := approvalHoldWindow - time.Since(a.RequestedAt); left > 0 {
+	if left := time.Until(*a.HeldUntil); left > 0 {
 		return fmt.Sprintf("live hold, ~%ds left", int(left.Seconds()))
 	}
-	return "hold likely timed out"
+	return "hold window ended"
 }
 
 // approvalHost extracts the "host" field from a's requested_scope, common to
@@ -612,8 +601,8 @@ func approvalCmd(client clientFn) *cobra.Command {
 			// the first N columns by position is unaffected. SCOPE prints "" for a
 			// still-PENDING row or a credential/tool_call approval — neither has a
 			// decision scope (DecisionScope's own doc: empty means nobody has
-			// decided yet). HOLD prints "" for anything that isn't a live
-			// wait_for_review egress hold — see approvalHoldHint.
+			// decided yet). HOLD prints "" for anything the server does
+			// not report as held — see approvalHoldHint.
 			fmt.Fprintln(tw, "ID\tRUN\tKIND\tSTATE\tHOST\tREQUESTED\tSCOPE\tHOLD")
 			for _, a := range aps {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
