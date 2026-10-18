@@ -180,7 +180,7 @@ make release-patch V=0.8.4 DRY_RUN=1 BRANCH=<a branch whose tree CI tested> HIGH
 |---|---|
 | `V` | `X.Y.Z` or `X.Y.Z-rc.N`, required. It must be greater than every `vX.Y.*` tag. |
 | `BRANCH` | An existing branch that contains `origin/release/X.Y`. Default: `chore/release-V`, cut from `origin/release/X.Y`. |
-| `MERGE` | A ref to merge into the candidate, for example `origin/main`. Merged with `--no-ff --signoff` and `rerere.enabled=false`. |
+| `MERGE` | A ref to merge into the candidate, for example `origin/main`. Merged with `--no-ff --signoff` and `rerere.enabled=false`. A resume after the release commit skips it, so the release stays what was cut. |
 | `NOTES` | The CHANGELOG paste file, passed to `release-commit.sh --notes`. |
 | `BODY` | The Release body file. Default: the new CHANGELOG section. Over 125000 characters is refused. |
 | `HIGHLIGHTS` | The ROADMAP Shipped row's text. Required when the row is missing. |
@@ -567,7 +567,7 @@ JSON
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
     - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
-      `wardyn-runner-units.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
+      `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
   - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).

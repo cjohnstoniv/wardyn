@@ -67,6 +67,15 @@ printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
 - That limited static inspection found no affected call path; it is not a general reachability proof.
 - The shrinkwrap still records `shell-quote` 1.10.0.
 
+- Checked 2026-10-18 against the newest release, 4.141.0 (linux-amd64 only):
+
+| Artifact | Result |
+| --- | --- |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.0/code-server-4.141.0-linux-amd64.tar.gz) | `65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29` |
+| `devContainersSpecCLI.js` | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833`, identical to 4.139.1 |
+| `npm-shrinkwrap.json` | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7`, `shell-quote` 1.10.0 |
+| bundled `shell-quote` | 1.10.0 |
+
 - The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
 - Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
 

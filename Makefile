@@ -712,6 +712,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-setup-launch.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
+	./scripts/test-ui-licenses-tsv.sh
 	./scripts/test-verify-release.sh
 	./scripts/test-workflow-artifacts.sh
 
@@ -1631,6 +1632,11 @@ npm-audit: ## Fail closed on a high/critical advisory in a SHIPPED (prod) UI dep
 # still never gates a merge — but .github/workflows/ci.yml's `ui` job runs it
 # directly, on every push/PR, as a continue-on-error watcher step (R4-E2E-B3):
 # non-blocking, but the drift now surfaces in the log instead of rotting silently.
+#
+# The overrides cannot reach the copies of dompurify and katex compiled INTO
+# mermaid's browser bundle (#1924), which mermaid-cli loads into Chromium.
+# Checked 2026-10-18: mermaid 11.17.2 and 12.2.0 both embed DOMPurify 3.4.12;
+# KaTeX is 0.16.47 and 0.18.11. A clean audit does not prove those are patched.
 npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned-forward override rotting stale
 	@echo "Auditing ALL UI dependencies (including dev) for advisories (high+)..."
 	cd ui && pnpm audit --audit-level=high

@@ -26,7 +26,7 @@
 # Daemon-free, network-free.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$ROOT/scripts/release-patch.sh"
+SCRIPT="${SCRIPT:-"$ROOT/scripts/release-patch.sh"}"
 [ -x "$SCRIPT" ] || { echo "FAIL: $SCRIPT is missing or not executable"; exit 1; }
 
 WORK="$(mktemp -d)"
@@ -417,10 +417,10 @@ refused "P: refuses a DRY_RUN other than 0 or 1" 'DRY_RUN'
 
 # ── R. F1: a local tag left at an older head is never pushed ────────────────
 mkfix R
-rp V=0.8.4 PHASE=prepare MERGE=origin/main
+# An interrupted run left the tag on the candidate before its release commit, so this run's merge and release commit move HEAD past it.
+g -C "$WK" checkout -q -b chore/release-0.8.4 origin/release/0.8
 g -C "$WK" tag -a v0.8.4 -m old
 OLD=$(g -C "$WK" rev-parse HEAD)
-g clone -q "$OR" "$WORK/R/other" && (cd "$WORK/R/other" && echo more >MORE && g add MORE && g commit -q -s -m "more main" && g push -q origin main)
 rp V=0.8.4 MERGE=origin/main
 if [ "$RC" != 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" != "$OLD" ] && out_has 'local tag v0\.8\.4 is at' \
   && [ -z "$(g -C "$OR" tag -l v0.8.4)" ] && log_lacks push.log 'refs/tags|v0\.8\.4$' && log_lacks push.log 'refs/heads/release/' && log_lacks gh.log 'release edit'; then
@@ -428,6 +428,21 @@ if [ "$RC" != 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" != "$OLD" ] && out_has 'lo
 else bad "R: stale local tag (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
 keep_pushes
 check "R: the tag is pushed by its full ref when it is right" bash -c "grep -q 'refs/tags/v0.8.4' '$ALLPUSH'"
+
+# ── RS. a resume never widens a release that already has its release commit ─
+# A usage limit hits in the hour-long wait; lanes keep merging into main; the
+# operator re-runs the documented command. The candidate already carries
+# "release: X", so its CHANGELOG entries, notes and checks describe exactly what
+# it holds: the commits main gained since must not ride into the release.
+mkfix RS
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+CUT=$(g -C "$WK" rev-parse HEAD)
+g clone -q "$OR" "$WORK/RS/other" && (cd "$WORK/RS/other" && echo more >MORE && g add MORE && g commit -q -s -m "more main" && g push -q origin main)
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+if [ "$RC" = 0 ] && [ "$(g -C "$WK" rev-parse HEAD)" = "$CUT" ] && [ ! -e "$WK/MORE" ] && out_has 'frozen|already (has|carries)'; then
+  ok "RS: a resume keeps the cut candidate as it is and says why MERGE was not taken again"
+else bad "RS: resume widened the candidate (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
+keep_pushes
 
 # ── MC. a conflicting MERGE tells the operator to commit signed off ───────────
 mkfix MC
