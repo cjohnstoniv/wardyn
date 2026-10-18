@@ -235,6 +235,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveCapPrecheck(ctx, run, rebooted); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveRecoverContainment(ctx, run, actorType, actor); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	retiring := cfg.RunToken
 	id, rerr := s.reviveMintIdentity(ctx, run)
 	if rerr != nil {
@@ -420,6 +423,44 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 			"the revive failed ("+err.Error()+") and the run could not be recorded as lost; its proxy was stopped and its credentials revoked, and a later sweep recovers it")
 	}
 	return &reviveError{status: http.StatusBadGateway, reason: reason, lost: true, msg: msg + err.Error()}
+}
+
+// reviveRecoverContainment is a revive's answer for a run its runner holds contained after a settled end
+// or stop_proxy (an outage loss contained on reconnect): with the owner and policy re-checked above, it
+// queues the runner's recover_containment, ends the runner's session on this replica so its next fresh
+// session applies it, and refuses this revive; the next revive, once the runner applied it, leases the run.
+// A run held any other way (a kill, a quarantine, a hold pending a node record) is not recovered, and the
+// revive goes on to the lease refusal it met before.
+func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) *reviveError {
+	if run.RunnerID == nil {
+		return nil
+	}
+	st, err := s.runnerExecutionStore()
+	if err != nil {
+		return nil
+	}
+	if held, err := st.RunHeldContainedOnRunner(ctx, run.ID); err != nil || !held {
+		return nil
+	}
+	a, queued, err := st.QueueRunnerContainmentRecovery(ctx, *run.RunnerID, run.ID)
+	if err != nil {
+		if !errors.Is(err, store.ErrRunnerActionRefused) && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "wardynd: queueing a contained run's recovery failed", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+		return nil
+	}
+	if queued {
+		// Its receipt is runner.action.apply or runner.action.refuse.
+		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, placement.ActionRunnerRecoveryRequest, a.ID.String(), "success",
+			mustJSON(map[string]any{"subject": run.CreatedBy, "runner_id": a.RunnerID, "operation": a.Recovery.Operation, "marker_id": a.Recovery.ID})))
+	}
+	// Also for a recovery already queued: the session an earlier revive ended may have been on another
+	// replica, or its end may have failed. A runner on another replica, or offline, reads it on its next session.
+	if err := s.runnerHub(st).Goaway(ctx, *run.RunnerID); err != nil {
+		slog.WarnContext(ctx, "wardynd: a contained run's recovery waits for its runner's next session", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	}
+	return reviveRefused(http.StatusConflict, reasonReviveContainmentRecovering,
+		"the run's runner holds it contained since it was offline; a recovery is queued and the runner applies it when it next connects; revive the run again once it has")
 }
 
 // reviveSourceConfig is the config a revive starts from: the run's stored

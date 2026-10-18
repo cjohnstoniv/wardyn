@@ -49,16 +49,25 @@ func containmentRank(kind types.RunnerActionKind) int {
 
 // recoverContainment does not issue authority. H3 must authorize this exact
 // action first, then separately issue a new lease above the persisted replay floor.
+// A proof that does not match is refused, so the action closes instead of
+// failing every fresh session's PENDING. A matching proof met while a mutation
+// of the run is still in flight is deferred: the cause passes, and the org asks
+// again under a fresh action ID.
 func (m *Manager) recoverContainment(a runnerwire.PendingAction, r localRun) (runnerwire.ActionResult, error) {
 	proof := a.Recovery
-	if proof == nil || r.Containment == nil || *proof != *r.Containment || !proof.Contained || !m.mutationsDrained(a.RunID) || r.Quarantine != nil || r.ContainmentOnly || r.FailedCreation {
-		return runnerwire.ActionResult{}, errors.New("containment recovery proof does not match settled disposition")
+	if proof == nil || r.Containment == nil || *proof != *r.Containment || !proof.Contained || r.Quarantine != nil || r.ContainmentOnly || r.FailedCreation {
+		return runnerwire.ActionResult{}, refusal(errors.New("containment recovery proof does not match settled disposition"))
 	}
 	if proof.Operation != string(types.RunnerActionEnd) && proof.Operation != string(types.RunnerActionStopProxy) {
-		return runnerwire.ActionResult{}, errors.New("terminal containment cannot be recovered")
+		return runnerwire.ActionResult{}, refusal(errors.New("terminal containment cannot be recovered"))
 	}
 	if proof.Generation != r.Generation {
-		return runnerwire.ActionResult{}, errors.New("containment recovery generation changed")
+		return runnerwire.ActionResult{}, refusal(errors.New("containment recovery generation changed"))
+	}
+	if !m.mutationsDrained(a.RunID) {
+		result := runnerwire.ActionResult{ID: a.ID, Outcome: "deferred", ObservedAt: m.now().UTC()}
+		m.state.Actions[a.ID] = appliedAction{Action: a, Result: result}
+		return result, m.save()
 	}
 	r.Containment = nil
 	m.state.Runs[a.RunID] = r

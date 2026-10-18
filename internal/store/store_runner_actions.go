@@ -419,6 +419,14 @@ func (s PG) recordRunnerActionReceiptTx(ctx context.Context, tx pgx.Tx, a types.
 			return fmt.Errorf("store: settle deferred kills: %w", err)
 		}
 	}
+	// A recovery's final answer settles the deferred recoveries of its own obligation, the links a revive
+	// chained to it, so the run's fence lifts; a refusal answers the obligation as finally as a success.
+	if a.Kind == types.RunnerActionRecoverContainment && a.Outcome != types.RunnerActionDeferred {
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2
+			WHERE obligation_id = $1 AND id <> $2 AND kind = 'recover_containment' AND settled_at IS NULL AND outcome = 'deferred'`, a.ObligationID, a.ID); err != nil {
+			return fmt.Errorf("store: settle deferred recoveries: %w", err)
+		}
+	}
 	if err := settleRetirementResultTx(ctx, tx, a, a.Outcome); err != nil {
 		return err
 	}

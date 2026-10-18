@@ -153,7 +153,7 @@ The console prints the same command from the token mint answer, with its `proxy_
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
-Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. Revocation stops reconnects while local containment continues until the daemon exits.
+Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. The first revive of such a run queues its recovery on the runner and asks you to revive it again once the runner has reconnected ([offline runner recovery](runner-offline.md)). Revocation stops reconnects while local containment continues until the daemon exits.
 
 ## Set up a runner
 
