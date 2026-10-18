@@ -306,6 +306,14 @@ describe("runStartupView: the plan's table", () => {
     expect(view(mk({ state: "PENDING", createdAgo: 61 * S, updatedAgo: 1 * S }))!.hint).toBe(RUN_STARTUP.SLOW);
   });
 
+  it("PENDING clock starts at admitted_at: time spent QUEUED is neither slow nor overdue", () => {
+    const v = view({ ...mk({ state: "PENDING", createdAgo: 40 * MIN }), admitted_at: ago(2 * S) })!;
+    expect(v.hint).toBe("");
+    expect(v.rows[0]).toMatchObject({ mark: "active" });
+    expect(v.rows[0].stale).toBeUndefined();
+    expect(view({ ...mk({ state: "PENDING", createdAgo: 40 * MIN }), admitted_at: ago(61 * S) })!.hint).toBe(RUN_STARTUP.SLOW);
+  });
+
   it("overdue in STARTING: 4:29 is live, 4:30 drops the spinner and says OVERDUE", () => {
     const live = view(mk({ updatedAgo: 4 * MIN + 29 * S, ...PULLING }))!;
     expect(marks(live)).toEqual([`${START}=done`, `${DL}=active`, `${TERM}=pending`]);

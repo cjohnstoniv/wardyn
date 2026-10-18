@@ -324,6 +324,8 @@ export function runStartupView(
     state: string;
     created_at: string;
     updated_at: string;
+    /** When the run left the pool queue; PENDING is clocked from here, not from the time it spent waiting. */
+    admitted_at?: string | null;
     status_detail?: string | null;
     status_reason?: string | null;
   },
@@ -342,7 +344,7 @@ export function runStartupView(
   const detail = starting && reason !== STATUS_REASON_BUILDING ? run.status_detail : "";
   const stepReason = starting && reason !== STATUS_REASON_BUILDING ? reason : "";
 
-  const since = Date.parse(starting ? run.updated_at : run.created_at);
+  const since = Date.parse(starting ? run.updated_at : (run.admitted_at ?? run.created_at));
   const elapsed = Number.isNaN(since) ? 0 : Math.max(0, now - since);
 
   const last = (mark: StartupMark): StartupRow[] =>
