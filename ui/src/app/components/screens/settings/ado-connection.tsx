@@ -52,7 +52,8 @@ import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
-import { patCardView } from "../../../lib/ado-pat-display";
+import { useOwnTokenRows } from "../../../lib/hooks/use-own-token-rows";
+import { adoOrgLabel, patCardView } from "../../../lib/ado-pat-display";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { AdoPatBody, patToneClass } from "./ado-pat-panel";
 import type { SetupStatus } from "../../../lib/types";
@@ -61,6 +62,8 @@ import { CollapsibleCard } from "../../wardyn/collapsible-card";
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
   const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
   const access = status?.scm_access;
+  // Own-token rows for more than one organisation (#2146): a card body per organisation. With one, the card is as it was.
+  const ownRows = useOwnTokenRows(status);
   const hasRow = !!access && access.state !== "";
   const location = useLocation();
   const sectionRef = React.useRef<HTMLElement | null>(null);
@@ -91,6 +94,44 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
     });
   };
   if (!access || access.state === "") return null;
+  if (ownRows.length >= 2) {
+    return (
+      <CollapsibleCard
+        title={PROVIDERS.KIND_AZURE_DEVOPS}
+        id="azure-devops"
+        ref={sectionRef}
+        tabIndex={-1}
+        open={open}
+        onOpenChange={setOpen}
+        className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
+      >
+        <div className="space-y-4" data-testid="ado-own-token-cards">
+          {ownRows.map((row) => {
+            const view = patCardView(row, PROVIDERS.KIND_AZURE_DEVOPS);
+            const label = adoOrgLabel(row.org ?? "");
+            if (!view) return null;
+            return (
+              <section key={row.org} data-testid={`ado-org-${label}`} className="space-y-2">
+                <h4 className="flex flex-wrap items-center gap-2 text-body font-medium">
+                  <span className="font-mono">{label}</span>
+                  <span className={patToneClass[view.chip.tone]}>{view.chip.label}</span>
+                </h4>
+                <AdoPatBody
+                  access={row}
+                  view={view}
+                  connecting={connecting}
+                  onConnect={() => void handleConnect()}
+                  blockedUrl={blockedUrl}
+                  onFallbackClick={handleFallbackClick}
+                  onChanged={onChanged}
+                />
+              </section>
+            );
+          })}
+        </div>
+      </CollapsibleCard>
+    );
+  }
   // A row that creates tokens or takes a pasted one has its own card states
   // (ado-pat-panel.tsx); the shell is this card's, so the deep link, the focus
   // and the collapse behave the same.

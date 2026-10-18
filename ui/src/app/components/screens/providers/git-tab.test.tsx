@@ -706,6 +706,18 @@ describe("GitTab", () => {
     expect(within(row).queryByText(PROVIDERS.LANES_NEED_ADDRESS)).not.toBeInTheDocument();
   });
 
+  it("an off row names every other cause that withholds Save, not only 'no addresses' (#2520)", () => {
+    render(
+      <Harness
+        initial={[
+          { id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/"], disabled: true },
+        ]}
+      />,
+    );
+    const row = screen.getByTestId("provider-row-azure_devops");
+    expect(within(row).getByText(PROVIDERS.BASE_URL_INVALID)).toBeInTheDocument();
+  });
+
   it("an off row with no addresses keeps the reason readable — its textarea is collapsed", () => {
     render(<Harness initial={[{ id: "gh", kind: "github", base_urls: [], disabled: true }]} />);
     const row = screen.getByTestId("provider-row-github");

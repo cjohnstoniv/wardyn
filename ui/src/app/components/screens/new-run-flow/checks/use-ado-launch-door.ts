@@ -29,6 +29,9 @@ import { adoPatRefusalReason } from "../../../../lib/api/ado-pat";
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { patRefusalNote, type PatRefusalNote } from "../../../../lib/ado-pat-display";
 
+/** The refusal causes a sign-in repairs; an empty cause is "not connected", which it also repairs. */
+const SIGN_IN_CAUSES = new Set(["ended", "consent_needed"]);
+
 export function useAdoLaunchDoor(): {
   /** Call from Launch's catch block with the caught error. */
   notifyLaunchError: (e: unknown) => void;
@@ -106,6 +109,10 @@ export function useAdoLaunchDoor(): {
     notifyLaunchError: (e) => {
       setRefusal(patRefusalNote(adoPatRefusalReason(e)));
       if (!isGitCredentialRefusal(e)) return;
+      // Connect repairs only a sign-in: an expired own token is replaced in Settings, and a block, a
+      // missing permission or a missing console app belong to an admin. Those stay as the refusal
+      // sentence under Launch instead of a dialog that cannot end well.
+      if (e instanceof HttpError && e.cause && !SIGN_IN_CAUSES.has(e.cause)) return;
       setOrg(e instanceof HttpError ? e.org : "");
       setOpen(true);
     },

@@ -37,6 +37,9 @@ const read = (f: string) => readFileSync(join(here, f), "utf8");
 // now (internal/api/harnesscred_launch.go), so it is a fast call again.
 const LAUNCH_CALLS: ReadonlyArray<{ file: string; fn: string; path: string }> = [
   { file: "runs.ts", fn: "async preflightRunWire(", path: '"/runs/preflight"' },
+  // The corporate-network probes launch a throwaway sandbox and the server holds the request up to 90s.
+  { file: "health.ts", fn: "async testProxy(", path: '"/site-config/test-proxy"' },
+  { file: "health.ts", fn: "async testRedirect(", path: '"/site-config/test-redirect"' },
   { file: "workspaces.ts", fn: "async recordTask(", path: "/record`" },
   // A repo scan is a sandbox launch too, and the least obvious one: handleScanWorkspace
   // -> scanAttachedSources -> dispatchAndSettle (internal/api/source_scan.go,

@@ -160,6 +160,7 @@ func TestPushRuleSets_FoldReadsTheRowBasePathFromTheSiteConfig(t *testing.T) {
 	}
 	waitForRecAudit(t, st.audit, ovOnlyRun(t, st), "run.policy.resolve", "success")
 	runner := srv.cfg.Runner.(*fakeRunner)
+	runner.waitForSandbox(t) // run.policy.resolve is audited before CreateSandbox records the spec
 	runner.mu.Lock()
 	pc := runner.lastSpec.ProxyConfig
 	runner.mu.Unlock()

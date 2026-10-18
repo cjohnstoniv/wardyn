@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
+import { scmAccess } from "../../../../lib/api/scm-access";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { ADO } from "../../../../lib/ado-entra-copy";
 import { ADO_PAT } from "../../../../lib/ado-pat-copy";
@@ -352,5 +353,32 @@ describe("Name this run: a create the check did not foresee", () => {
     await userEvent.click(launchButton());
     expect(await screen.findByText(ADO.LAUNCH_DIALOG_TITLE)).toBeInTheDocument();
     expect(door.openDoor).not.toHaveBeenCalled();
+  });
+
+  // #2146: with own tokens for several organisations, an Azure DevOps credential refusal names the ones missing a token;
+  // any other refusal says nothing about tokens.
+  describe("the own-token note", () => {
+    const own = (org: string, state: string) => ({ state, token_mode: "own_pat", org: `https://dev.azure.com/${org}` });
+    const launchRefused = async (err: unknown) => {
+      vi.spyOn(scmAccess, "getMine").mockResolvedValue([own("acme", "live"), own("beta", "not_configured")] as never);
+      create.mockRejectedValueOnce(err);
+      open();
+      const box = await dialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "own tokens");
+      await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+      await userEvent.click(launchButton());
+      await within(box).findByRole("alert");
+      return box;
+    };
+
+    it("a git_credential refusal names the organisation missing a token", async () => {
+      const box = await launchRefused(Object.assign(refusal(422, "Add your token.", "git_credential"), { cause: "token_expired", org: "https://dev.azure.com/beta" }));
+      expect(await within(box).findByTestId("ado-own-token-note")).toHaveTextContent("Add your Azure DevOps token for beta first.");
+    });
+
+    it("a refusal that is not about Azure DevOps shows no token note", async () => {
+      const box = await launchRefused(refusal(422, "this run needs 2 CPU, more than quota runs-quota has left.", "namespace_quota_exceeded"));
+      expect(within(box).queryByTestId("ado-own-token-note")).not.toBeInTheDocument();
+    });
   });
 });

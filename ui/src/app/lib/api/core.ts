@@ -216,6 +216,10 @@ export class HttpError extends Error {
   /** The included tool (tools[].id) a run refusal is about, "" when the body
    *  names none: New Run attaches the blocker to that harness. */
   tool: string;
+  /** Why a git_credential 422's row is unusable beyond "not connected" (token_expired, ended,
+   *  consent_needed, blocked, permissions_missing, ado_pat_needs_console_app); "" when the body
+   *  names none, which is not connected. */
+  cause: string;
   /** The policy a governance refusal came from and how to ask for a change
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
@@ -234,6 +238,7 @@ export class HttpError extends Error {
     kind = "",
     policy?: PolicyRef,
     tool = "",
+    cause = "",
   ) {
     super(message);
     this.status = status;
@@ -242,6 +247,7 @@ export class HttpError extends Error {
     this.provider = provider;
     this.kind = kind;
     this.tool = tool;
+    this.cause = cause;
     if (policy) this.policy = policy;
     this.name = "HttpError";
   }
@@ -461,8 +467,8 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy, tool } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool);
+    const { message, reason, org, provider, kind, policy, tool, cause } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause);
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
@@ -513,6 +519,7 @@ type ErrEnvelope = {
   kind: string;
   policy?: PolicyRef;
   tool: string;
+  cause: string;
 };
 
 // The envelope's `policy` object, kept only when it is an object naming its
@@ -530,7 +537,7 @@ function policyField(v: unknown): PolicyRef | undefined {
 }
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
-  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "" });
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
   const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
@@ -544,6 +551,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         kind?: unknown;
         policy?: unknown;
         tool?: unknown;
+        cause?: unknown;
       };
       if (typeof j.error === "string" && j.error) {
         return {
@@ -554,6 +562,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           kind: field(j.kind),
           policy: policyField(j.policy),
           tool: field(j.tool),
+          cause: field(j.cause),
         };
       }
     } catch {

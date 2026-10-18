@@ -149,6 +149,8 @@ export const GOVERNANCE = {
   OVERLAY_NARROW: "Narrow",
   OVERLAY_LIMITS_MOVED:
     "This profile's own limits and rubric were moved into the narrowing rows below, so they still apply on top of the base. Review them before saving.",
+  PROFILE_FOLDED:
+    "This profile's base and narrowing rows were folded into its own policy and limits, so what binds today still binds. Review them before saving.",
   OVERLAY_INHERITED: (v: string) => `Inherited: ${v}`,
   EFFECTIVE_TITLE: "Effective ceiling and limits",
   EFFECTIVE_LEAD: "What runs under this profile are bounded by: the base, narrowed here. Read-only.",
@@ -387,9 +389,11 @@ export const BASELINE = {
   TAB: "Baseline hosts",
   LEAD: "Hosts your organisation vouches for. Wardyn grades a run's egress and its API keys against a built-in list of public model, code and package hosts, plus the hosts here: allowlisting only these doesn't make a run's egress open, and an API key sent to one of them isn't a powerful secret. Nothing is listed until you add it, so grading doesn't change on its own.",
   HOSTS_LABEL: "Exact hosts",
-  HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses.",
+  HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses. Covers only the host named, not its subdomains.",
   SUFFIXES_LABEL: "Internal host suffixes",
   SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host and every host under it.",
+  // Under the suffixes box, one line per entry as typed: the reach an entry has before it is saved (#2130).
+  COVERS: (entry: string) => `${entry} covers ${entry} and every host under it (*.${entry}).`,
   SAVE: "Save",
   SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
   REFUSED_TITLE: "This can't be saved as written",

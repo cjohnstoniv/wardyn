@@ -80,17 +80,39 @@ export function isRecording(ws: Workspace): boolean {
   return Object.values(ws.record_results ?? {}).some((r) => r.status === "recording");
 }
 
-// isModelProviderHost mirrors record.go's modelProviderEgress: the LLM
-// harness's own egress (api.anthropic.com / any *.anthropic.com host,
-// api.openai.com) — needed by every session regardless of the task, so never
-// a task-specific "approve this" candidate. Static/cheap subset of
-// promoteSkipHosts (record.go) — the two remaining categories there
-// (a bound Bedrock integration's regional host, a required-integration's own
-// egress) need server-side integration resolution this pure client-side
-// helper has no view of, and stay a documented gap (see egressPromotionDiff).
-function isModelProviderHost(host: string): boolean {
+// isPlumbingHost mirrors the hosts record.go's promoteSkipHosts / promotableRecordHosts refuse to
+// promote, so the review card never offers an Approve the server answers with a 422 for the whole
+// request: the LLM harness's own egress (any *.anthropic.com, api.openai.com), the git broker's managed
+// and SSH hosts, the workspace's own non-GitHub clone hosts, hosts the operator permanently denies, and
+// IP literals. Two categories there (a bound Bedrock integration's regional host, a required
+// integration's own egress) need server-side integration resolution this pure client-side helper has no
+// view of; the server's 422 stays the backstop for those. Keep in step with record.go.
+const BROKER_HOSTS = ["github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com", "ssh.github.com"];
+
+const entryCovers = (entry: string, host: string): boolean => {
+  const e = entry.toLowerCase().trim().replace(/:\d+$/, "");
+  return e.startsWith("*.") ? host.endsWith(e.slice(1)) : e === host;
+};
+
+const isIPLiteral = (host: string): boolean => /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
+
+function cloneHostsOf(ws: Workspace): string[] {
+  const out: string[] = [];
+  for (const src of ws.sources ?? []) {
+    if (src.type !== "repo" || !src.source || !/^https?:\/\//i.test(src.source)) continue;
+    try {
+      out.push(new URL(src.source).hostname.toLowerCase());
+    } catch {
+      // not a URL: a bare slug or scp form names no extra clone host
+    }
+  }
+  return out;
+}
+
+function isPlumbingHost(ws: Workspace, host: string): boolean {
   const h = host.toLowerCase();
-  return h === "anthropic.com" || h.endsWith(".anthropic.com") || h === "api.openai.com";
+  const skip = [...BROKER_HOSTS, "anthropic.com", "*.anthropic.com", "api.openai.com", ...cloneHostsOf(ws), ...(ws.denied_egress ?? [])];
+  return isIPLiteral(h) || skip.some((e) => entryCovers(e, h));
 }
 
 // EgressPromotionDiff buckets a session's observed+allowed hosts (Synthesize's
@@ -100,7 +122,7 @@ function isModelProviderHost(host: string): boolean {
 //   - alreadyApproved: covered by ApprovedEgress, the scan profile's
 //     egress_domains, or an effective egress:required requirement row.
 //   - plumbing: excluded as platform plumbing (the control-plane host itself,
-//     the model-provider harness hosts) — never approvable, and NOT the same
+//     the model-provider harness hosts, hosts the server never promotes) — never approvable, and NOT the same
 //     claim as alreadyApproved ("an operator already approved this").
 // One function computing all three (rather than three separately-derived
 // lists) so they can't drift apart — every observed+allowed host lands in
@@ -159,7 +181,7 @@ export function egressPromotionDiff(ws: Workspace, taskKey: string, selfHost?: s
     seen.add(h);
     if (already.has(h)) {
       diff.alreadyApproved.push(h);
-    } else if ((self && h === self) || isModelProviderHost(h)) {
+    } else if ((self && h === self) || isPlumbingHost(ws, h)) {
       diff.plumbing.push(h);
     } else {
       diff.approvable.push(h);

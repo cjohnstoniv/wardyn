@@ -46,9 +46,9 @@ const MODES: { mode: Mode; name: string; help: string }[] = [
 ];
 
 // A whole-number field with its unit and range error. The text is held here so
-// a half-typed or out-of-range entry stays on screen with its error; a whole
-// number is committed to the row either way, and gitRowInvalid withholds Save
-// on one the server would refuse.
+// a half-typed or out-of-range entry stays on screen with its error; the row
+// takes the number (NaN when it is not one) either way, and gitRowInvalid
+// withholds Save on one the server would refuse.
 function LifetimeField({
   id,
   label,
@@ -68,7 +68,7 @@ function LifetimeField({
   value: number;
   disabled: boolean;
   valid: (text: string) => boolean;
-  onCommit: (n: number | undefined) => void;
+  onCommit: (n: number) => void;
 }) {
   const [text, setText] = React.useState(String(value));
   const bad = !valid(text);
@@ -87,8 +87,10 @@ function LifetimeField({
           value={text}
           onChange={(e) => {
             setText(e.target.value);
+            // Not a whole number commits NaN, which patLifetimeInvalid reads as invalid: the draft
+            // must not silently fall back to the default while the field shows an error (#2511).
             const n = Number(e.target.value);
-            onCommit(e.target.value.trim() === "" ? undefined : Number.isInteger(n) ? n : undefined);
+            onCommit(e.target.value.trim() !== "" && Number.isInteger(n) ? n : Number.NaN);
           }}
         />
         <span className="text-body text-muted-foreground">{unit}</span>

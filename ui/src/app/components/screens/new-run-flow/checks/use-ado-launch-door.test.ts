@@ -60,6 +60,26 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
     expect(result.current.dialog.blockedUrl).toBe("/api/v1/scm/azure-devops/signin");
   });
 
+  // A sign-in cannot repair an expired own token or an administrator-owned refusal (#2621).
+  it.each(["token_expired", "blocked", "permissions_missing", "ado_pat_needs_console_app"])(
+    "a %s refusal does not open the Connect dialog",
+    (cause) => {
+      const { result } = renderHook(() => useAdoLaunchDoor());
+      act(() => {
+        result.current.notifyLaunchError(new HttpError(422, "refused", "git_credential", "contoso", "", "", undefined, "", cause));
+      });
+      expect(result.current.dialog.open).toBe(false);
+    },
+  );
+
+  it.each(["ended", "consent_needed"])("a %s refusal still opens the Connect dialog", (cause) => {
+    const { result } = renderHook(() => useAdoLaunchDoor());
+    act(() => {
+      result.current.notifyLaunchError(new HttpError(422, "refused", "git_credential", "contoso", "", "", undefined, "", cause));
+    });
+    expect(result.current.dialog.open).toBe(true);
+  });
+
   it("a real, un-blocked connect that the person cancels still closes the dialog", async () => {
     const popup = { closed: false, close: vi.fn(), opener: {} as unknown, location: { href: "" } };
     vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);

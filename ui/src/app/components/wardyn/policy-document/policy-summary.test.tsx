@@ -271,3 +271,13 @@ describe("PolicySummary — facts, launch checks, marks and hidden values", () =
     expect(screen.queryByRole("heading", { level: 3 })).toBeNull();
   });
 });
+
+describe("PolicySummary — push limits (#2601)", () => {
+  it("shows an enforced file-size limit, hold wait and inspected-pack size with no path rules", () => {
+    const spec = { push_rules: { max_file_size_mib: 5, hold_seconds: 300, max_inspect_pack_mib: 32 } } as unknown as RunPolicySpec;
+    render(<PolicySummary spec={spec} />);
+    expect(row("Tools and pushes", "Largest file")).toHaveTextContent("5 MiB");
+    expect(row("Tools and pushes", "Hold waits")).toHaveTextContent("300 seconds");
+    expect(row("Tools and pushes", "Largest push inspected")).toHaveTextContent("32 MiB");
+  });
+});

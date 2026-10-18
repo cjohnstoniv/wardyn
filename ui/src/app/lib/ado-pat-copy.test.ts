@@ -61,6 +61,8 @@ describe("ADO_PAT copy canon", () => {
     expect(ADO_PAT.RUN_PAUSED).toBe("Paused: this run's token was revoked. A new one is created when the run resumes.");
     expect(ADO_PAT.APPROVAL_WIDENS).toBe("Approving adds this access to the run's token for the rest of this run, even for a one-time approval.");
     expect(ADO_PAT.OWN_ADD_CTA).toBe("Add your personal access token");
+    expect(ADO_PAT.OWN_NO_TOKEN).toBe("No token yet");
+    expect(ADO_PAT.OWN_ORGS_ADD_FIRST("beta")).toBe("Add your Azure DevOps token for beta first.");
     expect(ADO_PAT.OWN_DIALOG_TITLE).toBe("Add your personal access token");
     expect(ADO_PAT.OWN_OPEN_TOKENS).toBe("Open Azure DevOps tokens");
     expect(ADO_PAT.OWN_FIELD_TOKEN).toBe("Token");

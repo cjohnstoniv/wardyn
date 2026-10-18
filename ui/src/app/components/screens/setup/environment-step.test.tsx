@@ -54,6 +54,12 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
 
+  it("never claims the pick is saved: nothing persists it, New Run resolves its own default (#2574)", () => {
+    renderStep();
+    expect(screen.queryByText(/saved in this browser|save it in this browser/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/new runs default to the strongest barrier installed here/i)).toBeInTheDocument();
+  });
+
   it("(2a) selecting a column by click calls onSelect with its wire class", async () => {
     const { onSelect } = renderStep();
     await user.click(screen.getByRole("radio", { name: /Wall/ }));

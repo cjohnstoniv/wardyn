@@ -223,6 +223,7 @@ export function HarnessLoginPane({
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
+  const failedTokenRef = React.useRef("");
   // The launch-after-dismiss race: harnessLogin's POST answers with the run id
   // after dispatch has already created the run, so a cancellation that lands
   // while it is in flight sees `runId === null` and kills nothing — the run is
@@ -502,7 +503,9 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("attached"); // stay on the terminal so they can retry the paste
-        savedRef.current = false; // allow another attempt (auto or manual)
+        setAutoCaptured(false); // so the paste fallback and Cancel render again
+        failedTokenRef.current = t; // the scrape must not re-send a token the server refused
+        savedRef.current = false; // allow another attempt (manual)
       }
     },
     [modelProvider, token, runId, onDone],
@@ -593,7 +596,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         return;
       }
       const tok = extractSetupToken(outBufRef.current);
-      if (tok) {
+      if (tok && tok !== failedTokenRef.current) {
         setToken(tok);
         setAutoCaptured(true);
         void saveToken(tok);

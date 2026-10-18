@@ -8,7 +8,7 @@
 // the honest per-step badge/done derivation the orchestrator reads. One
 // badge-semantics delta from the design spec is folded in (see the workspaces
 // case below). No React here by design — data/derivation only.
-import type { EgressRedirect, SetupStatus, Workspace } from "../../../lib/types";
+import type { EgressRedirect, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import type { ProxyTestResult } from "../../../lib/api/health";
 import { deploymentMode, deriveReadiness, Readiness } from "../../../lib/readiness";
 import { DEMOS, DEMO_IDS, type Demo, type DemoId } from "../demos/demo-catalog";
@@ -282,6 +282,24 @@ export const REVIEW_BADGE_FLOOR_WARN = "Ready, except the default policy";
 // on navigation and the gate must survive leaving and re-entering it. Never
 // persisted: a stale "reached" surviving a page reload would be exactly the
 // false reassurance this whole feature exists to prevent.
+/** The fields a proxy probe depends on; a change to any makes a held proxy verdict stale. */
+export function upstreamKey(c: SiteConfig | null | undefined): string {
+  return JSON.stringify([c?.upstream_proxy_url, c?.upstream_proxy_secret_ref, c?.upstream_proxy_no_proxy]);
+}
+
+/** `byFrom` minus the verdicts whose redirect was removed or whose `to` changed in `next`;
+ *  null when nothing was dropped, so a caller skips the state write. */
+export function keepCurrentRedirects<V>(
+  prev: SiteConfig | null | undefined,
+  next: SiteConfig,
+  byFrom: Record<string, V>,
+): Record<string, V> | null {
+  const was = new Map((prev?.egress_redirects ?? []).map((r) => [r.from, r.to]));
+  const now = new Map((next.egress_redirects ?? []).map((r) => [r.from, r.to]));
+  const kept = Object.fromEntries(Object.entries(byFrom).filter(([from]) => now.has(from) && now.get(from) === was.get(from)));
+  return Object.keys(kept).length === Object.keys(byFrom).length ? null : kept;
+}
+
 export interface CorpNetworkState {
   proxyConfigured: boolean;
   proxyDetected: boolean;
@@ -296,7 +314,7 @@ export interface CorpNetworkState {
    *  one launch point always names what it is about to try. Transient, never
    *  persisted. */
   customDraft: string;
-  /** Each configured redirect's last test result this session, keyed by its `from` (a redirect has no server id) — a missing key means untested. Stale keys from a since-removed/edited redirect are harmless: corpNetworkGate only ever looks up a `from` from the CURRENT list. */
+  /** Each configured redirect's last test result this session, keyed by its `from` (a redirect has no server id) — a missing key means untested. A save that removes a redirect or changes its `to` drops its key (keepCurrentRedirects), so a verdict never outlives the target it tested. */
   redirectProbes: Record<string, ProxyTestResult>;
 }
 const CORP_NETWORK_UNSET: CorpNetworkState = {

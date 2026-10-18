@@ -39,7 +39,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
+import { appLaneAvailable, gitRowBlockers, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
 import { EntraEditor } from "./entra-editor";
 import { AdoConvertedRow, AdoServerRow } from "./ado-token-mode";
 import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
@@ -301,9 +301,11 @@ function Row({
             <p className="text-body text-muted-foreground">{PROVIDERS.ROW_DISABLED_HINT}</p>
           )}
           {/* The server refuses a zero-address row whether it is on or off, so
-              Save is withheld either way — the cause has to stay readable on a
-              row whose textarea is collapsed. */}
-          {row.base_urls.length === 0 && <p className="mt-1 text-xs leading-snug text-danger">{PROVIDERS.BASE_URLS_REQUIRED}</p>}
+              Save is withheld either way — every cause has to stay readable on a
+              row whose editor is collapsed. */}
+          {gitRowBlockers(row).map((why) => (
+            <p key={why} className="mt-1 text-xs leading-snug text-danger">{why}</p>
+          ))}
         </div>
       ) : (
         <div className="space-y-4 p-3">
