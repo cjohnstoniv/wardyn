@@ -327,18 +327,7 @@ func TestRecordPromote_ModelProviderRowHostsAreSkipped(t *testing.T) {
 		{Host: "gateway.corp.example", AllowCount: 4},
 	}}
 	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
-	fake.site = types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{
-		{
-			ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
-			Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
-			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
-		},
-		{
-			ID: "gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint,
-			BaseURL:   "https://gateway.corp.example",
-			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "m"}},
-		},
-	}}}
+	fake.site = bedrockAndGatewaySite()
 	srv := New(baseTestConfig(newHarness(t), fake))
 
 	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, "")
@@ -352,5 +341,48 @@ func TestRecordPromote_ModelProviderRowHostsAreSkipped(t *testing.T) {
 	}
 	if _, ok := fake.ws.Requirements["egress:api.stripe.com"]; !ok {
 		t.Errorf("an ordinary app host was not promoted: %v", fake.ws.Requirements)
+	}
+}
+
+// bedrockAndGatewaySite is a site config with a Bedrock bearer provider and a
+// route-through gateway provider row.
+func bedrockAndGatewaySite() types.SiteConfig {
+	return types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{
+		{
+			ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+			Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
+		},
+		{
+			ID: "gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint,
+			BaseURL:   "https://gateway.corp.example",
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "m"}},
+		},
+	}}}
+}
+
+// TestRecordPromote_BulkSubsetSkipsModelProviderRowHosts: the console's bulk promote
+// sends every checked host, plumbing included. The provider row's host is skipped,
+// not refused, and the rest of the request lands.
+func TestRecordPromote_BulkSubsetSkipsModelProviderRowHosts(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = bedrockAndGatewaySite()
+	srv := New(baseTestConfig(newHarness(t), fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken,
+		`{"hosts":["bedrock-runtime.us-east-1.amazonaws.com","api.stripe.com"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := fake.ws.Requirements["egress:api.stripe.com"]; !ok {
+		t.Errorf("api.stripe.com was not promoted: %v", fake.ws.Requirements)
+	}
+	if _, ok := fake.ws.Requirements["egress:bedrock-runtime.us-east-1.amazonaws.com"]; ok {
+		t.Errorf("the Bedrock runtime host was promoted: %v", fake.ws.Requirements)
 	}
 }

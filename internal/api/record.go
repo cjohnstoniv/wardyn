@@ -569,16 +569,29 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 // as they were.
 func (s *Server) recordPromoteSkipHosts(ctx context.Context, ws types.Workspace) map[string]struct{} {
 	skip := s.promoteSkipHosts(ctx, ws)
-	if s.cfg.Store != nil {
-		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			for _, h := range modelProviderRowHosts(sc) {
-				if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
-					skip[h] = struct{}{}
-				}
-			}
-		}
+	for h := range s.modelProviderRowHostSet(ctx) {
+		skip[h] = struct{}{}
 	}
 	return skip
+}
+
+// modelProviderRowHostSet is every model provider row's serving host, lowercased,
+// from the stored site config; empty when it cannot be read.
+func (s *Server) modelProviderRowHostSet(ctx context.Context) map[string]struct{} {
+	out := map[string]struct{}{}
+	if s.cfg.Store == nil {
+		return out
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return out
+	}
+	for _, h := range modelProviderRowHosts(sc) {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out
 }
 
 // skipCovers reports whether any skip ENTRY names or covers host.
@@ -779,9 +792,15 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// set, unless the operator narrowed it to a validated subset.
 	var wantHosts []string
 	if req.Hosts != nil {
+		// The console's bulk promote sends every checked host, plumbing included: a model
+		// provider row's host is never promoted, and is skipped rather than refused.
+		providerHosts := s.modelProviderRowHostSet(r.Context())
 		for _, h := range req.Hosts {
 			h = strings.ToLower(strings.TrimSpace(h))
 			if h == "" {
+				continue
+			}
+			if _, plumbing := providerHosts[h]; plumbing {
 				continue
 			}
 			if _, ok := promotable[h]; !ok {
