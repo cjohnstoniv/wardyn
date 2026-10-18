@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -110,12 +111,19 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeScanLaunchRefusal answers the two policy refusals a scan launch can end
-// in, the provider admission and the placement denial, and reports whether it did.
+// writeScanLaunchRefusal answers the policy refusals a scan launch can end in,
+// the provider admission, the placement denial and a governance run limit, and
+// reports whether it did.
 func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 	var denied *placementDeniedError
 	if errors.As(err, &denied) {
 		return denied.refusal.write(s, w, r)
+	}
+	// A limit refuses a well-formed request, so 403 with the limit's own
+	// sentence, as the record and sign-in lanes answer it.
+	if errors.Is(err, errRecordCeilingLimit) {
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		return true
 	}
 	return s.writeAdmissionLaunchRefusal(w, r, err)
 }

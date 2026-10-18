@@ -22,9 +22,10 @@ var ErrNoRevision = errors.New("secretstore: this store keeps no row revision")
 // not: a store without it (a test double) takes the unguarded Put, and a
 // caller asserts it.
 type Revisioned interface {
-	// Revision names the current content of this view's OWN row of name,
+	// Revision names the current value of this view's OWN row of name,
 	// opaquely, and is "" when the row does not exist. Equal revisions mean
-	// no write landed between the two reads.
+	// no write of the value landed between the two reads (a re-wrap or a
+	// move of the same value is not one).
 	Revision(ctx context.Context, name string) (string, error)
 }
 

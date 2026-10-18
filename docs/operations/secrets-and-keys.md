@@ -253,6 +253,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 | **Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until *you* delete it | Restoring it is only half an undo — the database is already re-encrypted, so `.bak` is usable **only** together with the Postgres dump from step 1 |
 | ↳ | Once the rotated deployment is confirmed working, delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
 | A step after the commit fails (the key file could not be replaced) | The error says so and names `<key-file>.new`. That file holds the new identity, and at that point is the **only** key that reads the store — save it before doing anything else |
+| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. If the latest `secret.rekey` row (above) names the recipient `age-keygen -y <key-file>.new` prints, move it into place and set `WARDYN_AGE_KEY` to it; otherwise remove it and run again |
 | Always | **Back the key up off-host.** Rotation re-encrypts what is there; it cannot recover a key you have already lost |
 
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
@@ -950,6 +951,7 @@ Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 
 - The kind (`platform` for wardynd's boot keys) is in the name and the tag, so your Key Vault logs can tell the two apart. Key Vault has no per-name policy, so unlike two Vault roles it does not separate the privilege.
 - A read derives the name from the row's owner and name and refuses a row that points to any other name or vault. It then refuses a value whose tags name another row.
+- So the prefix and the vault URL, as spelled (an explicit `:443` included), are fixed once rows exist, and so is the namespace when the chart supplies the prefix. A changed one makes every read refuse; wardynd warns at boot and names the settings. Set it back to the value the rows were written under.
 - A replace is a new **version** of the same name, and every earlier version is **disabled**: Key Vault cannot delete old versions.
 - A write lists the versions before it writes and disables only those, so it never disables a newer one; writes to one credential wait for each other across replicas.
 - Once the name holds `WARDYN_AZURE_KV_MAX_VERSIONS` versions, the next write starts a new generation: a fresh name, and the old generation is deleted. The default is 100, well under the 500 at which Key Vault's secret backup fails — the vault's own count decides, not the pointer row.

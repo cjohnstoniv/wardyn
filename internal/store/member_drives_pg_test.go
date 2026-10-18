@@ -249,7 +249,7 @@ func TestMemberDriveOwnerStarting(t *testing.T) {
 	}
 	ask := func(owner string) bool {
 		t.Helper()
-		got, err := st.MemberDriveOwnerStarting(ctx, owner)
+		got, err := st.MemberDriveOwnerStarting(ctx, owner, 90*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,6 +265,46 @@ func TestMemberDriveOwnerStarting(t *testing.T) {
 	if !ask("alice@example.com") {
 		t.Fatal("the owner's starting run was missed")
 	}
+}
+
+// TestMemberDriveOwnerStarting_CreateStillHoldingItsLease: a run of the owner's already ended on
+// another replica, with no sandbox recorded, whose dispatcher still heartbeats its watcher lease is a
+// create in flight, so it counts until the lease goes stale. A run with a sandbox recorded, and one
+// whose lease was never held or has gone stale, do not.
+func TestMemberDriveOwnerStarting_CreateStillHoldingItsLease(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	const fresh = 90 * time.Second
+	now := time.Now().UTC()
+	run, err := st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "alice@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC2, State: types.RunKilled, RunnerTarget: "docker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(when string, want bool) {
+		t.Helper()
+		got, err := st.MemberDriveOwnerStarting(ctx, "alice@example.com", fresh)
+		if err != nil || got != want {
+			t.Errorf("%s: MemberDriveOwnerStarting = %v, %v; want %v", when, got, err, want)
+		}
+	}
+	ask("a killed run whose lease was never held", false)
+	if err := st.HeartbeatRunWatcher(ctx, run.ID, "replica-a"); err != nil {
+		t.Fatal(err)
+	}
+	ask("a killed run whose create still holds its lease", true)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET watcher_heartbeat = now() - interval '5 minutes' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ask("the same run once its lease is stale", false)
+	if err := st.HeartbeatRunWatcher(ctx, run.ID, "replica-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = 'sb-1' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ask("a run whose sandbox is recorded (its container holds the drive)", false)
 }
 
 // TestGetMemberDrive: the admin route's read finds a member drive by id

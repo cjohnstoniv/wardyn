@@ -179,7 +179,7 @@ export interface UserDriveMeta {
    *  what a member gets when their group snapshot is stale, when their
    *  allocation could not name a directory, or when the store is down. The
    *  server ships the reason as a closed vocabulary beside the null
-   *  (`groups_snapshot_stale` / `unmountable` / `unavailable` /
+   *  (`groups_snapshot_stale` / `unmountable` / `drive_subject_unsupported` / `unavailable` /
    *  `governance_unavailable`, user_drives_resolve.go) and suppresses the
    *  allocation alongside it; without reading that key, all four arrive as
    *  the one answer whose remedy is wrong for every one of them.

@@ -50,6 +50,9 @@ chmod +x "$TMP/bin/gh"
 cat >"$TMP/bin/go" <<'FAKEGO'
 #!/usr/bin/env bash
 sub="$1"; shift || true
+if [ -n "${GH_TOKEN+x}" ] || tr '\0' '\n' <"/proc/$PPID/environ" 2>/dev/null | grep -q '^GH_TOKEN='; then
+  echo "$sub" >>"${FAKE_GO_LOG:-/dev/null}"
+fi
 case "$sub" in
   vet)
     [ -e VET_BROKEN ] && { echo "fake go vet: VET_BROKEN present" >&2; exit 1; }
@@ -133,7 +136,7 @@ gh_prs_json() {
     for n in "$@"; do
       [ "$first" -eq 1 ] || echo ","
       first=0
-      printf '{"number":%d,"headRefName":"pr-%d","baseRefName":"main","isDraft":false}' "$n" "$n"
+      printf '{"number":%d,"headRefName":"pr-%d","baseRefName":"main","isDraft":false,"isCrossRepository":false}' "$n" "$n"
     done
     echo
     echo "]"
@@ -382,11 +385,11 @@ case11() {
   FAKE_GH_PRS="$dir/prs.json"
   cat >"$FAKE_GH_PRS" <<'JSON'
 [
-{"number":110,"headRefName":"pr-110","baseRefName":"old-stack","isDraft":false},
-{"number":111,"headRefName":"pr-111","baseRefName":"pr-112","isDraft":false},
-{"number":112,"headRefName":"pr-112","baseRefName":"main","isDraft":false},
-{"number":113,"headRefName":"pr-113","baseRefName":"feature/x","isDraft":false},
-{"number":114,"headRefName":"pr-114","baseRefName":"release/0.8","isDraft":false}
+{"number":110,"headRefName":"pr-110","baseRefName":"old-stack","isDraft":false,"isCrossRepository":false},
+{"number":111,"headRefName":"pr-111","baseRefName":"pr-112","isDraft":false,"isCrossRepository":false},
+{"number":112,"headRefName":"pr-112","baseRefName":"main","isDraft":false,"isCrossRepository":false},
+{"number":113,"headRefName":"pr-113","baseRefName":"feature/x","isDraft":false,"isCrossRepository":false},
+{"number":114,"headRefName":"pr-114","baseRefName":"release/0.8","isDraft":false,"isCrossRepository":false}
 ]
 JSON
   export FAKE_GH_PRS
@@ -403,6 +406,59 @@ JSON
   echo "ok  the stacked-base warning names only a PR whose base is no longer open"
 }
 
+# ── 12. a fork PR is never fetched or built, and the checks start tokenless ─
+# 120 is same-repo; 121 is a fork PR (its ref exists on origin, so a script
+# that fetched it would merge its 0005 migration); 122 omits the field. Only
+# 120 is a candidate. The two phases run as the workflow runs them: fetch with
+# GH_TOKEN, then check without it in the environment. The fake go reports any
+# GH_TOKEN in its own environment or its parent's /proc/PID/environ (an
+# `unset` inside one process leaves the original block readable there).
+case12() {
+  local dir="$TMP/case12"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 120 add_0004
+  make_pr "$dir/seed" "$dir/origin.git" 121 add_0005
+  make_pr "$dir/seed" "$dir/origin.git" 122 add_0006
+  FAKE_GH_PRS="$dir/prs.json"
+  cat >"$FAKE_GH_PRS" <<'JSON'
+[
+{"number":120,"headRefName":"pr-120","baseRefName":"main","isDraft":false,"isCrossRepository":false},
+{"number":121,"headRefName":"pr-121","baseRefName":"main","isDraft":false,"isCrossRepository":true},
+{"number":122,"headRefName":"pr-122","baseRefName":"main","isDraft":false}
+]
+JSON
+  export FAKE_GH_PRS
+  local summary="$dir/summary.md" list="$dir/list.json" out rc=0
+  : >"$summary"
+  FAKE_GO_LOG="$dir/go-saw-token"; export FAKE_GO_LOG
+  out="$( cd "$dir/work" && env -u GITHUB_BASE_REF -u GITHUB_REF_NAME -u WARDYN_TEST_PG \
+      GH_TOKEN=fake-token GITHUB_STEP_SUMMARY="$summary" \
+      ./scripts/nightly-migration-merge-check.sh --fetch-only "$list" 2>&1 )" || rc=$?
+  [ "$rc" -eq 0 ] || fail "the fetch phase must exit 0: $out"
+  [ -s "$list" ] || fail "the fetch phase must write the PR list"
+  git -C "$dir/work" rev-parse -q --verify refs/scratch/nightly/pr-120 >/dev/null \
+    || fail "the same-repo head must be fetched"
+  git -C "$dir/work" rev-parse -q --verify refs/scratch/nightly/pr-121 >/dev/null \
+    && fail "the fork PR head must not be fetched"
+  rc=0
+  out="$( cd "$dir/work" && env -u GITHUB_BASE_REF -u GITHUB_REF_NAME -u WARDYN_TEST_PG -u GH_TOKEN \
+      GITHUB_STEP_SUMMARY="$summary" \
+      ./scripts/nightly-migration-merge-check.sh --check-only "$list" 2>&1 )" || rc=$?
+  unset FAKE_GO_LOG
+  [ "$rc" -eq 0 ] || fail "a fork PR must not fail the job: $out"
+  grep -q "1 of 1 PR(s) merged together" "$summary" || fail "only the same-repo PR is merged: $(cat "$summary")"
+  grep -q "Not checked: 2 fork PR(s)" "$summary" || fail "summary must count the skipped fork PRs: $(cat "$summary")"
+  [ -s "$dir/go-saw-token" ] && fail "GH_TOKEN visible to the checks: $(cat "$dir/go-saw-token")"
+  # The workflow's checks step must not carry the token in its env either.
+  local wf="$ROOT/.github/workflows/nightly.yml"
+  if [ -f "$wf" ]; then
+    sed -n '/name: Octopus scratch merge/,/--check-only/p' "$wf" | grep -q 'GH_TOKEN' \
+      && fail "the --check-only workflow step must not set GH_TOKEN"
+    grep -q -- '--check-only' "$wf" || fail "nightly.yml must run the checks with --check-only"
+  fi
+  echo "ok  fork PRs are skipped and the checks start without GH_TOKEN"
+}
+
 case1
 case2
 case3
@@ -414,5 +470,6 @@ case8
 case9
 case10
 case11
+case12
 
 echo "test-nightly-migration-merge-check: all cases passed"

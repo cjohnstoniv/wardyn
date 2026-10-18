@@ -199,6 +199,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q.run.State = types.RunQueued
+	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
+	// that dies after the commit leaves no promotable run without its authority.
+	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses
 	created, err := s.createQueuedRun(ctx, q.run, entry)
 	switch {
 	case errors.Is(err, store.ErrRunQueueFull):
@@ -212,17 +215,16 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.recordPolicyApplyAudits(ctx, q.f.source)
-	abort := func(hint string) { s.abortQueuedRun(ctx, created.ID, hint) }
-	if err := s.persistRunComponents(ctx, created.ID, q.f.comps); err != nil {
-		abort(createRunComponentsAbortHint)
-		writeServerError(w, r, "record run components", err)
-		return
-	}
-	// The harness set too, as create records it: revive, extend and the run.create row read this record.
-	if err := s.persistRunHarnesses(ctx, created.ID, q.f.harnesses); err != nil {
-		abort(createRunHarnessesAbortHint)
-		writeServerError(w, r, "record run harnesses", err)
-		return
+	if rows := entry.Components; len(rows) > 0 {
+		err := errors.New("api: the store cannot record run components")
+		if st, ok := s.cfg.Store.(store.ComponentStore); ok {
+			err = fenceErasedComponents(ctx, st, created.ID, rows)
+		}
+		if err != nil {
+			s.abortQueuedRun(ctx, created.ID, createRunComponentsAbortHint)
+			writeServerError(w, r, "record run components", err)
+			return
+		}
 	}
 	s.recordCreateFolds(ctx, created.ID, q.f.reqEvents)
 	position, err := qs.RunQueuePosition(ctx, created.ID)

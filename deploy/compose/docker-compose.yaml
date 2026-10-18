@@ -438,8 +438,11 @@ services:
       # must never point at an issuer that isn't running. Set it (and start
       # dex) via `docker compose --profile sso up` for the SSO/Dex demo.
       WARDYN_OIDC_ISSUER: "${WARDYN_OIDC_ISSUER:-}"
+      # Another IdP: set WARDYN_OIDC_CLIENT_ID to its client, and
+      # WARDYN_OIDC_INTERNAL_ISSUER to the issuer (the desktop launcher does
+      # that itself when the envelope leaves it unset).
       WARDYN_OIDC_INTERNAL_ISSUER: "${WARDYN_OIDC_INTERNAL_ISSUER:-http://dex:5556}"
-      WARDYN_OIDC_CLIENT_ID: "wardyn"
+      WARDYN_OIDC_CLIENT_ID: "${WARDYN_OIDC_CLIENT_ID:-wardyn}"
       WARDYN_OIDC_CLIENT_SECRET: "${WARDYN_OIDC_CLIENT_SECRET:-wardyn-oidc-secret}"
       # Follows the published port (and is overridable like its five neighbours):
       # this is the URL the BROWSER is sent back to, so it has to name the host

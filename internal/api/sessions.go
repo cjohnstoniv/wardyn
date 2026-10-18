@@ -244,6 +244,11 @@ func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string
 		serr = errors.Join(serr, rerr)
 	}
 	if subject != "" && subject != principal {
+		// The subject's own cutoff first, so a service token whose mint is past its late check of the
+		// sponsor and not yet inserted is ended too; the sweep below only sees tokens already there.
+		if subject != res.KeyPrincipal {
+			serr = errors.Join(serr, s.cfg.SessionRevocations.RevokeSub(ctx, subject))
+		}
 		n, kerr := s.revokeSponsoredTokens(ctx, subject)
 		res.Tokens += n
 		_, kqerr := s.cancelQueuedRunsOf(ctx, subject, queueCancelSessionRevoked)
