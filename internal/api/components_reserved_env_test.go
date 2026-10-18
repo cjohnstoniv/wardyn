@@ -29,7 +29,8 @@ func TestRunComponents_ReservedEnvironmentNamesAreRefusedAtEveryDoor(t *testing.
 		}
 	}
 	for _, name := range []string{"PATH", "HOME", "BASH_ENV", "NODE_OPTIONS", "PYTHONPATH", "GIT_SSH_COMMAND", "CLAUDE_CONFIG_DIR",
-		"HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "GIT_CONFIG_COUNT", "CLAUDE_CODE_ANYTHING"} {
+		"HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "GIT_CONFIG_COUNT", "CLAUDE_CODE_ANYTHING",
+		"SHELLOPTS", "PS4", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "JAVA_TOOL_OPTIONS"} {
 		for where, def := range definitions(name) {
 			for _, row := range []string{"inline", "a person's saved row", "an organisation's row"} {
 				t.Run(name+"/"+where+"/"+row, func(t *testing.T) {

@@ -370,10 +370,16 @@ func inspectionCorpusOf(pol types.RunPolicySpec) inspectionCorpus {
 // withInspectionCorpus is pc with c restored on a copy of its inspection settings: the org-only
 // form of a laptop copy.
 func withInspectionCorpus(pc runner.ProxyConfig, c inspectionCorpus) runner.ProxyConfig {
-	if pc.Policy.LLMInspection == nil || len(c.names)+len(c.values) == 0 {
-		return pc
-	}
-	pc.Policy = pc.Policy.Clone()
-	pc.Policy.LLMInspection.WorkspaceSecretNames, pc.Policy.LLMInspection.WorkspaceSecretValues = c.names, c.values
+	pc.Policy = c.restoredOn(pc.Policy)
 	return pc
+}
+
+// restoredOn is pol with c restored on a copy of its inspection settings.
+func (c inspectionCorpus) restoredOn(pol types.RunPolicySpec) types.RunPolicySpec {
+	if pol.LLMInspection == nil || len(c.names)+len(c.values) == 0 {
+		return pol
+	}
+	pol = pol.Clone()
+	pol.LLMInspection.WorkspaceSecretNames, pol.LLMInspection.WorkspaceSecretValues = c.names, c.values
+	return pol
 }

@@ -158,7 +158,8 @@
 # docs/sdk.md 19021 = 18992 + 29, measured: the revive_containment_recovering row.
 # docs/sdk.md 19033 = 18992 + 12 + 29, measured: both sides after the AF1 merge
 # 0.9.4 L6a +21: the order=desc sentence on the per-run audit trail.
-docs/sdk.md=19054 share=21
+# docs/sdk.md 19072 = 19033 + 39 (the drive_subject_unsupported reason row)
+docs/sdk.md=19093 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

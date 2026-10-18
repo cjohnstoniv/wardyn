@@ -206,6 +206,11 @@ func applyRoleMappingChange(s *Server, r *http.Request, q store.Querier, ch type
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonSSONotConfigured, "SSO is not configured")
 		})
 	}
+	// The whole map's lock, then the row's: every gate below judges the whole map, so two changes to
+	// different rows must not both judge a map the other is about to change.
+	if err := store.LockGovernanceTarget(ctx, q, govKindRoleMapping); err != nil {
+		return govApplied{}, err
+	}
 	if err := store.LockGovernanceTarget(ctx, q, govKindRoleMapping, ch.TargetKey); err != nil {
 		return govApplied{}, err
 	}

@@ -51,7 +51,7 @@ const (
 	staleWitnessRetries = 3
 )
 
-// runnerGrace never lets a runner-mode delete be a force delete: a zero grace removes the object
+// runnerGrace never lets a pod delete be a force delete, in either mode: a zero grace removes the object
 // without the kubelet confirming (R4-M2). nil keeps the pod's own grace.
 func runnerGrace(g *int64) *int64 {
 	if g == nil || *g >= 1 {

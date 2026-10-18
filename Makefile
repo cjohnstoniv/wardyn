@@ -799,6 +799,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	pon=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set persistence.enabled=true); \
 	echo "$$pon" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "fs"' || { echo "chart with persistence on no longer selects the fs store"; exit 1; }; \
 	echo "$$pon" | grep -A1 "name: WARDYN_RECORDING_DIR" | grep -q 'value: "/data/recordings"' || { echo "chart with persistence on left WARDYN_RECORDING_DIR off the persistent mount"; exit 1; }; \
+	echo "$$pon" | grep -A15 "kind: PersistentVolumeClaim" | grep -q "helm.sh/resource-policy: keep" || { echo "the persistence PVC lost helm.sh/resource-policy: keep — turning persistence off (as HA requires) or uninstalling would delete every fs recording and the audit quarantine"; exit 1; }; \
 	echo "$$out" | grep -q "podSelector: {}" || { echo "chart ingress default is not same-namespace"; exit 1; }; \
 	echo "$$out" | grep -A4 "podSelector:" | grep -q "app.kubernetes.io/component: control-plane" || { echo "NetworkPolicy podSelector no longer pins to the control-plane pod — a sandbox pod with a matching name+instance label would inherit wardynd's own egress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "unexpected namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }; \
@@ -1528,6 +1529,9 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# The OIDC client id is forwarded, and stays "wardyn" (Dex's) when unset.
+	docker compose --env-file /dev/null -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_CLIENT_ID: wardyn$$' || { echo "compose no longer defaults WARDYN_OIDC_CLIENT_ID to wardyn"; exit 1; }
+	WARDYN_OIDC_CLIENT_ID=app-1 docker compose --env-file /dev/null -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_CLIENT_ID: app-1$$' || { echo "compose does not forward WARDYN_OIDC_CLIENT_ID: an IdP other than Dex gets client_id=wardyn"; exit 1; }
 	@# A removed WARDYN_MEMBER_* name left in an m' envelope must still reach wardynd, whose boot
 	@# refusal (refuseRemovedEnv) is the only thing that stops a dropped deny list from widening
 	@# the writable set; compose forwards only the names its environment: list spells out.

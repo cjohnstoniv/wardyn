@@ -475,8 +475,9 @@ type MemberDriveStore interface {
 	BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error)
 	// BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner's drive.
 	BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
-	// MemberDriveOwnerStarting reports whether owner has a run in STARTING.
-	MemberDriveOwnerStarting(ctx context.Context, owner string) (bool, error)
+	// MemberDriveOwnerStarting reports whether owner has a run in STARTING, or one with no sandbox
+	// recorded whose dispatcher's watcher lease is younger than leaseFresh.
+	MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error)
 	// AbortMemberDriveDelete clears only the tombstone started names.
 	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
 	// FinishMemberDriveDelete removes the row only while it carries started.

@@ -108,7 +108,7 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		if err != nil && loc != "" {
 			// Commit may have reached the server despite a lost reply. The
 			// locked cleanup leaves any object the current row still names.
-			if _, derr := s.removeOldExternal(context.WithoutCancel(ctx), owner, name, target, loc); derr != nil {
+			if _, _, derr := s.removeOldExternal(context.WithoutCancel(ctx), owner, name, target, loc); derr != nil {
 				return false, false, fmt.Errorf("%w; the value written to %s could not be removed again (%v) — `wardynd -reconcile` lists it", err, target, derr)
 			}
 		}
@@ -119,7 +119,7 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 			return err == nil, false, err
 		}
 		store, old := splitRef(e.kekID)
-		soft, err := s.removeOldExternal(ctx, owner, name, store, old)
+		_, soft, err := s.removeOldExternal(ctx, owner, name, store, old)
 		if err != nil {
 			return false, false, fmt.Errorf("the row now holds the value locally, but its old copy in %s was not removed: %w — remove it there (`wardynd -reconcile` lists it)", store, err)
 		}
@@ -176,31 +176,32 @@ func (s *Store) commitMigration(ctx context.Context, target string, before rowSn
 }
 
 // Delete only while the row's session lock excludes external writers. A
-// replacement may reuse the very object we intended to remove, so recheck it.
-func (s *Store) removeOldExternal(ctx context.Context, owner, name, store, loc string) (bool, error) {
+// replacement may reuse the very object we intended to remove, so recheck it:
+// named reports the row names it, and nothing was removed.
+func (s *Store) removeOldExternal(ctx context.Context, owner, name, store, loc string) (named, soft bool, err error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
 	conn, release, err := s.lockExternalRow(ctx, owner, name)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer release()
 	var version int16
 	var kekID string
 	err = conn.QueryRow(ctx, `SELECT enc_version, kek_id FROM secrets WHERE owned_by=$1 AND name=$2`, owner, name).Scan(&version, &kekID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("lock: %w", err)
+		return false, false, fmt.Errorf("lock: %w", err)
 	}
 	if err == nil && version == extVersion {
 		if curStore, curLoc := splitRef(kekID); curStore == store && secretstore.RefObject(curLoc) == secretstore.RefObject(loc) {
-			return false, nil
+			return true, false, nil
 		}
 	}
 	dctx, rep := secretstore.WithDeleteReport(ctx)
 	if err := s.ext.Delete(dctx, owner, name, loc); err != nil {
-		return false, err
+		return false, false, err
 	}
-	return rep.Store != "" && !rep.Purged, nil
+	return false, rep.Store != "" && !rep.Purged, nil
 }
 
 // flipRow rewrites one locked row to its new location. The caller commits.

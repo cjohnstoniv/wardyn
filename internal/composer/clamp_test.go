@@ -368,6 +368,38 @@ func TestClamp_FirstUseApprovalTakesStricter(t *testing.T) {
 	}
 }
 
+// The ceiling's hold window and hold count bound a proposal, through both doors, as meet and Leq
+// read them: a longer window or more holds is cut to the ceiling with a warning, and a tighter or
+// default proposal is kept.
+func TestClamp_HoldKnobsBoundedByCeiling(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.FirstUseApproval, ceiling.FirstUseHoldSeconds, ceiling.MaxHolds = types.FirstUseWaitForReview, 15, 2
+	wide := types.RunPolicySpec{FirstUseApproval: types.FirstUseWaitForReview, FirstUseHoldSeconds: 600, MaxHolds: 256}
+	for name, clampFn := range map[string]func(types.RunPolicySpec) (types.RunPolicySpec, []string){
+		"Clamp": func(p types.RunPolicySpec) (types.RunPolicySpec, []string) {
+			return Clamp(p, ceiling, types.GovernanceLimits{})
+		},
+		"ClampMember": func(p types.RunPolicySpec) (types.RunPolicySpec, []string) {
+			return ClampMember(p, ceiling, types.GovernanceLimits{}, types.ResourceLimits{}, types.ResourceLimits{})
+		},
+	} {
+		got, warns := clampFn(wide)
+		if got.FirstUseHoldSeconds != 15 || got.MaxHolds != 2 {
+			t.Errorf("%s: holds = %ds x %d, want the ceiling's 15s x 2", name, got.FirstUseHoldSeconds, got.MaxHolds)
+		}
+		if !hasWarn(warns, "first_use_hold_seconds lowered") || !hasWarn(warns, "max_holds lowered") {
+			t.Errorf("%s: warns = %v, want one per cut", name, warns)
+		}
+		if !leqEgress(got, ceiling) {
+			t.Errorf("%s: the clamped holds are not within the ceiling by Leq's own reading", name)
+		}
+		tight, warns := clampFn(types.RunPolicySpec{FirstUseApproval: types.FirstUseWaitForReview, FirstUseHoldSeconds: 5, MaxHolds: 1})
+		if tight.FirstUseHoldSeconds != 5 || tight.MaxHolds != 1 || hasWarn(warns, "lowered") {
+			t.Errorf("%s: a tighter proposal = %ds x %d (warns %v), want it kept", name, tight.FirstUseHoldSeconds, tight.MaxHolds, warns)
+		}
+	}
+}
+
 // TestClamp_LLMInspectionInheritsCeiling is HIGH-2: nil means OFF, so an
 // omitted (or merely different) proposal must inherit the ceiling's spec
 // outright whenever the ceiling sets one — never stay nil under a ceiling that

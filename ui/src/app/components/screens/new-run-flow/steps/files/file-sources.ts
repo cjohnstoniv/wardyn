@@ -19,6 +19,7 @@ const UNAVAILABLE_TEXT: Record<string, string | undefined> = {
   groups_snapshot_stale: MEMBER.DENIED_STALE_GROUPS,
   governance_unavailable: DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE,
   unmountable: DRIVE_MEMBER.NR_UNAVAILABLE,
+  drive_subject_unsupported: DRIVE_MEMBER.NR_UNAVAILABLE,
   unavailable: DRIVE_MEMBER.NR_UNAVAILABLE,
 };
 
