@@ -46,13 +46,13 @@ var (
 // types.ValidArch, is not stored, and neither it nor a failed write refuses the event: caps is
 // acknowledged before the runner may become ready, and both are labels, never something a run is
 // admitted by. A runner registered before it reported an architecture gets one on its next connect.
-func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) {
+func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) {
 	var caps runnerwire.Caps
 	if runnerwire.Unmarshal(ev.Data, &caps) != nil {
 		return
 	}
 	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
-		s.recordRunnerVersion(ctx, rs, runnerID, strings.TrimSpace(caps.Version))
+		s.recordRunnerVersion(ctx, rs, runnerID, session, strings.TrimSpace(caps.Version))
 	}
 	if ms, ok := s.cfg.Store.(machineNameStore); ok {
 		s.recordMachineName(ctx, ms, runnerID, strings.TrimSpace(caps.MachineName))
@@ -74,9 +74,9 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runn
 }
 
 // recordRunnerVersion stamps the runner's session (last_seen_at) with the version it reported, then writes
-// the runner.connect row Connected owed, so the row carries that version. A version that is not bounded
+// the runner.connect row Connected owed that session, so the row carries that version. A version that is not bounded
 // printable text is not stored; neither it nor a failed write refuses the event.
-func (s *Server) recordRunnerVersion(ctx context.Context, st store.RunnerStore, runnerID uuid.UUID, version string) {
+func (s *Server) recordRunnerVersion(ctx context.Context, st store.RunnerStore, runnerID uuid.UUID, session, version string) {
 	if !types.ValidMachineName(version) {
 		slog.WarnContext(ctx, "wardynd: runner reported an unusable version", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(version)))
 		version = ""
@@ -84,7 +84,7 @@ func (s *Server) recordRunnerVersion(ctx context.Context, st store.RunnerStore, 
 	if err := st.TouchRunner(ctx, runnerID, version, s.cfg.Now()); err != nil {
 		slog.WarnContext(ctx, "wardynd: record runner version", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 	}
-	s.writeOwedRunnerConnect(ctx, st, runnerID, version)
+	s.writeOwedRunnerConnect(ctx, st, runnerID, session, version)
 }
 
 func (s *Server) recordMachineName(ctx context.Context, ms machineNameStore, runnerID uuid.UUID, name string) {

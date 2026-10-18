@@ -36,10 +36,13 @@ type runnerStreamState struct {
 	owners  map[string]ownerSlots
 	offline runnerOfflineSweeps
 	relay   relayListener
-	// connectOwed holds the runners whose session is admitted but whose runner.connect row waits for the
-	// version the runner reports (see runnerHub), under connectMu.
-	connectMu   sync.Mutex
-	connectOwed map[uuid.UUID]bool
+	// beganSession is each runner's latest fresh session id (set by BeginInventory, which runs just before
+	// Connected), and connectOwed the session whose runner.connect row waits for the version its runner
+	// reports (see runnerHub). Both are under connectMu. Keying the debt by session keeps a superseded
+	// session's late caps from settling the new session's row.
+	connectMu    sync.Mutex
+	beganSession map[uuid.UUID]string
+	connectOwed  map[uuid.UUID]string
 
 	// handshakes counts connections admitted and not yet proved or closed.
 	handshakes    atomic.Int32
@@ -267,14 +270,14 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 				}
 				s.runnerStreams.connectMu.Lock()
 				if s.runnerStreams.connectOwed == nil {
-					s.runnerStreams.connectOwed = map[uuid.UUID]bool{}
+					s.runnerStreams.connectOwed = map[uuid.UUID]string{}
 				}
-				s.runnerStreams.connectOwed[id] = true
+				s.runnerStreams.connectOwed[id] = s.runnerStreams.beganSession[id]
 				s.runnerStreams.connectMu.Unlock()
 				return nil
 			}
 			cfg.Disconnected = func(ctx context.Context, id uuid.UUID) error {
-				s.writeOwedRunnerConnect(ctx, st, id, "")
+				s.writeOwedRunnerConnect(ctx, st, id, s.owedConnectSession(id), "")
 				var lastSeen *time.Time
 				if rn, err := st.GetRunner(ctx, id); err == nil {
 					lastSeen = rn.LastSeenAt
@@ -289,14 +292,34 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 	return s.runnerStreams.hub
 }
 
-// writeOwedRunnerConnect writes the runner.connect row Connected owed for id, once, with version, or with
-// the version the runner row holds when the session reported none. It holds connectMu across the write so
-// the Disconnected that follows waits for it.
-func (s *Server) writeOwedRunnerConnect(ctx context.Context, st store.RunnerStore, id uuid.UUID, version string) {
+// noteRunnerSession records session as id's latest fresh session, for the Connected that follows it.
+func (s *Server) noteRunnerSession(id uuid.UUID, session string) {
 	rs := &s.runnerStreams
 	rs.connectMu.Lock()
 	defer rs.connectMu.Unlock()
-	if !rs.connectOwed[id] {
+	if rs.beganSession == nil {
+		rs.beganSession = map[uuid.UUID]string{}
+	}
+	rs.beganSession[id] = session
+}
+
+// owedConnectSession is the session whose runner.connect row id owes, "" when none.
+func (s *Server) owedConnectSession(id uuid.UUID) string {
+	rs := &s.runnerStreams
+	rs.connectMu.Lock()
+	defer rs.connectMu.Unlock()
+	return rs.connectOwed[id]
+}
+
+// writeOwedRunnerConnect writes the runner.connect row id owes for session, once, with version, or with
+// the version the runner row holds when the session reported none. A session that is not the one owing
+// the row (a superseded session's late caps) writes nothing and leaves the debt. It holds connectMu across
+// the write so the Disconnected that follows waits for it.
+func (s *Server) writeOwedRunnerConnect(ctx context.Context, st store.RunnerStore, id uuid.UUID, session, version string) {
+	rs := &s.runnerStreams
+	rs.connectMu.Lock()
+	defer rs.connectMu.Unlock()
+	if owed, ok := rs.connectOwed[id]; !ok || owed != session {
 		return
 	}
 	delete(rs.connectOwed, id)
