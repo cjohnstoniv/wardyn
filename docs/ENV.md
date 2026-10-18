@@ -2344,7 +2344,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
-| `WARDYN_AGENT_ARCH` | string (`amd64`, `arm64`; `x86_64`, `aarch64` accepted) | (unset = this host's `uname -m`) | `scripts/stage-agent-binary.sh` only, build-time: the architecture to stage for, when it differs from the build host's. `--arch` beats it; it beats `uname -m`. [`docs/adoption/corp-image-authoring.md`](adoption/corp-image-authoring.md) says when to use it. |
+| `WARDYN_AGENT_ARCH` | string | (unset = `uname -m`) | [`scripts/stage-agent-binary.sh`](../scripts/stage-agent-binary.sh) only, build-time: the architecture to stage, `amd64` or `arm64`. `--arch` beats it. |
 | `WARDYN_AWS_SSO_LOGIN_COMMAND` | string | fixed literal | the `aws-sso` image's chained login+upload command ([`deploy/images/aws-sso/login-hint.sh`](../deploy/images/aws-sso/login-hint.sh)), exported into `signin-pane.sh`'s self-run pane and printed on both the hint and the failure path. Not operator-settable — a constant, not a knob |
 | `WARDYN_AWS_SSO_SELFRUN_BANNER`, `WARDYN_AWS_SSO_SELFRUN_DONE`, `WARDYN_AWS_SSO_SELFRUN_FAILED`, `WARDYN_AWS_SSO_SELFRUN_PREP_STUCK` | string | fixed literal | the aws-sso self-run pane's own status lines (`login-hint.sh` → `signin-pane.sh`), one per phase of the device-code flow. Not operator-settable — message constants, not knobs |
 | `WARDYN_AWS_SSO_SELFRAN` | internal (bash flag var, `tmux set-environment`) | unset | `signin-pane.sh` sets it to `1` (session-scoped via tmux, not exported to child processes) once the self-run login has started, so `login-hint.sh` prints the "run it yourself" hint only when nothing already tried to |
