@@ -35,7 +35,7 @@ import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { basePath } from "../../lib/base-path";
 import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
-import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
+import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
@@ -55,6 +55,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // work, and the pane already says why.
   const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const running = run.state === "RUNNING";
+  // A service identity's sponsor opens the terminal and apps, never SSH (the server answers it run_owner_only).
+  const sponsorOnly = resolved && sponsorOnlyEntry(run, principal, operator);
 
   const [ssh, setSSH] = React.useState<{
     enabled?: boolean;
@@ -148,7 +150,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     ...(proxy ? [`  ProxyCommand ${proxy}`] : []),
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
-  const sshOn = !!ssh?.enabled;
+  const sshOn = !!ssh?.enabled && !sponsorOnly;
   const uiApps: UIApp[] = run.ui_apps ?? [];
   const uiSandboxOn = !!uiSandbox?.enabled;
   // ponytail: "external:" is a bare description-string prefix, not a typed
@@ -251,6 +253,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
       </p>
 
+      {!sponsorOnly && (
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs font-medium text-foreground">SSH</p>
         {healthAnswered && !sshOn && (
@@ -262,6 +265,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           </p>
         )}
       </div>
+      )}
 
       {sshOn && !hasKeys && (
         <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">

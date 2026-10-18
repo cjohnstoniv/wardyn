@@ -8,7 +8,11 @@ import { HttpError } from "./api/core";
 import {
   entryErrorMessage,
   mayEnterRun,
+  mayEnterRunOrUnknown,
   RUN_OWNER_ONLY,
+  SERVICE_ATTACH_LINE,
+  SERVICE_ENTRY_LINE,
+  sponsorOnlyEntry,
   runEntryOwnerLine,
   runEntryRefusalLine,
 } from "./run-entry";
@@ -37,6 +41,35 @@ describe("mayEnterRun", () => {
     expect(mayEnterRun(person, "", true)).toBe(false);
     expect(mayEnterRun(person, null, true)).toBe(false);
     expect(mayEnterRun({}, "", false)).toBe(false);
+  });
+});
+
+// A service identity's run is entered by its sponsor under service_attach, a grant the console cannot see: the
+// server's ticket mint decides, so the console must not refuse in the sponsor's place.
+describe("a service identity's run", () => {
+  const svc = { created_by: "service:ci-bot" };
+
+  it("is left to the server for any resolved viewer, and still refused to nobody by the console", () => {
+    expect(mayEnterRun(svc, "sam@acme.io", false)).toBe(false);
+    expect(mayEnterRunOrUnknown(svc, "sam@acme.io", false, true)).toBe(true);
+    expect(mayEnterRunOrUnknown({ created_by: "priya@acme.io" }, "sam@acme.io", false, true)).toBe(false);
+  });
+
+  it("names the sponsor arm only for a viewer the owner arm does not already admit", () => {
+    expect(sponsorOnlyEntry(svc, "sam@acme.io", false)).toBe(true);
+    expect(sponsorOnlyEntry({ ...svc, operator_owned: true }, "sam@acme.io", true)).toBe(false);
+    expect(sponsorOnlyEntry({ created_by: "priya@acme.io" }, "sam@acme.io", false)).toBe(false);
+  });
+
+  it("never names the service principal as the person who may enter", () => {
+    expect(runEntryRefusalLine(svc)).toBe(SERVICE_ENTRY_LINE);
+    expect(runEntryRefusalLine(svc)).not.toMatch(/service:ci-bot/);
+  });
+
+  it("maps the sponsor arm's 404 to the service_attach line, not the raw text", () => {
+    const wire = new HttpError(404, "run not found", "run_not_found");
+    expect(entryErrorMessage(wire, () => "fallback")).toBe(SERVICE_ATTACH_LINE);
+    expect(entryErrorMessage(new HttpError(404, "run not found"), () => "fallback")).toBe("fallback");
   });
 });
 

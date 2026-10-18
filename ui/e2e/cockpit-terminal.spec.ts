@@ -83,6 +83,32 @@ test.describe("Run cockpit terminal", () => {
     await expect(pane.getByText(/Could not mint an attach ticket/)).toHaveCount(0);
   });
 
+  // The sponsor of a service identity's run enters it under service_attach, a grant the console cannot see, so the
+  // page opens the terminal and lets the ticket mint decide; it never tells the viewer only "service:<name>" may.
+  test("a service identity's run opens its terminal, and no line names the service as the only one who may", async ({ page }) => {
+    const { id: runId } = await findRunningFixture(page);
+    let cached: Record<string, unknown> | null = null;
+    await page.route(`**/api/v1/runs/${runId}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (!cached) {
+        const json = await (await route.fetch()).json();
+        cached = { ...json, interactive: true, state: "RUNNING", created_by: "service:ci-bot", operator_owned: false };
+      }
+      await route.fulfill({ json: cached });
+    });
+    await stubAttachTicket(page, runId);
+    await stubAttachSocket(page, (_n, ws) => {
+      ws.send(attachModeFrame(false, { principal: "sam@e2e.example" }));
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane.locator(".xterm-screen").first()).toBeVisible();
+    await expect(page.getByText(/Only service:ci-bot can open/)).toHaveCount(0);
+  });
+
   test("an in-place promotion on the same socket clears the observer chrome and typed input lands", async ({
     page,
   }) => {

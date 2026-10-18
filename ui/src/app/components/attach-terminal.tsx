@@ -62,7 +62,7 @@ import { RendererFellBackNotice, RendererMenu } from "./attach-terminal-renderer
 import { isMacPlatform, type CopyGate, type CopyOffer } from "./attach-terminal-clipboard";
 import { RUN_COCKPIT, TERMINAL, TERMINAL_COPY } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
-import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
+import { entryErrorMessage, mayEnterRunOrUnknown, RUN_OWNER_ONLY } from "../lib/run-entry";
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, type ConnState } from "./use-attach-session";
@@ -169,8 +169,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // run no person owns.
   const mayEnter =
     createdBy === undefined ||
-    !operatorResolved ||
-    mayEnterRun({ created_by: createdBy, operator_owned: operatorOwned }, principal, operator);
+    mayEnterRunOrUnknown({ created_by: createdBy, operator_owned: operatorOwned }, principal, operator, operatorResolved);
   // This pane's own error line: the terminal-error wording of the owner-only rule.
   const refusal = operatorOwned ? OPERATOR_ONLY_REASON : RUN_OWNER_ONLY;
   const containerRef = React.useRef<HTMLDivElement>(null);
