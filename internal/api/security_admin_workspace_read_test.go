@@ -346,8 +346,31 @@ func assertNoHostAxis(t *testing.T, got types.Workspace) {
 // TestSecurityAdminEgressWriteEchoIsProjected: the egress writes this tier is
 // widened for answer with the updated workspace, and that echo is the same
 // document a read of it is, so it carries the same projection.
+// egressTopologyStore completes the topology double for the two egress writes:
+// each stores the list on the one workspace and returns the full row, so the
+// echo carries every field class the read projection must cut.
+type egressTopologyStore struct{ *r3TopologyStore }
+
+func (s egressTopologyStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
+	if id != s.ws.ID {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	s.ws.ApprovedEgress = doms
+	return s.ws, nil
+}
+
+func (s egressTopologyStore) SetWorkspaceDeniedEgress(_ context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
+	if id != s.ws.ID {
+		return types.Workspace{}, store.ErrNotFound
+	}
+	s.ws.DeniedEgress = doms
+	return s.ws, nil
+}
+
 func TestSecurityAdminEgressWriteEchoIsProjected(t *testing.T) {
 	srv, st := newTopologyWorkspaceServer(t, "sub-ws-owner")
+	srv.cfg.Store = egressTopologyStore{st}
+	srv.router = srv.routes()
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
 	for _, route := range []string{"/approved-egress", "/denied-egress"} {
 		w := doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+st.ws.ID.String()+route, sec, `{"domains":["x.example"]}`)
