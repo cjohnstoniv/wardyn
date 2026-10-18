@@ -912,8 +912,6 @@ func TestRunnerBootRefusesOverrides(t *testing.T) {
 	}
 }
 
-// TestRunnerTeardownHoldsPolicies: runner-mode teardown drops nothing without evidence, and drops
-// pods, Secrets, then NetworkPolicies once both pods are proven stopped.
 // TestRunnerTeardownLeavesOtherObjects: the runner's sweep names its run AND its
 // runner id, so another run's Secret and NetworkPolicy, and the same run's under
 // another runner, are untouched. An emptied or widened selector deletes them.
@@ -948,6 +946,8 @@ func TestRunnerTeardownLeavesOtherObjects(t *testing.T) {
 	}
 }
 
+// TestRunnerTeardownHoldsPolicies: runner-mode teardown drops nothing without evidence, and drops
+// pods, Secrets, then NetworkPolicies once both pods are proven stopped.
 func TestRunnerTeardownHoldsPolicies(t *testing.T) {
 	h := newRunnerHarness(t)
 	h.boundProxy(t)

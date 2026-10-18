@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
-IMAGE="${WARDYN_ROOT_UID_IMAGE:-busybox:1.38}" # the pin ci.yml's base-image mirror primes
+IMAGE="${WARDYN_ROOT_UID_IMAGE:-busybox:1.38@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616}" # deploy/base-images.txt's pin
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 # The tests drop to uid 1000 and 65532 inside the container and must still reach the binary.

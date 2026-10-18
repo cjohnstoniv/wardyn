@@ -475,9 +475,10 @@ func (s *Server) dialRelayLogged(ctx context.Context) error {
 
 // TestServerErrorForwarders_ArgsMatchSignatures keeps the table honest: each
 // forwarder's msgArg indexes a string parameter and its statusArg (when it
-// has one) an int, read off the real declaration, so a signature change
-// (uiFail gained a reason parameter and the table silently pointed at it) is
-// a failure here instead of a guard that checks the wrong argument.
+// has one) an int, read off the real declaration, so a forwarder renamed,
+// removed, or whose parameters shifted off a string/int is a failure here. It
+// cannot tell two string parameters apart (uiFail's reason from its msg):
+// TestScanFileForLeaks_FlagsUiFailMessage pins which one the table reads.
 func TestServerErrorForwarders_ArgsMatchSignatures(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
