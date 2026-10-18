@@ -235,6 +235,41 @@ func TestArtifactBaseURLs(t *testing.T) {
 	}
 }
 
+// TestArtifactBaseURLs_IndexHostRowWins: the console suggests a second host per
+// pip, cargo and go; whichever order the rows were added in, the ecosystem's
+// index host names the mirror and its companion host stays network-only.
+func TestArtifactBaseURLs_IndexHostRowWins(t *testing.T) {
+	index := []types.EgressRedirect{
+		{From: "https://proxy.golang.org", To: "https://art.corp/api/go/go-remote", Ecosystem: "go"},
+		{From: "https://pypi.org/simple", To: "https://art.corp/api/pypi/pypi-remote/simple", Ecosystem: "pip"},
+	}
+	companion := []types.EgressRedirect{
+		{From: "https://sum.golang.org", To: "https://art.corp/api/go/sumdb", Ecosystem: "go", GoChecksumDBOff: true},
+		{From: "https://files.pythonhosted.org", To: "https://art.corp/api/pypi/pypi-remote", Ecosystem: "pip"},
+	}
+	want := map[string]string{
+		"go":  "https://art.corp/api/go/go-remote",
+		"pip": "https://art.corp/api/pypi/pypi-remote/simple",
+	}
+	for name, rows := range map[string][]types.EgressRedirect{
+		"index first":     {index[0], index[1], companion[0], companion[1]},
+		"companion first": {companion[0], companion[1], index[0], index[1]},
+	} {
+		sc := types.SiteConfig{EgressRedirects: rows}
+		if got := artifactBaseURLs(sc); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: artifactBaseURLs\n got: %v\nwant: %v", name, got, want)
+		}
+		if artifactGoSumDBOff(sc) {
+			t.Errorf("%s: GOSUMDB opt-out read off the companion sumdb row, not the go mirror row", name)
+		}
+	}
+	// No index row: the last row of the ecosystem wins, as before.
+	only := types.SiteConfig{EgressRedirects: companion}
+	if got := artifactBaseURLs(only); got["go"] != "https://art.corp/api/go/sumdb" || got["pip"] != "https://art.corp/api/pypi/pypi-remote" {
+		t.Errorf("without an index row the last row must win, got %v", got)
+	}
+}
+
 // TestArtifactRepoCheck reports info status + configured ecosystems.
 func TestArtifactRepoCheck(t *testing.T) {
 	// Unconfigured: info + fix hint.
