@@ -39,7 +39,7 @@ replicas: 1
 # failing does not stop the control plane. Replaces `allowMultiReplica`, which
 # is removed (a values file that still sets it true is refused, with a pointer
 # here). Sets WARDYN_HA=true on the container, lifts the `replicas > 1`
-# refusal, and adds a PodDisruptionBudget (minAvailable 1) and a preferred pod
+# refusal, and (at two or more replicas) adds a PodDisruptionBudget (minAvailable 1) and a preferred pod
 # anti-affinity across nodes. The upgrade strategy stays Recreate: this is node
 # failure tolerance, not zero-downtime upgrades.
 #
