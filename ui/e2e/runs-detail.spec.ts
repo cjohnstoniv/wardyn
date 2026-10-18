@@ -123,7 +123,8 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toHaveCount(0);
     await page.getByRole("button", { name: "Kill", exact: true }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog).toContainText(`Kill ${b.id}?`);
+    await expect(dialog).toContainText(`Kill "${b.task}"?`);
+    await expect(dialog).toContainText(b.id.slice(0, 8));
     await dialog.getByRole("button", { name: "Cancel" }).click();
   });
 

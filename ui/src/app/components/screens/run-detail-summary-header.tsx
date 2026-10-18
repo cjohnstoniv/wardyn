@@ -504,6 +504,7 @@ export function SummaryHeader({
         </Button>
         <KillRunDialog
           runId={confirmId}
+          title={run.title?.trim() || run.task}
           onOpenChange={(o) => !o && setConfirmId(null)}
           onConfirm={onKill}
         />

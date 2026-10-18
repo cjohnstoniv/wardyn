@@ -284,7 +284,7 @@ describe("RunDetailScreen — a route change drops everything run A was doing", 
 
       await user.click(screen.getByRole("button", { name: /^Kill/ }));
       const dialog = screen.getByRole("alertdialog");
-      expect(dialog).toHaveAccessibleName("Kill run-b?");
+      expect(dialog).toHaveAccessibleName('Kill "Distinct task B"?');
       await user.click(within(dialog).getByRole("button", { name: "Kill run" }));
       expect(killRunMock).toHaveBeenCalledTimes(1);
       expect(killRunMock).toHaveBeenCalledWith("run-b");
