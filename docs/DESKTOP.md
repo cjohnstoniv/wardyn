@@ -306,6 +306,7 @@ Three more the tier inherits rather than introduces:
 - `set` prints which post-0.6.6 keys it left as the server already had them.
 - That carry-forward is what stops the 5-minute converge on a laptop whose MDM file predates 0.7.2 from silently deleting the org's provider policy on every tick.
 - To CLEAR a block deliberately, write it as `{}` — the only clear form that behaves the same on this door and on the API.
+- To clear a list or text field (`internal_hosts`, `upstream_proxy_no_proxy`, `sign_in_help_text`, `sign_in_help_url`), pass `--clear <field>`: an empty `[]` or `""` in the file is not sent, so it leaves the stored value in place.
 
 ### An org `default_disk_mib` runs UNCAPPED here, with a warning
 
