@@ -362,12 +362,28 @@ describe("PolicyTab — changes grouped by cause", () => {
     );
     await ready();
     const g = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
-    for (const t of ["Wall", "Fence", "Refused, then sent for approval", "4096 MiB", "9000 MiB", "1.5 CPU"]) {
+    for (const t of ["Wall", "Fence", "Any other host: Refused, then sent for approval", "4096 MiB", "9000 MiB", "1.5 CPU"]) {
       expect(within(g).getByText(t)).toBeInTheDocument();
     }
     for (const raw of ["CC2", "CC1", "deny_with_review", "wait_for_review"]) {
       expect(within(g).queryByText(raw)).not.toBeInTheDocument();
     }
+  });
+
+  it("sets a host in monospace and a setting's words in the console's own type (#2926)", async () => {
+    show(
+      view({
+        changes: [
+          change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] }),
+          change({ cause: "limits", field: "first_use_approval", added: ["deny_with_review"] }),
+        ],
+      }),
+    );
+    await ready();
+    const gh = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
+    expect(within(gh).getByText("Any other host: Refused, then sent for approval").className).not.toContain("font-mono");
+    const gw = screen.getByRole("heading", { name: CHANGE_HEADING.workspace }).parentElement!;
+    expect(within(gw).getByText("registry.npmjs.org").className).toContain("font-mono");
   });
 
   it("a change to wait_for_review names the policy's own hold time, not the default", async () => {
@@ -379,7 +395,7 @@ describe("PolicyTab — changes grouped by cause", () => {
     );
     await ready();
     const g = screen.getByRole("heading", { name: CHANGE_HEADING.limitsOwn }).parentElement!;
-    expect(within(g).getByText("Held for up to 45 seconds while someone decides")).toBeInTheDocument();
+    expect(within(g).getByText("Any other host: Held for up to 45 seconds while someone decides")).toBeInTheDocument();
     expect(within(g).queryByText(/30 seconds/)).not.toBeInTheDocument();
   });
 

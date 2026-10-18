@@ -34,6 +34,7 @@ import {
 } from "../../wardyn/policy-document/policy-summary";
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
+import { cn } from "../../ui/utils";
 import { CHANGE_HEADING, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
@@ -163,7 +164,7 @@ function RecordedPolicy({
           <ul className="mt-1 space-y-0.5">
             {g.entries.map((e, i) => (
               <li key={i} className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
-                <span className="min-w-0 break-all font-mono">{e.text}</span>
+                <span className={cn("min-w-0 break-all", e.mono && "font-mono")}>{e.text}</span>
                 {e.mark && <MarkChip mark={e.mark} />}
               </li>
             ))}
@@ -199,7 +200,7 @@ function RecordedPolicy({
 
 /* ---------- changes ---------- */
 
-type Group = { key: string; heading: string; detail: string[]; entries: { text: string; mark?: PolicyMark }[] };
+type Group = { key: string; heading: string; detail: string[]; entries: { text: string; mono: boolean; mark?: PolicyMark }[] };
 
 function MarkChip({ mark }: { mark: PolicyMark }) {
   return mark === "added" ? (
@@ -247,12 +248,20 @@ function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: strin
     groups.set(key, g);
     // The heading of a restart or a disk change already says what happened.
     const plain = c.cause === "restart" || c.cause === "org_disk" || c.cause === "pool_disk";
-    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "added" });
-    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mark: plain ? undefined : "removed" });
+    const mono = !READABLE_FIELDS.has(c.field);
+    for (const text of c.added ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mono, mark: plain ? undefined : "added" });
+    for (const text of c.removed ?? []) g.entries.push({ text: entryText(c.field, text, holdSeconds), mono, mark: plain ? undefined : "removed" });
     g.detail.push(...(c.detail ?? []));
   }
   return [...groups.values()];
 }
+
+// The fields entryText rewrites into the console's words; every other entry is a wire value (a host, a
+// credential id, an app id) and stays in monospace.
+const READABLE_FIELDS = new Set([
+  "min_confinement_class", "first_use_approval", "first_use_hold_seconds", "git_push_any_branch",
+  "allow_all_egress", "auto_stop_after_sec", "resources.cpu_millis", "resources.memory_mib", "resources.disk_mib",
+]);
 
 // Single-value fields arrive as one-entry sets of the raw value; each reads in the
 // console's own words, as the Summary does, never as a wire code like CC2.
@@ -263,7 +272,8 @@ function entryText(field: string, text: string, holdSeconds?: number): string {
     case "min_confinement_class":
       return CC_META[text as ConfinementClass]?.label ?? text;
     case "first_use_approval":
-      return firstUseText(text, holdSeconds);
+      // Named by its setting: bare, "Refused" reads like a host.
+      return `${SUMMARY.otherHost}: ${firstUseText(text, holdSeconds)}`;
     case "first_use_hold_seconds":
       return SUMMARY.held(n);
     case "git_push_any_branch":
