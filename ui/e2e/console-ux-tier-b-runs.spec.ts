@@ -7,7 +7,7 @@
 // wrapping, computed positions). Text-shaped fixes are pinned in vitest next to their screen.
 import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute, sidebarLink } from "./fixtures";
 
 const PHONE = { width: 390, height: 844 };
 
@@ -77,4 +77,17 @@ test.describe("Tier B runs list", () => {
     const [c, e] = [(await composer.boundingBox())!, (await empty.boundingBox())!];
     expect(e.y - (c.y + c.height)).toBeGreaterThanOrEqual(8);
   });
+});
+
+test.describe("Tier B run pages", () => {
+  // #2908: a run's own page keeps its parent item lit, in both views.
+  for (const view of ["user", "admin"] as const) {
+    test(`Run detail (${view} view): the sidebar's Runs item stays highlighted`, async ({ page }) => {
+      await gotoConsole(page, view);
+      const id = await seedRun(page);
+      await navToRoute(page, `${view === "admin" ? "/admin" : ""}/runs/${id}`);
+      await expect(page.getByRole("tab", { name: /Overview/ })).toBeVisible();
+      await expect(sidebarLink(page, "Runs")).toHaveAttribute("aria-current", "page");
+    });
+  }
 });

@@ -24,9 +24,9 @@ import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
 // is only the second, "user" is neither.
-function renderMobileNav(role: Role = "admin", memberMode = false) {
+function renderMobileNav(role: Role = "admin", memberMode = false, at = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[at]}>
       <UnsavedGuardProvider>
         <MobileNav
           pendingApprovals={2}
@@ -475,6 +475,14 @@ describe("MobileNav (below-md nav fallback)", () => {
         screen.getByRole("link", { name: new RegExp(`^${label}`) }),
       ).toBeInTheDocument();
     }
+  });
+
+  it("keeps Runs lit on a run's own page, not only on the list (#2908)", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/runs/run-1");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /^Approvals/ })).not.toHaveAttribute("aria-current");
   });
 
   it("Escape closes the drawer and returns aria-expanded to false", async () => {
