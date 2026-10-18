@@ -248,7 +248,8 @@
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
-| **v0.10** | The New Run items marked Coming soon; see [below](#v010-scope). |
+| **v0.10** | **Developer sandboxes**: desktop machines with a real browser inside nested walls, plus the New Run items marked Coming soon; see [below](#v010-scope). |
+| **v0.10.x** | The developer-sandbox follow-ons behind flags: macOS, Windows, the local window, GPU desktops, fork, personal walls and agent rules; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 
@@ -274,7 +275,42 @@ What 0.9.3 adds to the runners (the release candidates are in the Shipped table)
 
 ### v0.10 scope
 
-New Run shows these as Coming soon in 0.9.
+- **The flagship is developer sandboxes** (epic #2944).
+- A developer, or an agent working for one, gets a real machine: a desktop, a real browser, their tools.
+- It is a governed sandbox inside nested walls. Each layer can only narrow: the organisation's outer limits, then teams, the person, the sandbox, and the agent.
+- Credentials stay out wherever Wardyn can broker them. Where one must enter, such as a sign-in inside a desktop, it is scoped, short-lived and audited.
+
+**0.10.0, the core:**
+
+| Area | Item | Issue |
+|---|---|---|
+| Walls | Organisation outer walls, off until turned on, with a dry-run report | #2945 |
+| Walls | Walls bind super admins; the admin token is an audited break-glass | #2946 |
+| Walls | Every limit names the layer that set it and a contact | #2951 |
+| Walls | A final seal after every late host addition | #2952 |
+| Machines | Linux desktop VM sandboxes | #2953 |
+| Machines | The proxy is the VM's only network, proved per guest OS | #2956 |
+| Machines | A governed local-model endpoint for the person's own GPU | #2957 |
+| Experience | Open desktop in the console | #2962 |
+| Experience | Needs you: the agent pauses, the person takes over and hands back | #2963 |
+| Controls | Clipboard and file transfer per direction | #2967 |
+| Controls | Desktop session recording | #2968 |
+| Controls | Sign-ins inside a desktop, in separate person and agent profiles | #2972 |
+| Process | Spikes and mock-first designs | #2973, #2974 |
+
+**0.10.x, behind flags:**
+
+| Item | Issue |
+|---|---|
+| macOS sandboxes on company-managed Macs, proved by an MDM device certificate | #2954, #2975 |
+| Windows sandboxes from org-supplied images under a licence pool | #2955 |
+| Laptop sandboxes in a local native window | #2961 |
+| GPU in container sandboxes, and an opt-in GPU desktop for Linux VMs | #2958, #2959 |
+| Snapshots, fork, warm pools and sleep on disconnect | #2960 |
+| Per-setting delegation, personal walls, agent rules, place rules | #2947, #2948, #2949, #2950 |
+| Preview URLs, in-browser approvals, action gates, watermark, browser lock-down, Record Mode for desktops | #2965, #2964, #2971, #2969, #2970, #2966 |
+
+**Also in 0.10:** the New Run items marked Coming soon in 0.9.
 
 | Item | Issue |
 |---|---|
