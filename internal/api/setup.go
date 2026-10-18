@@ -398,7 +398,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := s.approvalNotifyCheck(ctx); ok {
 		checks = append(checks, chk)
 	}
-	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
+	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture, s.cfg.DisableGitPATBroker))
 
 	// github_ref_ruleset: the only row that leaves the machine. Gated on the App
 	// being configured, cached, short-timeout, and never worse than "warn" — see
