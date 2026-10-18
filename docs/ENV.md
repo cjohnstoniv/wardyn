@@ -2309,7 +2309,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VERSION` | string | (unset = newest release) | `install.sh` only: which release the one-line installer resolves, e.g. `v0.6.6`. Unset asks the GitHub releases API |
 | `WARDYN_HOME` | string (path) | `~/.wardyn` (`~/.<WARDYN_NS>`) | `install.sh` only: where the one-line install puts `.env`, the compose file and the data. Re-running the installer at a newer version reads the same directory — that is the upgrade path ([OPERATIONS.md](OPERATIONS.md#upgrading-a-one-line-install)) |
 | `WARDYN_PORT` | int | `8080` | `install.sh` only: the loopback host port the one-line install publishes the console on. It is written once, as `WARDYN_UP_PORT` in `.env`; an upgrade re-run deliberately does **not** rewrite the ports, so change the port in `.env` rather than here |
-| `WARDYN_DEFAULT_POLICY_AUTO` | bool | (unset) | **not operator-settable — an internal marker, not a knob.** [`scripts/up.sh`](../scripts/up.sh) writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen. [Details](#wardyn_default_policy_auto) |
+| `WARDYN_DEFAULT_POLICY_AUTO` | string | (unset) | **not operator-settable — an internal marker, not a knob.** [`scripts/up.sh`](../scripts/up.sh) writes the policy path it auto-picked into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY`; `0` once an explicit override or a hand edit is seen. [Details](#wardyn_default_policy_auto) |
 | `WARDYN_INSTALL_IMAGE` | string | `ghcr.io/cjohnstoniv/wardynd:latest` | [`deploy/desktop/install.sh`](../deploy/desktop/install.sh) only: the `wardynd` image it runs `-gen-age-key` against to mint a new device's `age.key`. Set it to a pinned digest or a corporate mirror ref. [Details](#wardyn_install_image) |
 
 ### `WARDYN_KATA_VERSION`
@@ -2321,8 +2321,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_DEFAULT_POLICY_AUTO`
 
 - **Not operator-settable — an internal marker, not a knob.**
-- [`scripts/up.sh`](../scripts/up.sh) writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen.
-- Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand.
+- [`scripts/up.sh`](../scripts/up.sh) writes the policy path it auto-picked into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY`; `0` once an explicit `WARDYN_DEFAULT_POLICY` override or a hand edit is seen.
+- Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand: it re-picks only while the value still equals the recorded path, so editing the line keeps your value.
+- A `1` written by an older release counts as ours only while the value is one of the three paths `up` can pick.
 - Including a model path `host_llm_key_present` cannot see in THIS process's env at all (a credential connected through the UI).
 - `up` asks the running daemon's own `/setup/status` `llm_ready` for that, not just its own env.
 
