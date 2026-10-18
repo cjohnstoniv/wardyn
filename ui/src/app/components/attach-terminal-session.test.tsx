@@ -106,6 +106,7 @@ class FakeWebSocket {
 import { AttachTerminal } from "./attach-terminal";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { HttpError } from "../lib/api/core";
+import { OperatorProvider } from "./wardyn/operator-context";
 import { runs } from "../lib/api/runs";
 import { ATTACH_CAP_REASON } from "../lib/run-entry";
 import { aheadByHours } from "../lib/test-clock";
@@ -414,5 +415,54 @@ describe("AttachTerminal — a handshake refused on the direct lane", () => {
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(screen.queryByText(CAP)).toBeNull();
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// A member (no cookie lane) mints a ticket on every connect. A mint that fails because the network or the daemon is
+// down is the same drop a closed socket is: it spends the reconnect budget and ends on Reconnect, not on a red
+// error with no way back but a reload.
+describe("AttachTerminal — a ticket mint that fails on the ticket lane", () => {
+  beforeEach(() => {
+    stubTerminalEnv();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const member = () =>
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" />
+      </OperatorProvider>,
+    );
+
+  it.each([
+    ["no network", () => new TypeError("Failed to fetch")],
+    ["a 503 while the daemon restarts", () => new HttpError(503, "unavailable")],
+  ])("%s: retries within the budget and ends on Reconnect", async (_name, failure) => {
+    vi.mocked(runs.attachTicket).mockReset().mockRejectedValue(failure());
+    member();
+    await act(() => vi.advanceTimersByTimeAsync(60000));
+    expect(vi.mocked(runs.attachTicket).mock.calls.length).toBeGreaterThan(1);
+    expect(screen.queryByText(/Could not mint an attach ticket/)).toBeNull();
+    expect(screen.getByRole("button", { name: TERMINAL.RECONNECT })).toBeInTheDocument();
+  });
+
+  it("recovers when the mint answers again", async () => {
+    vi.mocked(runs.attachTicket).mockReset().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue("ticket");
+    member();
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(0);
+    expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1].url).toContain("ticket=ticket");
+  });
+
+  it("a refusal that will not change still ends at once", async () => {
+    vi.mocked(runs.attachTicket).mockReset().mockRejectedValue(new HttpError(404, "run not found"));
+    member();
+    await act(() => vi.advanceTimersByTimeAsync(60000));
+    expect(vi.mocked(runs.attachTicket)).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Could not mint an attach ticket/)).toBeInTheDocument();
   });
 });

@@ -59,6 +59,30 @@ test.describe("Run cockpit terminal", () => {
     await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeVisible();
   });
 
+  // The ticket mint is the first leg of every (re)connect on this lane. A mint the network drops is a drop like a
+  // closed socket: it backs off and tries again, and the terminal comes up without the person reloading.
+  test("a ticket mint the network drops retries and the terminal still comes up", async ({ page }) => {
+    const { id: runId } = await findRunningFixture(page);
+    await stubInteractiveRun(page, runId);
+    let mints = 0;
+    await page.route(`**/api/v1/runs/${runId}/attach/ticket`, (route) => {
+      mints += 1;
+      if (mints <= 2) return route.abort("connectionreset");
+      return route.fulfill({ json: { ticket: "e2e-cockpit-ticket" } });
+    });
+    await stubAttachSocket(page, (_n, ws) => {
+      ws.send(attachModeFrame(true, { principal: "bob@e2e.example" }));
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+
+    const pane = page.getByTestId("run-terminal-pane");
+    await expect(pane.getByText(RUN_COCKPIT.heldBy("bob@e2e.example"))).toBeVisible({ timeout: 20_000 });
+    expect(mints).toBeGreaterThan(2);
+    await expect(pane.getByText(/Could not mint an attach ticket/)).toHaveCount(0);
+  });
+
   test("an in-place promotion on the same socket clears the observer chrome and typed input lands", async ({
     page,
   }) => {
