@@ -357,7 +357,8 @@ test("A2 — the safety meter", async () => {
 
   // Minimal template -> Guarded (CC2 = one medium; small egress + deny_with_
   // review + auto_stop = no higher item).
-  await act(page, dlg.getByRole("button", { name: "Minimal" }));
+  await dlg.getByTestId("policy-template-menu").click();
+  await act(page, page.getByTestId("policy-template-minimal"));
   await expect(meter, "Minimal did not read Guarded — the CC2 medium is not the overall level").toHaveAttribute(
     "data-safety",
     "Guarded",
