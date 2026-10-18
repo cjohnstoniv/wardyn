@@ -833,7 +833,7 @@ const (
 
 	// driveRefusalSubjectUnsupported is unmountable for a sign-in subject no home is derived from
 	// (types.DriveSubjectFoldsOntoASCII); an admin's home override is the remedy. 422 at launch and
-	// preview, 400 at the admin reclaim.
+	// preview, 400 at the admin reclaim, and GET /me's user_drive_unavailable token for the same state.
 	driveRefusalSubjectUnsupported = "drive_subject_unsupported"
 )
 

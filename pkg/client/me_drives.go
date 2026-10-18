@@ -24,8 +24,8 @@ type MeDriveCatalogue struct {
 	// shuts the door for the caller.
 	DeniedByProfile string `json:"denied_by_profile,omitempty"`
 	// Unavailable is why the catalogue could not be answered:
-	// groups_snapshot_stale, user_type_unknown, unavailable or
-	// governance_unavailable (the /me.user_drive_unavailable tokens).
+	// groups_snapshot_stale, user_type_unknown, drive_subject_unsupported,
+	// unavailable or governance_unavailable (the /me.user_drive_unavailable tokens).
 	Unavailable string `json:"unavailable,omitempty"`
 	// PoolChecked is true when runner_pool_id named a pool the caller may use,
 	// so UnavailableReason includes not_in_pool. False for no pool and for one

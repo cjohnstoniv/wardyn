@@ -120,6 +120,8 @@ func driveUnavailableReason(err error) string {
 		return driveUnavailableGroups
 	case errors.Is(err, errUserTypeUnknown):
 		return driveUnavailableUserType
+	case errors.Is(err, errDriveSubjectUnsupported):
+		return driveRefusalSubjectUnsupported
 	case errors.Is(err, errDriveUnmountable):
 		return driveUnavailableUnmountable
 	default:

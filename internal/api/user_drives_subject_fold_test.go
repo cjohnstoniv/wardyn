@@ -52,6 +52,9 @@ func TestResolveUserDrive_SubjectThatFoldsOntoASCIIIsRefused(t *testing.T) {
 		if ref := driveRunError(err); ref == nil || ref.body.Reason != driveRefusalSubjectUnsupported || ref.status != http.StatusUnprocessableEntity {
 			t.Errorf("%s: launch refusal = %+v, want 422 %s", name, ref, driveRefusalSubjectUnsupported)
 		}
+		if got := driveUnavailableReason(err); got != driveRefusalSubjectUnsupported {
+			t.Errorf("%s: GET /me user_drive_unavailable = %q, want %q", name, got, driveRefusalSubjectUnsupported)
+		}
 	}
 
 	// The admin reclaim names its object the same way, so it refuses the same subject.
