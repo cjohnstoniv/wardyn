@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -43,6 +44,37 @@ func TestCapAuditTarget(t *testing.T) {
 	} {
 		if store.CapAuditTarget(ok) != ok {
 			t.Errorf("CapAuditTarget(%q) rewrote a target that is already within the cap", ok)
+		}
+	}
+}
+
+// A multi-byte rune straddling the cap, and a bare invalid byte, both left text
+// Postgres refuses (22021) and the spool replays forever. The capped target must be
+// valid UTF-8 and still carry the marker; a valid target is untouched.
+func TestCapAuditTarget_StaysValidUTF8(t *testing.T) {
+	// 511 ASCII bytes then a 2-byte rune: the cut at byte 512 falls inside it.
+	straddle := strings.Repeat("a", store.MaxAuditTargetLen-1) + "é" + strings.Repeat("b", 64)
+	for name, in := range map[string]string{
+		"rune across the cap": straddle,
+		"3-byte rune across":  strings.Repeat("a", store.MaxAuditTargetLen-1) + "€" + "tail",
+		"bare invalid byte":   "/api/v1/policies/\xff",
+		"invalid and long":    "\xff" + strings.Repeat("a", 2*store.MaxAuditTargetLen),
+	} {
+		got := store.CapAuditTarget(in)
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: CapAuditTarget returned invalid UTF-8: %q", name, got)
+		}
+		if len(got) > store.MaxAuditTargetLen+len(store.AuditTargetTruncatedMarker) {
+			t.Errorf("%s: capped target is %d bytes", name, len(got))
+		}
+		if len(in) > store.MaxAuditTargetLen && !strings.HasSuffix(got, store.AuditTargetTruncatedMarker) {
+			t.Errorf("%s: a cut target must say so", name)
+		}
+	}
+	// A valid target within the cap stays byte-identical, multi-byte or not.
+	for _, ok := range []string{"/api/v1/é/€", strings.Repeat("é", store.MaxAuditTargetLen/2)} {
+		if store.CapAuditTarget(ok) != ok {
+			t.Errorf("CapAuditTarget(%q) rewrote a valid target within the cap", ok)
 		}
 	}
 }

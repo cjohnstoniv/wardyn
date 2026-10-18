@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -19,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
-	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -588,6 +588,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.Attachments, ws.BaseImageID = atts, baseImageID
 	created, err := s.cfg.Store.CreateWorkspace(r.Context(), ws)
+	if errors.Is(err, store.ErrConflict) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken, workspaceNameTakenMsg)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "create workspace", err)
 		return
@@ -633,6 +637,10 @@ func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []typ
 	}
 	return ""
 }
+
+// workspaceEditAttempts bounds how often handleUpdateWorkspace redoes an edit
+// the store refused as stale.
+const workspaceEditAttempts = 3
 
 // handleUpdateWorkspace replaces a workspace's editable identity fields (name,
 // sources, base_image), round-tripping the fetched row so the scan-owned
@@ -683,77 +691,119 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
-	// this GET→mutate→UPDATE can race an async repo-scan upload and
-	// write back a stale profile; identity edits are rare and the remedy is a
-	// re-scan — add an optimistic updated_at guard if it ever bites for real.
-	sourcesChanged := !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
-	stampEgressEdit := false
-	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
-	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
-	// Three-tier: the edited composition upserts+attaches through the library
-	// exactly as create does — the hydrated read makes attachments
-	// authoritative, so they must track every composition edit. existing
-	// (the PRE-edit attachments) carries any per-source Overrides forward by
-	// SourceID — must be read before the next line overwrites
-	// ws.Attachments.
-	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
-	if aerr != nil {
-		writeServerError(w, r, "attach sources", aerr)
+	// This GET→mutate→UPDATE writes the whole row back, so the store applies it
+	// only while updated_at still matches the snapshot read here (ErrWorkspaceStale
+	// below): a run claim, record result or build that landed in between is
+	// never reverted.
+	var (
+		sourcesChanged, imageChanged, resetBuild bool
+		staleImage                               string
+		updated                                  types.Workspace
+		err                                      error
+	)
+	// A concurrent writer of a scoped column (a run claim, a record result, a
+	// build) stamps updated_at between our read and this write, and the store then
+	// refuses the snapshot rather than revert it. The request carries no
+	// precondition and every derived field is recomputed from the row, so redo the
+	// edit on the fresh row; only a writer that keeps winning gets the 409.
+	for attempt := 1; ; attempt++ {
+		resetBuild, staleImage = false, ""
+		sourcesChanged = !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
+		stampEgressEdit := false
+		imageChanged = !baseImageEqual(ws.BaseImage, req.BaseImage)
+		ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
+		// Three-tier: the edited composition upserts+attaches through the library
+		// exactly as create does — the hydrated read makes attachments
+		// authoritative, so they must track every composition edit. existing
+		// (the PRE-edit attachments) carries any per-source Overrides forward by
+		// SourceID — must be read before the next line overwrites
+		// ws.Attachments.
+		atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
+		if aerr != nil {
+			writeServerError(w, r, "attach sources", aerr)
+			return
+		}
+		ws.Attachments, ws.BaseImageID = atts, baseImageID
+		if sourcesChanged {
+			// New CONTENT: everything reviewed against the old sources is stale.
+			// (Tier-1 contracts are untouched — they live on the sources.)
+			//
+			// Profile and Status are NOT reset here: every workspace
+			// reaching this handler now has a non-empty Attachments (upsertAndAttach
+			// always attaches at least the composition floor's ephemeral source), so
+			// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
+			// the fresh sources on every read — a write here is provably discarded
+			// before this request's own response leaves the store.
+			ws.ApprovedEgress = nil
+			ws.Requirements = nil
+			// A session still recording is not "reviewed against the old sources": it
+			// is a live run whose capture lands in this map, so dropping its entry
+			// loses the recording and strands active_run_id.
+			ws.RecordResults = inFlightRecordResults(ws.RecordResults)
+			// Stamp the clear (0055) — asked for here, written by the database. This
+			// handler is the THIRD durable writer of approved_egress, beside the two
+			// scoped setters migration 0055 named. The boot heal
+			// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
+			// approval and its ONLY newer-action guard is egress_edited_at — so a
+			// clear that leaves the stamp untouched is re-widened on the next
+			// restart, silently and fail-OPEN, exactly the loss the column exists
+			// to prevent. The operator changing the composition IS the newer action;
+			// record that it happened.
+			//
+			// The stamp was taken from wardynd's clock here and compared against
+			// approvals.decided_at; both are now the database's own now(), because a
+			// guard that is an inequality between two clocks fails open by exactly
+			// the skew. UpdateWorkspace writes it when told to.
+			stampEgressEdit = true
+		}
+		if sourcesChanged || imageChanged {
+			// The build cache keys on the old profile/base — a different base
+			// image alone invalidates it, but does NOT wipe the contract: in the
+			// three-tier model requirements come from the sources + integrations,
+			// and the wizard persists its step-② image choice through here — a
+			// first-time pick must not destroy the overlay it just helped shape.
+			//
+			// The docker tag this row was pointing at is about
+			// to become unreachable from the store (no run will ever resolve
+			// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
+			// — reclaim it now rather than leaking it forever.
+			// Reclaimed after the row is written (below): an edit that is refused or
+			// retried must not have removed the image the row still points at.
+			staleImage, resetBuild = ws.ImageRef, true
+			ws.ImageRef = ""
+			ws.BuiltProfileHash = ""
+		}
+		updated, err = s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
+		if errors.Is(err, store.ErrWorkspaceStale) && attempt < workspaceEditAttempts {
+			if fresh, gerr := s.cfg.Store.GetWorkspace(r.Context(), id); gerr == nil {
+				if fresh.OwnedBy != ws.OwnedBy {
+					break // the owner changed mid-edit: the authorization above no longer holds, so 409
+				}
+				ws = fresh
+				continue
+			}
+		}
+		break
+	}
+	if err == nil {
+		s.removeStaleImage(r.Context(), staleImage, "")
+		if resetBuild {
+			// Forget what this process remembers about that build: the cleared row
+			// already stops the tracker claiming `done`, but its Error arm is
+			// consulted BEFORE the row, so an edit after a failed build otherwise
+			// reported that build's reason against a composition it never saw.
+			s.builds.drop(id)
+		}
+	}
+	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
 		return
 	}
-	ws.Attachments, ws.BaseImageID = atts, baseImageID
-	if sourcesChanged {
-		// New CONTENT: everything reviewed against the old sources is stale.
-		// (Tier-1 contracts are untouched — they live on the sources.)
-		//
-		// Profile and Status are NOT reset here: every workspace
-		// reaching this handler now has a non-empty Attachments (upsertAndAttach
-		// always attaches at least the composition floor's ephemeral source), so
-		// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
-		// the fresh sources on every read — a write here is provably discarded
-		// before this request's own response leaves the store.
-		ws.ApprovedEgress = nil
-		ws.Requirements = nil
-		ws.RecordResults = nil
-		// Stamp the clear (0055) — asked for here, written by the database. This
-		// handler is the THIRD durable writer of approved_egress, beside the two
-		// scoped setters migration 0055 named. The boot heal
-		// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
-		// approval and its ONLY newer-action guard is egress_edited_at — so a
-		// clear that leaves the stamp untouched is re-widened on the next
-		// restart, silently and fail-OPEN, exactly the loss the column exists
-		// to prevent. The operator changing the composition IS the newer action;
-		// record that it happened.
-		//
-		// The stamp was taken from wardynd's clock here and compared against
-		// approvals.decided_at; both are now the database's own now(), because a
-		// guard that is an inequality between two clocks fails open by exactly
-		// the skew. UpdateWorkspace writes it when told to.
-		stampEgressEdit = true
+	if errors.Is(err, store.ErrWorkspaceStale) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceUpdateConflict, workspaceUpdateConflictMsg)
+		return
 	}
-	if sourcesChanged || imageChanged {
-		// The build cache keys on the old profile/base — a different base
-		// image alone invalidates it, but does NOT wipe the contract: in the
-		// three-tier model requirements come from the sources + integrations,
-		// and the wizard persists its step-② image choice through here — a
-		// first-time pick must not destroy the overlay it just helped shape.
-		//
-		// The docker tag this row was pointing at is about
-		// to become unreachable from the store (no run will ever resolve
-		// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
-		// — reclaim it now rather than leaking it forever.
-		s.removeStaleImage(r.Context(), ws.ImageRef, "")
-		ws.ImageRef = ""
-		ws.BuiltProfileHash = ""
-		// And forget what this process remembers about that build: the
-		// cleared row already stops the tracker claiming `done`, but its Error
-		// arm is consulted BEFORE the row, so an edit after a failed build
-		// otherwise reported that build's reason against a composition it never
-		// saw.
-		s.builds.drop(id)
-	}
-	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
-	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
+	if errors.Is(err, store.ErrConflict) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken, workspaceNameTakenMsg)
 		return
 	}
 	if err != nil {
@@ -799,109 +849,6 @@ func baseImageEqual(a, b *types.WorkspaceBaseImage) bool {
 		return a == b
 	}
 	return a.Kind == b.Kind && a.Image == b.Image && slices.Equal(a.Steps, b.Steps)
-}
-
-// maxApprovedEgress bounds the operator-owned approved-egress list — matches
-// the scanner's SuggestedEgress cap, its only intended feeder.
-const maxApprovedEgress = 64
-
-// handleSetApprovedEgress replaces the workspace's operator-owned approved
-// egress list (PUT semantics: the body is the FULL list; un-approve by
-// omission — idempotent, no per-host delete endpoint needed). These hosts
-// originate from the scanner's content-derived SuggestedEgress — untrusted
-// repo content — so promotion is an explicit operator action, audited, and
-// the list lives OUTSIDE the scan-owned profile blob: a rescan can neither
-// widen nor resurrect it. Plain lowercase dotted hosts only.
-func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request) {
-	type body struct {
-		Domains []string `json:"domains"`
-	}
-	// A host the git broker (or the control plane itself) already
-	// owns is dead by construction as a direct ApprovedEgress entry — dispatch
-	// routes it through the broker/proxy specially, never as a plain allowlist
-	// host, so "approving" one here writes a row a real run's proxy will never
-	// consult. This is the SAME static skip-set promoteSkipHosts applies to the
-	// bulk promote-egress writer (record.go) plus the control-plane's own host
-	// (handlePromoteRecordEgress's selfHost) — this is the LAST writer of
-	// ApprovedEgress that did not share it; reject with the same honest 4xx
-	// the shape validator already uses instead of a silent-toast no-op.
-	// The set itself is deadApprovedEgressHosts (workspaces_canon.go), shared
-	// with the observed-egress panel that produces what gets promoted here.
-	deadHosts := s.deadApprovedEgressHosts()
-	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
-		func(req body) ([]string, string, string) {
-			if len(req.Domains) > maxApprovedEgress {
-				return nil, reasonWorkspaceApprovedEgressInvalid, "too many domains (max 64)"
-			}
-			set := map[string]struct{}{}
-			for _, d := range req.Domains {
-				d = strings.ToLower(strings.TrimSpace(d))
-				if !hostrules.ValidApprovedHost(d) {
-					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
-				}
-				if _, dead := deadHosts[d]; dead {
-					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
-				}
-				set[d] = struct{}{}
-			}
-			return sortedKeys(set), "", ""
-		},
-		// Wrapped, not passed as a method value: the store call must not be
-		// resolved until validation has passed.
-		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceApprovedEgress(ctx, id, doms)
-		},
-		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
-}
-
-// handleSetDeniedEgress replaces the workspace's operator-owned denied-egress
-// list (PUT semantics: the body is the FULL list; un-deny by omission — same
-// idempotent, no-per-host-delete shape as handleSetApprovedEgress). Backs
-// the revocation surface (SetWorkspaceDeniedEgress, store.go): this is
-// the ONLY way to undo a `deny · always` decision once made — including a
-// deny on a model-provider host, which permanently
-// defeats that workspace's credential injection (deny beats allow at the
-// proxy, policy.go), because api.anthropic.com/similar can only ever reach
-// AllowedDomains through modelProviderEgress, never through this handler's own
-// validator. So this route is also the only cure for an ALREADY-bricked
-// workspace, which is exactly why its validator is deliberately narrower than
-// handleSetApprovedEgress's:
-//
-// Do NOT copy handleSetApprovedEgress's deadHosts set here. That set is
-// ALLOW-shaped — git-broker/control-plane hosts a real run's proxy never
-// consults as a plain ApprovedEgress entry, so promoting one is dead weight —
-// and it carries no model-provider guard. Copying it would make this PUT a
-// SECOND, unguarded door to that brick, on the one route whose entire job is
-// to be the escape hatch FROM that brick. So this validates only
-// hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/port/
-// wildcard) and nothing else — deliberately unguarded, on purpose, because a
-// deny-direction guard here would remove the only way to undo an over-broad
-// one.
-func (s *Server) handleSetDeniedEgress(w http.ResponseWriter, r *http.Request) {
-	type body struct {
-		Domains []string `json:"domains"`
-	}
-	scopedWorkspaceWrite(s, w, r, "workspace.egress.deny",
-		func(req body) ([]string, string, string) {
-			if len(req.Domains) > maxApprovedEgress {
-				return nil, reasonWorkspaceDeniedEgressInvalid, "too many domains (max 64)"
-			}
-			set := map[string]struct{}{}
-			for _, d := range req.Domains {
-				d = strings.ToLower(strings.TrimSpace(d))
-				if !hostrules.ValidApprovedHost(d) {
-					return nil, reasonWorkspaceDeniedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
-				}
-				set[d] = struct{}{}
-			}
-			return sortedKeys(set), "", ""
-		},
-		// Wrapped, not passed as a method value: the store call must not be
-		// resolved until validation has passed.
-		func(ctx context.Context, id uuid.UUID, doms []string) (types.Workspace, error) {
-			return s.cfg.Store.SetWorkspaceDeniedEgress(ctx, id, doms)
-		},
-		func(domains []string) map[string]any { return map[string]any{"domains": domains} })
 }
 
 // handleSetWorkspaceLLMCred binds (or clears) the operator-owned model/harness

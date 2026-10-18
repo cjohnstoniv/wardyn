@@ -54,7 +54,9 @@ var isOperatorCensus = map[string]int{
 	// The deployer funnel, admin read projections and display tiers.
 	"setup.go:handleSetupStatus":                   3, // the third gates the substrate_health row: operator-only, so a member poll never probes the substrate
 	"setup_integrations.go:handleListIntegrations": 1,
-	"me.go:handleMe":                               3,
+	// A member's Checks are redacted, so a member poll never probes the image store.
+	"setup_claude_signin_image.go:claudeSignInImageRows": 1,
+	"me.go:handleMe": 3,
 	// Compares stamped tiers: the switch must not change whether a demotion
 	// revokes tokens.
 	"apitokens.go:roleSnapshotDrops": 2,

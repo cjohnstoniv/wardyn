@@ -535,6 +535,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   reaped" to the reaper, but `-1` states the omission was deliberate on a run
   like this, not a policy that simply forgot the field (see
   [`examples/policies/remote-workspace.yaml`](../examples/policies/remote-workspace.yaml)).
+- That holds only under a ceiling with no positive `auto_stop_after_sec` (or for an admin). A member under the shipped default ceiling is cut to 3600s unless the operator raises it, as the Channel budget notes below.
 
 - If the tool's own agent commits and pushes under a branch name it picked itself — not the `wardyn/<run-id>/*` namespace `agent-run` sets up —
   - the git-broker's default confinement refuses that push with no way to tell the external tool why.

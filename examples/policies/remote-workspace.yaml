@@ -28,7 +28,10 @@ first_use_approval: wait_for_review
 
 min_confinement_class: CC1
 
-# Never reaped. The reaper's idle clock is Wardyn's own view of activity
+# Never reaped, under a ceiling with no positive auto_stop_after_sec (an admin's
+# run, or a ceiling you have set to 0). A member under the shipped default
+# ceiling (default.json, 3600) is cut to 3600s unless the operator raises it.
+# The reaper's idle clock is Wardyn's own view of activity
 # (attach/egress); it has no way to see a human thinking inside the external
 # tool's own UI, or that tool's own agent working for hours between calls
 # that touch the sandbox at all — both would otherwise read as "idle".

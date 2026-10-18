@@ -347,3 +347,55 @@ func TestWebhookConfig_TimeoutDefaultUnchanged(t *testing.T) {
 		t.Fatalf("WebhookConfig{}.withDefaults().Timeout = %q, want the production 15s default", got.Timeout)
 	}
 }
+
+// stuckCloseWriter is a syslogWriter whose Info and Close both wait for release:
+// log/syslog.Writer closes under the mutex a blocked write holds.
+type stuckCloseWriter struct{ release chan struct{} }
+
+func (w *stuckCloseWriter) Info(string) error { <-w.release; return nil }
+func (w *stuckCloseWriter) Close() error      { <-w.release; return nil }
+
+// A collector that stopped reading used to hold Close for as long as the queue
+// took to time out write by write, and then on the writer's lock, so wardynd's
+// shutdown never reached the sinks closed after it.
+func TestSyslogSink_CloseIsBoundedAgainstAStalledCollector(t *testing.T) {
+	prevWrite := setSyslogWriteTimeout(20 * time.Millisecond)
+	prevClose := syslogCloseTimeoutNS.Swap(int64(300 * time.Millisecond))
+	t.Cleanup(func() { setSyslogWriteTimeout(prevWrite); syslogCloseTimeoutNS.Store(prevClose) })
+
+	w := &stuckCloseWriter{release: make(chan struct{})}
+	s := newSyslogSinkWith(w, "tcp", "collector.invalid:514")
+	t.Cleanup(func() { close(w.release) })
+	for i := 0; i < 100; i++ {
+		if err := s.Emit(context.Background(), makeSyslogEvent("syslog.close.stalled")); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Error("Close returned nil although the connection never closed")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close was still waiting on the stalled collector after 3s; it must give up at its bound")
+	}
+	if s.Drops() == 0 {
+		t.Error("the events Close gave up on were not counted as drops")
+	}
+	// A second Close, after the bound was hit, must not panic.
+	go func() { closed <- s.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a second Close did not return")
+	}
+}
+
+func TestSyslogCloseTimeout_ProductionValueUnchanged(t *testing.T) {
+	if got := time.Duration(syslogCloseTimeoutNS.Load()); got != SyslogCloseTimeout {
+		t.Fatalf("syslog close bound = %v, want %v", got, SyslogCloseTimeout)
+	}
+}

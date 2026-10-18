@@ -145,8 +145,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// Every replica registers every sweep this install runs, whether or not it
 	// ever holds the sweeper lock, so a follower can see a stopped leader.
 	_, recSweepable := recStore.(recordingSweepable)
+	approvalExpiry := approvalExpirySweepInterval(*f.approvalExpiryInterval, *f.approvalExpiryAfter)
 	registerSweepHealth(ticks, sweepInstall{
-		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
+		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: approvalExpiry,
 		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
 		runOutputPersist: *f.runOutputPersist,
 		api:              srv.HealthSweeps(),
@@ -182,13 +183,13 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
 	}
 
-	if *f.approvalExpiryInterval > 0 {
+	if approvalExpiry > 0 {
 		leaderGo(rootCtx, leader, "approval.sweeper", func(ctx context.Context) {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv, ticks)
+			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, approvalExpiry, *f.approvalExpiryAfter, srv, ticks)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
-			slog.Duration("interval", *f.approvalExpiryInterval),
+			slog.Duration("interval", approvalExpiry),
 			slog.Duration("after", *f.approvalExpiryAfter),
 		)
 	}

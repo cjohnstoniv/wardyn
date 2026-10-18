@@ -138,6 +138,29 @@ func recordResultsMap(ws types.Workspace) map[string]RecordTaskResult {
 	return out
 }
 
+// inFlightRecordResults is raw reduced to the entries still `recording`, nil when
+// there are none. A sources edit clears the reviewed results but must leave a live
+// session's marker: the capture that settles it is written under that entry.
+func inFlightRecordResults(raw json.RawMessage) json.RawMessage {
+	var all map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &all) != nil {
+		return nil
+	}
+	keep := map[string]json.RawMessage{}
+	for k, v := range all {
+		var e struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(v, &e) == nil && e.Status == recordStatusRecording {
+			keep[k] = v
+		}
+	}
+	if len(keep) == 0 {
+		return nil
+	}
+	return mustJSON(keep)
+}
+
 // putRecordResult upserts one task's entry via the store's ATOMIC per-key
 // jsonb merge (never a whole-map read-modify-write, so writers of different
 // tasks can't lose each other). onlyIfStatus, when non-empty, makes the write
@@ -176,6 +199,16 @@ func recordSessionKey(name string) string {
 		s = strings.Trim(s[:48], "-")
 	}
 	return s
+}
+
+// hasRecordingEntry reports whether a `recording` entry in ws belongs to runID.
+func hasRecordingEntry(ws types.Workspace, runID uuid.UUID) bool {
+	for _, res := range recordResultsMap(ws) {
+		if res.RunID == runID && res.Status == recordStatusRecording {
+			return true
+		}
+	}
+	return false
 }
 
 // repairStaleWorkspaceRuns settles any import run stranded by a terminal-transition
@@ -229,6 +262,17 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 					s.reconcileWorkspaceRun(ctx, *src.ActiveRunID)
 					repaired = true
 				}
+			}
+		}
+	}
+	// Pointer strand: the in-flight run has terminated and no `recording` entry
+	// belongs to it, so no reconcile will ever clear the pointer (a sources edit
+	// that dropped the entry, a swallowed clear on a store error) and the
+	// workspace could never be deleted. The clear is a CAS on that run id.
+	if ws.ActiveRunID != nil && ws.Status != types.WorkspaceScanning && !hasRecordingEntry(ws, *ws.ActiveRunID) {
+		if run, err := s.cfg.Store.GetRun(ctx, *ws.ActiveRunID); err == nil && isTerminalRunState(run.State) {
+			if cleared, cerr := s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, *ws.ActiveRunID); cerr == nil && cleared {
+				repaired = true
 			}
 		}
 	}

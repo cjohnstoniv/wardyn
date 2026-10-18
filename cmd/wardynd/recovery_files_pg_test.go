@@ -133,6 +133,60 @@ func TestRecoveryFiles_GoodPGAndFSRecordingsPass(t *testing.T) {
 	}
 }
 
+// An image without asciinema stores its plain log as the cast, and an erasure leaves an empty fence
+// marker under .erased/: neither is a damaged recording, and neither may fail an intact set.
+func TestRecoveryFiles_PlainLogsAndErasureFencesDoNotFailAnIntactSet(t *testing.T) {
+	rg := newRehearseRig(t)
+	rg.addCasts(map[string]string{"run-good": goodCast, "run-plain": "plain log, no asciinema\n"})
+	r := rg.runSet(rg.stagedSet())
+	if r.err != nil {
+		t.Fatalf("pg store: %v\n%s", r.err, r.out)
+	}
+	if c, _ := r.check("recordings"); c.Result != resultPass || c.Counts["checked"] != 2 || c.Counts["plain_log"] != 1 {
+		t.Errorf("pg recordings = %+v; want both checked and passing, one counted as a plain log", c)
+	}
+
+	dir := rg.stagedSetWith("fs", func(dir string) {
+		stage(t, dir, "recordings/run-a.cast", goodCast)
+		stage(t, dir, "recordings/run-plain.cast", "plain log, no asciinema\n")
+		stage(t, dir, "recordings/.erased/"+uuid.NewString()+".cast", "")
+	})
+	r = rg.runSet(dir)
+	if r.err != nil {
+		t.Fatalf("fs store: %v\n%s", r.err, r.out)
+	}
+	if c, _ := r.check("recordings"); c.Result != resultPass || c.Counts["checked"] != 2 || c.Counts["plain_log"] != 1 {
+		t.Errorf("fs recordings = %+v; want the two recordings checked (one a plain log) and the fence marker left out", c)
+	}
+}
+
+// The plain-log allowance is not a way past damage: an empty body, or one that starts with a NUL
+// byte, still fails in both stores.
+func TestRecoveryFiles_EmptyAndNulCastsStillFail(t *testing.T) {
+	rg := newRehearseRig(t)
+	rg.addCasts(map[string]string{"run-good": goodCast, "run-empty": "", "run-nul": "\x00\x00garbage"})
+	r := rg.runSet(rg.stagedSet())
+	requireExit(t, r.err, exitRehearseFail)
+	c, _ := r.check("recordings")
+	got := strings.Join(c.Failing, "\n")
+	if c.Result != resultFail || !strings.Contains(got, "run-empty") || !strings.Contains(got, "run-nul") || strings.Contains(got, "run-good") {
+		t.Errorf("pg recordings = %+v; want the empty and NUL casts failing", c)
+	}
+
+	dir := rg.stagedSetWith("fs", func(dir string) {
+		stage(t, dir, "recordings/run-a.cast", goodCast)
+		stage(t, dir, "recordings/run-empty.cast", "")
+		stage(t, dir, "recordings/run-nul.cast", "\x00\x00garbage")
+	})
+	r = rg.runSet(dir)
+	requireExit(t, r.err, exitRehearseFail)
+	c, _ = r.check("recordings")
+	got = strings.Join(c.Failing, "\n")
+	if c.Result != resultFail || !strings.Contains(got, "run-empty") || !strings.Contains(got, "run-nul") {
+		t.Errorf("fs recordings = %+v; want the empty and NUL casts failing", c)
+	}
+}
+
 func TestRecoveryFiles_ATruncatedFSCastFailsNamingIt(t *testing.T) {
 	rg := newRehearseRig(t)
 	dir := rg.stagedSetWith("fs", func(dir string) {

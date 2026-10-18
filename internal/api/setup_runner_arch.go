@@ -49,7 +49,10 @@ func (s *Server) runnerArchImagesRow(ctx context.Context) (SetupCheck, bool) {
 // the text says it cannot tell.
 func describeLocalImage(ctx context.Context, describe func(context.Context, string) (string, error), ref string) string {
 	if describe != nil {
-		if d, err := describe(ctx, ref); err == nil {
+		// Bounded like every other substrate read on the setup page.
+		dctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+		defer cancel()
+		if d, err := describe(dctx, ref); err == nil {
 			return d
 		}
 	}

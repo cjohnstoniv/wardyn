@@ -54,6 +54,20 @@ func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after 
 	}
 }
 
+// approvalExpirySweepInterval is the interval the approval sweeper runs at: the
+// configured one, or 0 (the sweeper stays off) when after is not positive. A
+// zero or negative age would put the cutoff at or past now and expire every
+// PENDING approval on the first tick, while the sandbox is told the ceiling is
+// the 24h default (approvalExpiryCeiling), so it would wait on a dead request.
+func approvalExpirySweepInterval(interval, after time.Duration) time.Duration {
+	if interval > 0 && after <= 0 {
+		slog.Warn("wardynd: WARDYN_APPROVAL_EXPIRY_AFTER is zero or negative; the approval expiry sweeper is off and PENDING approvals never expire on their own",
+			slog.Duration("after", after))
+		return 0
+	}
+	return interval
+}
+
 // approvalSweepTick is one approval expiry sweep, returning the sweep's error.
 func approvalSweepTick(ctx context.Context, st approval.Store, after time.Duration, m reauthExpiryCounter) error {
 	n, byKind, err := approval.ExpireStaleByKind(ctx, st, after)

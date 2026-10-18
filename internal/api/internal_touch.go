@@ -24,13 +24,12 @@ const touchDebounce = lifecycle.TouchDebounce
 // ponytail: in-process only; per-replica debounce is fine because the singleton
 // control plane is a documented constraint (docs/OPERATIONS.md).
 //
-// ruleSource excludes the ONE decision that is not real agent activity:
-// credential:reauth-timeout is the proxy's own signal that a re-auth hold's
-// WAIT ran out with nobody there (ruleSourceCredentialReauthTimeout, mirrored
-// from internal/egress/proxy). A timeout reports that nobody answered, not
-// that the agent did something, so it should not restart the idle clock.
+// ruleSource is judged by agentActivityDecision, the one predicate the pause
+// clock and the runner-side Activity flag use too: a re-auth hold timing out
+// and the toolgate's poll of an approval it is blocked on are waiting, not the
+// agent doing something, so neither restarts the idle clock.
 func (s *Server) shouldTouch(runID uuid.UUID, ruleSource string) bool {
-	if ruleSource == ruleSourceCredentialReauthTimeout {
+	if !agentActivityDecision(ruleSource) {
 		return false
 	}
 	now := time.Now()
