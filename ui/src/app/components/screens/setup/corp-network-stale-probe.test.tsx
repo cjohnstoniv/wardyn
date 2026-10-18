@@ -78,7 +78,7 @@ describe("a saved change drops the verdict it made stale", () => {
       tab: "egress",
     });
     await user.click(screen.getByText("a.example.com"));
-    setField(await screen.findByLabelText("To"), "mirror-typo.corp.internal");
+    setField(await screen.findByLabelText("To", { selector: "#eg-edit-to" }), "mirror-typo.corp.internal");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ redirectProbes: {} }));
   });
