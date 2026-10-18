@@ -34,6 +34,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
@@ -308,7 +309,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   const caps = useMyCapabilities(!operator);
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
-  const [longestList, setLongestList] = React.useState(0);
+  const [decidedLongest, setDecidedLongest] = React.useState(0);
+  // The decided history is fetched when the Decided tab is open, not on every visit to the page.
+  const [decidedStatus, setDecidedStatus] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
+  // The list is asked for in the view the page is in, the scope the nav badge counts: the User view is
+  // the person's own runs' approvals, the Admin view everyone's.
+  const view = useConsoleMode();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // ?tab=decided lands on the Decided tab — the audit trail's "Released by
   // approval" chip links here for an approval that has, by construction,
@@ -333,33 +339,50 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // CANCELLED is fetched for the same reason (B4): a run's terminal transition
   // moves its PENDING approvals there, and a row that left the pending queue
   // without appearing in the decided one would just vanish.
-  const fetchAll = React.useCallback(() => {
+  const fetchPending = React.useCallback(
+    () => api.listApprovals("PENDING", "", view).then(setPendingItems),
+    [view],
+  );
+  const fetchDecided = React.useCallback(() => {
     return Promise.all([
-      api.listApprovals("PENDING"),
-      api.listApprovals("APPROVED"),
-      api.listApprovals("DENIED"),
-      api.listApprovals("EXPIRED"),
-      api.listApprovals("CANCELLED"),
-    ]).then(([pending, approved, denied, expired, cancelled]) => {
-      setPendingItems(pending);
+      api.listApprovals("APPROVED", "", view),
+      api.listApprovals("DENIED", "", view),
+      api.listApprovals("EXPIRED", "", view),
+      api.listApprovals("CANCELLED", "", view),
+    ]).then(([approved, denied, expired, cancelled]) => {
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
       // complete lists. Decided history only grows, so this one does get hit.
-      setLongestList(Math.max(
-        pending.length, approved.length, denied.length, expired.length, cancelled.length,
-      ));
+      setDecidedLongest(Math.max(approved.length, denied.length, expired.length, cancelled.length));
       setDecidedItems([...approved, ...denied, ...expired, ...cancelled].sort(
         (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
       ));
     });
-  }, []);
+  }, [view]);
+  // The tab the poll and a decision refresh: the pending queue always, the decided history only while it is
+  // the one on screen (#2487: it is up to four capped lists, and only grows).
+  const filterRef = React.useRef(filter);
+  filterRef.current = filter;
+  const fetchAll = React.useCallback(
+    () => (filterRef.current === "decided" ? Promise.all([fetchPending(), fetchDecided()]).then(() => undefined) : fetchPending()),
+    [fetchPending, fetchDecided],
+  );
+  const loadDecided = React.useCallback(() => {
+    setDecidedStatus((st) => (st === "ready" ? st : "loading"));
+    fetchDecided()
+      .then(() => setDecidedStatus("ready"))
+      .catch(() => setDecidedStatus((st) => (st === "ready" ? st : "error")));
+  }, [fetchDecided]);
+  React.useEffect(() => {
+    if (filter === "decided") loadDecided();
+  }, [filter, loadDecided]);
 
   const load = React.useCallback(() => {
     setStatus("loading");
-    fetchAll()
+    fetchPending()
       .then(() => setStatus("ready"))
       .catch(() => setStatus("error"));
-  }, [fetchAll]);
+  }, [fetchPending]);
   React.useEffect(load, [load]);
 
   // A HITL queue is blocking — newly-arrived requests must surface
@@ -468,7 +491,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.STALE_GROUPS}</p>
       )}
 
-      <TruncatedNote count={longestList} cap={LIST_LIMIT} />
+      <TruncatedNote count={Math.max(pendingItems.length, decidedLongest)} cap={LIST_LIMIT} />
 
       {/* S10: replaces the sentence this design falsifies (§7.8
           TOOL_CALL_NOTE) — an Azure DevOps escalation IS enforced, held at
@@ -532,6 +555,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             ))}
           </div>
         )
+      ) : decidedStatus === "error" ? (
+        <div className="rounded-xl border border-border bg-card">
+          <ErrorState onRetry={loadDecided} />
+        </div>
+      ) : decidedStatus !== "ready" ? (
+        <div className="rounded-xl border border-border bg-card">
+          <TableSkeleton rows={4} cols={3} />
+        </div>
       ) : decidedItems.length === 0 ? (
         <div className="rounded-xl border border-border bg-card">
           <EmptyState

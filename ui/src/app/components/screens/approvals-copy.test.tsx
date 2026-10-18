@@ -91,24 +91,24 @@ describe("ApprovalsScreen — copy + EXPIRED inclusion", () => {
     });
   });
 
-  it("fetches CANCELLED approvals on load and shows them in the decided view", async () => {
+  it("fetches CANCELLED approvals when the Decided tab opens and shows them", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <MemoryRouter>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("CANCELLED"));
     const decidedTab = await screen.findByRole("tab", { name: /decided/i });
     await user.click(decidedTab);
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("CANCELLED"));
     await waitFor(() => expect(screen.getByText(/run_cancelled_77/)).toBeInTheDocument());
     // The badge reads the ONE copy key, not a title-cased wire value.
     expect(screen.getByText(APPROVAL.STATE_CANCELLED)).toBeInTheDocument();
   });
 
-  it("fetches EXPIRED approvals on load", async () => {
+  it("fetches EXPIRED approvals when the Decided tab opens", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
