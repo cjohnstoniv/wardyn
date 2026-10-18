@@ -15,7 +15,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, listenForOtherTabs, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuth, probeAuthWithReason, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
@@ -439,10 +439,11 @@ export default function App() {
   React.useEffect(() => {
     let active = true;
     const hadToken = getToken() !== null;
-    void probeAuth().then((probe) => {
+    void probeAuthWithReason().then(({ probe, reason }) => {
       if (!active) return;
       if (probe === "unreachable") setUnreachable(true);
-      if (probe === "unauthed" && hadToken) setSignedOut(true);
+      // A cold load whose session ended says so, as a rejected stored token does.
+      if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {

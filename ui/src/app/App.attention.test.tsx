@@ -19,7 +19,7 @@
 // still holds: that file's own H1/L4/M2/M3 suite (ui-setup-shell) stubs
 // RunsScreen entirely (`vi.mock("./components/screens/runs", ...)`), and this
 // file needs the REAL RunsScreen mounted at /runs — the two mock sets cannot
-// share one file. This one instead mocks `./lib/api/core` (probeAuth) and
+// share one file. This one instead mocks `./lib/api/core` (probeAuth, probeAuthWithReason) and
 // `./lib/use-poll` (a recorder, not a real ticking interval) so App() reaches
 // "authed" without a real network and its pollers' registrations are
 // inspectable directly.
@@ -29,7 +29,11 @@ import { MemoryRouter } from "react-router-dom";
 
 vi.mock("./lib/api/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api/core")>();
-  return { ...actual, probeAuth: vi.fn().mockResolvedValue("authed") };
+  return {
+    ...actual,
+    probeAuth: vi.fn().mockResolvedValue("authed"),
+    probeAuthWithReason: vi.fn().mockResolvedValue({ probe: "authed", reason: "" }),
+  };
 });
 // The real RunsScreen mounted at /runs now calls listRunsFiltered — a real
 // fetch would just throw (no backend in this test); mocked to a quiet empty

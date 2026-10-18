@@ -417,7 +417,8 @@ export async function wfetch(
   if (path === "/me" && method === "GET" && (res.status === 200 || res.status === 401)) noteIdentityRead(startedAt);
 
   if (res.status === 401) {
-    await drainBody(res);
+    // The body is read, which also completes the request (drainBody); the reason rides the error.
+    const { reason } = await errEnvelope(res);
     // Reconciliation can invalidate /me before its 401 reaches the shell.
     // A refused write still belongs to its caller, even after an auth change.
     const stale = path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted);
@@ -440,7 +441,7 @@ export async function wfetch(
       if (token && getToken() === token) setToken(null);
       _unauthorized?.(refused);
     }
-    throw new HttpError(401, "Unauthorized");
+    throw new HttpError(401, "Unauthorized", reason);
   }
   if (res.status === 403) _forbidden?.();
   return res;
@@ -607,10 +608,20 @@ export function unwrapList<T>(payload: unknown): T[] {
 //                 credentials, and must never be reported as one.
 export type AuthProbe = "authed" | "unauthed" | "unreachable";
 
+// The 401 reasons (internal/api/auth_status.go) that mean a session this browser held has ended; the
+// cold load says so (App.tsx) instead of showing a bare sign-in screen.
+const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"]);
+export const isSessionEnded = (reason: string): boolean => SESSION_ENDED_REASONS.has(reason);
+
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the
 // response status, so it asks for a single row (?limit=1) rather than pulling
 // the whole runs list just to discard it.
 export async function probeAuth(): Promise<AuthProbe> {
+  return (await probeAuthWithReason()).probe;
+}
+
+/** probeAuth plus the reason a 401 named ("" when it named none, or the probe was not a 401). */
+export async function probeAuthWithReason(): Promise<{ probe: AuthProbe; reason: string }> {
   try {
     const res = await wfetch(withLimit("/runs", 1), { method: "GET" });
     // wfetch has already thrown HttpError(401) for a real rejection, so a
@@ -622,10 +633,10 @@ export async function probeAuth(): Promise<AuthProbe> {
     // drainBody). This one fires on EVERY cold document load, so an unread
     // body here would leak on every route and in every role.
     await drainBody(res);
-    return verdict;
+    return { probe: verdict, reason: "" };
   } catch (e) {
-    if (e instanceof HttpError && e.status === 401) return "unauthed";
-    return "unreachable";
+    if (e instanceof HttpError && e.status === 401) return { probe: "unauthed", reason: e.reason };
+    return { probe: "unreachable", reason: "" };
   }
 }
 

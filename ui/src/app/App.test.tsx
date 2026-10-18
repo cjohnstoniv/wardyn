@@ -125,7 +125,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 // mid-session case can wait for the console to be genuinely authed and
 // rendered before ever letting the 401 land. `probeUnauthed` (cold-mount
 // case) needs no such control: nothing has rendered yet either way.
-function mockFetch(opts: { probeUnauthed?: boolean; me?: typeof ME_ADMIN; on401?: string }): {
+function mockFetch(opts: { probeUnauthed?: boolean; probeReason?: string; me?: typeof ME_ADMIN; on401?: string }): {
   fetch: Mock;
   resolve401: () => void;
 } {
@@ -134,6 +134,7 @@ function mockFetch(opts: { probeUnauthed?: boolean; me?: typeof ME_ADMIN; on401?
     const u = String(url);
     if (pending && opts.on401 && u.includes(opts.on401)) return pending.promise;
     if (u.includes("/runs?limit=1") && !u.includes("limit=1000")) {
+      if (opts.probeReason) return Promise.resolve(jsonResponse(401, { error: "your session expired — sign in again", reason: opts.probeReason }));
       return Promise.resolve(jsonResponse(opts.probeUnauthed ? 401 : 200, []));
     }
     if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
@@ -173,6 +174,15 @@ describe("App — the sign-in screen's notice", () => {
     await screen.findByText("Admin token", { exact: true });
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
+  });
+
+  // #2110: an SSO session the server named as ended (expired, cut on another device) is a session
+  // this browser held too, though no token is stored; a 401 that names nothing stays a first visit.
+  it("a cold-mount 401 that names an ended session shows the signed-out warning", async () => {
+    vi.stubGlobal("fetch", mockFetch({ probeReason: "expired_session" }).fetch);
+    renderApp();
+    await screen.findByText("Admin token", { exact: true });
+    expect(await screen.findByText(SESSION_ENDED_REASON)).toBeInTheDocument();
   });
 
   // #483: a stored token refused on load is a session this browser held — the
