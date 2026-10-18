@@ -138,6 +138,17 @@ scripts/stage-agent-binary.sh claude-code            # downloads + checksum-veri
 make agent-images-core CLAUDE_INSTALL=native
 ```
 
+The script stages the binary for **this host's** architecture. To stage the other one, for
+example the arm64 binary from an amd64 build host, pass `--arch amd64|arm64` or set
+`WARDYN_AGENT_ARCH` (`x86_64` and `aarch64` also work). The flag beats the variable, and
+the variable beats `uname -m`. Checksum verification is unchanged: the release manifest
+already lists a sha256 per platform. The build refuses a staged binary whose architecture
+differs from the image's target and names the `--arch` fix.
+
+```
+scripts/stage-agent-binary.sh claude-code <version> --arch arm64
+```
+
 **codex-cli** (`CODEX_INSTALL=native`): **staged-only** — codex has no
 Wardyn-verified public download contract, so the native path consumes a host-staged
 binary and fails loudly if it's absent (rather than guessing a URL):
@@ -147,6 +158,9 @@ WARDYN_CODEX_BIN_URL=<a native codex binary you trust> WARDYN_CODEX_BIN_SHA256=<
   scripts/stage-agent-binary.sh codex-cli
 make agent-images-core CODEX_INSTALL=native
 ```
+
+`--arch` is accepted for codex-cli too, but it only labels the log line. The URL is yours,
+so it must already point at the matching binary.
 
 Both staged binaries (`deploy/images/{claude-code/claude-bin,codex-cli/codex-bin}`)
 are gitignored — never commit them.
@@ -231,3 +245,43 @@ docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-c
   -t <your-registry>/agent-claude-code:<tag> --push .
 docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>
 ```
+
+### Cross-arch builds when the public registry is blocked
+
+The `buildx` recipe above depends on the public registry **twice**. On an amd64 build host whose proxy refuses it (HTTP 403), both halves fail:
+
+| Step | What it pulls | Failure |
+|---|---|---|
+| Emulation, `docker run --privileged tonistiigi/binfmt --install arm64` | the binfmt image | 403, exit 125 |
+| `docker buildx create`, which provisions a container builder | the builder's `moby/buildkit` image | 403 |
+
+The second one is the confusing one. Skipping emulation does not help, because the build fails earlier, at `booting buildkit`, before the Dockerfile is read. The 403 body is the proxy's HTML block page, so the error reads `invalid character '<'` and looks like a JSON bug.
+
+Cross-arch does not require running target-arch instructions. Run them only in a native stage and keep the target stage free of `RUN`. Plain `docker build --platform linux/arm64` then cross-builds on the daemon's embedded BuildKit and pulls nothing extra:
+
+```dockerfile
+# Both ARGs MUST precede the first FROM, else they are stage-scoped and blank.
+ARG CLI_STAGE_IMAGE
+ARG BASE_IMAGE
+# Native stage: any mirrored image that has gunzip.
+FROM --platform=$BUILDPLATFORM ${CLI_STAGE_IMAGE} AS cli
+ARG CLAUDE_SHA256=<sha256 of the linux-arm64 binary from the release manifest>
+# A gzip of that binary, next to the Dockerfile.
+COPY claude-linux-arm64.gz /tmp/claude.gz
+RUN set -eu; gunzip -c /tmp/claude.gz > /tmp/claude; echo "$CLAUDE_SHA256  /tmp/claude" | sha256sum -c -
+# Zero RUN from here on, so nothing needs emulation.
+FROM ${BASE_IMAGE}
+COPY --chmod=0755 --from=cli /tmp/claude /usr/local/bin/claude
+COPY --chmod=0755 agent-run /usr/local/bin/agent-run
+```
+
+```sh
+DOCKER_BUILDKIT=1 docker build --platform linux/arm64 \
+  --build-arg BASE_IMAGE=<your-registry>/agent-base:<tag>-arm64 \
+  --build-arg CLI_STAGE_IMAGE=<your-registry>/<any-image-with-gunzip>:<tag> -t <ref> .
+test "$(docker image inspect --format '{{.Architecture}}' <ref>)" = arm64   # nothing executed, so assert
+```
+
+- **The assertion replaces the build-time proof.** Nothing ran for arm64, so no `claude --version` check happened. A wrong `BASE_IMAGE` otherwise ships an amd64 image silently, and it fails only on a laptop.
+- **Do not `rm` the archive.** `/tmp` is sticky and the `COPY`ed file is root-owned, so an unprivileged `USER` gets `Operation not permitted`.
+- **The shipped Dockerfile does not have this shape.** [`deploy/images/claude-code/Dockerfile`](../../deploy/images/claude-code/Dockerfile) runs `RUN` steps in its final stage. The shape above applies to a layer you add on a published multi-arch base.
