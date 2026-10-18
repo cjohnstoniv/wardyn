@@ -74,8 +74,6 @@ const (
 // The refusal sentences. They reach the SANDBOX (the proxy relays them in Azure
 // DevOps' own error shape), and the proxy reads only a short slice of a
 // refusal body, so each stays well under that.
-//
-// DRAFT (M2 canon pending)
 const (
 	adoCapNotGrantableRefusal  = "Wardyn refused this Azure DevOps request: no run can be granted that access."
 	adoCapAboveCeilingRefusal  = "Wardyn refused this Azure DevOps request: it needs %q, which is outside what an administrator allows for this organisation."

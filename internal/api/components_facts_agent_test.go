@@ -75,6 +75,9 @@ func TestComponentFacts_AgentActualDoors(t *testing.T) {
 					if fact.Agent.ManagedSettings == nil || fact.Agent.ManagedSettings.Path != path || fact.Agent.ManagedSettings.Document != string(content) {
 						t.Fatalf("managed document differs from dispatch's generator: %+v", fact.Agent.ManagedSettings)
 					}
+					if fact.Agent.ManagedSettings.Harness != agent {
+						t.Fatalf("managed settings name harness %q, want the document's own %q", fact.Agent.ManagedSettings.Harness, agent)
+					}
 				} else if fact.Agent.ManagedSettings != nil {
 					t.Fatal("non-Claude harness has no managed-settings parser")
 				}
@@ -309,10 +312,11 @@ func TestComponentFacts_GovernanceHoldMatchesDispatch(t *testing.T) {
 			profile.Ceiling.ToolRules = tc.rules
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(profile))
 			member := govSession(t, govMemberSub, []string{"eng"}, false)
-			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits}
-			params := dispatchParams{}
-			if tc.hold {
-				params.ToolApprovals = "hold"
+			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits, Spec: profile.Ceiling}
+			// The value create dispatches with, from create's own derivation rather than set by hand.
+			params := dispatchParams{ToolApprovals: effectiveToolApprovals(createRunRequest{Agent: "claude-code", Task: "facts"}, ceiling)}
+			if (params.ToolApprovals == "hold") != tc.hold {
+				t.Fatalf("create derives tool_approvals %q, want hold=%v", params.ToolApprovals, tc.hold)
 			}
 			dispatched, _, _ := agentPolicyDispatchCeiling(t, &fakeRunner{}, "claude-code", tc.level, "facts", params, ceiling)
 			doors := []string{componentDoors[1]}
@@ -380,6 +384,9 @@ func TestComponentFacts_HarnessSetFallbackMatchesDispatch(t *testing.T) {
 	if got == nil || got.Path != want.path || got.Document != string(want.content) {
 		t.Fatalf("preflight reports %+v; dispatch writes %s at %s", got, want.content, want.path)
 	}
+	if got.Harness != want.harness {
+		t.Errorf("managed_settings.harness = %q, want %q: the fact names the harness whose document dispatch writes, not the started codex-cli", got.Harness, want.harness)
+	}
 }
 
 // Control: an exec run has no agent process, so no agent fact, as before.
@@ -390,5 +397,18 @@ func TestComponentFacts_ExecRunUnchanged(t *testing.T) {
 		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"managed_settings"`) || strings.Contains(w.Body.String(), `"kind":"agent"`) {
 			t.Fatalf("%s exec = %d %s", door, w.Code, w.Body.String())
 		}
+	}
+}
+
+// FUG-L748: the harness the fact names is the one whose document dispatch writes, which is not the
+// started agent's when it has none: a codex-cli start in a set with claude-code carries claude-code's.
+func TestAgentPolicyDocumentNamesTheHarnessWhoseDocumentItIs(t *testing.T) {
+	set := []types.RunHarness{{Harness: "codex-cli"}, {Harness: claudeCodeHarness}}
+	doc, err := agentPolicyDocument("codex-cli", "", set, true, false, nil)
+	if err != nil || !doc.ok {
+		t.Fatalf("document = %+v, %v", doc, err)
+	}
+	if doc.harness != claudeCodeHarness {
+		t.Errorf("document harness = %q, want %q: codex-cli has none, so the set's first that does supplies it", doc.harness, claudeCodeHarness)
 	}
 }

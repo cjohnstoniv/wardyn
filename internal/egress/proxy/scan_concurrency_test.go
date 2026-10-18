@@ -71,7 +71,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 	go func() {
 		defer close(firstDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/a", held)
-		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, "", contentscan.ChannelGeneric, "read body", noop)
 		release()
 	}()
 
@@ -86,7 +86,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 		defer close(secondDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/b",
 			strings.NewReader(`{"payload":"small"}`))
-		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, "", contentscan.ChannelGeneric, "read body", noop)
 		release()
 	}()
 
@@ -146,7 +146,7 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	go func() {
 		defer close(firstDone)
 		req := httptest.NewRequest(http.MethodPost, "http://connector.test/slow", held)
-		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, contentscan.ChannelGeneric, "read body", noop)
+		_, _, release, _ := p.scanBufferedBody(httptest.NewRecorder(), req, "", contentscan.ChannelGeneric, "read body", noop)
 		release()
 	}()
 	select {
@@ -174,7 +174,7 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	go func() {
 		var o outcome
 		var release func()
-		_, _, release, o.blocked = p.scanBufferedBody(rec, req, contentscan.ChannelGeneric, "read body",
+		_, _, release, o.blocked = p.scanBufferedBody(rec, req, "", contentscan.ChannelGeneric, "read body",
 			func(d egress.Decision, _ string, _ *egress.ScanSummary) { o.decision, o.emitted = d, true })
 		release()
 		got <- o
@@ -234,7 +234,7 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "http://connector.test/a", strings.NewReader(body))
 	reader, _, release, blocked := p.scanBufferedBody(httptest.NewRecorder(), req,
-		contentscan.ChannelGeneric, "read body", noop)
+		"", contentscan.ChannelGeneric, "read body", noop)
 	if blocked || reader == nil {
 		t.Fatalf("a clean in-cap body must be returned for forwarding (blocked=%v reader=%v)", blocked, reader)
 	}
@@ -252,7 +252,7 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 	var denied bool
 	req2 := httptest.NewRequest(http.MethodPost, "http://connector.test/b",
 		strings.NewReader(body)).WithContext(ctx)
-	_, _, release2, blocked2 := p.scanBufferedBody(rec, req2, contentscan.ChannelGeneric, "read body",
+	_, _, release2, blocked2 := p.scanBufferedBody(rec, req2, "", contentscan.ChannelGeneric, "read body",
 		func(d egress.Decision, _ string, _ *egress.ScanSummary) { denied = d == egress.Deny })
 	release2()
 	if !blocked2 || !denied || rec.Code != http.StatusBadGateway {
@@ -268,7 +268,7 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 	}
 	req3 := httptest.NewRequest(http.MethodPost, "http://connector.test/c", strings.NewReader(body))
 	_, _, release3, blocked3 := p.scanBufferedBody(httptest.NewRecorder(), req3,
-		contentscan.ChannelGeneric, "read body", noop)
+		"", contentscan.ChannelGeneric, "read body", noop)
 	release3()
 	if blocked3 {
 		t.Fatal("a body must be admitted once the previous one released its bytes — the budget bounds " +

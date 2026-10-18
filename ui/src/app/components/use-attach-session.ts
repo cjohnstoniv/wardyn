@@ -23,7 +23,9 @@ import { createRenderer, type RendererControl, type RendererPref, type RendererS
 import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
-import { entryErrorMessage } from "../lib/run-entry";
+import { HttpError } from "../lib/api/core";
+import { sessionExpiry } from "../lib/api/session-activity";
+import { ATTACH_CAP_REASON, entryErrorMessage } from "../lib/run-entry";
 import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
@@ -69,11 +71,24 @@ const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 // whose sign-in stopped authorizing it (signed out, revoked, expired, or a
 // check that could not be answered) is closed with 4401 and the reason
 // "session ended". Reconnecting would only fail the same check, so like a
-// take-over it is final: no retry.
+// take-over it is final: no retry. The one exception is a session renewed
+// since the socket opened: the socket keeps the expiry its handshake saw, so
+// it ends at that while the session lives on, and a fresh ticket opens it again.
 const AUTH_ENDED_CLOSE_CODE = 4401;
 const AUTH_ENDED_REASON = "session ended";
 
 // Helpers
+
+/** The grid the container would fit, whatever the local grid is pinned to. */
+export function realFit(fit: FitAddon | null): { cols: number; rows: number } | null {
+  try {
+    const d = fit?.proposeDimensions();
+    return d && d.cols > 0 && d.rows > 0 ? { cols: d.cols, rows: d.rows } : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
   const q = new URLSearchParams();
   if (ticket) q.set("ticket", ticket);
@@ -168,11 +183,18 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
   // Read at each (re)connect, not keyed on: /me landing late must not rebuild
   // the terminal (one socket and one ticket per page load). Teardown on a
-  // changed authorisation still rides `mayEnter` and `signedOut` below.
+  // changed authorisation still rides `mayEnter` below.
   const operatorRef = React.useRef(operator);
   const operatorResolvedRef = React.useRef(operatorResolved);
   operatorRef.current = operator;
   operatorResolvedRef.current = operatorResolved;
+  // Signing out mid-page closes the socket and stops retries and input, but
+  // keeps the terminal and what it shows: the same person signing back in
+  // reconnects into it. Someone else signing in reloads the page (reauth.ts
+  // reloadAs), which disposes it with everything else.
+  const signedOutRef = React.useRef(signedOut);
+  signedOutRef.current = signedOut;
+  const suspendRef = React.useRef<(on: boolean) => void>(() => {});
 
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
@@ -180,9 +202,13 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator on a run
     // whose stated creator is somebody else skips straight to the reason below,
     // before creating a terminal or a socket.
-    if (signedOut || !mayEnter) {
-      setConnState(signedOut ? "closed" : "error");
-      setErrorMsg(signedOut ? "" : refusal);
+    if (!mayEnter) {
+      const showRefusal = (on: boolean) => {
+        setConnState(on ? "closed" : "error");
+        setErrorMsg(on ? "" : refusal);
+      };
+      showRefusal(signedOutRef.current);
+      suspendRef.current = showRefusal;
       return;
     }
 
@@ -267,6 +293,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     let reconnectAttempts = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false; // set in cleanup so a pending backoff never reconnects
+    // Signed out: no socket, no retry, no input. `gen` retires a ticket mint
+    // still in flight when the sign-out landed.
+    let suspended = signedOutRef.current;
+    let gen = 0;
 
     // Streaming decoder for the output observer (a multibyte glyph split across
     // frames stays correct; our token of interest is ASCII regardless).
@@ -312,8 +342,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       send(new TextEncoder().encode(text));
     };
 
+    // What the server is told this client's size is. A pinned observer's local grid
+    // is the writer's, so a reconnect URL built from it would hand the server the
+    // writer's size as the observer's own.
+    const connectSize = () => (observerPinRef.current ? realFit(fitAddonRef.current) : null) ?? { cols: term.cols, rows: term.rows };
+
     const connect = () => {
-      if (disposed) return;
+      if (disposed || suspended) return;
+      const g = gen;
       setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
       // Ticket lane needed for token-only mode (the bearer can't ride a WS
       // handshake) AND for a non-operator owner (the cookie lane is
@@ -337,11 +373,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         runs
           .attachTicket(runId)
           .then((ticket) => {
-            if (disposed) return;
-            openSocket(buildWsUrl(runId, ticket, term.cols, term.rows));
+            if (disposed || g !== gen) return;
+            const sz = connectSize();
+            openSocket(buildWsUrl(runId, ticket, sz.cols, sz.rows));
           })
           .catch((e: unknown) => {
-            if (disposed) return;
+            if (disposed || g !== gen) return;
             setConnState("error");
             setErrorMsg(
               entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`),
@@ -350,11 +387,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
+      const sz = connectSize();
+      openSocket(buildWsUrl(runId, undefined, sz.cols, sz.rows), true);
     };
 
-    const openSocket = (url: string) => {
-      if (disposed) return;
+    const openSocket = (url: string, direct = false) => {
+      if (disposed || suspended) return;
+      let opened = false;
+      const openedUnder = sessionExpiry();
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -389,6 +429,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       };
 
       ws.onopen = () => {
+        opened = true;
         clearConnectTimer();
         // #216 — was `term.writeln([reconnected])`; the open dot below says so.
         reconnectAttempts = 0; // a successful attach resets the budget
@@ -403,6 +444,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           autoRunSent = true;
           const cmd = autoRunRef.current;
           autoRunTimer = setTimeout(() => {
+            autoRunTimer = null;
             send(new TextEncoder().encode(cmd + "\r"));
           }, 900);
         }
@@ -458,43 +500,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         }
       };
 
-      ws.onclose = (ev) => {
-        clearConnectTimer();
-        writerWs = null;
-        copyGate.reset();
+      // Unexpected drop: re-attach to the persistent tmux session with backoff.
+      const retry = () => {
         if (disposed) return;
-        // Displaced — checked before the reconnect path, because it is the one
-        // close that looks unexpected and must never be retried. See
-        // TAKEN_OVER_CLOSE_CODE: reconnecting here re-claims the PTY on top of
-        // the human who just took it, which is the whole bug this state exists
-        // to prevent. No retry, no onClose() either — the parent should keep
-        // this panel mounted so the operator can see what happened and take it
-        // back, which is the only remaining action.
-        const reason = ev.reason ?? "";
-        if (ev.code === TAKEN_OVER_CLOSE_CODE || reason.startsWith(TAKEN_OVER_REASON_PREFIX)) {
-          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
-          setMode(null); // we hold nothing now; the header must not still say "driving"
-          setConnState("closed");
-          // #216 — was a writeln; the holder footer's displacedHint says this.
-          return;
-        }
-        if (ev.code === AUTH_ENDED_CLOSE_CODE || reason === AUTH_ENDED_REASON) {
-          setMode(null);
-          setConnState("closed");
-          term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");
-          return;
-        }
-        // Clean, intentional close (1000) => the run finished / we unmounted.
-        // Don't reconnect; persistent tmux re-attach is only for UNEXPECTED drops.
-        if (ev.code === 1000) {
-          setConnState("closed");
-          term.writeln(
-            `\r\n\x1b[2m[connection closed${ev.reason ? ": " + ev.reason : ""}]\x1b[0m`,
-          );
-          onCloseRef.current?.();
-          return;
-        }
-        // Unexpected drop: re-attach to the persistent tmux session with backoff.
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           // Drop the stale attach mode, exactly as the taken-over branch does.
           // Whether we come back as writer or observer is the SERVER's call,
@@ -523,6 +531,69 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         onCloseRef.current?.();
       };
 
+      ws.onclose = (ev) => {
+        clearConnectTimer();
+        writerWs = null;
+        copyGate.reset();
+        if (disposed) return;
+        // Displaced — checked before the reconnect path, because it is the one
+        // close that looks unexpected and must never be retried. See
+        // TAKEN_OVER_CLOSE_CODE: reconnecting here re-claims the PTY on top of
+        // the human who just took it, which is the whole bug this state exists
+        // to prevent. No retry, no onClose() either — the parent should keep
+        // this panel mounted so the operator can see what happened and take it
+        // back, which is the only remaining action.
+        const reason = ev.reason ?? "";
+        if (ev.code === TAKEN_OVER_CLOSE_CODE || reason.startsWith(TAKEN_OVER_REASON_PREFIX)) {
+          setTakenOverBy(reason.startsWith(TAKEN_OVER_REASON_PREFIX) ? reason.slice(TAKEN_OVER_REASON_PREFIX.length) : "");
+          setMode(null); // we hold nothing now; the header must not still say "driving"
+          setConnState("closed");
+          // #216 — was a writeln; the holder footer's displacedHint says this.
+          return;
+        }
+        if (ev.code === AUTH_ENDED_CLOSE_CODE || reason === AUTH_ENDED_REASON) {
+          const renewedTo = sessionExpiry();
+          if (renewedTo !== null && renewedTo > Date.now() && (openedUnder === null || renewedTo > openedUnder)) {
+            retry();
+            return;
+          }
+          setMode(null);
+          setConnState("closed");
+          term.writeln("\r\n\x1b[2m[session ended: sign in again to reconnect]\x1b[0m");
+          return;
+        }
+        // Clean, intentional close (1000) => the run finished / we unmounted.
+        // Don't reconnect; persistent tmux re-attach is only for UNEXPECTED drops.
+        if (ev.code === 1000) {
+          setConnState("closed");
+          term.writeln(
+            `\r\n\x1b[2m[connection closed${ev.reason ? ": " + ev.reason : ""}]\x1b[0m`,
+          );
+          onCloseRef.current?.();
+          return;
+        }
+        // A socket opened without a ticket shows a browser no status or body when its handshake is refused, so the
+        // run's session cap would read as a bare failure. The ticket mint answers it with its reason (attach_ticket.go).
+        if (direct && !opened) {
+          const g = gen;
+          runs.attachTicket(runId).then(() => {
+            if (g === gen) retry();
+          }, (e: unknown) => {
+            if (disposed || g !== gen) return;
+            if (e instanceof HttpError && e.reason === ATTACH_CAP_REASON) {
+              setMode(null);
+              setConnState("error");
+              setErrorMsg(e.message);
+              onCloseRef.current?.();
+              return;
+            }
+            retry();
+          });
+          return;
+        }
+        retry();
+      };
+
       ws.onerror = () => {
         clearConnectTimer();
         // An error is always followed by a close event, and onclose's own
@@ -540,6 +611,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // admitted (or we had none) — so: drop our socket and attach again; the
     // fresh attach registers as holder. Between the eviction and that attach
     // the holder endpoint honestly reports held:false.
+    // A deliberate attach replaces any automatic one still pending: a ticket mint in flight (retired by `gen`) or a
+    // backoff timer. Without this, one click could open two sockets.
+    const cancelPendingAttach = () => {
+      gen += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+
     reclaimRef.current = () => {
       if (disposed) return;
       const cur = wsRef.current;
@@ -557,6 +636,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       }
       wsRef.current = null;
       reconnectAttempts = 0; // a deliberate re-attach starts from a full budget
+      cancelPendingAttach();
       connect();
     };
 
@@ -567,10 +647,57 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       reconnectAttempts = 0;
       setReconnectAttempt(0);
       setReconnectExhausted(false);
+      cancelPendingAttach();
       connect();
     };
 
-    connect();
+    suspendRef.current = (on: boolean) => {
+      if (disposed || on === suspended) return;
+      suspended = on;
+      if (!on) {
+        reconnectAttempts = 0;
+        setReconnectAttempt(0);
+        setReconnectExhausted(false);
+        connect();
+        return;
+      }
+      gen += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = null;
+      if (autoRunTimer) {
+        // Not typed yet: the next connect types it instead.
+        clearTimeout(autoRunTimer);
+        autoRunTimer = null;
+        autoRunSent = false;
+      }
+      const cur = wsRef.current;
+      if (cur) {
+        // Our own teardown, not a drop: no reconnect bookkeeping on the way out.
+        cur.onclose = null;
+        cur.onerror = null;
+        cur.onmessage = null;
+        try {
+          cur.close(1000, "signed out");
+        } catch {
+          /* already closing */
+        }
+      }
+      wsRef.current = null;
+      writerWs = null;
+      copyGate.reset();
+      setMode(null);
+      setConnState("closed");
+      setErrorMsg("");
+    };
+
+    if (suspended) {
+      setConnState("closed");
+      setErrorMsg("");
+    } else {
+      connect();
+    }
 
     // Terminal input → WebSocket binary frame (reads the current socket).
     const inputDispose = term.onData((data) => {
@@ -684,7 +811,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       wsRef.current = null;
     };
     // mayEnter is keyed on deliberately: a confirmed non-owner tears the
-    // terminal down. operator and operatorResolved are read through refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller); these deps are unchanged from the effect this hook was extracted from
-  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, signedOut]);
+    // terminal down. operator, operatorResolved and signedOut are read
+    // through refs; signedOut acts through suspendRef below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller)
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal]);
+
+  // Declared after the effect above, so on mount it finds suspendRef already
+  // set to the state that effect started in, and does nothing.
+  React.useEffect(() => {
+    suspendRef.current(signedOut);
+  }, [signedOut]);
 }

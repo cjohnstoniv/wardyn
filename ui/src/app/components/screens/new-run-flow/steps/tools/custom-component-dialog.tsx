@@ -17,10 +17,12 @@ import { Input } from "../../../../ui/input";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { CustomComponentDialog as FullEditor } from "../../checks/custom-component-dialog";
 import { blankSecret, headerHostChoices, requestOf, validateDraft, type ComponentDraft } from "../../checks/custom-component-form-model";
-import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
+import { NamesFailed, SELECT_CLASS, ToolDialog, ToolField, type NamesFailure } from "./tool-dialog";
 
 export interface CustomComponentProps {
   names: readonly string[];
+  /** Why the names could not be read, with a retry; absent when they were. */
+  namesFailure?: NamesFailure;
   residentAllowed: boolean;
   /** Where a person adds a secret of their own. */
   secretsPath: string;
@@ -30,7 +32,7 @@ export interface CustomComponentProps {
 
 const hostsOf = (text: string): string[] => text.split(/[\s,]+/).filter(Boolean);
 
-export function CustomComponentDialog({ names, residentAllowed, secretsPath, onAttach, onClose }: CustomComponentProps) {
+export function CustomComponentDialog({ names, namesFailure, residentAllowed, secretsPath, onAttach, onClose }: CustomComponentProps) {
   const id = React.useId();
   const [name, setName] = React.useState("");
   const [hostText, setHostText] = React.useState("");
@@ -67,7 +69,7 @@ export function CustomComponentDialog({ names, residentAllowed, secretsPath, onA
   };
 
   if (full) {
-    return <FullEditor context="run" residentAllowed={residentAllowed} secretsPath={secretsPath} onClose={onClose} onAttach={onAttach} />;
+    return <FullEditor context="run" residentAllowed={residentAllowed} secretsPath={secretsPath} onClose={onClose} onAttach={onAttach} initialDraft={draftOfForm()} initialKeep={save ? "save" : "run"} />;
   }
   return (
     <ToolDialog
@@ -92,6 +94,7 @@ export function CustomComponentDialog({ names, residentAllowed, secretsPath, onA
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <p id={`${id}-secret-help`} className="text-sm text-muted-foreground">{NR_TOOLS.CC_SECRET_HELP}</p>
+        <NamesFailed failure={namesFailure} />
       </ToolField>
       {askHost && (
         <ToolField id={`${id}-header-host`} label={NR_TOOLS.CC_HEADER_HOST}>

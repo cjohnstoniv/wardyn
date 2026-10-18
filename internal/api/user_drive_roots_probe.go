@@ -30,7 +30,7 @@ import (
 // render as "we checked and it is fine".
 var errDriveRootUnanswered = errors.New("the host root did not answer in time")
 
-// DRAFT (M2 canon pending). The one new admin-facing sentence this bound needs.
+// The one new admin-facing sentence this bound needs.
 const (
 	// driveRootUnansweredMsg is the 503 a drive WRITE gets when the deployment's
 	// host-root ceiling cannot be evaluated because the share stopped answering.

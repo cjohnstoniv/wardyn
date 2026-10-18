@@ -246,7 +246,9 @@ export function useRunDetail(id: string) {
   // Kill again follows the evidence: offered once the ending facts have settled
   // (or failed to read) and the trail does not PROVE the teardown. A failed read
   // does not hide a row the main trail already holds, so a proven kill stays off.
-  const killAgain = run?.state === "KILLED" && endingState !== "loading" && killEvidence !== "confirmed";
+  // A queued stop is settled too: the credentials are revoked, and a second kill cannot reach the offline runner.
+  const killSettled = killEvidence === "confirmed" || killEvidence === "queued";
+  const killAgain = run?.state === "KILLED" && endingState !== "loading" && !killSettled;
   // The outcome block of a KILLED run waits for its facts (see loadEnding). When
   // the read failed it still shows what the main trail proves, and nothing when
   // that holds no kill row either (no row would read as "no kill record", which a
@@ -259,7 +261,7 @@ export function useRunDetail(id: string) {
   // remount): the server's ended_at against our Date.now() would depend on skew.
   // The row arrives, or the wait gives up and the person can kill again. A failed
   // ending read is retried on the same polls (load re-calls loadEnding).
-  const unconfirmedKill = run?.state === "KILLED" && killEvidence !== "confirmed";
+  const unconfirmedKill = run?.state === "KILLED" && !killSettled;
   if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
   const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
   usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);

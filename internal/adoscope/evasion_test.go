@@ -467,6 +467,17 @@ func TestEvasionDotSegmentsWithPathParameter(t *testing.T) {
 	runCases(t, cases)
 }
 
+// Text the service trims before a path parameter is refused: stripping the
+// parameter leaves a dot segment or a trimmed name.
+func TestEvasionTrimmedTextBeforePathParameter(t *testing.T) {
+	var cases []caseT
+	for _, seg := range []string{".. ;x", "...;x", "hooks.;x", "%20..;x", ".%20;x"} {
+		path := "/acme/proj/_apis/git/repositories/" + seg
+		cases = append(cases, caseT{name: path, req: adoReq(http.MethodGet, path, ""), wantErr: true})
+	}
+	runCases(t, cases)
+}
+
 // A ";" that does not follow a dot segment is an ordinary name character.
 func TestEvasionPlainSemicolonAdmitted(t *testing.T) {
 	runCases(t, []caseT{
@@ -474,7 +485,6 @@ func TestEvasionPlainSemicolonAdmitted(t *testing.T) {
 		{name: "a name like file;v=1", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/file;v=1.txt", ""), want: CapCodeRead},
 		{name: "a leading dot name with a parameter", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/.hidden;x", ""), want: CapCodeRead},
 		{name: "a lone semicolon", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/;x", ""), want: CapCodeRead},
-		{name: "three dots with a parameter", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/...;x", ""), want: CapCodeRead},
 		{name: "an ordinary repository", req: adoReq(http.MethodGet, "/acme/proj/_apis/git/repositories/r1", ""), want: CapCodeRead},
 	})
 }

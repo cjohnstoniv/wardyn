@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
@@ -59,8 +60,20 @@ type Config struct {
 	Listen string `json:"listen,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
-	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
+	// DecisionSpoolDir is a spool directory shared with runnerd, absent on org substrates. No runner
+	// sets it since runners send decisions to DecisionSink; a runnerd from before that change still
+	// does, with this proxy image when it follows the organisation's.
 	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
+	// SelfLapse (k8s runners only) closes the proxy until its first renew and
+	// ends it, terminally, at the last successful renew's send time plus
+	// RunTokenTTL. Set only with DecisionSink.
+	SelfLapse bool `json:"self_lapse,omitempty"`
+	// DecisionSink (runners) streams decisions to runnerd, the only spool
+	// writer, instead of a shared DecisionSpoolDir.
+	DecisionSink *DecisionSinkConfig `json:"decision_sink,omitempty"`
+	// HardDeny (k8s runners only) refuses in-cluster names and addresses before
+	// the InternalHosts lift, for agent egress.
+	HardDeny *HardDenyConfig `json:"hard_deny,omitempty"`
 	// MITMCACertPEM / MITMCAKeyPEM are the OPTIONAL TLS-MITM certificate authority
 	// (PEM). When both are set AND content inspection is enabled, the proxy
 	// TLS-terminates opaque CONNECT tunnels to known LLM hosts (Anthropic/OpenAI)
@@ -112,6 +125,12 @@ type Config struct {
 	// An older proxy image refuses this key at start (strict decode), so the
 	// proxy image is upgraded with wardynd.
 	BrokeredPATGrantIDs []uuid.UUID `json:"brokered_pat_grant_ids,omitempty"`
+	// ResidentMints are the run's runner_resident ssh_key and git_pat grants,
+	// set only on a runner's own proxy (design 0.9 §7.4). handleBrokerMint answers
+	// a mint of one locally, after its brokered refusals and before the relay, and
+	// never at or past its ExpiresAt. The org's stored copy holds each Token's
+	// placeholder; the runner fills its own copy from its keystore.
+	ResidentMints []ResidentMint `json:"resident_mints,omitempty"`
 	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
 	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
 	// per sidecar: the gate is keyed by host, and every organisation shares
@@ -363,6 +382,9 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
 	}
+	if err := validResidentMints(c.ResidentMints); err != nil {
+		return nil, err
+	}
 	for _, r := range c.ViaOrgRoutes {
 		if r.GrantID == uuid.Nil || r.Host == "" {
 			return nil, fmt.Errorf("config: via_org_routes entry needs a grant_id and a host")
@@ -494,20 +516,16 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// ipguard.Liftable" at write time (validateInternalHosts, internal/api), so
 	// a failure here means a config file authored outside that path. Fail
 	// closed rather than silently drop a malformed entry.
-	for i, h := range c.InternalHosts {
-		for j, cidr := range h.CIDRs {
-			prefix, err := netip.ParsePrefix(cidr)
-			if err != nil {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
-			}
-			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
-				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
-			}) {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
-			}
-		}
+	if err := c.validateInternalHostCIDRs(); err != nil {
+		return err
 	}
 	if err := c.validateTerminatedGates(); err != nil {
+		return err
+	}
+	if err := c.validateDecisionSink(); err != nil {
+		return err
+	}
+	if err := c.validateHardDeny(); err != nil {
 		return err
 	}
 	if err := c.validateMCP(); err != nil {
@@ -526,6 +544,59 @@ func (c *Config) applyDefaultsAndValidate() error {
 	return c.validateChannelHosts()
 }
 
+// validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside
+// ipguard.Liftable.
+func (c *Config) validateInternalHostCIDRs() error {
+	for i, h := range c.InternalHosts {
+		for j, cidr := range h.CIDRs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
+			}
+			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
+				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
+			}) {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDecisionSink checks self_lapse comes only with decision_sink (k8s runners; a Docker
+// runner's proxy has the sink alone), and the sink without a spool.
+func (c *Config) validateDecisionSink() error {
+	if c.SelfLapse && c.DecisionSink == nil {
+		return fmt.Errorf("config: self_lapse needs decision_sink (k8s runners)")
+	}
+	if c.DecisionSink != nil {
+		if c.DecisionSpoolDir != "" {
+			return fmt.Errorf("config: decision_sink and decision_spool_dir are exclusive")
+		}
+		if err := c.DecisionSink.validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
+}
+
+// DecisionSinkConfig reaches runnerd's decision sink: URL is tls://host:port,
+// SPKISHA256 the hex SHA-256 of the sink certificate's SubjectPublicKeyInfo
+// (the only trust), Key the run's 32-byte key in hex.
+type DecisionSinkConfig struct {
+	URL        string `json:"url"`
+	SPKISHA256 string `json:"spki_sha256"`
+	Key        string `json:"key"`
+}
+
+// HardDenyConfig is the in-cluster deny set: DNS suffixes, exact names or IP
+// literals, and CIDRs. IPs and CIDRs match the literal and every resolved address.
+type HardDenyConfig struct {
+	Suffixes []string `json:"suffixes,omitempty"`
+	Hosts    []string `json:"hosts,omitempty"`
+	CIDRs    []string `json:"cidrs,omitempty"`
+}
+
 // validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An
 // Azure DevOps grant is enforced by the REST gate; without the MITM CA nothing terminates, and the
 // covered hosts would degrade to a credential-less tunnel no gate sees — so a config carrying ado_grant
@@ -541,6 +612,13 @@ func (c *Config) validateTerminatedGates() error {
 	}
 	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
+	}
+	// The door serves every request on its host ahead of injection (serveAPIDoor), so a rule there
+	// would never send its credential: a host carries one credential.
+	for _, inj := range c.Injection {
+		if c.GitHubAPI != nil && patAPIHost(strings.TrimSpace(inj.Host)) == ghscope.APIHost {
+			return fmt.Errorf("config: injection rule host %q is the GitHub CLI door's host; a host carries one credential", inj.Host)
+		}
 	}
 	if err := c.validateAzureARM(); err != nil {
 		return err

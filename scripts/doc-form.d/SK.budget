@@ -1,16 +1,26 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the rewrite, so growth fails.
 # docs/operations/secrets-and-keys.md 10605 adds 30 over 10575 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/secrets-and-keys.md 10697 adds 92 over 10605 (0.9 R1-0088): "Offboarding a key domain" tells the credential key from the audit-seal key, and leads with keeping the domain.
-docs/operations/secrets-and-keys.md=10697 share=25
+# docs/operations/secrets-and-keys.md 10711 adds 14 over 10697, measured (0.9.3 RV2 r2): the EC2 node instance role also raises kek_service_static_key.
+# docs/operations/secrets-and-keys.md 10781 = 10711 + 70, measured: the undeclared-domain row and the sealed-actor wording in the key-custody rows.
+# docs/operations/secrets-and-keys.md 10713 adds 2 over 10711 (0.9.3 FIN-B), measured: the node role is shared by every pod or process on that machine.
+# docs/operations/secrets-and-keys.md 10783, measured at the second decided-rows merge into the final train (both sides' sentences).
+docs/operations/secrets-and-keys.md=10783 share=25
 # docs/operations/secrets-and-keys.md 10535 adds 1001 over 9534 (0.9 F-588 M1): the 'Key service: AWS KMS' section, AWS KMS in the key-service lists, and the custody sentence for all three key services.
 # docs/operations/secrets-and-keys.md 10434 adds 900 (0.9 F-588 M1): the 'Key service: AWS KMS' section and AWS KMS in the key-service lists.
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.
 # docs/operations/monitoring.md 2035 adds 6 over 2029 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/monitoring.md 2094 adds 59 over 2035: 0.9 final docs pass, measured: the three runner pool queue metric families.
-docs/operations/monitoring.md=2094 share=13
+# docs/operations/monitoring.md 2138 adds 44 over 2094, measured (0.9.3 ADO): wardyn_audit_outcome_refused_total.
+# docs/operations/monitoring.md 2159 adds 21 over 2138: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
+docs/operations/monitoring.md=2159 share=13
 # docs/operations/monitoring.md=2001 adds 158 (0.9 F-1513): the five wardyn_audit_delivery_* metric rows (#1513).
 # docs/operations/monitoring.md=2029 adds 28 (0.9 Q-b): the run_queue sweep row.
 # docs/operations/run-lifetime.md 2026 adds 19 over 2007: revive refusals name the Azure CLI case and say a refused live run keeps its access, measured.
-docs/operations/run-lifetime.md=2026 share=21
-docs/operations/kubernetes-known-gaps.md=2060 share=15
+# docs/operations/run-lifetime.md 2044 adds 18 (0.9.3 F-R24), measured: a pool's Interactive idle stop bounds auto_stop_after_sec.
+# docs/operations/run-lifetime.md 2077 adds 33 over 2044 (0.9.3 FIN-E), measured: the pool idle-stop default and maximum.
+docs/operations/run-lifetime.md=2077 share=21
+# docs/operations/kubernetes-known-gaps.md 2110 adds 50 over 2060, measured: the proxy DNS rule's coverage and what needs an operator policy (0.9.3 ASK-6 review).
+# docs/operations/kubernetes-known-gaps.md 2153 = 2110 + 43, measured: the proxy DNS peer's fixed namespace and label, and how to check yours
+docs/operations/kubernetes-known-gaps.md=2153 share=15
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.

@@ -132,6 +132,40 @@ function expectCreateEqualsLastCheck(bodies: Bodies) {
   return create;
 }
 
+test.describe("New Run, Start and Run: the shared pieces", () => {
+  test("the AI path is Coming soon in words, and is not announced as a disabled control (FR-0124)", async ({ page }) => {
+    await stubFlow(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    const card = page.getByRole("article", { name: NR_START.AI_TITLE });
+    await expect(card).toContainText(NR_SHARED.COMING_SOON);
+    // aria-disabled is not allowed on the article role; the words carry it.
+    await expect(card).not.toHaveAttribute("aria-disabled", /.*/);
+    await expect(card.getByRole("button")).toHaveCount(0);
+  });
+
+  test("a barrier's info tip opens on click and closes on Esc; a caveat is text, not only a hover title (FR-0119, FR-0123)", async ({ page }) => {
+    await stubFlow(page);
+    await openGuided(page);
+    await press(page, NR_SHAPE.AGENT_TITLE);
+    const table = page.getByRole("table");
+    const caveat = table.locator('[aria-label="Yes, with caveat"]').first();
+    const risk = await caveat.getAttribute("title");
+    expect(risk).toBeTruthy();
+    // The residual risk is in the cell's text, which a screen reader reads, as well as in its title.
+    await expect(caveat).toHaveText(risk!);
+
+    const tip = table.getByRole("button", { name: /^About / }).first();
+    await tip.click();
+    const bubble = page.getByText(NR_RUN.PROTECTS_HEAD);
+    await expect(bubble).toBeVisible();
+    await expect(page.getByText(NR_RUN.NOT_PROTECTS_HEAD)).toBeVisible();
+    await expect(page.getByText(NR_RUN.HOW_HEAD)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(bubble).toHaveCount(0);
+  });
+});
+
 test.describe("New Run, Guided setup: each workload end to end", () => {
   test("Agent task, Interactive: a harness starts with the run", async ({ page }) => {
     const bodies = await stubFlow(page);
@@ -228,12 +262,43 @@ test.describe("New Run, Guided setup: the Harnesses step (NR-11)", () => {
     });
   });
 
+  test("Interactive: Your own tools starts no CLI, so it offers no starting prompt", async ({ page }) => {
+    await stubFlow(page);
+    await openGuided(page);
+    await toHarnesses(page, "agent", "interactive");
+    await expect(page.getByLabel(NR_HARNESSES.STARTING_PROMPT)).toHaveCount(1);
+    await page.locator("#nr-harness-0").selectOption({ label: "Your own tools" });
+    await expect(page.getByLabel(NR_HARNESSES.STARTING_PROMPT)).toHaveCount(0);
+  });
+
   test("a second harness no image carries shows its truthful disabled reason", async ({ page }) => {
-    await stubFlow(page, { sets: [] });
+    await stubFlow(page, { sets: [], harnesses: [CLAUDE, CODEX] });
     await openGuided(page);
     await toHarnesses(page, "agent", "interactive");
     await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
     await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, CODEX.display))).toBeVisible();
+  });
+
+  test("Your own tools brings no CLI, so it can join a harness even when no image carries a pair", async ({ page }) => {
+    const [claude, , own] = SCENARIO_HARNESSES.full;
+    await stubFlow(page, { harnesses: [claude, own], sets: [] });
+    await openGuided(page);
+    await toHarnesses(page, "agent", "interactive");
+    await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeEnabled();
+    await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, own.display))).toHaveCount(0);
+    await press(page, NR_HARNESSES.ADD_ANOTHER);
+    await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(2) })).toBeVisible();
+  });
+
+  test("a second harness a larger declared set carries is offered (DR-0225)", async ({ page }) => {
+    const [claude, codex, own] = SCENARIO_HARNESSES.full;
+    await stubFlow(page, { sets: [[claude.id, codex.id, own.id]] });
+    await openGuided(page);
+    await toHarnesses(page, "agent", "interactive");
+    await expect(page.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeEnabled();
+    await expect(page.getByText(NR_HARNESSES.NO_COMBINATION(CLAUDE.display, CODEX.display))).toHaveCount(0);
+    await press(page, NR_HARNESSES.ADD_ANOTHER);
+    await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(2) })).toBeVisible();
   });
 
   test("not-installed, no-provider and not-enabled harnesses stay listed with their reasons", async ({ page }) => {

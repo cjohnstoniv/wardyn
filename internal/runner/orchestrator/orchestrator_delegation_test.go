@@ -172,6 +172,39 @@ func TestOrchestrator_ImagePresent_FailsWhenNoSubstrateImplementsIt(t *testing.T
 	}
 }
 
+// imageDescribingSubstrate wraps a fakeSubstrate to additionally implement runner.ImageDescriber.
+type imageDescribingSubstrate struct {
+	*fakeSubstrate
+	text  string
+	calls []string
+}
+
+func (i *imageDescribingSubstrate) DescribeImage(_ context.Context, ref string) (string, error) {
+	i.calls = append(i.calls, ref)
+	return i.text, nil
+}
+
+// TestOrchestrator_DescribeImage_SelectsFirstImplementingSubstrate: the setup check asks the
+// orchestrator, which hands the question to the first wired substrate that has a local image store,
+// skipping one that has none; with none it fails rather than answer.
+func TestOrchestrator_DescribeImage_SelectsFirstImplementingSubstrate(t *testing.T) {
+	k8s := &fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC3}}
+	docker := &imageDescribingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}, text: "digest sha256:abc"}
+	second := &imageDescribingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker2", classes: []types.ConfinementClass{types.CC2}}, text: "other"}
+	o := New(k8s, docker, second)
+
+	got, err := o.DescribeImage(context.Background(), "wardyn/agent:local")
+	if err != nil || got != "digest sha256:abc" {
+		t.Fatalf("DescribeImage = %q, %v, want the first implementer's text", got, err)
+	}
+	if len(docker.calls) != 1 || docker.calls[0] != "wardyn/agent:local" || len(second.calls) != 0 {
+		t.Errorf("DescribeImage must stop at the first implementer; docker.calls=%v second.calls=%v", docker.calls, second.calls)
+	}
+	if _, err := New(k8s).DescribeImage(context.Background(), "img"); err == nil {
+		t.Error("DescribeImage must fail when no wired substrate has a local image store")
+	}
+}
+
 // sweepingSubstrate wraps a fakeSubstrate to additionally implement the
 // unexported SweepOrphanedSandboxes capability Orchestrator type-asserts for
 // — again a separate concrete type so one substrate can implement it and

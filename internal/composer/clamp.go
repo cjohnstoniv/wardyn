@@ -183,7 +183,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 	var own types.ResourceLimits
 	pids := int(eff.PidsLimit)
 	if ceiling.Resources != nil {
-		own, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
+		own, pids = *ceiling.Resources, cmp.Or(ceiling.Resources.PidsLimit, pids) // a ceiling silent on pids keeps the default bound
 	}
 	effCeilingResources := &types.ResourceLimits{
 		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
@@ -447,7 +447,14 @@ func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits, floor 
 	}
 	bound(&out.CPUMillis, limits.MaxCPUMillis, floor.CPUMillis, int(eff.CPUMillis))
 	bound(&out.MemoryMiB, limits.MaxMemoryMiB, floor.MemoryMiB, int(eff.MemoryMiB))
-	if r == nil || (out.CPUMillis == r.CPUMillis && out.MemoryMiB == r.MemoryMiB) {
+	if r == nil {
+		// No block is the platform default; it is cut only where a maximum sits below that default.
+		if out == (types.ResourceLimits{}) {
+			return nil, false
+		}
+		return &out, true
+	}
+	if out.CPUMillis == r.CPUMillis && out.MemoryMiB == r.MemoryMiB {
 		return r, false
 	}
 	return &out, true

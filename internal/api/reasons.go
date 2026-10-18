@@ -231,6 +231,7 @@ const (
 	// #656 slice 1 — workspaces (workspaces.go, workspace_admission.go,
 	// workspace_envcode.go, workspace_providers.go).
 	reasonWorkspaceRepoNotAdmitted    = "workspace_repo_not_admitted"     // the repository is not on this deployment's admitted list
+	reasonRepoURLCredentials          = "repo_url_credentials"            // an http(s) repository URL carries a user name, password or token; a git_pat grant carries it instead
 	reasonWorkspaceEnvcodeNoLocalDir  = "workspace_envcode_no_local_dir"  // the workspace has no local_dir source to emit env-as-code from
 	reasonWorkspaceEnvcodeNoProfile   = "workspace_envcode_no_profile"    // the workspace has no scanned profile to emit from
 	reasonWorkspaceProvidersInvalid   = "workspace_providers_invalid"     // the submitted provider block fails validation
@@ -263,6 +264,9 @@ const (
 	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
 	reasonSiteConfigRunnersViaOwnRoute      = "site_config_runners_via_own_route"      // a changed runners.enabled was named inline instead of through PUT /runners/settings
 
+	// Any write carrying the console's X-Wardyn-Expected-Principal header (expected_principal.go).
+	reasonExpectedPrincipalMismatch = "expected_principal_mismatch" // the draft was composed under a different person than the one now signed in
+
 	// GET/PUT /governance/egress-baseline.
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
@@ -270,6 +274,7 @@ const (
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)
+	reasonCredentialDeliveryStale       = "credential_delivery_stale"       // If-Match does not match the current policy ETag
 
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode
@@ -343,7 +348,7 @@ const (
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
 	reasonInvitationTargetUnknown    = "invitation_target_unknown"     // no person row and no bound identity has that principal
 	reasonInvitationReplacesInvalid  = "invitation_replaces_invalid"   // replaces_token_id is not a live admin-minted token of the target
-	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative
+	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative or over 100 years
 	reasonInvitationCapReached       = "invitation_cap_reached"        // the target already has the maximum pending invitations
 	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
@@ -533,4 +538,14 @@ const (
 	reasonTemplateNameTaken          = "template_name_taken"           // another template of the same audience already uses the name (case-insensitive)
 	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
 	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
+)
+
+// Kubernetes runner node-loss containment (run_containment.go): a run its runner deleted
+// but cannot prove stopped, and the security operator's node record that releases it.
+const (
+	reasonRunContainmentPending = "run_containment_pending" // identity.renew: the run's runner holds it as containment pending
+	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
+	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
+	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
 )

@@ -19,7 +19,7 @@ package proxy
 // strings.Contains(detail, egressInternalHostsRemedy) — the constants against
 // themselves — so the separators, the order, and three of the four sentences
 // could be reworded with every gate green. Golden literals below: a reworded
-// constant reds HERE, which is exactly what a DRAFT string awaiting a canon
+// constant reds HERE, which is exactly what a string awaiting a wording
 // sitting needs.
 //
 // The rule SOURCE stays builtin:private-ip on both variants (its AUDIT-ACTIONS
@@ -27,6 +27,7 @@ package proxy
 // The retry header stays `never` on both: both are truly final.
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -56,9 +57,30 @@ const (
 	goldenRequireTLSBody = "credential injection for allowed.test requires TLS: this rule sets require_tls and the request was plain HTTP"
 )
 
-// denyBody is the 403 body without http.Error's trailing newline.
+// denyBody is the 403 body without http.Error's trailing newline. A forward-lane
+// egress deny is JSON now ({"wardyn":{"detail",...}}); its sentence is returned
+// as the text it was, so these goldens keep pinning the wording.
 func denyBody(rec *httptest.ResponseRecorder) string {
-	return strings.TrimSuffix(rec.Body.String(), "\n")
+	return strings.TrimSuffix(denyText(rec), "\n")
+}
+
+// denyText is the deny sentence in http.Error's format (detail, then the
+// attribution line when there is one, then a newline), or the raw body when it
+// is not a forward-lane egress deny.
+func denyText(rec *httptest.ResponseRecorder) string {
+	var b struct {
+		Wardyn struct {
+			Detail      string `json:"detail"`
+			Attribution string `json:"attribution"`
+		} `json:"wardyn"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &b) != nil || b.Wardyn.Detail == "" {
+		return rec.Body.String()
+	}
+	if b.Wardyn.Attribution != "" {
+		return b.Wardyn.Detail + "\n" + b.Wardyn.Attribution + "\n"
+	}
+	return b.Wardyn.Detail + "\n"
 }
 
 // driveDeny resolves host to addr and CONNECTs to it, returning the recorder.

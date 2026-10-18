@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the eight images a Wardyn release actually ships, cosign-signed
+# Publishes the nine images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the eight images, and why each ref is what it is (verified against the
+# ── the nine images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -32,6 +32,9 @@ name: Release images
 #     default for k8s.proxyImage (environment-specific, required in practice),
 #     so this is the ref an operator points `--set k8s.proxyImage=` at once
 #     they choose ghcr as their registry, not a value baked into the chart.
+#   ghcr.io/cjohnstoniv/wardyn-runnerd
+#     deploy/helm/wardyn-runnerd/values.yaml's `image.repository` default; that
+#     chart pins wardyn-proxy to the same tag. Same base pins as wardyn-proxy.
 #   ghcr.io/cjohnstoniv/agent-base, ghcr.io/cjohnstoniv/agent-codex-cli
 #     internal/api/runs_policy.go's agentImage() fallback convention:
 #     "ghcr.io/cjohnstoniv/agent-" + ImageKey, and internal/api/harness.go's
@@ -247,7 +250,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk"
           echo "watched=${watched}" >> "$GITHUB_OUTPUT"
           choice=build
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
@@ -299,6 +302,9 @@ jobs:
       # daemon-proxy-secret-kind (T-59, #719), provider-subscription-docker-pg
       # (T-17, #677) and managed-settings-drift (#1395) each joined after a
       # green hosted run (see nightly.yml's own comment on each job).
+      # runner-compat-walk joined before its first hosted run, on purpose: it is
+      # the check that a released runner and a released organisation keep working
+      # with this tag (nightly.yml's own comment on the job).
       - id: green
         name: The tag's tree must be green by CI and by a dispatched nightly
         if: inputs.dry_run != true || steps.path.outputs.path == 'promote'
@@ -414,6 +420,11 @@ jobs:
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
+          # The Kubernetes runner image (deploy/helm/wardyn-runnerd). RELEASE_BUILD as for wardynd.
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
+            build-args: |
+              RELEASE_BUILD=true
           # float-latest: "true" on the three agent-* rows below (W30-S1-2).
           # internal/api/runs_policy.go's agentImage() fallback — what a
           # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
@@ -786,7 +797,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The same eight rows as `images` and `images-ui-sandbox`. `dockerfile` is
+        # The same nine rows as `images` and `images-ui-sandbox`. `dockerfile` is
         # the recipe nightly built, read by check-image-pins.sh,
         # gpl-source-offer.sh and guard 16; this job never builds it. The
         # wardynd-fips digest was checked for its GOFIPS140 snapshot in nightly's
@@ -798,6 +809,8 @@ jobs:
             dockerfile: deploy/compose/Dockerfile.wardynd
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
+          - name: wardyn-runnerd
+            dockerfile: deploy/compose/Dockerfile.runnerd
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             float-latest: "true"
@@ -980,6 +993,57 @@ jobs:
             wardyn-runnerd-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
+  # The laptop runner's macOS installer, built from the two darwin wardyn-runnerd binaries above.
+  # pkgbuild, productbuild, productsign and notarytool exist only on macOS, hence this runner.
+  # Signing turns on by secret and each step is skipped with a log line when its secrets are unset
+  # (scripts/build-runner-pkg.sh header): APPLE_DEVELOPER_ID_APPLICATION_* signs the binary,
+  # APPLE_DEVELOPER_ID_INSTALLER_* signs the package, APPLE_NOTARY_* notarizes it once both are signed.
+  # With none set the package is unsigned: a person allows it in System Settings (Privacy & Security, Open
+  # Anyway), and only an MDM agent or script install can push it (Apple's own app-install command needs a
+  # Developer ID Installer signature).
+  runner-pkg:
+    name: macOS runner package (.pkg)
+    runs-on: macos-14
+    needs: [preflight-green, binaries]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "cli-darwin-*"
+          merge-multiple: true
+          path: bin
+      - name: Build, sign and notarize (each only with its secrets)
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          APPLE_DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_IDENTITY }}
+          APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD }}
+          APPLE_DEVELOPER_ID_INSTALLER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_IDENTITY }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          scripts/build-runner-pkg.sh --version "$version" \
+            --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
+            --out wardyn-runnerd.pkg
+          # An unsigned package has no signature to check; a signed one must verify.
+          pkgutil --check-signature wardyn-runnerd.pkg || true
+          payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
+          grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$payload"
+          grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
+          grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runner-pkg
+          path: wardyn-runnerd.pkg
+          if-no-files-found: error
+
   # The chart, published as an OCI artifact so installing does not require cloning.
   #
   # Until 0.6.2 the images were published and the CHART was not, which made the
@@ -1052,7 +1116,7 @@ jobs:
     # !failure() lets this run when `images` or `promote` was skipped by the path
     # choice; any job that FAILED still stops it.
     if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
-    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries]
+    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries, runner-pkg]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1075,7 +1139,7 @@ jobs:
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: "{sbom-*,chart,cli-*}"
+          pattern: "{sbom-*,chart,cli-*,runner-pkg}"
           merge-multiple: true
           path: assets
       - name: Assemble the asset set
@@ -1126,7 +1190,7 @@ jobs:
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
-                      wardyn-runner-units.tar.gz; do
+                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"

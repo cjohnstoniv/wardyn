@@ -44,7 +44,7 @@ func TestDestinationOverlaps(t *testing.T) {
 	}}
 	srv := &Server{}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(operatorCtx(capSub, capEmail, oidc.RoleUser))
-	b := srv.newComponentHostBounds(r, site, spec, governanceCeiling{}, nil)
+	b := srv.newComponentHostBounds(r, site, spec, "", governanceCeiling{}, nil)
 
 	for entry, want := range map[string]bool{
 		// The vendors' hosts.
@@ -102,7 +102,7 @@ func TestComponentHostBounds_AzureDevOpsLane(t *testing.T) {
 	srv := &Server{}
 	as := func(sub string) componentHostBounds {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(operatorCtx(sub, sub+"@corp.example", oidc.RoleUser))
-		return srv.newComponentHostBounds(r, site, spec, governanceCeiling{}, nil)
+		return srv.newComponentHostBounds(r, site, spec, "", governanceCeiling{}, nil)
 	}
 	owner := as(adoTestOwner)
 	for _, h := range adoContosoHosts {
@@ -115,7 +115,7 @@ func TestComponentHostBounds_AzureDevOpsLane(t *testing.T) {
 	}
 	// A run that declares no Azure DevOps repository has no lane.
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(operatorCtx(adoTestOwner, "a@corp.example", oidc.RoleUser))
-	if b := srv.newComponentHostBounds(r, site, types.RunPolicySpec{}, governanceCeiling{}, nil); b.collides(mustDestination(t, "dev.azure.com")) {
+	if b := srv.newComponentHostBounds(r, site, types.RunPolicySpec{}, "", governanceCeiling{}, nil); b.collides(mustDestination(t, "dev.azure.com")) {
 		t.Error("dev.azure.com collides on a run with no Azure DevOps repository")
 	}
 }
@@ -124,7 +124,7 @@ func TestComponentHostBounds_AzureDevOpsLane(t *testing.T) {
 // referenced workspace's permanent denies, matched as dispatch re-asserts them.
 func TestComponentHostBounds_DenySet(t *testing.T) {
 	b := (&Server{}).newComponentHostBounds(httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), types.SiteConfig{},
-		types.RunPolicySpec{DeniedDomains: []string{"policy-denied.example"}},
+		types.RunPolicySpec{DeniedDomains: []string{"policy-denied.example"}}, "",
 		governanceCeiling{Spec: types.RunPolicySpec{DeniedDomains: []string{"*.ceiling-denied.example", "ported.example:8443"}}},
 		[]types.Workspace{{DeniedEgress: []string{"ws-denied.example"}}, {DeniedEgress: []string{"ws2-denied.example"}}})
 	for entry, want := range map[string]bool{

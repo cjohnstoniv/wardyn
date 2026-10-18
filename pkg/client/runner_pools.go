@@ -6,8 +6,10 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -95,7 +97,7 @@ const (
 //
 // Limits and Barriers are never filled on these doors: the list carries a
 // pool's limits and barrier_options, and preflight carries this run's.
-// MainDrive is filled on the list and on both doors.
+// MainDrive and MyRunners are filled on the list and on both doors.
 type RunnerPoolChoice struct {
 	ID           uuid.UUID                `json:"id"`
 	Name         string                   `json:"name"`
@@ -107,6 +109,11 @@ type RunnerPoolChoice struct {
 	// MainDrive is what this pool's runners do with a run's main-drive size, for the caller's own eligible
 	// targets. Absent on a pool the caller may only manage. The enforcement word reaches members only here.
 	MainDrive *MainDriveFacts `json:"main_drive,omitempty"`
+	// MyRunners is every one of the caller's OWN self-hosted runners that is a member of a user pool,
+	// whether or not it can take a run now; never another person's. It is how a person reads which
+	// pools each of their runners is in, and how Review says how many are online. Filled on the pool
+	// list and on both dry doors.
+	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 }
 
 // MainDriveEnforcement is how a pool binds a run's main-drive size. Never request or external.
@@ -168,10 +175,6 @@ type RunnerPoolCatalogueEntry struct {
 	// RunTypesSource is RunTypesSourcePool or RunTypesSourceNone.
 	RunTypesSource string          `json:"run_types_source,omitempty"`
 	BarrierOptions []BarrierOption `json:"barrier_options"`
-	// MyRunners is every one of the caller's OWN self-hosted runners that is a
-	// member of a user pool, whether or not it can take a run now; never another
-	// person's. It is how a person reads which pools each of their runners is in.
-	MyRunners []PoolRunner `json:"my_runners,omitempty"`
 	// Slots is how busy the pool is; absent on a row the caller may only manage.
 	Slots *PoolSlots `json:"slots,omitempty"`
 	// Capacity is its runners' limits and usage added up; absent on a row the caller may only manage.
@@ -179,6 +182,12 @@ type RunnerPoolCatalogueEntry struct {
 	// Owner is a user pool's owner: the caller on their own pools, and the
 	// person each other pool belongs to on an administrator's oversight rows.
 	Owner string `json:"owner,omitempty"`
+	// State, Revision and PoolLimits are the pool's own record, as GET /runner-pools/{id} reads it
+	// (PoolLimits is that record's raw limits, not the effective ones in Limits), on every row,
+	// including one the caller may only manage, so a list needs no read of each pool.
+	State      RunnerPoolState   `json:"state,omitempty"`
+	Revision   int64             `json:"revision,omitempty"`
+	PoolLimits *RunnerPoolLimits `json:"pool_limits,omitempty"`
 }
 
 // The Verdict of PoolSlots: advisory, since the launch decides.
@@ -256,12 +265,17 @@ type PoolDefault struct {
 type CreateRunnerPoolRequest struct {
 	Name   string            `json:"name"`
 	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+	// Recording is whether the pool requires its runs recorded: preferred (empty) or required.
+	Recording types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses a bad name and limits a pool cannot keep.
 func (r CreateRunnerPoolRequest) Validate() error {
 	if err := types.ValidateRunnerPoolName(r.Name); err != nil {
 		return err
+	}
+	if !r.Recording.Valid() {
+		return fmt.Errorf("recording %q is not preferred or required", r.Recording)
 	}
 	if r.Limits != nil {
 		return r.Limits.Validate()
@@ -273,8 +287,9 @@ func (r CreateRunnerPoolRequest) Validate() error {
 // are as CreateRunnerPoolRequest's; every run is still bounded by the caller's
 // governance profile.
 type CreateMyRunnerPoolRequest struct {
-	Name   string            `json:"name"`
-	Limits *RunnerPoolLimits `json:"limits,omitempty"`
+	Name      string                     `json:"name"`
+	Limits    *RunnerPoolLimits          `json:"limits,omitempty"`
+	Recording types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses a bad name and limits a pool cannot keep.
@@ -302,6 +317,8 @@ type UpdateRunnerPoolRequest struct {
 	Name     *string           `json:"name,omitempty"`
 	State    *RunnerPoolSwitch `json:"state,omitempty"`
 	Limits   *RunnerPoolLimits `json:"limits,omitempty"`
+	// Recording, when set, replaces the pool's recording requirement.
+	Recording *types.RecordingRequirement `json:"recording,omitempty"`
 }
 
 // Validate refuses an update that changes nothing, a revision that was never
@@ -311,8 +328,10 @@ func (r UpdateRunnerPoolRequest) Validate() error {
 	switch {
 	case r.Revision < 1:
 		return errors.New("revision is the revision you read")
-	case r.Name == nil && r.State == nil && r.Limits == nil:
-		return errors.New("change the name, the state or the limits")
+	case r.Name == nil && r.State == nil && r.Limits == nil && r.Recording == nil:
+		return errors.New("change the name, the state, the limits or the recording requirement")
+	case r.Recording != nil && (*r.Recording == "" || !r.Recording.Valid()):
+		return errors.New("recording is preferred or required")
 	case r.State != nil && *r.State != RunnerPoolSwitchActive && *r.State != RunnerPoolSwitchDisabled:
 		return errors.New("state is active or disabled; delete a pool with DELETE")
 	}
@@ -386,6 +405,36 @@ func (c *Client) CreateMyRunnerPool(ctx context.Context, req CreateMyRunnerPoolR
 	return out, err
 }
 
+// OwnRunnerPool is the caller's user pool named name (in any case), made when they have none, and
+// whether it was just made. It reads only the pools the caller may use (GET /me/runner-pools), where a
+// user-scope row is their own; an organization pool of the same name is not theirs to put a self-hosted
+// runner in, so it is passed over.
+func (c *Client) OwnRunnerPool(ctx context.Context, name string) (pool RunnerPool, created bool, err error) {
+	list, err := c.ListMyRunnerPools(ctx, "")
+	if err != nil {
+		return pool, false, err
+	}
+	var ids []uuid.UUID
+	for _, p := range list.Pools {
+		if p.Scope == RunnerPoolUser && strings.EqualFold(p.Name, name) {
+			ids = append(ids, p.ID)
+		}
+	}
+	switch len(ids) {
+	case 0:
+		req := CreateMyRunnerPoolRequest{Name: name}
+		if err = req.Validate(); err != nil {
+			return pool, false, err
+		}
+		pool, err = c.CreateMyRunnerPool(ctx, req)
+		return pool, err == nil, err
+	case 1:
+		pool, err = c.GetRunnerPool(ctx, ids[0])
+		return pool, false, err
+	}
+	return pool, false, fmt.Errorf("%d of your pools are named %q; name it by id with `wardyn runner claim --pool <id>`", len(ids), name)
+}
+
 // UpdateMyRunnerPool renames, switches or re-limits one of the caller's own
 // user pools; anyone else's answers as an unknown id does.
 func (c *Client) UpdateMyRunnerPool(ctx context.Context, id uuid.UUID, req UpdateRunnerPoolRequest) (RunnerPool, error) {
@@ -410,6 +459,19 @@ func (c *Client) AddMyRunnerToPool(ctx context.Context, poolID, runnerID uuid.UU
 // RemoveMyRunnerFromPool takes the caller's own runner out of a pool.
 func (c *Client) RemoveMyRunnerFromPool(ctx context.Context, poolID, runnerID uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
+}
+
+// AddRunnerPoolRunner puts a claimed organisation runner into an organisation pool (admin). A runner
+// serves one pool only; one already in another pool is refused with the server's sentence.
+func (c *Client) AddRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID) (RunnerPoolMember, error) {
+	var out RunnerPoolMember
+	err := c.do(ctx, http.MethodPut, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, &out)
+	return out, err
+}
+
+// RemoveRunnerPoolRunner takes an organisation runner, in any state, out of an organisation pool (admin).
+func (c *Client) RemoveRunnerPoolRunner(ctx context.Context, poolID, runnerID uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/runner-pools/"+poolID.String()+"/runners/"+runnerID.String(), nil, nil)
 }
 
 // GetOrgRunnerPoolDefaults reads the organisation's default pool and barrier.

@@ -600,7 +600,7 @@ func TestApprovalPendingRefusalIsRetryableAndReEmits(t *testing.T) {
 // HOSTNAME's operator reads is composed of four separately-frozen constants, so
 // the owner's canon sitting can reword or drop one without touching the join.
 //
-// It asserts THROUGH the constants deliberately — the sentences are DRAFT and
+// It asserts THROUGH the constants deliberately — the sentences are frozen as constants and
 // the pin is the composition, not a copy of the text a second time.
 func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"priv.example.test"}})
@@ -669,7 +669,7 @@ func TestNilDecisionLogWithoutAMemoEntryGetsThePlainRefusal(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	p.writeEgressDeny(rec, "never-refused.example", 443, nil, true)
-	if body := strings.TrimSpace(rec.Body.String()); body != "egress denied by policy" {
+	if body := strings.TrimSpace(denyText(rec)); body != "egress denied by policy" {
 		t.Errorf("body = %q, want the plain refusal — a nil log is not evidence of a private-IP verdict", body)
 	}
 	if got := rec.Header().Get(egressHeaderRetry); got != "" {
@@ -715,7 +715,7 @@ func TestMemoedFlagIsRequiredForTheMemoedRefusal(t *testing.T) {
 		t.Errorf("%s = %q, want %q — a memoed refusal is what the retry header exists for",
 			egressHeaderRetry, got, egressRetryNever)
 	}
-	if body := memoed.Body.String(); !strings.Contains(body, egressInternalHostsRemedy) {
+	if body := denyText(memoed); !strings.Contains(body, egressInternalHostsRemedy) {
 		t.Errorf("body = %q, want the private-IP remedy", body)
 	}
 
@@ -723,7 +723,7 @@ func TestMemoedFlagIsRequiredForTheMemoedRefusal(t *testing.T) {
 	// the plain refusal — the memo is not a fallback body for every nil log.
 	own := httptest.NewRecorder()
 	p.writeEgressDeny(own, host, 443, nil, false)
-	if body := strings.TrimSpace(own.Body.String()); body != "egress denied by policy" {
+	if body := strings.TrimSpace(denyText(own)); body != "egress denied by policy" {
 		t.Errorf("body = %q, want the plain refusal for a caller that never reads the memo", body)
 	}
 	for _, h := range []string{egressHeaderRetry, egressHeaderDetail} {

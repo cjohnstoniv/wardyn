@@ -56,6 +56,35 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+describe("organization pool members", () => {
+  it("shows an organization runner as an organization runner, beside a remote-hosted one", () => {
+    const cluster = selfRunner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
+    renderDrawer(pool(), { members: [member(EU), member(cluster)] });
+    const cards = document.querySelectorAll("[data-member]");
+    expect(cards).toHaveLength(2);
+    const org = within(cards[1] as HTMLElement);
+    expect(org.getByText("cluster-a")).toBeInTheDocument();
+    expect(org.getByText("Organization")).toBeInTheDocument();
+    expect(org.queryByText("Self-hosted")).not.toBeInTheDocument();
+    expect(org.getByText("node-1.corp.example.com")).toBeInTheDocument();
+    expect(within(cards[0] as HTMLElement).getByText("Remote-hosted")).toBeInTheDocument();
+    expect(screen.getByText("Remote-hosted and organization runners")).toBeInTheDocument();
+  });
+});
+
+describe("organization pool members read by a pool member", () => {
+  it("shows an organization runner the server sent without the people behind it, and prints no undefined", () => {
+    const sent = selfRunner({ id: "r-cluster", name: "cluster-a", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com" });
+    // What a pool member reads: the owner, minter, trust writer and revoker keys are not sent at all.
+    for (const k of ["owner", "minted_by", "minted_by_email", "trust_set_by", "trust_set_at", "revoked_by", "revoked_by_email", "revoke_reason"] as const) delete sent[k];
+    renderDrawer(pool(), { members: [member(sent)] });
+    const card = document.querySelector("[data-member]") as HTMLElement;
+    expect(within(card).getByText("cluster-a")).toBeInTheDocument();
+    expect(within(card).getByText("Organization")).toBeInTheDocument();
+    expect(card.textContent).not.toMatch(/undefined|null/);
+  });
+});
+
 describe("organization default pool", () => {
   it("shows its chips, what it allows, its resources and the default with Clear default", async () => {
     const p = pool({ id: "p-gen", name: "General", limits: { barriers: ["CC1", "CC2", "CC3"] } });

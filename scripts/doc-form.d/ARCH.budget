@@ -5,7 +5,9 @@
 # ARCHITECTURE.md 5359 adds 50: 18 (invariant 1 links docs/CREDENTIALS.md) and 32 (invariant 6: the application cannot erase an audit row; the one removal is the partition drop).
 # ARCHITECTURE.md 5360 adds 1: the 0.9 kernel note names client-mode runners in place of the remote decision API.
 # ARCHITECTURE.md 5386 adds 26 over 5360 (0.9 F-1508-M3): invariant 4 names the service identity as its own actor.
-ARCHITECTURE.md=5386 share=35
+# ARCHITECTURE.md 5399 adds 13 over 5386 (0.9.3 FIN-E), measured: the denial table source of record and the device_channel marker.
+# ARCHITECTURE.md 5755 adds 356, measured: the wardyn-runnerd row and the runner substrates section (laptop and organisation runners, resident credentials), and the runner chart named beside the two stacks.
+ARCHITECTURE.md=5755 share=35
 SECURITY.md=999 share=35
 PROVENANCE.md=798 share=35
 docs/DATA-FLOW.md=1200 share=35

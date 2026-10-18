@@ -457,6 +457,8 @@ func writeJSONRPC(w http.ResponseWriter, v any) {
 // and internal hosts as configured). A redirect is refused, never followed.
 func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	p, s := x.p, x.server
+	// Only an explicit deny stops it here: the builtin evaluator is the only one wired, and it answers
+	// allow or deny, so a verdict that needs a decision cannot reach this check.
 	if verdict, err := p.evaluator.EvaluateHost(x.r.Context(), x.req); err != nil || verdict == egress.VerdictDeny {
 		x.deny(w, "policy:denied", "this MCP server's host is blocked for this run", http.StatusForbidden)
 		return

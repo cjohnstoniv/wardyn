@@ -26,6 +26,8 @@ vi.mock("../../../lib/api/credential-delivery", () => ({
 import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
+import { unsavedSnapshot } from "../../../lib/unsaved-registry";
+import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import type { DeliveryPolicy } from "../../../lib/types/credential-delivery";
 import { RunnerCredentials } from "./runner-credentials";
@@ -170,6 +172,48 @@ describe("RunnerCredentials — save", () => {
     expect(putMock.mock.calls[0][0]).toEqual({ classes: { api_key: { mode: "via_org" }, azure_foundry_token: { mode: "via_org" } } });
   });
 
+  it("carries a stored minimum for an OS the editor has no field for through a save", async () => {
+    getMock.mockResolvedValue(
+      doc({ env_secret: { mode: "runner_resident", require_posture: { os_min: { darwin: "14.0", freebsd: "14.1" } } } }),
+    );
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    setField(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.darwin)), "15.0");
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][0]).toEqual({
+      classes: { env_secret: { mode: "runner_resident", require_posture: { os_min: { darwin: "15.0", freebsd: "14.1" } } } },
+    });
+  });
+
+  it("sends the ETag it read as If-Match, then the one the save answered with", async () => {
+    getMock.mockResolvedValue({ ...doc(), etag: '"read"' });
+    putMock.mockResolvedValue({ ...doc({ api_key: { mode: "via_org" } }), etag: '"saved"' });
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await screen.findByText(DELIVERY.SAVED);
+    await user.click(option("env_secret", "runner_resident"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+    expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"saved"']);
+  });
+
+  it("a save of an unrelated row keeps the stored per-trust overrides", async () => {
+    const by_trust = { personal: { classes: { env_secret: { mode: "refuse" as const } } } };
+    getMock.mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), policy: { classes: { env_secret: { mode: "runner_resident" } }, by_trust } });
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][0]).toMatchObject({ by_trust });
+  });
+
   it("a minimum that is not a version blocks Save and says so on its field", async () => {
     const user = userEvent.setup();
     renderTab();
@@ -199,6 +243,19 @@ describe("RunnerCredentials — save", () => {
     expect(onSubmitted).toHaveBeenCalledTimes(1);
   });
 
+  it("a held draft is not a second change: Save stays off until the draft changes again", async () => {
+    putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await screen.findByText(CHANGES.SUBMITTED_TITLE);
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
+    await user.click(option("env_secret", "runner_resident"));
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeEnabled();
+  });
+
   it("a 400 shows the server's sentence under the refusal heading and moves focus there", async () => {
     putMock.mockRejectedValue(new HttpError(400, 'class "github_token" cannot be delivered as "runner_resident"'));
     const user = userEvent.setup();
@@ -209,6 +266,53 @@ describe("RunnerCredentials — save", () => {
     const heading = await screen.findByRole("heading", { name: DELIVERY.REFUSED_TITLE });
     expect(screen.getByRole("alert")).toHaveTextContent('class "github_token" cannot be delivered as "runner_resident"');
     expect(heading).toHaveFocus();
+  });
+});
+
+describe("RunnerCredentials — a stale save", () => {
+  const RAW = "If-Match does not match the current credential delivery policy";
+
+  it("a 412 reloads the stored document and its ETag, offers the refused draft in the saved-elsewhere banner, and never shows the raw sentence", async () => {
+    // Someone else saved env_secret first: the reload after the 412 brings their document and its new ETag.
+    getMock
+      .mockResolvedValueOnce({ ...doc(), etag: '"read"' })
+      .mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), etag: '"theirs"' });
+    putMock.mockRejectedValueOnce(new HttpError(412, RAW));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    expect(await screen.findByText("Someone else saved this first")).toBeInTheDocument();
+    expect(screen.getByText(/"api_key"/)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(RAW))).toBeNull();
+    expect(screen.queryByRole("heading", { name: DELIVERY.REFUSED_TITLE })).toBeNull();
+    // The next Save is against the reloaded ETag, not the refused one.
+    await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+    expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"theirs"']);
+  });
+
+  it("keeps the unsaved guard armed while the refused draft is only in the banner, and lets go once it is discarded", async () => {
+    getMock
+      .mockResolvedValueOnce({ ...doc(), etag: '"read"' })
+      .mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), etag: '"theirs"' });
+    putMock.mockRejectedValueOnce(new HttpError(412, RAW));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    expect(await screen.findByText("Someone else saved this first")).toBeInTheDocument();
+    // The reload made the editor equal to the stored document; the banner still holds the only copy of the draft.
+    expect(unsavedSnapshot()).toContain("api_key");
+    expect(screen.getByText(PROVIDERS_EXTRA.SAVED_ELSEWHERE_RELOADED_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(PROVIDERS_EXTRA.DISCARD_AND_RELOAD)).toBeNull();
+    await user.click(screen.getByRole("button", { name: PROVIDERS_EXTRA.DISCARD_RELOADED }));
+    expect(unsavedSnapshot()).toBeNull();
   });
 });
 

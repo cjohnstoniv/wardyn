@@ -25,7 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// mp400* — the refusal bodies this file writes. DRAFT (M2 canon pending), held
+// mp400* — the refusal bodies this file writes, held
 // as constants for the reason agent_providers.go gives for its own.
 const (
 	mp400ID           = "model_providers[%d].id: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters"

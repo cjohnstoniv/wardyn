@@ -118,6 +118,7 @@ func TestRepoDigestFor(t *testing.T) {
 	}{
 		{"short name matches its normalized entry", "ubuntu:24.04", []string{"docker.io/library/ubuntu@" + testBaseDigest}, "docker.io/library/ubuntu@" + testBaseDigest},
 		{"first match wins", "a/b:1", []string{"c/d@" + testOtherDigest, "a/b@" + testBaseDigest, "a/b@" + testOtherDigest}, "a/b@" + testBaseDigest},
+		{"a pinned base keeps its own digest", "a/b@" + testOtherDigest, []string{"a/b@" + testBaseDigest, "a/b@" + testOtherDigest}, "a/b@" + testOtherDigest},
 		{"private registry with a port", "localhost:5000/team/img:dev", []string{"localhost:5000/team/img@" + testBaseDigest}, "localhost:5000/team/img@" + testBaseDigest},
 		{"other repository", "a/b:1", []string{"a/c@" + testBaseDigest}, ""},
 		{"none", "a/b:1", nil, ""},

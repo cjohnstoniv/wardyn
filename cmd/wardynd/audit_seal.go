@@ -163,6 +163,7 @@ func (r sealingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	// A pending row goes to the spool and nowhere else: the store holds fields
 	// sealed under their subjects' keys only. The drain re-seals it.
 	if r.spool == nil {
+		slog.WarnContext(ctx, "audit row not recorded", "action", ev.Action, "why", "no_spool")
 		return fmt.Errorf("audit seal: %s not recorded: a subject key could not be had and there is no spool to hold the row", ev.Action)
 	}
 	slog.WarnContext(ctx, "wardynd: a subject's audit key could not be had; the row is held in the audit spool sealed under the pending key and is re-sealed by the drain",

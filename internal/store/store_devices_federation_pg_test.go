@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testutil"
@@ -344,6 +346,45 @@ func TestPG_Devices_EveryAcceptedRowReChecksFromTheStoredRow(t *testing.T) {
 				t.Errorf("organisation chain broken (hash ok=%v, link ok=%v)", got[0].orgHashOK, got[0].linkOK)
 			}
 		})
+	}
+}
+
+// Behind a trusted proxy the TCP peer is recorded in device_origin, this
+// organisation's own annotation, so the device's claim still recomputes from
+// the stored row and the organisation's chain verifies.
+func TestPG_Devices_ProxiedIngestKeepsTheClaimReCheckable(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := audit.WithProxyPeer(context.Background(), "10.0.0.1:443")
+	d := federationDevice(t, st)
+	r1 := federationRow(t, pool, d, "", 1, "t", json.RawMessage(`{"s":"x"}`))
+	r2 := federationRow(t, pool, d, r1.RowHash, 2, "t", nil)
+	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil || res.Accepted != 2 {
+		t.Fatalf("ingest: %+v %v", res, err)
+	}
+	got := storedFederated(t, pool, d.ID)
+	if len(got) != 2 {
+		t.Fatalf("stored %d rows, want 2", len(got))
+	}
+	for _, g := range got {
+		var stored struct {
+			ProxyPeer json.RawMessage `json:"proxy_peer"`
+			Origin    struct {
+				ProxyPeer string `json:"proxy_peer"`
+			} `json:"device_origin"`
+		}
+		if err := json.Unmarshal([]byte(g.data), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if !g.deviceHashOK || !g.orgHashOK || !g.linkOK {
+			t.Errorf("seq %d: device claim ok=%v, org hash ok=%v, link ok=%v; data=%s", g.seq, g.deviceHashOK, g.orgHashOK, g.linkOK, g.data)
+		}
+		if stored.Origin.ProxyPeer != "10.0.0.1:443" || stored.ProxyPeer != nil {
+			t.Errorf("seq %d: want the peer in device_origin.proxy_peer only; data=%s", g.seq, g.data)
+		}
+	}
+	if status, err := st.VerifyAuditChain(context.Background()); err != nil || !status.OK {
+		t.Fatalf("organisation chain verify: %+v %v", status, err)
 	}
 }
 
@@ -695,5 +736,65 @@ func TestPG_Devices_FederationRevokedMark(t *testing.T) {
 	cur, curHash, cerr := st.GetFederationCursor(ctx)
 	if err != nil || cerr != nil || revoked || cur != 0 || curHash != "" {
 		t.Fatalf("after reset: revoked=%v cursor=(%d, %q) err=%v/%v", revoked, cur, curHash, err, cerr)
+	}
+}
+
+// The legacy device forwarder sends every chained row, so the Azure DevOps audit families reach the
+// organisation by construction. This names them: one row of each family goes through the device audit
+// ingest and comes back with its action, target, outcome and data unchanged.
+func TestPG_Devices_IngestCarriesTheADOAuditFamiliesVerbatim(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	actions := []string{
+		"ado.signin.capture", "ado_pat.connect", "ado_pat.disconnect", "ado_pat.mint", "ado_pat.mint.denied",
+		"ado_pat.revoke", "ado_pat.revoke.failed", "ado_pat.org_check", "ado_pat.own.store", "ado_pat.own.delete",
+		"ado_shared_credential.retire",
+	}
+	var rows []types.FederatedAuditEvent
+	prev := ""
+	for i, action := range actions {
+		ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorHuman,
+			Actor: "federation:" + d.ID.String(), Action: action, Target: "dev.azure.com/contoso/" + action, Outcome: "success",
+			SourceIP: "10.9.9.9", PrevHash: prev, Data: json.RawMessage(`{"family":"` + action + `","n":` + strconv.Itoa(i) + `}`)}
+		ev.RowHash = auditRowHash(t, pool, prev, ev)
+		prev = ev.RowHash
+		rows = append(rows, types.FederatedAuditEvent{AuditEvent: ev, Seq: int64(i + 1)})
+	}
+	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, rows); err != nil || res.Accepted != len(rows) {
+		t.Fatalf("ingest: %+v %v", res, err)
+	}
+	stored, err := pool.Query(ctx, `SELECT action, target, outcome, data - 'device_origin' FROM audit_events WHERE actor = $1 ORDER BY seq`,
+		store.FederatedActor(d.ID, "federation:"+d.ID.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stored.Close()
+	i := 0
+	for stored.Next() {
+		var action, target, outcome string
+		var data []byte
+		if err := stored.Scan(&action, &target, &outcome, &data); err != nil {
+			t.Fatal(err)
+		}
+		sent := rows[i]
+		var got, want any
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(sent.Data, &want); err != nil {
+			t.Fatal(err)
+		}
+		if action != sent.Action || target != sent.Target || outcome != sent.Outcome || !reflect.DeepEqual(got, want) {
+			t.Errorf("row %d (%s) arrived as %q %q %q %s", i+1, sent.Action, action, target, outcome, data)
+		}
+		i++
+	}
+	if err := stored.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if i != len(actions) {
+		t.Fatalf("stored %d rows, want %d", i, len(actions))
 	}
 }

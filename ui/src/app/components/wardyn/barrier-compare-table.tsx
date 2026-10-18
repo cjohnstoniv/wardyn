@@ -9,14 +9,15 @@
 // CSS display shows exactly one, so the hidden set is out of the accessibility
 // tree and the page never has two live radio sets.
 import * as React from "react";
-import { Info, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import { cn } from "../ui/utils";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { BarrierArt } from "./barrier-art";
 import { BarrierStrengthStrip } from "./barrier-strength-strip";
 import { CAVEAT_PREFIX, CC_META, CC_MATRIX_ROWS, CC_MATRIX_WHERE } from "./cc-meta";
 import { MarkCell } from "./mark-cell";
+import { InfoTip } from "./info-tip";
 import { Chip } from "./primitives";
+import { NR_RUN } from "./copy/new-run/run";
 import { TIER_PICKER } from "../../lib/tier-picker-copy";
 import type { ConfinementClass } from "../../lib/types";
 
@@ -26,15 +27,6 @@ export interface BarrierOption {
   /** Why the barrier cannot be picked; shown as visible text and described to the radio. */
   reason?: string;
 }
-
-// PLACEHOLDER: the info popover's three headings are canon strings of the
-// approved mock that copy/new-run/* (E1d) will own; swap this constant for that
-// import when the lanes merge.
-const INFO_HEADINGS = {
-  protects: "Protects against",
-  doesntProtect: "Doesn't protect against",
-  howItWorks: "How it works",
-};
 
 // Make's barrier comparison (snapshot App.tsx:1798-1912, index.css:240-275): a 1 px-ruled grid of the corner,
 // three column heads (art, name, tagline, badge, radio dot, lock reason) and the criteria rows, each cell washed
@@ -167,11 +159,6 @@ function Mark({ mark, cc }: { mark: Parameters<typeof MarkCell>[0]["mark"]; cc: 
   return (
     <span className="mx-auto grid size-[26px] place-items-center rounded-full bg-card" style={{ backgroundImage: `linear-gradient(${MARK_DISC[mark]}, ${MARK_DISC[mark]})` }}>
       <MarkCell mark={mark} cc={cc} caveatPrefix={CAVEAT_PREFIX} />
-      {mark === "caveat" && (
-        <span className="sr-only">
-          {CAVEAT_PREFIX} {CC_META[cc].doesntProtect}
-        </span>
-      )}
     </span>
   );
 }
@@ -255,30 +242,16 @@ function BarrierChoice({
   );
 }
 
-// PLACEHOLDER for the shared InfoTip (E1a, info-tip.tsx): same contract (a
-// labelled icon button that opens on click or tap and closes on Esc), so the
-// merge swaps this for that import.
 function BarrierInfo({ cc }: { cc: ConfinementClass }) {
   const meta = CC_META[cc];
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={TIER_PICKER.ABOUT(meta.label)}
-          className={cn("flex size-4 shrink-0 items-center justify-center", TINT[cc].text)}
-        >
-          <Info className="size-4" aria-hidden />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-72 text-xs">
-        <p className="text-sm font-medium text-foreground">{INFO_HEADINGS.protects}</p>
-        <p className="mt-1 text-muted-foreground">{meta.protects}</p>
-        <p className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.doesntProtect}</p>
-        <p className="mt-1 text-muted-foreground">{meta.doesntProtect}</p>
-        <p className="mt-2 text-sm font-medium text-foreground">{INFO_HEADINGS.howItWorks}</p>
-        <p className="mt-1 text-muted-foreground">{meta.mechanism}</p>
-      </PopoverContent>
-    </Popover>
+    <InfoTip label={TIER_PICKER.ABOUT(meta.label)}>
+      <p className="text-sm font-medium text-foreground">{NR_RUN.PROTECTS_HEAD}</p>
+      <p className="mt-1 text-muted-foreground">{meta.protects}</p>
+      <p className="mt-2 text-sm font-medium text-foreground">{NR_RUN.NOT_PROTECTS_HEAD}</p>
+      <p className="mt-1 text-muted-foreground">{meta.doesntProtect}</p>
+      <p className="mt-2 text-sm font-medium text-foreground">{NR_RUN.HOW_HEAD}</p>
+      <p className="mt-1 text-muted-foreground">{meta.mechanism}</p>
+    </InfoTip>
   );
 }

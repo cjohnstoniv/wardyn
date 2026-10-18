@@ -36,6 +36,9 @@ describe("since and gives up", () => {
   it("reads the hours left from deadline_at in the canon hour words, then the time it gives up", () => {
     expect(givesUp(at(24 * HOUR), NOW)).toBe("In 24 hours");
     expect(givesUp(at(HOUR), NOW)).toBe("In 1 hour");
+    // FR-0101: inside the last hour it is the time, not "In 1 hour" from 30 minutes out.
+    expect(givesUp(at(30 * MIN), NOW)).toBe(shortTime(at(30 * MIN)));
+    expect(givesUp(at(59 * MIN), NOW)).toBe(shortTime(at(59 * MIN)));
     expect(givesUp(at(20 * MIN), NOW)).toBe(shortTime(at(20 * MIN)));
     expect(givesUp(at(-5 * MIN), NOW)).toBe(shortTime(at(-5 * MIN)));
   });
@@ -46,6 +49,7 @@ describe("why it waits", () => {
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs", max: 40 })).toBe("CI jobs is running its limit of 40. This run starts when there's room.");
     expect(waitingBody("runner_pool_no_runner_free", { name: "Laptops" })).toBe("None of your runners in Laptops is online. This run starts when one is.");
     expect(waitingBody("runner_pool_runners_at_capacity", { name: "Laptops" })).toBe("Every runner in Laptops is at its limit. This run starts when one has room.");
+    expect(waitingBody("runner_pool_recording_store_off", { name: "Laptops" })).toBe("Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on.");
     expect(waitingBody("runner_pool_at_capacity", undefined)).toBeUndefined();
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs" })).toBeUndefined();
   });

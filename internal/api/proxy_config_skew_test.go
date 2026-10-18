@@ -251,7 +251,9 @@ func TestDispatchConfigLoadsOnPreviousProxy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := &fakeRunner{}
-			srv, _ := pgHarnessWithRunner(t, fr)
+			// Its own database: seedSiteConfig writes the singleton site config, which another
+			// package's test on the shared database would otherwise read mid-window.
+			srv := pgHarnessOnPool(t, fr, throwawayBarePGPool(t))
 			srv.cfg.ControlPlaneURL, srv.cfg.ControlPlaneCAPEM = "https://wardynd:8443", "internal-ca"
 			if tc.setup != nil {
 				tc.setup(t, srv)

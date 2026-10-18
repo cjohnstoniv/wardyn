@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -174,7 +176,32 @@ func TestAgentProvidersPut(t *testing.T) {
 			t.Fatalf("stale If-Match = %d, want 412; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agent412Stale) {
-			t.Errorf("412 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("412 body = %s, want the constant sentence", w.Body.String())
+		}
+	})
+
+	t.Run("a Save composed under another person is refused before the write", func(t *testing.T) {
+		before := fake.putSeen
+		put := func(who string) *httptest.ResponseRecorder {
+			return doWithHeaders(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken,
+				`{"agents":[{"id":"claude-code"}]}`,
+				map[string]string{expectedPrincipalHeader: who})
+		}
+		w := put(url.PathEscape("someone-else@example.com"))
+		if w.Code != http.StatusPreconditionFailed {
+			t.Fatalf("expected-principal mismatch = %d, want 412; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), expectedPrincipalMismatch) || !strings.Contains(w.Body.String(), `"reason":"expected_principal_mismatch"`) {
+			t.Errorf("412 body = %s, want the expected-principal sentence and its own reason", w.Body.String())
+		}
+		if fake.putSeen != before {
+			t.Error("a refused Save reached the store")
+		}
+		if w = put("%zz"); w.Code != http.StatusPreconditionFailed {
+			t.Errorf("an undecodable value = %d, want 412", w.Code)
+		}
+		if w = put(url.PathEscape(adminTokenPrincipal)); w.Code != http.StatusOK {
+			t.Errorf("the caller's own principal = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
 
@@ -202,7 +229,7 @@ func TestAgentProvidersPut(t *testing.T) {
 		}
 	})
 
-	t.Run("an unwritable row is refused with the DRAFT constant", func(t *testing.T) {
+	t.Run("an unwritable row is refused with the constant", func(t *testing.T) {
 		w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken, `{"agents":[{"id":"ghost"}]}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("PUT = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -329,6 +356,27 @@ func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
 	return New(cfg)
 }
 
+func TestRunCreateRefusesADraftFromAnotherPerson(t *testing.T) {
+	srv := agentRosterFixture(t, nil)
+	body := `{"task":"echo hi","agent":"claude-code"}`
+	w := doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
+	if w.Code != http.StatusPreconditionFailed || errorReason(w) != reasonExpectedPrincipalMismatch ||
+		!strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
+		t.Fatalf("launch under another person = %d, want 412 expected_principal_mismatch with the expected-principal sentence; body=%s", w.Code, w.Body.String())
+	}
+	w = doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: adminTokenPrincipal})
+	if w.Code == http.StatusPreconditionFailed {
+		t.Fatalf("launch under the signed-in person was refused: %s", w.Body.String())
+	}
+	// A read never carries the header's meaning.
+	if w = doWithHeaders(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "",
+		map[string]string{expectedPrincipalHeader: "someone-else"}); w.Code != http.StatusOK {
+		t.Errorf("GET with a foreign header = %d, want 200", w.Code)
+	}
+}
+
 // TestAgentRosterRefusesRunCreate is the enforcement half, and its FIRST half is
 // the one that matters most: with no block, nothing changes.
 func TestAgentRosterRefusesRunCreate(t *testing.T) {
@@ -358,7 +406,7 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 		}
 		// A member-facing refusal names the agent and NOTHING else.
 		if strings.Contains(w.Body.String(), "codex-cli") || strings.Contains(w.Body.String(), "openai") {
@@ -380,7 +428,7 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 			t.Fatalf("member create = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 		}
 	})
 
@@ -506,7 +554,7 @@ func TestRecordDoorAnswersTheRosterRefusal(t *testing.T) {
 			w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-		t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+		t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 	}
 	// The internal sentinel is a Go-side marker, never a member-facing word.
 	if strings.Contains(w.Body.String(), errAgentNotEnabled.Error()) {

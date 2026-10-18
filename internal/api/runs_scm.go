@@ -55,7 +55,7 @@ func repoFieldSafe(s string) bool {
 	return gitremote.FieldSafe(s)
 }
 
-// repoField400Charset — DRAFT (M2 canon pending). The write-door refusal for a
+// repoField400Charset — The write-door refusal for a
 // repo-shaped field carrying a control character or whitespace — the charset
 // repoFieldSafe guards, because every one of these values flows verbatim into
 // an in-sandbox `git clone`/`git checkout` argument. %s is the field name, so
@@ -65,7 +65,7 @@ func repoFieldSafe(s string) bool {
 // it.
 const repoField400Charset = "%s must not contain control characters or whitespace"
 
-// repo400LocatorShape — DRAFT (M2 canon pending). The write-door refusal for a
+// repo400LocatorShape — The write-door refusal for a
 // locator repoLocatorPathSafe rejects. It is a 400 ("you wrote this wrong"), not
 // an admission 422/403: a dot-segment or percent-encoded repository address is
 // never a legitimate one on any provider, in legacy open mode included, so the
@@ -75,7 +75,7 @@ const repoField400Charset = "%s must not contain control characters or whitespac
 const repo400LocatorShape = "%s is not a repository address — a repository address carries " +
 	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
 
-// repo400LocatorUnreadable — DRAFT (M2 canon pending). repo400LocatorShape's
+// repo400LocatorUnreadable — repo400LocatorShape's
 // sentence when the address fails only because the site configuration, which
 // lists the Azure DevOps Server hosts, could not be read (#724).
 const repo400LocatorUnreadable = "%s could not be checked: the site configuration, which lists this " +
@@ -218,8 +218,9 @@ func repoCloneURL(slug string) string {
 		}
 		return ""
 	}
-	// scp-form user@host:path — has '@' and ':' but no scheme.
-	if strings.ContainsRune(slug, '@') && strings.ContainsRune(slug, ':') {
+	// scp-form [user@]host:path — no scheme; as git reads it, a ':' before any '/'.
+	if colon, slash := strings.IndexByte(slug, ':'), strings.IndexByte(slug, '/'); (strings.ContainsRune(slug, '@') && colon >= 0) ||
+		(colon > 0 && (slash < 0 || colon < slash)) {
 		if host, ok := sshCloneHost(slug); ok {
 			if _, ok := sshOver443Endpoint(host); ok {
 				return slug
@@ -312,7 +313,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		ref = strings.TrimSpace(ref)
 		if ref != "" && !repoFieldSafe(ref) {
 			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
-				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
+				slog.String("slug", redactRepoURL(slug)), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
 		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
@@ -339,10 +340,10 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			// ever cloned. Say it on the 201 (run create appends the returned
 			// sentence) and in the log.
 			slog.Warn("wardynd: repo clone target is not an allowed destination; dropping the repo",
-				slog.String("slug", slug), slog.String("dest", dest), slog.String("err", terr.Error()))
+				slog.String("slug", redactRepoURL(slug)), slog.String("dest", dest), slog.String("err", terr.Error()))
 			warnings = append(warnings, fmt.Sprintf(
 				"repository %s was NOT cloned: its workspace_repos target %s is refused (%s) — fix the target in the policy and launch again",
-				slug, dest, terr))
+				redactRepoURL(slug), dest, terr))
 			return
 		}
 		if first, taken := seenDest[dest]; taken {
@@ -355,7 +356,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			// agent goes looking for a repo that was never there, so the 201
 			// says it as well as the log.
 			slog.Warn("wardynd: repo clone target collides with another repo in this run; dropping the later one",
-				slog.String("slug", slug), slog.String("dest", dest))
+				slog.String("slug", redactRepoURL(slug)), slog.String("dest", dest))
 			if first == slug {
 				// The same repository named twice — a workspace launch names its
 				// repo as the run's own repo too — is one clone, not a drop.
@@ -363,7 +364,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"repository %s was NOT cloned: %s is already where %s is cloned — give one of them its own target and launch again",
-				slug, dest, first))
+				redactRepoURL(slug), dest, redactRepoURL(first)))
 			return
 		}
 		seenDest[dest] = slug

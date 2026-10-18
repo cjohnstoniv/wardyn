@@ -65,6 +65,17 @@ func TestJudgeFit_AWaitingRunIsRefusedOnlyWhenItCanNeverFit(t *testing.T) {
 	}
 }
 
+// A waiting run is refused only for a quota that can never hold it, and the sentence says so
+// rather than telling the person to stop a run, which would not make room.
+func TestJudgeFit_AWaitingRunThatNeverFitsIsNotToldToStopARun(t *testing.T) {
+	fit := runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadOK, Quota: []runner.QuotaFit{
+		{Name: "q", Axes: []runner.QuotaAxis{{Key: "requests.cpu", Need: 2000, Left: 500, Hard: 1000}}}}}
+	want := "this run needs 2 CPU, more than quota q can ever hold (1 CPU). Make the run smaller, or ask your admin to raise the quota."
+	if v := judgeFit(fit, true); v.refusal != want {
+		t.Errorf("refusal = %q, want %q", v.refusal, want)
+	}
+}
+
 // Nothing is renewed while a run waits: the provider check reads the sign-in's status and the start
 // does the renewing, so the credential is spent only for a run that is about to use it.
 func TestQueuedRunRenewsNothing(t *testing.T) {
@@ -180,6 +191,7 @@ func TestMaxWaitShape(t *testing.T) {
 // identity and a portal's via all come back on the start's context as they were.
 func TestQueueAuthorityRoundTrip(t *testing.T) {
 	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	deviceID := uuid.New()
 	for _, tc := range []struct {
 		name   string
 		ctx    context.Context
@@ -220,6 +232,15 @@ func TestQueueAuthorityRoundTrip(t *testing.T) {
 			func(t *testing.T, ctx context.Context) {
 				if got, ok := audit.DelegationFrom(ctx); !ok || got != via {
 					t.Errorf("via = %+v, %v; want %+v", got, ok, via)
+				}
+			}},
+		{"device", context.WithValue(context.Background(), deviceCtxKey{}, types.Device{ID: deviceID}),
+			func(t *testing.T, ctx context.Context) {
+				if d, ok := deviceFromContext(ctx); !ok || d.ID != deviceID {
+					t.Fatalf("device = %+v, %v; want %s", d, ok, deviceID)
+				}
+				if _, actor := actorFromContext(ctx, ""); actor != deviceActor(deviceID) || operatorOwnedRequest(ctx) {
+					t.Errorf("a promoted device run acts as %q, operator-owned %v; want the device, not the admin token", actor, operatorOwnedRequest(ctx))
 				}
 			}},
 		{"the admin token", context.Background(),

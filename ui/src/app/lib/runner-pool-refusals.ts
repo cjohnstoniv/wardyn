@@ -22,6 +22,7 @@ export const RUNNER_POOL_REASONS = [
   "runner_pool_member_mismatch",
   "runner_pools_unavailable",
   "runner_pool_run_type_not_allowed",
+  "runner_pool_run_type_missing",
   "runner_pool_barrier_not_allowed",
   "runner_pool_queue_full",
   "runner_pool_full",
@@ -66,6 +67,24 @@ export const RUNNER_CAPACITY = {
   RUNNER_LIMITS_UNSET: (name: string) => `No runner in ${name} has its limits set. Every runner needs limits before it can run anything.`,
 } as const;
 
+/**
+ * A run whose organisation or pool requires recording when no runner in the pool that could take it
+ * records (runnerpool.RunnerRecordingOffMsg): the create and preflight runner_recording_off.
+ */
+export const RUNNER_RECORDING = {
+  RUNNER_RECORDING_OFF: (name: string) =>
+    `Recording is required, and no runner in ${name} records runs. Choose another pool, or turn recording on for the runner.`,
+  /** runner_recording_off for a run with no pool (runnerpool.RunnerRecordingOffUnpooledMsg). */
+  RUNNER_RECORDING_OFF_UNPOOLED: () =>
+    "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner.",
+  /** recording_store_off at create and preflight (runnerpool.RecordingStoreOffMsg). */
+  RECORDING_STORE_OFF: () =>
+    "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred.",
+  /** recording_store_off when saving a required setting (runnerpool.RecordingSaveStoreOffMsg). */
+  RECORDING_SAVE_STORE_OFF: () =>
+    "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first.",
+} as const;
+
 /** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
 export const RUN_TYPE_PLURAL = { background: "background tasks", interactive: "interactive environments" } as const;
 
@@ -91,16 +110,17 @@ export const RUNNER_POOL_REFUSAL = {
   NOT_FOUND: () => "That pool isn't available to you. Choose one from the list.",
   UNAVAILABLE: (name: string) => `${name} is switched off right now. Choose another pool.`,
   DEFAULT_UNAVAILABLE_PERSONAL: () => "Your default pool is no longer available. Choose a pool to continue.",
-  DEFAULT_UNAVAILABLE_ORG: () => "Your organisation's default pool is no longer available. Choose a pool to continue.",
+  DEFAULT_UNAVAILABLE_ORG: () => "Your organization's default pool is no longer available. Choose a pool to continue.",
   STALE: (name: string) => `${name} changed while this run was being set up. Review it and try again.`,
   NO_ELIGIBLE_MEMBER: (name: string) => `No runner in ${name} can run this right now.`,
   NO_OWN_RUNNER: (name: string) => `None of your own runners in ${name} can run this right now.`,
   MEMBER_MISMATCH: (runner: string, name: string) => `${runner} is not one of your runners in ${name}.`,
   KIND_MISMATCH: (name: string) => `${name} has no runner of the kind this run asks for. Choose another pool.`,
-  ORG_POOL_SELF_HOSTED: () => "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools.",
+  ORG_POOL_SELF_HOSTED: () => "Organization pools take remote-hosted runners and the organization's own runners. A person's self-hosted runner can join its owner's user pools.",
   REMOTE_NOT_CONFIGURED: (id: string) => `${id} isn't a remote-hosted runner this server is set up with.`,
   REMOTE_NOT_AVAILABLE: (id: string) => `${id} is not available to people's pools. Ask your admin to make it available.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
+  RUN_TYPE_MISSING: () => "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client.",
   RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
     `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,
   BARRIER_NOT_ALLOWED: (name: string, asked: keyof typeof BARRIER_LABEL, allowed: (keyof typeof BARRIER_LABEL)[]) => {
@@ -120,6 +140,7 @@ export const RUN_WAIT = {
   AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when there's room.`,
   NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
   RUNNERS_AT_CAPACITY: (name: string) => `Every runner in ${name} is at its limit. This run starts when one has room.`,
+  RECORDING_STORE_OFF: () => "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on.",
 } as const;
 
 /** The reason a waiting run carries for each RUN_WAIT sentence. */
@@ -127,6 +148,7 @@ export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
   AT_CAPACITY: "runner_pool_at_capacity",
   NO_RUNNER_FREE: "runner_pool_no_runner_free",
   RUNNERS_AT_CAPACITY: "runner_pool_runners_at_capacity",
+  RECORDING_STORE_OFF: "runner_pool_recording_store_off",
 };
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */
@@ -146,6 +168,7 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   REMOTE_NOT_CONFIGURED: "runner_pool_member_mismatch",
   REMOTE_NOT_AVAILABLE: "runner_pool_member_mismatch",
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
+  RUN_TYPE_MISSING: "runner_pool_run_type_missing",
   RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
   BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
   QUEUE_FULL: "runner_pool_queue_full",
@@ -169,6 +192,7 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   REMOTE_NOT_CONFIGURED: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_CONFIGURED(a[0]),
   REMOTE_NOT_AVAILABLE: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_AVAILABLE(a[0]),
   UNAVAILABLE_SERVER: () => RUNNER_POOL_REFUSAL.UNAVAILABLE_SERVER(),
+  RUN_TYPE_MISSING: () => RUNNER_POOL_REFUSAL.RUN_TYPE_MISSING(),
   RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
   BARRIER_NOT_ALLOWED: (...a) =>
     RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED(a[0], a[1] as keyof typeof BARRIER_LABEL, a.slice(2) as (keyof typeof BARRIER_LABEL)[]),

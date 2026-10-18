@@ -252,7 +252,7 @@ func (s *Server) writeTemplate(w http.ResponseWriter, r *http.Request, ts store.
 // shown only to a caller who may write the template.
 func templateView(c templateCaller, t types.RunTemplate) (client.Template, error) {
 	var doc client.TemplateDocument
-	if err := json.Unmarshal(t.Document, &doc); err != nil {
+	if err := json.Unmarshal(redactRepoURLsInJSON(t.Document), &doc); err != nil {
 		return client.Template{}, err
 	}
 	out := client.Template{

@@ -147,3 +147,36 @@ func TestRunnerAssertedPG_DeferredQuarantineContinuesInTheNextSession(t *testing
 		t.Fatalf("deferred predecessor settlement=%q by=%v err=%v", settlement, by, err)
 	}
 }
+
+// A run's own deferred kill continues the same way: once the session that deferred it completed its
+// inventory, the next session's PENDING carries one successor with the identical binding.
+func TestRunnerAssertedPG_DeferredRunKillContinuesInTheNextSession(t *testing.T) {
+	pool, cfg, rn, run, _, _ := runnerExitAPIFixture(t)
+	ctx := t.Context()
+	srv := New(cfg)
+	var gen uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT generation FROM runner_executions WHERE run_id=$1`, run.ID).Scan(&gen); err != nil {
+		t.Fatal(err)
+	}
+	ref := "runner:" + rn.ID.String() + "/sandbox"
+	if _, _, err := cfg.Store.(store.PG).QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: rn.ID, RunID: run.ID,
+		Kind: types.RunnerActionKill, Ref: ref, Generation: gen}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := srv.PendingFromRunner(ctx, rn.ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("PENDING = %+v, %v", pending, err)
+	}
+	applyAll(t, srv, rn.ID, pending, func(runnerwire.PendingAction) string { return types.RunnerActionDeferred })
+	// The page omits the run, which the org still holds: reconciliation is required, and the inventory completes.
+	if err := finalStatePage(t, srv, rn.ID); !errors.Is(err, store.ErrRunnerReconciliationRequired) {
+		t.Fatalf("final inventory: %v", err)
+	}
+	if err := srv.BeginInventoryFromRunner(ctx, rn.ID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	next, err := srv.PendingFromRunner(ctx, rn.ID)
+	if err != nil || len(next) != 1 || next[0].Kind != types.RunnerActionKill || next[0].ID == pending[0].ID || next[0].Ref != ref {
+		t.Fatalf("successor PENDING = %+v, %v", next, err)
+	}
+}

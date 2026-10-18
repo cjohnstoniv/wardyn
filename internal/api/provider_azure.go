@@ -48,7 +48,7 @@ const (
 	azureGrantTTLSeconds = 3600
 )
 
-// DRAFT (M2 canon pending). The states and remedies of the run refusal (mpRunRefusal) for a chosen
+// The states and remedies of the run refusal (mpRunRefusal) for a chosen
 // azure_foundry provider.
 const (
 	mpAZNotSignedIn = "you are not signed in to Azure for it"

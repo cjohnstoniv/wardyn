@@ -151,9 +151,14 @@ export interface RunnerPool {
   state: RunnerPoolState;
   revision: number;
   limits?: RunnerPoolLimits;
+  /** Whether the pool requires its runs recorded; absent is preferred. */
+  recording?: RecordingRequirement;
   created_at: string;
   updated_at: string;
 }
+
+/** Go: types.RecordingRequirement. The stricter of the organisation's and the pool's applies. */
+export type RecordingRequirement = "preferred" | "required";
 
 /** Go: types.RunnerPoolMember. Exactly one of runner_id (self_hosted) and remote_runner_id (remote_hosted) is set. */
 export interface RunnerPoolMember {
@@ -172,6 +177,10 @@ export interface RunnerPoolDefaults {
   pool_id?: string;
   /** The organisation's default barrier; a person's own document never carries one (the server refuses it). */
   barrier?: ConfinementClass;
+  /** The organisation's alone, like barrier: whether every run must be recorded. */
+  recording?: RecordingRequirement;
+  /** The organisation's document alone. A write that names the revision it read is refused (409 `runner_pool_stale`) once it has moved on. */
+  revision?: number;
 }
 
 /** Go: types.ResolvedRunnerPool. A label for the choice, never admission. */
@@ -213,6 +222,8 @@ export interface RunnerPoolChoice {
   barriers?: ConfinementClass[];
   /** What this pool's runners do with the main drive's size; absent on a pool the caller may only manage. */
   main_drive?: MainDriveFacts;
+  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. On the list and both dry doors. */
+  my_runners?: PoolRunner[];
 }
 
 /** Go: client.MainDriveEnforcement. The weakest word across the pool's targets; never request or external. */
@@ -277,12 +288,14 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   run_types: RunnerPoolRunType[];
   run_types_source?: "pool" | "none";
   barrier_options: BarrierOption[];
-  /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
-  my_runners?: PoolRunner[];
   slots?: PoolSlots;
   capacity?: PoolCapacity;
   /** A user pool's owner: the caller, or the person on an administrator's oversight row. */
   owner?: string;
+  /** The pool's own record, as GET /runner-pools/{id} reads it, on every row (including an oversight row). `pool_limits` is its raw limits, not the effective `limits`. */
+  state?: RunnerPoolState;
+  revision?: number;
+  pool_limits?: RunnerPoolLimits;
 }
 
 /**
@@ -324,12 +337,14 @@ export interface RunnerPoolList {
 export interface CreateRunnerPoolRequest {
   name: string;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** Go: client.CreateMyRunnerPoolRequest: a user pool of the caller's own. */
 export interface CreateMyRunnerPoolRequest {
   name: string;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** The state an update may put a pool in (Go: client.RunnerPoolSwitch); deleting is the DELETE route alone. */
@@ -341,6 +356,7 @@ export interface UpdateRunnerPoolRequest {
   name?: string;
   state?: RunnerPoolSwitch;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** Go: types.RemoteRunnerPoolRef. One live pool a remote-hosted runner is in; owner only on the operators' reads. */

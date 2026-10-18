@@ -6,7 +6,7 @@
 // The /providers screen — the drives-screen.tsx precedent: forbidden (a 403 is
 // the TIER, not the network), fetch-failed (distinct from empty), the legacy
 // banner (zero rows), populated, and exactly ONE teal button at a time.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
@@ -31,6 +31,12 @@ vi.mock("../../../lib/api/providers", async () => {
       putWorkspaceProviders: (...a: unknown[]) => putWorkspaceProvidersMock(...a),
     },
   };
+});
+
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/health")>("../../../lib/api/health");
+  return { ...actual, health: { ...actual.health, whoami: (...a: unknown[]) => whoamiMock(...a) } };
 });
 
 const getAgentProvidersMock = vi.fn();
@@ -81,12 +87,16 @@ vi.mock("react-router-dom", async () => {
 function renderScreen(operator = true) {
   return render(
     <UnsavedGuardProvider>
-      <OperatorProvider operator={operator}>
+      <OperatorProvider operator={operator} principal="alice">
         <ProvidersScreen />
       </OperatorProvider>
     </UnsavedGuardProvider>,
   );
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   getWorkspaceProvidersMock.mockReset();
@@ -96,6 +106,7 @@ beforeEach(() => {
   getAgentProvidersMock.mockReset();
   getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
   putAgentProvidersMock.mockReset();
+  whoamiMock.mockReset();
 });
 
 describe("ProvidersScreen", () => {
@@ -195,7 +206,7 @@ describe("ProvidersScreen", () => {
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
   });
 
-  // V1 lens E finding 2 (HIGH): Save was withheld on the DRAFT's emptiness, so
+  // V1 lens E finding 2 (HIGH): Save was withheld on the draft's emptiness, so
   // removing the last row hid the only button that could commit the removal —
   // the tab flipped to the legacy-open banner whose only action is Add, and the
   // change was discarded on navigation. The withhold is on the LOADED snapshot.
@@ -386,6 +397,62 @@ describe("ProvidersScreen", () => {
     // Save providers is STILL on screen (the draft is still there to save) —
     // an ordinary retry sends If-Match, as the sibling test below pins.
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
+  });
+
+  it("Discard mine and reload: a different person reloads the page, not just the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "someone-else" });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Discard mine and reload: the same person reloads only the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "alice" });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: no answer from /me reloads only the providers", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e5"',
+    });
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue(null);
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await userEvent.click(await screen.findByRole("button", { name: PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).not.toBeInTheDocument());
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("a 400 renders the server's own refusal verbatim under SAVE_REFUSED_TITLE", async () => {

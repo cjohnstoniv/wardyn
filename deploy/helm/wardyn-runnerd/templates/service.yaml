@@ -1,0 +1,20 @@
+{{/* runnerd's start-up check requires this Service to resolve to exactly one ClusterIP. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "runnerd.fullname" . }}
+  labels:
+    {{- include "runnerd.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "runnerd.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: relay
+      protocol: TCP
+      port: {{ .Values.relay.servicePort }}
+      targetPort: relay
+    - name: sink
+      protocol: TCP
+      port: {{ .Values.sink.port }}
+      targetPort: sink

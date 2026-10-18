@@ -703,18 +703,28 @@ func (p *Proxy) rulesForRemote(host, path string) (*pushRuleSet, string) {
 	if len(p.pushSets) == 0 {
 		return p.policy.contentRules(), ""
 	}
-	set, ok := p.pushSetsForHost(host)
-	if !ok {
-		return p.pushBase, ""
+	// One Azure DevOps Server host can carry several collections, each set under its own base path: the
+	// remote is read under each, and the entry it is under decides. Only when it is under none is it refused.
+	remote := "https://" + host + "/" + strings.TrimPrefix(path, "/")
+	var firstErr error
+	derived := false
+	for _, set := range p.pushSetsForHost(host) {
+		spec, found, err := types.PushRulesForServerRemote(p.pushSets, set.Provider, remote, set.BasePath)
+		switch {
+		case err != nil:
+			if firstErr == nil {
+				firstErr = err
+			}
+		case found:
+			return compilePushRules(&spec), ""
+		default:
+			derived = true
+		}
 	}
-	spec, found, err := types.PushRulesForServerRemote(p.pushSets, set.Provider, "https://"+host+"/"+strings.TrimPrefix(path, "/"), set.BasePath)
-	if err != nil {
-		return nil, "wardyn: cannot tell which source-control entry this push belongs to, so its push rules cannot be applied: " + err.Error()
+	if firstErr != nil && !derived {
+		return nil, "wardyn: cannot tell which source-control entry this push belongs to, so its push rules cannot be applied: " + firstErr.Error()
 	}
-	if !found {
-		return p.pushBase, ""
-	}
-	return compilePushRules(&spec), ""
+	return p.pushBase, ""
 }
 
 // rulesForADOGrant is rulesForRemote for the Azure DevOps REST gate, whose path
@@ -740,16 +750,17 @@ func (p *Proxy) rulesForADOGrant(host, org string) (*pushRuleSet, string) {
 	return p.pushBase, ""
 }
 
-// pushSetsForHost finds the set whose entry is on host, for its provider and
+// pushSetsForHost lists the sets whose entry is on host, for their provider and
 // base path.
-func (p *Proxy) pushSetsForHost(host string) (types.PushRuleSet, bool) {
+func (p *Proxy) pushSetsForHost(host string) []types.PushRuleSet {
+	var out []types.PushRuleSet
 	for _, s := range p.pushSets {
 		want, werr := types.CanonicalPushHost(s.Provider, s.Host)
 		if h, err := types.CanonicalPushHost(s.Provider, host); err == nil && werr == nil && h == want {
-			return s, true
+			out = append(out, s)
 		}
 	}
-	return types.PushRuleSet{}, false
+	return out
 }
 
 // anyPushRules reports whether this run has content rules anywhere, which is

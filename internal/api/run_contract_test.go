@@ -281,7 +281,7 @@ func TestRunContractReasonsAreTheTypeScriptOnes(t *testing.T) {
 	for _, reason := range []string{
 		reasonPlacementInvalid, reasonWorkspaceTargetInvalid, reasonWorkspaceTargetOverlap, reasonWorkspacePinConflict,
 		reasonImageConflict, reasonWorkspaceADOOrgConflict, reasonResourcesInvalid, reasonOverrideInvalid,
-		reasonAllowedImageInvalid,
+		reasonAllowedImageInvalid, reasonRepoURLCredentials,
 		reasonOverrideRefused, reasonRequestFieldUnavailable, string(placement.ReasonPlacementUnavailable),
 	} {
 		if !strings.Contains(string(raw), `"`+reason+`"`) {

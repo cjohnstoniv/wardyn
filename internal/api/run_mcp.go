@@ -93,7 +93,12 @@ func admitMCPHarnesses(def types.ComponentDefinition, asked, included []string) 
 		return nil, nil
 	}
 	if asked == nil {
-		return slices.DeleteFunc(slices.Clone(included), func(h string) bool { return mcpHarnessUnsupported(h) != "" }), nil
+		usable := slices.DeleteFunc(slices.Clone(included), func(h string) bool { return mcpHarnessUnsupported(h) != "" })
+		if len(usable) == 0 {
+			return nil, &mcpHarnessProblem{http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+				"mcp_harnesses: this run has no harness that can use an MCP server. Add Claude Code or Codex CLI, or remove the component."}
+		}
+		return usable, nil
 	}
 	for i, h := range asked {
 		if !slices.Contains(included, h) {
@@ -155,6 +160,10 @@ func mcpServerKeys(attached []attachedComponent) []string {
 	}
 	return keys
 }
+
+// orgMCPKeyLockPart names the one lock (db.ComponentKeyLockClass) an organisation MCP server's save holds
+// across orgMCPKeyFree and its write.
+const orgMCPKeyLockPart = "org-mcp-key"
 
 // orgMCPKeyFree refuses an organisation MCP component whose server key (its
 // name's slug, as cut for the key) is another organisation MCP component's:

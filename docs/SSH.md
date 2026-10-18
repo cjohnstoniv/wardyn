@@ -164,6 +164,7 @@ ssh <run-id>@<advertise-host> -p <port>
 - Or let the CLI assemble it: `wardyn run ssh <run-id>` reads the gateway's
   address off `/healthz` and execs your local `ssh(1)` against it, so there is
   no connect string to copy.
+- It refuses a plain-http, non-loopback `--url` in every mode, before it reads `/healthz`; use `https://`.
 - `wardyn run ssh --print <run-id>` emits that command
   instead of running it (for a script or a demo) and `--config` emits the
   `ssh_config` block below — both byte-identical to what the card renders.
@@ -627,12 +628,18 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 
 ## Bounds
 
+- **Keepalive.** The gateway sends each established connection a `keepalive@openssh.com` request every 30 seconds.
+  - It closes the connection when no answer comes within the next 30, so a dead peer is dropped within 30 to 60 seconds and frees its run's attach slot.
+  - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
+  - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
+  - The close writes no audit row and no log line.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
-  `outcome=failure`). These unknown-actor refusals share the `auth.fail` rate bound (burst 5,
-  1/s) and a drop is counted in `wardyn_auth_failed_suppressed_total`; a refusal that names a
-  registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
+  `outcome=failure`).
+  - These unknown-actor refusals share the `auth.fail` rate bound (burst 5, 1/s), and a drop is counted in `wardyn_auth_failed_suppressed_total`.
+  - A refusal that names a registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
+  - Per-key buckets are capped at 1024 live keys; a key past the cap shares the `auth.fail` bound.
 - **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
   the web terminal's, but no longer unboundedly so.**
   - SSH authorization is
@@ -773,7 +780,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
   else the client's shell happens to export reaches the sandbox.
 - **Audit actions**:
-  - `ssh.authenticate` (every attempt; unknown-actor refusals are rate-bound),
+  - `ssh.authenticate` (every success; refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
     timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).

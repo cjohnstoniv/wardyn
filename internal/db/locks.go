@@ -61,6 +61,10 @@ const (
 	// ADOSignInLockClass is the Entra sign-in refresh single-flight (Azure
 	// DevOps and Azure AI Foundry): obj = person and provider row.
 	ADOSignInLockClass int32 = 0x5741444F // ASCII "WADO"
+	// ComponentKeyLockClass serializes organisation MCP server saves across
+	// their server-key check and write, so two names that give one key cannot
+	// both be saved.
+	ComponentKeyLockClass int32 = 0x57434B59 // ASCII "WCKY"
 	// SiteConfigLockClass serializes the read-modify-write writers of the one
 	// site-config document.
 	SiteConfigLockClass int32 = 0x57534346 // ASCII "WSCF"
@@ -78,12 +82,15 @@ const (
 //
 //	run operation, then the Azure DevOps run-token mint/revoke, then the AWS
 //	SSO refresh, then the Azure DevOps sign-in refresh (the order the credential
-//	erase takes its two), then the document locks, and the audit sweep last.
+//	erase takes its two), then the organisation MCP server key lock (held
+//	around a component save's row lock), then the document locks, and the
+//	audit sweep last.
 var LockOrder = []int32{
 	RunOpLockClass,
 	ADORunTokenLockClass,
 	AWSSSOLockClass,
 	ADOSignInLockClass,
+	ComponentKeyLockClass,
 	SiteConfigLockClass,
 	CapEnforcementLockClass,
 	AuditSweepLockClass,

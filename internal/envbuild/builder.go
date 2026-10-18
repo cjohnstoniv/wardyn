@@ -344,14 +344,24 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, l
 		ensure = func(ctx context.Context, ref string) error { return dockerutil.PullImage(ctx, b.cli, ref, "envbuild") }
 	}
 	if err := ensure(ctx, baseRef); err != nil {
-		return Built{}, fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
-			"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
+		return Built{}, baseUnavailable(baseRef, forcePull, err)
 	}
 	if logSink == nil {
 		logSink = b.DefaultLogSink
 	}
 	// pullParent=false: the base is already present locally (ensured or force-pulled above); a registry pull here would fail for a local-only or digest-pinned user image.
 	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, false)
+}
+
+// baseUnavailable is the failure when FinalizeBase cannot get its base. A refresh pulls the base again, so
+// a base that exists only on this host fails it, and the hint to pre-pull would not help that.
+func baseUnavailable(baseRef string, forcePull bool, err error) error {
+	if forcePull {
+		return fmt.Errorf("envbuild: BYOI base image %q could not be pulled again for the refresh: %w "+
+			"(a base image that exists only on this host has no registry copy to pull, so it cannot be refreshed; build the workspace without a refresh to wrap the local image)", baseRef, err)
+	}
+	return fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
+		"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
 }
 
 // hardenedHostConfig builds the Docker HostConfig for the build container: locked-down network

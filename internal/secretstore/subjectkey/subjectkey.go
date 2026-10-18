@@ -312,6 +312,11 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	}
 	key, err := k.Unwrap(ctx, wrapped, kek.PrincipalBind(id.owner, id.purpose, id.version, domain))
 	if err != nil {
+		// An outage or a revoked access is not a verdict on the wrap: say what failed, keeping the cause
+		// for errors.Is, and leave the "does not unwrap" wording to a key service that answered about it.
+		if errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrService) {
+			return nil, fmt.Errorf("subjectkey: the key service could not unwrap generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, err)
+		}
 		return nil, fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q) does not unwrap (moved, forged, corrupted, or its key version retired): %w", id.version, id.owner, id.purpose, err)
 	}
 	m.cache.put(id, key)
@@ -356,7 +361,8 @@ func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, s
 // a handle, which would map a sealed audit field back to its owner. Rows are
 // never deleted, so a version is never reused and the next write creates
 // max+1. It returns the generations this call destroyed (none when the subject
-// had no live key, which writes no event). The local cache is evicted only after
+// had no live key, which writes no event but a tombstone generation, so the
+// destruction's time is still recorded). The local cache is evicted only after
 // the commit; other replicas stop at their next use (Key).
 func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, error) {
 	if err := check(owner, purpose); err != nil {
@@ -379,6 +385,16 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 		return nil, unavailable("destroy", err)
 	}
 	slices.Sort(gens)
+	if len(gens) == 0 {
+		// No live key: a tombstone generation still records the destruction, so a write
+		// queued for this subject before it (GoneSince) reads as erased, never as a
+		// subject to mint a fresh key for.
+		if _, err := tx.Exec(ctx, `INSERT INTO principal_keys (owner, purpose, version, domain, kek_id, wrapped_key, destroyed_at, handle)
+			VALUES ($1, $2, (SELECT COALESCE(max(version), 0) + 1 FROM principal_keys WHERE owner=$1 AND purpose=$2), '', '', NULL, now(), NULL)`,
+			owner, purpose); err != nil {
+			return nil, unavailable("tombstone", err)
+		}
+	}
 	var destroyed *types.AuditEvent
 	if len(gens) > 0 {
 		data, _ := json.Marshal(map[string]any{"owner": owner, "purpose": purpose, "generations": gens})

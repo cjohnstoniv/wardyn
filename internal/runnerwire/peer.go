@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -105,6 +106,9 @@ type Peer struct {
 	owed      int64
 	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
 	replyWake chan struct{}
+	// retire is the carried calls to drop at the first PONG (retireUnanswerable):
+	// Start sets it before the read loop starts, which alone uses it after.
+	retire []uint32
 }
 
 // NewPeer builds a peer; Run drives it.
@@ -269,11 +273,23 @@ func (p *Peer) Run(ctx context.Context) error {
 			p.fail(err)
 			return p.Err()
 		}
-		if err := p.handle(f); err != nil {
+		if err := guarded(func() error { return p.handle(f) }); err != nil {
 			p.fail(err)
 			return p.Err()
 		}
 	}
+}
+
+// guarded runs fn and turns a panic in it into an error that ends this link only: a handler's bug on one
+// runner's link must not take the process, and every other link in it, down.
+func guarded(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("runnerwire: a handler panicked; ending its link", "panic", fmt.Sprint(r))
+			err = fmt.Errorf("%w: a handler panicked", ErrBadFrame)
+		}
+	}()
+	return fn()
 }
 
 func (p *Peer) handle(f Frame) error {
@@ -354,6 +370,7 @@ func (p *Peer) handleFrame(f Frame) error {
 		}
 		now := time.Now()
 		p.lastPong.Store(&now)
+		p.retireUnanswerable()
 	default:
 		if p.cfg.OnControlChecked != nil {
 			return p.cfg.OnControlChecked(f)
@@ -399,7 +416,7 @@ func (p *Peer) handleStream(f Frame) error {
 			return err
 		} else if err != nil {
 			p.returnCredit(int64(len(f.Payload))) // refused, not held
-			_ = s.Reset(ResetInternal)
+			return s.resetQueued(ResetInternal)
 		}
 	case TypeWindow:
 		n, err := DecodeWindow(f.Payload)
@@ -636,12 +653,10 @@ func (p *Peer) onOpen(f Frame) error {
 	p.mu.Unlock()
 	if o.Call == 0 {
 		if p.cfg.OnOpen == nil {
-			_ = s.Reset(ResetRefused)
-			return nil
+			return s.resetQueued(ResetRefused)
 		}
 		if err := p.cfg.OnOpen(s, o); err != nil {
-			_ = s.Reset(ResetRefused)
-			return nil
+			return s.resetQueued(ResetRefused)
 		}
 	}
 	return p.answer(Frame{Type: TypeOpenOK, Stream: f.Stream})

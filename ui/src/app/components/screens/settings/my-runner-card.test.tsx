@@ -58,6 +58,7 @@ import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { MyRunnerCard } from "./my-runner-card";
+import { MY_POOLS } from "../../wardyn/copy/runner-pools";
 import { setField } from "../../../../test/set-field";
 
 const FULL = "SHA256:3Jd1d8XqTHEWHOLEFINGERPRINTVALUEk2Q9";
@@ -73,6 +74,8 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     id: "r-laptop",
     name: "laptop-7",
     state: "claimed",
+    owner_kind: "person",
+    trust_class: "personal",
     online: true,
     key_fingerprint: FULL,
     key_fingerprint_abbreviated: false,
@@ -115,6 +118,9 @@ const WAITING = runner({
 const TOKEN: RunnerRegistrationToken = {
   id: "t1",
   owner: "alice",
+  owner_kind: "person",
+  minted_by_kind: "human",
+  break_glass: false,
   minted_by: "alice",
   token: "wdr_selfminted",
   created_at: aheadByHours(0),
@@ -511,7 +517,10 @@ describe("My pools", () => {
     renderCard();
     await expand(user);
     const mine = (await screen.findByText("My pools")).closest("section") as HTMLElement;
-    expect(within(mine).getByText("Only you can see or change these")).toBeInTheDocument();
+    expect(within(mine).getByText(MY_POOLS.ONLY_YOU)).toBeInTheDocument();
+    expect(within(mine).getByText(MY_POOLS.LEDE)).toBeInTheDocument();
+    expect(MY_POOLS.ONLY_YOU).toBe("Only you can change these. Administrators can see them.");
+    expect(MY_POOLS.LEDE).toContain("You can have up to 10 pools, for example Laptop and Home server.");
     const laptop = within(mine).getByRole("button", { name: "Laptop" }).closest("li") as HTMLElement;
     expect(within(laptop).getByText("✓ Default")).toBeInTheDocument();
     expect(within(laptop).queryByRole("button", { name: "Make Laptop your default" })).toBeNull();
@@ -658,7 +667,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     expect(screen.getByText(VM_HINT)).toBeInTheDocument();
   });
 
-  const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean) => {
+  const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean, beforeClaim?: () => void) => {
     listMineMock.mockResolvedValue([WAITING]);
     claimMock.mockResolvedValue({ runner_id: "r-mbp", fingerprint: FULL, state: "claimed", org_url_sha256: "" });
     pools.addMyRunner.mockResolvedValue({});
@@ -673,6 +682,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     setField(within(dialog).getByRole("textbox", { name: /Fingerprint from your computer/ }), FULL);
     setField(within(dialog).getByRole("combobox", { name: /Put it in a pool/ }), pool);
     if (makeDefault) await user.click(box);
+    beforeClaim?.();
     await user.click(within(dialog).getByRole("button", { name: "Claim runner" }));
   };
 
@@ -725,5 +735,15 @@ describe("My runner card: the start command and the claim into a pool", () => {
     await claimWithPool(user, "Desk", false);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("mbp-ben is claimed but isn't in Desk. Add it from My pools.")));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a default that fails after the runner joined the pool does not say the runner is not in the pool (DR-0210)", async () => {
+    vi.mocked(toast.error).mockClear();
+    pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", true, () => pools.setMyDefaults.mockRejectedValueOnce(new HttpError(500, "Defaults could not be saved.", "internal")));
+    await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("mbp-ben is in Desk but isn't your default pool yet. Set it from My pools. Defaults could not be saved."));
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("isn't in Desk"));
   });
 });

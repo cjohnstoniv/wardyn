@@ -50,6 +50,7 @@ import { Mono } from "../../wardyn/code-block";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import {
@@ -115,6 +116,7 @@ export function ModelProviderEditor({
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
+  const discard = useDiscardReload(onSaved);
   const [confirm, setConfirm] = React.useState<Confirm>(null);
   const { disabled: busy, showSpinner } = useDeferredBusy(saving);
 
@@ -239,7 +241,7 @@ export function ModelProviderEditor({
                 <p className="mt-0.5">{refused}</p>
               </div>
             )}
-            {stale && <SavedElsewhereBanner documentText={stale} onDiscard={onSaved} />}
+            {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               {editing && (
                 <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm("remove")}>

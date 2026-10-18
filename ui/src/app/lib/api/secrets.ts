@@ -37,7 +37,7 @@ export const secrets = {
   // secret; the value is write-only.
   async setSecret(name: string, value: string): Promise<void> {
     const res = await wfetch(`/secrets/${encodeURIComponent(name)}`, {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify({ value }),
     });
     if (!res.ok) {

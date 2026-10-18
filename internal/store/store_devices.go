@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -353,7 +354,7 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 	}
 	const insertQ = `SELECT seq FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	for _, r := range toIngest {
-		data, err := mergeDeviceOrigin(deviceID, r)
+		data, err := mergeDeviceOrigin(deviceID, r, audit.ProxyPeer(ctx))
 		if err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: merge device origin: %w", err)
 		}
@@ -545,7 +546,7 @@ const federatedRowSQL = `COALESCE(starts_with(actor, 'device:' || (data->'device
 // The claimed object's members are carried as raw JSON, never decoded, so they survive byte-for-byte
 // (a float64 round trip would rewrite a large integer); FederatedRowProblem already refused every
 // other shape. That's what keeps the claim re-checkable from the stored row (FederatedClaimHashSQL).
-func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent) (json.RawMessage, error) {
+func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent, proxyPeer string) (json.RawMessage, error) {
 	origin := map[string]any{
 		"device_id": deviceID,
 		"seq":       r.Seq,
@@ -553,6 +554,11 @@ func mergeDeviceOrigin(deviceID uuid.UUID, r types.FederatedAuditEvent) (json.Ra
 		"prev_hash": r.PrevHash,
 		"actor":     r.Actor,
 		"source_ip": r.SourceIP,
+	}
+	// A proxied row's TCP peer goes here, not top-level like audit.StampProxyPeer:
+	// FederatedClaimHashSQL strips only device_origin from the claimed object.
+	if proxyPeer != "" {
+		origin["proxy_peer"] = proxyPeer
 	}
 	m := map[string]json.RawMessage{}
 	switch {

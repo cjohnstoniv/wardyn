@@ -110,14 +110,40 @@ export async function dexSignIn(page: Page, email: string): Promise<void> {
   await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
   await page.goto("/");
   await page
-    .getByRole("link", { name: "Sign in with SSO" })
-    .or(page.getByRole("button", { name: "Sign in with SSO" }))
+    .getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ })
+    .or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ }))
     .first()
     .click();
   await page.locator('input[type="password"]').waitFor({ timeout: 60_000 });
   await page.locator('input[type="text"], input[name="login"]').first().fill(email);
   await page.locator('input[type="password"]').fill(DEX_PASSWORD);
   await page.getByRole("button", { name: /log ?in/i }).click();
+  await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible({ timeout: 60_000 });
+}
+
+/**
+ * A signed-in session captured once from an estate whose sign-in is not Dex (the Entra kind estate).
+ *
+ * WARDYN_WALK_STORAGE_STATE names a Playwright storage-state file: sign in by hand, once, as the person the
+ * walk should act as, and save the browser state:
+ *
+ *   pnpm --dir ui exec playwright codegen --save-storage=/path/to/state.json <the estate's console URL>
+ *
+ * A spec that signs in through walkSignIn opts its context in with `test.use({ storageState: ENTRA_STORAGE_STATE })`,
+ * so every page of that context (a second tab included) is the same signed-in person. Unset, the walk signs in
+ * through Dex as before. The state holds a live session: keep the file out of the repository.
+ */
+export const ENTRA_STORAGE_STATE = process.env.WARDYN_WALK_STORAGE_STATE || undefined;
+
+/**
+ * Open the console signed in: from the stored session when WARDYN_WALK_STORAGE_STATE is set, else through Dex as
+ * `email`. With a stored session `email` is unused, because the stored person is the one signed in.
+ */
+export async function walkSignIn(page: Page, email: string): Promise<void> {
+  if (!ENTRA_STORAGE_STATE) return dexSignIn(page, email);
+  // The same renderer pin dexSignIn makes: the walk reads terminal text from the DOM.
+  await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
+  await page.goto("/");
   await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible({ timeout: 60_000 });
 }
 
@@ -129,7 +155,7 @@ export async function dexSignOut(page: Page): Promise<void> {
     .first()
     .click();
   await expect(
-    page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first(),
+    page.getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ }).or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ })).first(),
   ).toBeVisible({ timeout: 60_000 });
 }
 

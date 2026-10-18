@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -232,11 +233,18 @@ func newPoolRoutes(t *testing.T, routes map[string]any) poolRoutes {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if refusal, ok := resp.(poolRefusal); ok {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			resp = map[string]string{"error": refusal.sentence, "reason": "runner_pool_member_mismatch"}
+		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	t.Cleanup(cs.Close)
 	return poolRoutes{cs}
 }
+
+// poolRefusal is a route's answer that refuses with the server's sentence.
+type poolRefusal struct{ sentence string }
 
 func (p poolRoutes) sent(method, path string) bool {
 	p.mu.Lock()
@@ -448,6 +456,115 @@ func TestRunnerPoolAmbiguousRunnerNameIsRefused(t *testing.T) {
 	for _, r := range srv.reqs {
 		if r.method == http.MethodPut {
 			t.Errorf("an ambiguous name reached %s %s", r.method, r.path)
+		}
+	}
+}
+
+// An organization runner joins an organization pool by name or by id, found in the admin runner list
+// (owner_kind org), and leaves it by name or id as the pool's member list shows it. Each goes through the
+// organization's runner route; a person's runner named by id on the same pool keeps its own route.
+func TestRunnerPoolOrgRunnersAddAndRemove(t *testing.T) {
+	pool, cluster, person := uuid.New(), uuid.New(), uuid.New()
+	poolPath := "/api/v1/runner-pools/" + pool.String()
+	orgPath := poolPath + "/runners/" + cluster.String()
+	routes := map[string]any{
+		"GET " + poolPath:              sdk.RunnerPool{ID: pool, Name: "Cluster", Scope: sdk.RunnerPoolOrganization, Revision: 1},
+		"GET " + poolPath + "/members": []sdk.RunnerPoolMemberView{},
+		"GET /api/v1/runners": []sdk.RunnerView{
+			{ID: cluster, Name: "cluster-a", State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerOrg},
+			{ID: person, Name: "laptop-7", State: types.RunnerClaimed, OwnerKind: types.RunnerOwnerPerson}},
+		"GET /api/v1/me/runners":     []sdk.RunnerView{},
+		"GET /api/v1/remote-runners": []sdk.RemoteRunnerView{},
+		"PUT *":                      sdk.RunnerPoolMember{PoolID: pool},
+		"DELETE *":                   nil,
+	}
+	for _, arg := range []string{"cluster-a", cluster.String()} {
+		srv := newPoolRoutes(t, routes)
+		out, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), arg, "--url", srv.URL, "--token", "t")
+		if err != nil || !srv.sent(http.MethodPut, orgPath) || strings.TrimSpace(out) != "cluster-a added to Cluster" {
+			t.Errorf("add %s = %v, printed %q, sent %+v", arg, err, out, srv.reqs)
+		}
+	}
+	srv := newPoolRoutes(t, routes)
+	if _, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), person.String(), "--url", srv.URL, "--token", "t"); err != nil ||
+		!srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+pool.String()+"/runners/"+person.String()) {
+		t.Errorf("a person's runner id on an organization pool = %v, sent %+v", err, srv.reqs)
+	}
+
+	held := map[string]any{
+		"GET " + poolPath: routes["GET "+poolPath],
+		"GET " + poolPath + "/members": []sdk.RunnerPoolMemberView{
+			{Kind: sdk.RunnerKindSelfHosted, ID: cluster.String(), Name: "cluster-a", Runner: &sdk.RunnerView{ID: cluster, OwnerKind: types.RunnerOwnerOrg}}},
+		"DELETE *": nil,
+	}
+	for _, arg := range []string{"cluster-a", cluster.String()} {
+		srv := newPoolRoutes(t, held)
+		out, err := execCmdCapture(t, "runner", "pool", "remove", pool.String(), arg, "--url", srv.URL, "--token", "t")
+		if err != nil || !srv.sent(http.MethodDelete, orgPath) || strings.TrimSpace(out) != arg+" is no longer in Cluster" {
+			t.Errorf("remove %s = %v, printed %q, sent %+v", arg, err, out, srv.reqs)
+		}
+	}
+	// Already a member: said so, not added again.
+	held["GET /api/v1/runners"] = routes["GET /api/v1/runners"]
+	held["GET /api/v1/me/runners"], held["GET /api/v1/remote-runners"] = []sdk.RunnerView{}, []sdk.RemoteRunnerView{}
+	srv = newPoolRoutes(t, held)
+	out, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--url", srv.URL, "--token", "t")
+	if err != nil || srv.sent(http.MethodPut, orgPath) || strings.TrimSpace(out) != "cluster-a is already in Cluster" {
+		t.Errorf("add of a member = %v, printed %q, sent %+v", err, out, srv.reqs)
+	}
+}
+
+// The server's sentence for an organization runner it refuses (one already in another pool) is the error,
+// and a name an organization runner and a remote-hosted runner share is refused before any write.
+func TestRunnerPoolOrgRunnerRefusalsPassThrough(t *testing.T) {
+	pool, cluster := uuid.New(), uuid.New()
+	poolPath := "/api/v1/runner-pools/" + pool.String()
+	sentence := "This organization runner is already in another pool. Remove it from that pool first."
+	routes := map[string]any{
+		"GET " + poolPath:              sdk.RunnerPool{ID: pool, Name: "Cluster", Scope: sdk.RunnerPoolOrganization, Revision: 1},
+		"GET " + poolPath + "/members": []sdk.RunnerPoolMemberView{},
+		"GET /api/v1/runners":          []sdk.RunnerView{{ID: cluster, Name: "cluster-a", OwnerKind: types.RunnerOwnerOrg}},
+		"GET /api/v1/me/runners":       []sdk.RunnerView{},
+		"GET /api/v1/remote-runners":   []sdk.RemoteRunnerView{},
+		"PUT *":                        poolRefusal{sentence},
+	}
+	srv := newPoolRoutes(t, routes)
+	if _, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--url", srv.URL, "--token", "t"); err == nil || !strings.Contains(err.Error(), sentence) {
+		t.Errorf("a refused organization runner = %v, want the server's sentence", err)
+	}
+	routes["GET /api/v1/remote-runners"] = []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "cluster-a"}}}
+	srv = newPoolRoutes(t, routes)
+	_, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--url", srv.URL, "--token", "t")
+	if err == nil || !strings.Contains(err.Error(), `2 runners answer to "cluster-a"`) {
+		t.Errorf("an ambiguous name = %v", err)
+	}
+	for _, r := range srv.reqs {
+		if r.method == http.MethodPut {
+			t.Errorf("an ambiguous name reached %s %s", r.method, r.path)
+		}
+	}
+}
+
+// A user pool never takes an organization runner: its runners are looked up among your own and the
+// remote-hosted ones, the admin runner list is not read, and the organization's runner route is not used.
+func TestRunnerPoolUserPoolNeverTakesAnOrgRunner(t *testing.T) {
+	pool, cluster := uuid.New(), uuid.New()
+	poolPath := "/api/v1/runner-pools/" + pool.String()
+	srv := newPoolRoutes(t, map[string]any{
+		"GET " + poolPath:               sdk.RunnerPool{ID: pool, Name: "Laptop", Scope: sdk.RunnerPoolUser, Revision: 1},
+		"GET " + poolPath + "/members":  []sdk.RunnerPoolMemberView{},
+		"GET /api/v1/runners":           []sdk.RunnerView{{ID: cluster, Name: "cluster-a", OwnerKind: types.RunnerOwnerOrg}},
+		"GET /api/v1/me/runners":        []sdk.RunnerView{},
+		"GET /api/v1/me/remote-runners": []sdk.RemoteRunnerView{},
+		"PUT *":                         sdk.RunnerPoolMember{PoolID: pool},
+	})
+	_, err := execCmdCapture(t, "runner", "pool", "add", pool.String(), "cluster-a", "--url", srv.URL, "--token", "t")
+	if err != nil || !srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+pool.String()+"/remote-runners/cluster-a") {
+		t.Errorf("a name only an organization runner answers to = %v, sent %+v", err, srv.reqs)
+	}
+	for _, r := range srv.reqs {
+		if r.path == "/api/v1/runners" || r.path == poolPath+"/runners/"+cluster.String() {
+			t.Errorf("a user pool reached %s %s", r.method, r.path)
 		}
 	}
 }

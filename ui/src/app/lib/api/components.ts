@@ -20,12 +20,12 @@ export const components = {
   // POST /api/v1/me/components. 403 when custom components are off for the caller, 409 on a name
   // they already use, 422 on an invalid definition or at the saved-component limit.
   async saveMine(req: ComponentRequest): Promise<ComponentSaved> {
-    return asJson<ComponentSaved>(await wfetch("/me/components", { method: "POST", ...json(req) }));
+    return asJson<ComponentSaved>(await wfetch("/me/components", { method: "POST", asPerson: true, ...json(req) }));
   },
 
   // PUT /api/v1/me/components/{id}. 404 for an id that is not the caller's.
   async updateMine(id: string, req: ComponentRequest): Promise<ComponentSaved> {
-    return asJson<ComponentSaved>(await wfetch(`/me/components/${encodeURIComponent(id)}`, { method: "PUT", ...json(req) }));
+    return asJson<ComponentSaved>(await wfetch(`/me/components/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, ...json(req) }));
   },
 
   // DELETE /api/v1/me/components/{id} -> 204. Runs already launched with it keep their record.
@@ -41,7 +41,7 @@ export const components = {
   // PUT /api/v1/components/{id} (admin): creates the organisation component with this id, or
   // replaces it. A new one is available to nobody until an admin names who may use it.
   async put(id: string, req: ComponentRequest): Promise<ComponentSaved> {
-    return asJson<ComponentSaved>(await wfetch(`/components/${encodeURIComponent(id)}`, { method: "PUT", ...json(req) }));
+    return asJson<ComponentSaved>(await wfetch(`/components/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, ...json(req) }));
   },
 
   // DELETE /api/v1/components/{id} (admin) -> 204. Its restriction stays, so the id stays closed.

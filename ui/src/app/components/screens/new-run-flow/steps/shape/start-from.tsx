@@ -9,7 +9,7 @@ import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { cn } from "../../../../ui/utils";
 import type { TemplateSummary } from "../../../../../lib/types/templates";
-import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/scenarios/templates";
+import type { LaunchIntentSummary } from "../../../../../lib/types/launch-intents";
 import type { GuidedFacts } from "../../draft/run-intent";
 import { AgainPicker } from "./again-picker";
 import { TemplatePicker } from "./template-picker";

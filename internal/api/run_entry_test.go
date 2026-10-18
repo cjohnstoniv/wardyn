@@ -323,3 +323,13 @@ func TestEntry_SuperAdminKeepsGovernance(t *testing.T) {
 		t.Errorf("audit read as a super admin: %d, want reachable", w.Code)
 	}
 }
+
+// A run that is not a service identity's has no sponsored service; a service identity's names it.
+func TestSponsoredServiceIsEmptyForARunWithoutOne(t *testing.T) {
+	if got := sponsoredService(types.AgentRun{CreatedBy: "alice@corp.example"}); got != "" {
+		t.Errorf("sponsoredService of a person's run = %q, want empty", got)
+	}
+	if got := sponsoredService(types.AgentRun{CreatedBy: types.ServicePrincipalPrefix + "nightly"}); got != "nightly" {
+		t.Errorf("sponsoredService of a service identity's run = %q, want nightly", got)
+	}
+}

@@ -43,7 +43,7 @@ func TestAuditActionsUseTheClosedVerbList(t *testing.T) {
 			t.Errorf("%s: verb %q is not in the closed list", a, v)
 		}
 	}
-	if len(AuditActions) != 17 {
-		t.Errorf("%d actions, design §12.2 lists 14, minus egress.baseline.write (B-P1's, as governance.egress_baseline.write), plus runners.enabled.set, runner.inventory.hold, runner.update and runner.action.refuse", len(AuditActions))
+	if len(AuditActions) != 19 {
+		t.Errorf("%d actions, design §12.2 lists 14, minus egress.baseline.write (B-P1's, as governance.egress_baseline.write), plus runners.enabled.set, runner.inventory.hold, runner.update, runner.action.refuse, runner.trust.write and runner.recovery.request", len(AuditActions))
 	}
 }

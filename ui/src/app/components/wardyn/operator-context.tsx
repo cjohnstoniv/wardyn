@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { setExpectedPrincipal } from "../../lib/api/core";
 import type { MeUserDrive } from "../../lib/api/health";
 
 // One /me payload, one memoized identity object, one context. Each field's
@@ -287,6 +288,9 @@ export function OperatorProvider({
     }),
     [userDrive, userDriveDeniedByProfile, userDriveUnavailable],
   );
+  // DR-0034: a draft names the person this tab confirmed (see setExpectedPrincipal),
+  // and only once /me has answered: the "unknown" and "…" placeholders name no one.
+  React.useEffect(() => setExpectedPrincipal(operatorResolved ? principal : ""), [operatorResolved, principal]);
   // One memoized identity object for the whole provider — see the comment
   // above MeIdentity for the re-render trade this makes.
   const identity = React.useMemo<MeIdentity>(

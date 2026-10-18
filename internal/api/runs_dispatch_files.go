@@ -14,6 +14,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -44,13 +45,26 @@ import (
 // failed instead (ok=false), because every grant would silently go missing.
 // A run with no file_secret grant reads nothing and returns (nil, true).
 //
+// resolveFileSecretValues is the same with the run's stored grant rows. A
+// grant whose stored row is runner_resident is read instead from the
+// namespace its origin was proved in (readResidentValue: audited, masked with
+// both renderings, no owner fallback), and its file's Content is the grant's
+// placeholder, which the runner fills from its keystore at create. Its value
+// is returned in resident, for deliverResident and nothing else.
+//
 // dispatchRun reaches it through completeMaskManifestWithFileSecrets.
-func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec) (files []runner.ManagedFile, ok bool) {
+func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec) ([]runner.ManagedFile, bool) {
+	files, _, ok := s.resolveFileSecretValues(ctx, run, policy, nil)
+	return files, ok
+}
+
+func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec,
+	rows []types.CredentialGrant) (files []runner.ManagedFile, resident []residentValue, ok bool) {
 	if !slices.ContainsFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantFileSecret }) {
-		return nil, true
+		return nil, nil, true
 	}
 	if !s.fileSecretRunnerDelivers(ctx, run) {
-		return nil, false
+		return nil, nil, false
 	}
 	delivered := map[string]bool{}
 	for _, g := range policy.EligibleGrants {
@@ -74,7 +88,20 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 			skip = "another file_secret grant on this run already delivers this file"
 		}
 		scope := ""
-		if skip == "" {
+		row, isResident := residentGrantRow(rows, g)
+		if skip == "" && isResident {
+			if v, rerr := s.readResidentValue(ctx, run, row, secretName); rerr != nil {
+				skip = "secret could not be resolved"
+			} else {
+				delivered[file] = true
+				files = append(files, runner.ManagedFile{
+					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true,
+					Content: []byte(placement.ResidentPlaceholder(row.ID)),
+				})
+				resident = append(resident, v)
+			}
+		}
+		if skip == "" && !isResident {
 			owner := grantReadOwner(runIdentitySubject(ctx, run.CreatedBy), g.OwnerOnly, run.OperatorOwned)
 			gctx, row := secretstore.GrantRead(ctx, g.OwnerOnly)
 			val, gerr := s.cfg.Secrets.For(owner).Get(secretstore.WithPurpose(gctx, secretstore.PurposeDispatch), secretName)
@@ -94,6 +121,9 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 			}
 		}
 		data := map[string]any{"file": file, "secret_name": secretName}
+		if isResident {
+			data["delivery"] = types.GrantDeliveryResident
+		}
 		if scope != "" {
 			data["secret_scope"] = scope
 		}
@@ -104,18 +134,26 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.file_secret.resolve",
 			run.ID.String(), outcome, mustJSON(data)))
 	}
-	return files, true
+	return files, resident, true
 }
 
 // completeMaskManifestWithFileSecrets is the file lane's place in dispatchRun:
 // the last values the run receives, resolved onto spec immediately before the
 // run's masking manifest completes over them, so the manifest is whole when
-// the sandbox is created. false means the run has been failed.
-func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, spec *runner.SandboxSpec) bool {
-	files, ok := s.resolveFileSecretGrants(ctx, run, policy)
+// the sandbox is created. false means the run has been failed. The run's
+// runner_resident ssh_key and git_pat grants are authored here too
+// (authorResidentMints), and each resident value, of a file or a mint, joins
+// resident for deliverResident.
+func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec,
+	rows []types.CredentialGrant, patBroker bool, spec *runner.SandboxSpec, resident *[]residentValue) bool {
+	if !s.authorResidentMints(ctx, run, rows, patBroker, spec, resident) {
+		return false
+	}
+	files, values, ok := s.resolveFileSecretValues(ctx, run, policy, rows)
 	if !ok {
 		return false
 	}
+	*resident = append(*resident, values...)
 	spec.ManagedFiles = append(spec.ManagedFiles, files...)
 	return s.completeMaskManifest(ctx, run)
 }

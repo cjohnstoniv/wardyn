@@ -45,8 +45,6 @@ import (
 
 // The refusal bodies. Machine-facing (the caller is the proxy sidecar), but
 // each names the one thing a person reading the run's failure could do.
-//
-// DRAFT (canon pending)
 const (
 	azureCLIResolveNotRecorded = "An Azure CLI's sign-in is injected only through the grant Wardyn authors when a run launches with " +
 		"that component, which records whose sign-in the run uses; this grant carries no such record"

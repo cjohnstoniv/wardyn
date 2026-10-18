@@ -40,7 +40,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
 	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
-		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses"),
+		"PolicyOverridden PushRuleSets HarnessToolRules Harnesses ADOLaneRepo"),
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
@@ -55,7 +55,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.AzureSettings]():       strings.Fields("Endpoint Route"),
 	reflect.TypeFor[types.BedrockSettings]():     strings.Fields("Region BaseURL SSOStartURL SSOAccountID SSORoleName"),
 	reflect.TypeFor[types.ComponentSettings]():   strings.Fields("RequireVaultForCredentials DenyResidentDelivery AutonomyCap"),
-	reflect.TypeFor[types.EgressRedirect]():      strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem"),
+	reflect.TypeFor[types.EgressRedirect]():      strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem GoChecksumDBOff"),
 	reflect.TypeFor[types.EphemeralProvider]():   strings.Fields("DefaultDiskMiB MaxDiskMiB"),
 	reflect.TypeFor[types.GitProvider]():         strings.Fields("ID Kind Disabled BaseURLs Lanes GitHubAppInstallURL CredentialSource Entra"),
 	reflect.TypeFor[types.Integration]():         strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),

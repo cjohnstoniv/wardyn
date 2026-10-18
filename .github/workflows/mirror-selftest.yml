@@ -111,7 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           docker pull busybox:1.37
-          grep -E '"(GET|HEAD) /v2/library/busybox/manifests/1\.37 ' "$RUNNER_TEMP/base-image-mirror.log" | grep -F '" 404 '
+          # The containerd image store adds "?ns=docker.io" to the path; the classic store does not.
+          grep -E '"(GET|HEAD) /v2/library/busybox/manifests/1\.37(\?[^ ]*)? ' "$RUNNER_TEMP/base-image-mirror.log" | grep -F '" 404 '
       - name: With the mirror process killed, a digest pull falls through to Docker Hub
         run: |
           set -euo pipefail

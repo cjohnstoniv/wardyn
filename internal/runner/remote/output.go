@@ -114,6 +114,30 @@ func (s *Substrate) outputACK(ctx context.Context, id uuid.UUID, offset int64) e
 	}
 }
 
+// outputAccepted commits accepted through Options.OutputAccepted before the
+// ACK, retrying a failure with outputACK's backoff for up to callTimeout.
+func (s *Substrate) outputAccepted(ctx context.Context, id uuid.UUID, accepted int64) error {
+	if s.opts.OutputAccepted == nil {
+		return nil
+	}
+	delay := 50 * time.Millisecond
+	deadline := time.Now().Add(callTimeout)
+	for {
+		err := s.opts.OutputAccepted(ctx, id, accepted)
+		if err == nil || ctx.Err() != nil || time.Now().After(deadline) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		delay = min(2*delay, time.Second)
+	}
+}
+
 // receiveOutput returns nil at EOF and otherwise the error that ended it.
 func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire.Stream, offset int64) error {
 	// Output has no stdin. Half-close it so an EOF can release both wire ends
@@ -124,6 +148,13 @@ func (s *Substrate) receiveOutput(id uuid.UUID, sink *outputSink, st *runnerwire
 		n, readErr := st.Read(data)
 		accepted, writeErr := sink.accept(offset, data[:n])
 		offset += int64(n)
+		// The org's record of what it accepted is committed before the runner
+		// is told. Failing that, the stream ends as a transport loss does, with
+		// no ACK: the runner keeps the bytes and the sink keeps its writer.
+		if err := s.outputAccepted(st.Context(), id, accepted); err != nil {
+			_ = st.Close()
+			return err
+		}
 		// Even a short write has accepted its prefix; only those bytes are ACKed.
 		ackErr := s.outputACK(st.Context(), id, accepted)
 		if writeErr != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -153,9 +154,48 @@ func TestSweepRequestClosedResume_SkipsARunWhoseLockIsHeld(t *testing.T) {
 // reads under the lock.
 func TestSweepRequestClosedResume_LeavesANewerIdlePauseAlone(t *testing.T) {
 	f, _ := newSandboxFixture(t, types.PauseIdle)
-	f.srv.resumeWaitingRun(context.Background(), f.st, f.run.ID)
+	listedAt := time.Now().UTC().Add(-time.Hour)
+	listed := store.PauseCandidate{
+		Run: types.AgentRun{ID: f.run.ID, PausedAt: &listedAt, PausedReason: types.PauseWaiting},
+	}
+	f.srv.resumeClosedRun(context.Background(), f.st, listed)
 	if _, thaws := f.rn.counts(); thaws != 0 {
 		t.Fatalf("thaws = %d for an idle pause, want 0", thaws)
+	}
+	// An idle pause the listing saw a decided request for is resumed; a different
+	// idle pause under the same run is not.
+	listed.RequestDecidedSincePause = true
+	f.srv.resumeClosedRun(context.Background(), f.st, listed)
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Fatalf("thaws = %d for an idle pause newer than the listed one, want 0", thaws)
+	}
+}
+
+// TestSweepRequestClosedResume_ResumesAnIdlePauseWhoseRequestWasDecided: a request raised by traffic in flight
+// when the run froze closed while the run's lock was busy, and nothing told the run. The idle pause carries a
+// request decided after it began, with none open, so the next sweep thaws it; one with no such request, or
+// with a request open again, stays paused.
+func TestSweepRequestClosedResume_ResumesAnIdlePauseWhoseRequestWasDecided(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		open, decided bool
+		thaws         int
+	}{
+		{"nothing decided since the pause", false, false, 0},
+		{"decided, another request open", true, true, 0},
+		{"decided, none open", false, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, sr := newSandboxFixture(t, types.PauseIdle)
+			f.st.open, f.st.decided = tc.open, tc.decided
+			f.sweep(t)
+			if _, thaws := f.rn.counts(); thaws != tc.thaws {
+				t.Fatalf("thaws = %d, want %d", thaws, tc.thaws)
+			}
+			if pausedAt, _ := f.st.paused(); (pausedAt == nil) != (tc.thaws == 1) || sr.isFrozen() != (tc.thaws == 0) {
+				t.Errorf("paused = %v, frozen = %v after the sweep", pausedAt, sr.isFrozen())
+			}
+		})
 	}
 }
 

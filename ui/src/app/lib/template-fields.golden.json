@@ -31,6 +31,7 @@
       "github"
     ],
     "ComponentDefinition": [
+      "description",
       "hosts",
       "secrets",
       "config",
@@ -640,7 +641,7 @@
       "name": "ends_after_sec",
       "part": "runner",
       "omitted": "baseline",
-      "empty": "same_as_omitted",
+      "empty": "never",
       "meaning": "The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission.",
       "section": "run_wide"
     },

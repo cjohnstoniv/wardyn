@@ -115,14 +115,15 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
 test("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
   const stamp = Date.now().toString(36);
   const ids: string[] = [];
-  // The per-area packet's four saved policies (Member · State 4), with the line each reads as.
-  const policies: [string, string[], string | RegExp][] = [
-    [`ADO contributor ${stamp}`, [...ELEVEN_READS, "code_write", "pr"], "Azure DevOps: Read (every area) · Repos"],
+  // The per-area packet's four saved policies (Member · State 4), with the line each reads as under the
+  // row's label, and whether the line carries the high-risk badge.
+  const policies: [string, string[], string, boolean][] = [
+    [`ADO contributor ${stamp}`, [...ELEVEN_READS, "code_write", "pr"], "Read (every area) · Repos", false],
     [`ADO ticket triage ${stamp}`, ["code_read", "work_read", "work_write", "project_read"],
-      "Azure DevOps: Read code · Boards · View projects & teams"],
-    [`ADO repo-policy admin ${stamp}`, ["code_read", "policy_admin"], /^Azure DevOps: Read code · Edit branch policies\s*High risk$/],
+      "Read code · Boards · View projects & teams", false],
+    [`ADO repo-policy admin ${stamp}`, ["code_read", "policy_admin"], "Read code · Edit branch policies", true],
     [`ADO backlog cleanup ${stamp}`, ["work_read", "work_write", "work_admin"],
-      /^Azure DevOps: Boards · Delete work items & manage work tracking\s*High risk$/],
+      "Boards · Delete work items & manage work tracking", true],
   ];
   try {
     for (const [name, caps] of policies) {
@@ -133,13 +134,15 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
       expect(res.status()).toBe(201);
       ids.push(((await res.json()) as { id: string }).id);
     }
-    for (const [i, [, , line]] of policies.entries()) {
+    for (const [i, [, , line, highRisk]] of policies.entries()) {
       await gotoConsole(page);
       await openNewRun(page);
       await reviewRunDocument(page, { shape: "environment", experience: "interactive", no_repositories_or_drives: true, policy_id: ids[i] });
-      await expect(page.getByTestId("ado-access-summary")).toHaveText(line);
+      const summary = page.getByTestId("ado-access-summary");
+      await expect(summary.locator(".label-eyebrow")).toHaveText(ADO_ACCESS.SECTION_TITLE);
+      await expect(summary.locator("strong")).toHaveText(line);
+      await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toHaveCount(highRisk ? 1 : 0);
     }
-    await expect(page.getByTestId("ado-access-summary").getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();
   } finally {
     for (const id of ids) expect((await request.delete(`/api/v1/policies/${id}`, { headers: auth })).ok()).toBe(true);
   }

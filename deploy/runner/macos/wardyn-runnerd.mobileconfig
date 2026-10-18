@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copyright 2026 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Managed preferences for wardyn-runnerd: a configuration profile template for device management (Jamf,
+  Kandji, Intune, Mosyle, ...). MDM writes the payload to /Library/Managed Preferences/com.wardyn.runnerd.plist
+  (or, for a user-scoped profile, /Library/Managed Preferences/<user>/com.wardyn.runnerd.plist), and
+  `wardyn-runnerd serve` reads it as the default of the flag or environment variable named below.
+  A flag still outranks the profile; the profile outranks the environment. An empty or missing key is
+  unset. Only OrgURL is required.
+
+    OrgURL            flag org                  organisation public HTTPS URL (required)
+    ProxyImage        flag proxy-image          proxy image pin; left out, the image the organisation named at registration, else this binary's release image
+    RelayListen       flag relay-listen         run relay address; left out, found by a probe container
+    RelayHostTarget   flag relay-host-target    what a run's proxy reaches the relay at; left out, found by a probe
+    InternalNetwork   flag internal-network     Docker bridge for proxy sidecars (default wardyn-internal)
+    TrustedCAFile     flag trusted-ca-file      PEM bundle of extra roots; the file must exist on the Mac
+                                             (deliver it with a separate MDM file payload)
+    RecordingStore    flag recording-store      pg, fs or off (default pg)
+    DockerHost        DOCKER_HOST            the engine's socket, when it is not the default
+
+  Replace each __PLACEHOLDER__: the two UUIDs with fresh ones (uuidgen), __ORG_URL__ and __ORGANIZATION__.
+  Committed as-is it is valid plist XML — see scripts/test-runner-pkg.sh. MDM signs and scopes the profile;
+  an unsigned profile is accepted from MDM but not by a double-click.
+-->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>com.wardyn.runnerd</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>PayloadIdentifier</key>
+      <string>com.wardyn.runnerd.settings</string>
+      <key>PayloadUUID</key>
+      <string>__PAYLOAD_UUID__</string>
+      <key>PayloadDisplayName</key>
+      <string>Wardyn runner settings</string>
+      <key>OrgURL</key>
+      <string>__ORG_URL__</string>
+      <key>ProxyImage</key>
+      <string></string>
+      <key>RelayListen</key>
+      <string></string>
+      <key>RelayHostTarget</key>
+      <string></string>
+      <key>InternalNetwork</key>
+      <string></string>
+      <key>TrustedCAFile</key>
+      <string></string>
+      <key>RecordingStore</key>
+      <string></string>
+      <key>DockerHost</key>
+      <string></string>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key>
+  <string>Wardyn runner</string>
+  <key>PayloadIdentifier</key>
+  <string>com.wardyn.runnerd.profile</string>
+  <key>PayloadOrganization</key>
+  <string>__ORGANIZATION__</string>
+  <key>PayloadScope</key>
+  <string>System</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>__PROFILE_UUID__</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>

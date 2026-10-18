@@ -19,6 +19,13 @@
 export const SIGNIN = {
   LEAD: "This console governs the agents on this host.",
 
+  // The SSO button on a deployment whose OIDC issuer is Microsoft Entra ID
+  // (/healthz sso_provider "microsoft"); every other IdP keeps "Sign in with
+  // SSO". Owner-approved strings: no logo anywhere, and none of the words the
+  // brand guidance retires.
+  SSO_MICROSOFT: "Sign in with Microsoft",
+  SSO_MICROSOFT_HINT: "Use your work or school account",
+
   // First contact, before /healthz has answered even once which sign-in
   // doors exist (Q457-1: hide both doors while checking — no token field, no
   // SSO button, no claim about what's configured, rather than guess and

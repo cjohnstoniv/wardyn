@@ -338,6 +338,48 @@ func TestSealGovernanceRejectReason(t *testing.T) {
 	}
 }
 
+// The person a session revocation, a token mint, a namespace listing or an attach names in data is the
+// row's own person, so it is sealed under their key in fields mode as in full mode, and erasing them
+// leaves no clear copy of the name.
+func TestSealPersonNamedInDataBesideTheTarget(t *testing.T) {
+	for _, tc := range []struct{ action, path, actor, target string }{
+		{"session.revoke", "sub", "admin-alice", "bob"},
+		{"person.token.create", "target", "admin-alice", "bob"},
+		{"secret.list", "secret_owner", "admin-alice", "bob"},
+		{"person.attach", "sub", "bob", "carol"},
+	} {
+		for _, full := range []bool{false, true} {
+			t.Run(tc.action+map[bool]string{false: "/fields", true: "/full"}[full], func(t *testing.T) {
+				s, mk := newSealer(t)
+				if full {
+					s, mk, _ = newFullSealer(t, "admin-alice", "bob", "carol")
+				}
+				data, _ := json.Marshal(map[string]any{tc.path: "bob", "scope": "sub"})
+				ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: tc.actor,
+					Action: tc.action, Target: tc.target, Outcome: "success", Data: data}
+				got, pending, err := s.Seal(t.Context(), ev)
+				if err != nil || pending {
+					t.Fatalf("Seal = pending %v, %v", pending, err)
+				}
+				if v, _ := field(t, got, tc.path).(string); !strings.HasPrefix(v, "seal2.") {
+					t.Fatalf("%s.%s = %q, want it sealed", tc.action, tc.path, v)
+				}
+				mk.destroy("bob")
+				back, err := s.Unseal(t.Context(), []types.AuditEvent{got})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if v := field(t, back[0], tc.path); v != ErasedValue {
+					t.Errorf("%s after bob's erasure = %v, want %q", tc.path, v, ErasedValue)
+				}
+				if field(t, back[0], "scope") != "sub" {
+					t.Errorf("a field that is not sealed changed: %s", back[0].Data)
+				}
+			})
+		}
+	}
+}
+
 func TestUnsealedActionsAreNeverSealed(t *testing.T) {
 	for _, a := range UnsealedActions {
 		if SealsAction(a) {

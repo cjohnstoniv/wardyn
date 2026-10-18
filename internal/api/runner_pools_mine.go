@@ -39,7 +39,7 @@ func (s *Server) handleCreateMyRunnerPool(w http.ResponseWriter, r *http.Request
 		writePoolInvalid(w, err.Error())
 		return
 	}
-	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolUser, Owner: owner, Limits: req.Limits},
+	s.createPool(w, r, ps, types.RunnerPool{ID: uuid.New(), Name: req.Name, Scope: types.RunnerPoolUser, Owner: owner, Limits: req.Limits, Recording: req.Recording},
 		http.StatusUnprocessableEntity, "You already have 10 user pools, the most one person may keep. Delete one to make another.")
 }
 

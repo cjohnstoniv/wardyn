@@ -106,6 +106,9 @@ func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runI
 		}
 	}
 	if outcome == types.RunnerActionSuccess {
+		if err := recordRunnerActionApplyTx(ctx, tx, a, nil, observedAt, prepare); err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2
 			WHERE obligation_id = $1 AND id <> $2 AND settled_at IS NULL`, a.ObligationID, a.ID); err != nil {
 			return types.RunnerPendingAction{}, false, fmt.Errorf("store: settle asserted obligation: %w", err)

@@ -13,6 +13,7 @@
 // (ADO.LAUNCH_DIALOG_BODY) is true by construction: the form never left.
 import * as React from "react";
 import { scmAccess } from "../api/scm-access";
+import type { SCMAccess } from "../types/setup";
 import { apiURL } from "../base-path";
 
 const POLL_MS = 1500;
@@ -21,6 +22,25 @@ const SIGNIN_PATH = "/scm/azure-devops/signin";
 // hook has no handle on — nothing tells it the tab closed, so the poll it
 // starts for that path is bounded instead, long enough for a real sign-in.
 const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Which row a sign-in is for, when the caller knows: the address and kind a refusal named. */
+export interface AdoRowMatch {
+  org?: string;
+  kind?: string;
+}
+
+/**
+ * Whether the person's rows show a finished sign-in. A row counts only if it is live AND backed by the sign-in this
+ * popup runs: an own-token row (token_mode own_pat) reads live without any sign-in, and can sit beside the single
+ * sign-in row for another organisation, so it proves nothing about this one. When the caller names an org or kind,
+ * the row must be that one.
+ */
+export function signInCompleted(rows: readonly SCMAccess[], match?: AdoRowMatch): boolean {
+  const same = (a?: string, b?: string) => !a || a.toLowerCase() === (b ?? "").toLowerCase();
+  return rows.some(
+    (r) => r.state === "live" && r.token_mode !== "own_pat" && same(match?.org, r.org) && same(match?.kind, r.kind),
+  );
+}
 
 /**
  * connect() opens the connect popup and resolves once it closes: true if the
@@ -46,8 +66,8 @@ export function useAdoConnect(): {
    *  superseded/cancelled — no connect/reject verdict ever happened for
    *  it, so the caller must keep asking rather than treat it as a declined
    *  connection (review finding F1; regression finding 1). */
-  connect: () => Promise<boolean | null>;
-  connectFallback: () => Promise<boolean | null>;
+  connect: (match?: AdoRowMatch) => Promise<boolean | null>;
+  connectFallback: (match?: AdoRowMatch) => Promise<boolean | null>;
   /** Settles whichever poll is in flight, as null — cancelling a dialog
    *  (regression finding 2) must stop the interval AND make sure the
    *  cancelled attempt can never resolve `true` later and toast a stray
@@ -80,7 +100,7 @@ export function useAdoConnect(): {
   // shouldGiveUp() says stop (resolves false). connect() gives up when the
   // popup closes; connectFallback() gives up after a bounded timeout, since
   // it has no popup to watch.
-  const poll = React.useCallback((shouldGiveUp: () => boolean, onLive?: () => void): Promise<boolean | null> => {
+  const poll = React.useCallback((shouldGiveUp: () => boolean, match?: AdoRowMatch, onLive?: () => void): Promise<boolean | null> => {
     // Settle any poll already in flight (F2) before starting this one — a
     // second call (unmount, cancel(), or the fallback link clicked again)
     // must never leave the previous interval running unobserved. null, not
@@ -124,7 +144,7 @@ export function useAdoConnect(): {
           .getMine()
           .then((rows) => {
             if (!mountedRef.current) return;
-            if (rows.some((r) => r.state === "live")) {
+            if (signInCompleted(rows, match)) {
               onLive?.();
               finish(true);
             }
@@ -136,7 +156,7 @@ export function useAdoConnect(): {
     });
   }, []);
 
-  const connect = React.useCallback((): Promise<boolean | null> => {
+  const connect = React.useCallback((match?: AdoRowMatch): Promise<boolean | null> => {
     setBlockedUrl(null);
     // about:blank FIRST, same-origin, then sever the opener reference and
     // navigate — not window.open(<sign-in URL>, ...) directly. This is the
@@ -158,6 +178,7 @@ export function useAdoConnect(): {
     popup.location.href = apiURL(SIGNIN_PATH);
     return poll(
       () => popup.closed,
+      match,
       () => popup.close(),
     );
   }, [poll]);
@@ -165,9 +186,9 @@ export function useAdoConnect(): {
   // review follow-up N1: the blocked-popup fallback link opens sign-in in a
   // new tab the browser owns; this starts the SAME poll (bounded, see
   // FALLBACK_POLL_TIMEOUT_MS) so the dialog still advances on return.
-  const connectFallback = React.useCallback((): Promise<boolean | null> => {
+  const connectFallback = React.useCallback((match?: AdoRowMatch): Promise<boolean | null> => {
     const deadline = Date.now() + FALLBACK_POLL_TIMEOUT_MS;
-    return poll(() => Date.now() > deadline);
+    return poll(() => Date.now() > deadline, match);
   }, [poll]);
 
   const cancel = React.useCallback(() => {

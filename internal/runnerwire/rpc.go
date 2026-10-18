@@ -41,6 +41,9 @@ const (
 	MethodSweep           = "sweep_orphans"
 	MethodDeliverResident = "deliver_resident"
 	MethodEraseResident   = "erase_resident"
+	// MethodSelftest runs a BYOI image's contract check on a runner that
+	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
+	MethodSelftest = "byoi_selftest"
 )
 
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
@@ -66,6 +69,18 @@ type ExecArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation"`
 	Ref                 string    `json:"ref"`
 	Argv                []string  `json:"argv"`
+}
+
+// SelftestArgs carries no argv: the runner execs only its own selftest. The
+// generation is the task's issued, unattempted one, which the call must match
+// and never spends.
+type SelftestArgs struct {
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	Ref                 string    `json:"ref"`
+}
+
+type SelftestResult struct {
+	ExitCode int `json:"exit_code"`
 }
 
 type ExecResult struct {
@@ -131,11 +146,21 @@ type SweepResult struct {
 	Removed    int         `json:"removed"`
 }
 
+// RecoverOutputArgs are recover_output's arguments. Gap says the org takes a copy whose first bytes
+// the runner has already discarded; without it (an older org) such a copy is Unrecoverable.
+type RecoverOutputArgs struct {
+	Ref string `json:"ref"`
+	Gap bool   `json:"gap,omitempty"`
+}
+
 // RecoverResult names the `output` stream a recover_output call opened; the
-// runner sets Unrecoverable instead when it holds no copy.
+// runner sets Unrecoverable instead when it holds no copy. Gap is the offset
+// the stream starts at when the runner had already discarded the bytes before
+// it; it is set only when the call asked for Gap.
 type RecoverResult struct {
 	Stream        uint32 `json:"stream,omitempty"`
 	Unrecoverable bool   `json:"unrecoverable,omitempty"`
+	Gap           int64  `json:"gap,omitempty"`
 }
 
 // DeliverResidentArgs is the runner-only call that hands one runner_resident
@@ -159,6 +184,9 @@ type EraseResidentArgs struct {
 type ResidentErase struct {
 	GrantID uuid.UUID `json:"grant_id"`
 	Outcome string    `json:"outcome"`
+	// ReportID identifies this outcome of the grant: a report resent after a
+	// lost acknowledgement carries the same one, and each new outcome a fresh one.
+	ReportID uuid.UUID `json:"report_id,omitzero"`
 }
 
 // ResidentErase outcomes.

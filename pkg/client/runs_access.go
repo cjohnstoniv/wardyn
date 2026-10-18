@@ -58,7 +58,10 @@ type AccessMCP struct {
 // allowed, needs_approval or not_allowed; Reason (not_allowed only) is clamped,
 // denied_list, capability or always_deny.
 type AccessHost struct {
-	Host    string           `json:"host"`
+	Host string `json:"host"`
+	// Port is the port the host is spelled with, absent when it names none. A spelled port is matched
+	// as the proxy matches one: an allow or deny entry for another port does not cover it.
+	Port    int              `json:"port,omitempty"`
 	Via     string           `json:"via"`
 	Rows    []string         `json:"rows"`
 	Verdict string           `json:"verdict"`
@@ -73,10 +76,13 @@ type AccessHost struct {
 // minted value's ceiling, 0 when the run's lifetime bounds it or Wardyn does not
 // set it. AfterEnd is gone, expires or stays.
 type AccessCredential struct {
-	ID          string `json:"id"`
-	Row         string `json:"row"`
-	Kind        string `json:"kind"`
-	Owner       string `json:"owner"`
+	ID    string `json:"id"`
+	Row   string `json:"row"`
+	Kind  string `json:"kind"`
+	Owner string `json:"owner"`
+	// Label names the credential by its kind and whose it is, never by a secret's name. Empty for a
+	// model credential, which the console names by its provider.
+	Label       string `json:"label,omitempty"`
 	Delivery    string `json:"delivery"`
 	LifetimeSec int    `json:"lifetime_sec,omitempty"`
 	Renewed     bool   `json:"renewed,omitempty"`

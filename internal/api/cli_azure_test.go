@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -494,6 +495,12 @@ func TestAzureCLI_ComponentGate(t *testing.T) {
 		t.Fatalf("another person's launch = %+v, want their own sign-in asked for", refused)
 	}
 
+	// A service identity can never sign in to Azure, so it is told so rather than asked to.
+	svc := &componentAdmission{caller: types.ServicePrincipalPrefix + "ci-bot", credentials: true}
+	if _, refused := admit(svc); refused == nil || refused.refusal == nil || !strings.Contains(refused.refusal.body.Error, azureCLIServiceIdentityRefusal) {
+		t.Fatalf("a service identity's launch = %+v, want the service identity sentence", refused)
+	}
+
 	f.srv.cfg.AzureCLIEntra = nil
 	if _, refused := admit(launch()); refused == nil || refused.reason != reasonComponentCLIAzureNoEntra {
 		t.Fatalf("no console Entra sign-in = %+v, want %s", refused, reasonComponentCLIAzureNoEntra)
@@ -529,8 +536,8 @@ func TestAzureCLI_DoorsAndPreviewFacts(t *testing.T) {
 	}
 	c := slices.IndexFunc(ans.Access.Credentials, func(c client.AccessCredential) bool { return c.Kind == credKindAzureARM })
 	if c < 0 || ans.Access.Credentials[c].Delivery != deliveryProxy || ans.Access.Credentials[c].Owner != credOwnerOwn ||
-		!ans.Access.Credentials[c].Renewed || ans.Access.Credentials[c].AfterEnd != afterEndGone {
-		t.Errorf("credentials = %+v, want one proxy-only credential of the person's own, renewed and gone at the end", ans.Access.Credentials)
+		!ans.Access.Credentials[c].Renewed || ans.Access.Credentials[c].AfterEnd != afterEndGone || ans.Access.Credentials[c].Label != "Your Azure sign-in" {
+		t.Errorf("credentials = %+v, want one proxy-only credential of the person's own, renewed, gone at the end and labelled", ans.Access.Credentials)
 	}
 	for _, host := range []string{armscope.Host, proxy.AzureLoginHost} {
 		if h, ok := accessHost(ans.Access, host); !ok || h.Via != viaInjected || h.Verdict != verdictAllowed {
@@ -789,6 +796,18 @@ func TestAzureCLI_DispatchRefusals(t *testing.T) {
 			}
 		})
 	}
+	// A run a service identity started fails with the sentence that names why, never "not signed in":
+	// a service identity has no Azure sign-in to make.
+	t.Run("a service identity", func(t *testing.T) {
+		f := newAzCLIFixture(t, types.ComponentAccessRead, azCLISubA)
+		f.st.run.CreatedBy = types.ServicePrincipalPrefix + "ci-bot"
+		env, policy := map[string]string{}, &types.RunPolicySpec{}
+		_, _, ok := f.srv.authorAzureCLI(context.Background(), f.st.run, &azureCLIDispatch{ComponentID: f.id.String(), Azure: *f.st.attached[0].Definition.CLI.Azure},
+			"ca", "ca", policy, env, nil)
+		if ok || f.st.failedTo != types.RunFailed || !strings.Contains(f.st.hint, "a service identity has none") {
+			t.Errorf("ok %v state %q hint %q, want FAILED saying a service identity has no Azure sign-in", ok, f.st.failedTo, f.st.hint)
+		}
+	})
 }
 
 // NO REAL TOKEN IN THE SANDBOX. Whatever the person's sign-in holds and
@@ -1061,5 +1080,117 @@ func TestAzureARM_DeadSignInHoldsThenResumes(t *testing.T) {
 	}
 	if n := len(boot.st.approvals.requested); n != 0 {
 		t.Errorf("a boot resolve raised %d request(s), want none", n)
+	}
+}
+
+// The door is decided once, where the withheld lane is closed: with its credential gone it returns no
+// grant and takes back the hosts it opened, and with the credential present it returns the grant and
+// leaves the allowlist alone.
+func TestAzureCLIPlanCloseWithheldReturnsTheDoorItDecided(t *testing.T) {
+	gate := &proxy.AzureARMGrant{TenantID: "tenant"}
+	plan := azureCLIPlan{gate: gate, opened: []string{armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	keep := []runner.InjectionGrant{{Rule: egress.InjectionRule{Host: armscope.Host}}}
+
+	policy := types.RunPolicySpec{AllowedDomains: []string{"example.com", armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	if got := plan.closeWithheld(&policy, nil); got != nil {
+		t.Errorf("a withheld credential kept the door: %+v", got)
+	}
+	if !slices.Equal(policy.AllowedDomains, []string{"example.com"}) {
+		t.Errorf("allowed domains after closing = %v, want only the run's own", policy.AllowedDomains)
+	}
+
+	policy = types.RunPolicySpec{AllowedDomains: []string{"example.com", armscope.Host + ":443", proxy.AzureLoginHost + ":443"}}
+	if got := plan.closeWithheld(&policy, keep); got != gate {
+		t.Errorf("a present credential returned %+v, want the plan's door", got)
+	}
+	if len(policy.AllowedDomains) != 3 {
+		t.Errorf("an open door lost allowlist entries: %v", policy.AllowedDomains)
+	}
+}
+
+// A credentialed MCP server on the ARM host shares it with the Azure CLI door: the server takes its own
+// header credential off the injections and the door keeps the sign-in credential it was decided on.
+func TestAzureCLIDoorSurvivesAnMCPServerOnTheARMHost(t *testing.T) {
+	const id = "6f0c1d2e-0000-4000-8000-0000000c0a0b"
+	f := newComponentFixture(t)
+	f.srv.cfg.AzureCLIEntra = func(row string) ADOEntraConfig {
+		return ADOEntraConfig{RowID: row, TenantID: "tenant-1", ClientID: "console-app", RedirectURL: adoCallbackURL,
+			LoginClientID: "console-app", LoginTenantID: "tenant-1"}
+	}
+	ref := f.org(id, azCLIRowDef(types.ComponentAccessRead, azCLISubA))
+	blob := adoEntraBlob{RefreshToken: "r", Scopes: []string{azARMScope}, TenantID: "tenant-1", ClientID: "console-app",
+		Subject: capSub, CapturedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	if err := f.srv.cfg.Secrets.For(capSub).Put(context.Background(), cliSecretName(id, providerEntraPart), mustJSON(blob)); err != nil {
+		t.Fatal(err)
+	}
+	mcp := map[string]any{"inline": map[string]any{"hosts": []string{armscope.Host},
+		"mcp":     map[string]any{"url": "https://" + armscope.Host + "/mcp", "transport": "http"},
+		"secrets": []map[string]any{headerSecret(compOwnSecret, armscope.Host)}}}
+	f.srv.cfg.AgentImages = composeAgentImages
+	body := map[string]any{"experience": "background", "workload": map[string]any{"kind": "agent_task", "agent": "claude-code", "task": "x"},
+		"no_repositories_or_drives": true, "tools": []map[string]any{{"id": "claude-code", "kind": "harness"}}, "components": []any{mcp, ref}}
+	if w := f.ask(t, componentDoors[0], body); w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	fr := f.srv.cfg.Runner.(*fakeRunner)
+	fr.waitForSandbox(t)
+	fr.mu.Lock()
+	pc := fr.lastSpec.ProxyConfig
+	fr.mu.Unlock()
+	if pc.AzureARM == nil {
+		t.Errorf("the door was lost with an MCP server on its host")
+	}
+	if len(pc.MCPServers) != 1 || pc.MCPServers[0].GrantID == nil {
+		t.Errorf("MCP servers = %+v, want one with its own grant", pc.MCPServers)
+	}
+	var arm int
+	for _, in := range pc.Injection {
+		if hostEqual(in.Rule.Host, armscope.Host) {
+			arm++
+			if !strings.Contains(in.Rule.SecretName, providerEntraPart) {
+				t.Errorf("the host's remaining injection is %q, want the door's Entra credential", in.Rule.SecretName)
+			}
+		}
+	}
+	if arm != 1 {
+		t.Errorf("%d injections on the ARM host, want the door's one", arm)
+	}
+}
+
+// Dispatch hands the proxy the door closeWithheld decided, not a second reading of the injections after
+// the MCP servers have taken theirs. No reachable run tells the two apart (a ceiling that withholds the
+// door drops every injection on the host, the MCP server's too), so the wiring is pinned at its source.
+func TestDispatchHandsTheProxyTheDecidedAzureDoor(t *testing.T) {
+	src, err := os.ReadFile("runs_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "AzureARM: azureARM,") || strings.Contains(string(src), "gateFor(") {
+		t.Error("runs_dispatch.go must pass the proxy the door closeWithheld returned, with no second gateFor reading")
+	}
+}
+
+// A service identity has no Azure sign-in of its own to use, so create, Review and
+// dispatch tell it so rather than asking it to sign in or for a person it is not.
+func TestAzureCLI_ServiceIdentityIsToldItCannotSignIn(t *testing.T) {
+	f := newAzCLIFixture(t, types.ComponentAccessRead, azCLISubA)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	service := types.ServicePrincipalPrefix + "ci"
+	for _, credentials := range []bool{true, false} {
+		c := attachedComponent{snapshot: f.st.attached[0], source: "org"}
+		refused := f.srv.componentAzureCLIAdmitted(req, &componentAdmission{caller: service, credentials: credentials}, &c, 0)
+		if refused == nil || refused.reason != reasonComponentCLISignInRequired || c.needsSignIn {
+			t.Fatalf("credentials=%v: refused %+v needsSignIn %v, want the sign-in refusal and no setup item", credentials, refused, c.needsSignIn)
+		}
+		if want := "components[0]: " + azureCLIServiceIdentityRefusal; !strings.Contains(refused.refusal.body.Error, want) {
+			t.Errorf("credentials=%v: refusal %q lacks %q", credentials, refused.refusal.body.Error, want)
+		}
+	}
+
+	f.st.run.CreatedBy = service
+	_, _, ok := f.srv.authorAzureCLI(context.Background(), f.st.run, &azureCLIDispatch{ComponentID: f.id.String(), Azure: *f.st.attached[0].Definition.CLI.Azure},
+		"ca", "ca", &types.RunPolicySpec{}, map[string]string{}, nil)
+	if ok || f.st.hint != azureCLIServiceIdentityRefusal {
+		t.Errorf("dispatch: ok %v hint %q, want a refusal with %q", ok, f.st.hint, azureCLIServiceIdentityRefusal)
 	}
 }

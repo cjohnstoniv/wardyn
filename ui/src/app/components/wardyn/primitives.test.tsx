@@ -22,6 +22,7 @@ import type {
   ApprovalKind,
   ApprovalState,
 } from "../../lib/types";
+import { AgentBadge } from "./primitives";
 import type { AutonomyLevel } from "../../lib/api/governance";
 import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 
@@ -215,5 +216,13 @@ describe("ApprovalKindChip — human copy, not a raw wire token", () => {
     render(<ApprovalKindChip kind="tool_call" />);
     expect(screen.getByText("Tool call")).toBeInTheDocument();
     expect(screen.queryByText("tool-call")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentBadge — an agent this console has no chip for", () => {
+  it("shows the shared generic mark, not its first two letters", () => {
+    render(<AgentBadge agent="gemini-cli" />);
+    expect(screen.getByText("AG")).toBeInTheDocument();
+    expect(screen.queryByText("GE")).not.toBeInTheDocument();
   });
 });

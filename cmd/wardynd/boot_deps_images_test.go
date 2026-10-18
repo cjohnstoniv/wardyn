@@ -69,7 +69,7 @@ func TestParseAgentImages_RefusesBadVariants(t *testing.T) {
 func TestParseBootImages_ProxyImagePerArch(t *testing.T) {
 	empty, agentImages := "", ""
 	arm := "reg.example/wardyn-proxy:1-arm64"
-	f := &bootFlags{agentImagesJSON: &agentImages, proxyImageAMD64: &empty, proxyImageARM64: &arm}
+	f := &bootFlags{agentImagesJSON: &agentImages, proxyImage: &empty, proxyImageAMD64: &empty, proxyImageARM64: &arm}
 	_, _, byArch, err := parseBootImages(f)
 	if err != nil || len(byArch) != 1 || byArch["arm64"] != arm {
 		t.Fatalf("byArch = %v, %v; want only the arm64 entry", byArch, err)
@@ -78,5 +78,13 @@ func TestParseBootImages_ProxyImagePerArch(t *testing.T) {
 	f.proxyImageARM64 = &bad
 	if _, _, _, err = parseBootImages(f); err == nil || !strings.Contains(err.Error(), "WARDYN_PROXY_IMAGE_ARM64") {
 		t.Errorf("an unsafe ref = %v; want a refusal naming WARDYN_PROXY_IMAGE_ARM64", err)
+	}
+}
+
+func TestParseBootImages_PlainProxyImage(t *testing.T) {
+	empty, agentImages, bad := "", "", "a b"
+	f := &bootFlags{agentImagesJSON: &agentImages, proxyImage: &bad, proxyImageAMD64: &empty, proxyImageARM64: &empty}
+	if _, _, _, err := parseBootImages(f); err == nil || !strings.Contains(err.Error(), "WARDYN_PROXY_IMAGE ") {
+		t.Errorf("an unsafe plain ref = %v; want a refusal naming WARDYN_PROXY_IMAGE", err)
 	}
 }

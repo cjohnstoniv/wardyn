@@ -4,11 +4,13 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -25,11 +27,13 @@ type RunnerRegistrationStore interface {
 
 var _ RunnerRegistrationStore = PG{}
 
-const runnerRegistrationCols = `id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at, consumed_at`
+const runnerRegistrationCols = `id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at, consumed_at,
+	owner_kind, minted_by_kind, minted_by_email, break_glass`
 
 func scanRunnerRegistrationToken(row pgx.Row) (types.RunnerRegistrationToken, error) {
 	var t types.RunnerRegistrationToken
-	err := row.Scan(&t.ID, &t.Owner, &t.MintedBy, &t.TokenSHA256, &t.OrgURLSHA256, &t.CreatedAt, &t.ExpiresAt, &t.ConsumedAt)
+	err := row.Scan(&t.ID, &t.Owner, &t.MintedBy, &t.TokenSHA256, &t.OrgURLSHA256, &t.CreatedAt, &t.ExpiresAt, &t.ConsumedAt,
+		&t.OwnerKind, &t.MintedByKind, &t.MintedByEmail, &t.BreakGlass)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -39,11 +43,16 @@ func scanRunnerRegistrationToken(row pgx.Row) (types.RunnerRegistrationToken, er
 	return t, nil
 }
 
-// MintRunnerRegistrationToken never stores the raw bearer.
+// MintRunnerRegistrationToken never stores the raw bearer. An empty OwnerKind is person and an empty
+// MintedByKind human. The same statement deletes the owner's expired, unspent tokens: redeem answers an
+// expired token and an unknown one alike, and nothing references the table.
 func (s PG) MintRunnerRegistrationToken(ctx context.Context, raw string, token types.RunnerRegistrationToken) (types.RunnerRegistrationToken, error) {
-	const q = `INSERT INTO runner_registration_tokens (id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at)
- VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ` + runnerRegistrationCols
-	out, err := scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, q, token.ID, token.Owner, token.MintedBy, hashToken(raw), token.OrgURLSHA256, token.CreatedAt, token.ExpiresAt))
+	const q = `WITH gone AS (DELETE FROM runner_registration_tokens WHERE owner = $2 AND consumed_at IS NULL AND expires_at < $6)
+ INSERT INTO runner_registration_tokens (id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at,
+ owner_kind, minted_by_kind, minted_by_email, break_glass)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING ` + runnerRegistrationCols
+	out, err := scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, q, token.ID, token.Owner, token.MintedBy, hashToken(raw), token.OrgURLSHA256, token.CreatedAt, token.ExpiresAt,
+		cmp.Or(token.OwnerKind, types.RunnerOwnerPerson), cmp.Or(token.MintedByKind, types.RunnerMintedByHuman), token.MintedByEmail, token.BreakGlass))
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) && pe.Code == "23505" {
 		return types.RunnerRegistrationToken{}, ErrConflict
@@ -62,4 +71,9 @@ func (s PG) ConsumeRunnerRegistrationToken(ctx context.Context, raw, orgHash str
 		return types.RunnerRegistrationToken{}, false, nil
 	}
 	return token, err == nil, err
+}
+
+// GetRunnerRegistrationToken reads one token by id, spent or not. ErrNotFound when there is none.
+func (s PG) GetRunnerRegistrationToken(ctx context.Context, id uuid.UUID) (types.RunnerRegistrationToken, error) {
+	return scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, `SELECT `+runnerRegistrationCols+` FROM runner_registration_tokens WHERE id = $1`, id))
 }

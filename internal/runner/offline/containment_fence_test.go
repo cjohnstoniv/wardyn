@@ -62,8 +62,8 @@ func TestPendingKillFencesLateMutationAfterReconnect(t *testing.T) {
 			r := m.state.Runs[id]
 			recover := pendingContainment(m, id, types.RunnerActionRecoverContainment)
 			recover.Recovery = r.Containment
-			if _, err := m.apply(t.Context(), recover); err == nil {
-				t.Fatal("terminal kill recovered")
+			if res, err := m.apply(t.Context(), recover); err != nil || res.Outcome != types.RunnerActionRefused {
+				t.Fatalf("terminal kill recovery = %+v %v, want refused", res, err)
 			}
 			if err := m.Lease(t.Context(), runnerwire.Lease{RunID: id, TokenRenewedAt: org.Add(time.Second)}); err == nil {
 				t.Fatal("terminal kill admitted fresh lease")
@@ -99,11 +99,12 @@ func TestRenewableContainmentRequiresExactRecoveryAndFreshLease(t *testing.T) {
 		t.Fatal("containment proof used as mutation recovery")
 	}
 	wrong := recover
+	wrong.ID = uuid.New()
 	bad := proof
 	bad.ID = uuid.New()
 	wrong.Recovery = &bad
-	if _, err := m.apply(t.Context(), wrong); err == nil {
-		t.Fatal("wrong containment proof accepted")
+	if res, err := m.apply(t.Context(), wrong); err != nil || res.Outcome != types.RunnerActionRefused {
+		t.Fatalf("wrong containment proof = %+v %v, want refused", res, err)
 	}
 	result, err := m.apply(t.Context(), recover)
 	if err != nil || result.Outcome != "success" {
@@ -142,6 +143,37 @@ func TestRenewableContainmentRequiresExactRecoveryAndFreshLease(t *testing.T) {
 	}
 }
 
+// A matching recovery met while a mutation of the run is in flight is deferred, not refused: the cause
+// passes, and a fresh action for the same marker recovers the run once the mutation finishes.
+func TestContainmentRecoveryDefersWhileAMutationIsInFlight(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := m.apply(t.Context(), pendingContainment(m, id, types.RunnerActionStopProxy)); err != nil || result.Outcome != "success" {
+		t.Fatalf("stop not settled: %+v %v", result, err)
+	}
+	key := mutationKey{runnerwire.MethodReplaceProxy, m.expectedRef(id), uuid.Nil}
+	m.beginMutation(key.method, key.ref, key.generation)
+	recover := pendingContainment(m, id, types.RunnerActionRecoverContainment)
+	proof := *m.state.Runs[id].Containment
+	recover.Recovery = &proof
+	deferred, err := m.apply(t.Context(), recover)
+	if err != nil || deferred.Outcome != "deferred" || m.state.Runs[id].Containment == nil {
+		t.Fatalf("recovery with a mutation in flight = %+v %v, want deferred with the marker kept", deferred, err)
+	}
+	if replay, err := m.apply(t.Context(), recover); err != nil || replay != deferred {
+		t.Fatalf("deferred recovery replay = %+v %v", replay, err)
+	}
+	m.finishMutation(key)
+	fresh := recover
+	fresh.ID = uuid.New()
+	if result, err := m.apply(t.Context(), fresh); err != nil || result.Outcome != "success" || m.state.Runs[id].Containment != nil {
+		t.Fatalf("fresh recovery after the mutation drained = %+v %v, want success", result, err)
+	}
+}
+
 type endingSub struct{ *localSub }
 
 func (s endingSub) EndSandbox(ctx context.Context, ref string) error { return s.KillSandbox(ctx, ref) }
@@ -176,8 +208,8 @@ func TestContainmentSupersessionIsMonotone(t *testing.T) {
 				}
 				recover := pendingContainment(m, id, types.RunnerActionRecoverContainment)
 				recover.Recovery = &original
-				if _, err := m.apply(t.Context(), recover); err == nil {
-					t.Fatal("superseded recovery marker accepted")
+				if res, err := m.apply(t.Context(), recover); err != nil || res.Outcome != types.RunnerActionRefused {
+					t.Fatalf("superseded recovery marker = %+v %v, want refused", res, err)
 				}
 			} else if *marker != original {
 				t.Fatal("weaker action downgraded stronger containment")

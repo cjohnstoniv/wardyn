@@ -134,7 +134,7 @@ func testSpec() runner.SandboxSpec {
 		Image:            "busybox:latest",
 		ConfinementClass: types.CC1,
 		Env:              map[string]string{"FOO": "bar"},
-		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://cp:8080"},
+		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080"},
 		Resources:        runner.Resources{CPUMillis: 1000, MemoryMiB: 256},
 	}
 }
@@ -174,7 +174,7 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	f.failImagePull = true // absent + unpullable
 	d := newTestDriver(f)
 
-	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local", nil)
+	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local", "", nil)
 	if err == nil {
 		t.Fatal("ensureImage on an absent, unpullable image: got nil error")
 	}
@@ -203,7 +203,7 @@ func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
 		f.failImagePull = true // absent + unpullable
 		d := newTestDriver(f)
 
-		err := d.ensureImage(context.Background(), ref, nil)
+		err := d.ensureImage(context.Background(), ref, "", nil)
 		if err == nil {
 			t.Fatalf("ensureImage(%q) on an absent, unpullable image: got nil error", ref)
 		}
@@ -320,7 +320,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	if pcfg.RunToken != "tok" {
 		t.Errorf("proxy config run_token = %q, want tok", pcfg.RunToken)
 	}
-	if pcfg.ControlPlaneURL != "http://cp:8080" {
+	if pcfg.ControlPlaneURL != "http://127.0.0.1:8080" {
 		t.Errorf("proxy config control_plane_url = %q", pcfg.ControlPlaneURL)
 	}
 	if pcfg.Policy == nil {
@@ -494,6 +494,43 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	agentName := agentContainerName(runID)
 	if slices.Contains(f.startedNames, agentName) {
 		t.Errorf("the agent must never start behind a proxy that died at config load (started: %v)", f.startedNames)
+	}
+}
+
+// TestCreateSandbox_OlderProxyImageNamesTheFix: a proxy image older than this runner refuses a
+// setting it does not know at config load. The failure names that cause and its fix, then keeps the
+// proxy's own output; a config-load failure of any other kind keeps the plain message.
+func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
+	for _, tc := range []struct{ name, log, want string }{
+		{"escaped in a log attribute", `ERROR wardyn-proxy: load config failed err="parse config: json: unknown field \"decision_sink\""`,
+			"the proxy image is older than this runner (it refused setting decision_sink): upgrade the organisation before its runners, " +
+				"or pin a proxy image at least as new as this runner; proxy exited at config load (exit 1): "},
+		{"plain", `unknown field "x"`, "(it refused setting x): upgrade the organisation before its runners"},
+		{"another refusal", `parse config: unexpected end of JSON input`, "docker: proxy exited at config load (exit 1): parse config"},
+		{"a quote that spans lines", "unknown field \"\nnext line\"", "docker: proxy exited at config load (exit 1): unknown field"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
+			d.proxySettle = proxyStartSettle
+			runID := testSpec().RunID
+			f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3}
+			f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, tc.log)}
+			_, err := d.CreateSandbox(context.Background(), testSpec())
+			if err == nil {
+				t.Fatal("expected the proxy's config-load failure")
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.HasSuffix(err.Error(), tc.log) {
+				t.Errorf("error = %v; want %q and the proxy's output last", err, tc.want)
+			}
+			if !strings.HasPrefix(tc.want, "docker: proxy exited") {
+				return
+			}
+			if strings.Contains(err.Error(), "older than this runner") {
+				t.Errorf("error = %v; only a named unknown setting on one line means an older proxy image", err)
+			}
+		})
 	}
 }
 
@@ -1380,7 +1417,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 		f.images["wardyn/agent-claude:local"] = true
 		d := newTestDriver(f)
 		pulls := 0
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() { pulls++ }); err != nil {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", func() { pulls++ }); err != nil {
 			t.Fatalf("ensureImage on a present image: %v", err)
 		}
 		if pulls != 0 {
@@ -1393,7 +1430,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 		d := newTestDriver(f)
 		var order []string
 		f.onPull = func(string) { order = append(order, "pull") }
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", func() {
 			order = append(order, "report")
 		}); err != nil {
 			t.Fatalf("ensureImage on an absent, pullable image: %v", err)
@@ -1408,7 +1445,7 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 	t.Run("nil callback", func(t *testing.T) {
 		f := newFakeDocker()
 		d := newTestDriver(f)
-		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", nil); err != nil {
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", "", nil); err != nil {
 			t.Fatalf("ensureImage with a nil callback: %v", err)
 		}
 	})

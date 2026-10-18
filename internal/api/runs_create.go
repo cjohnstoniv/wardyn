@@ -156,7 +156,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
 	spec.WorkspaceRepos = append(newRepos, spec.WorkspaceRepos...)
 	if req.Repo == "" && len(newRepos) > 0 {
-		req.Repo = newRepos[0].Repo // run-row label only; the gate + wsRefs read WorkspaceRepos
+		// The run row's label, and the run's own repository for the per-person
+		// Azure DevOps lane: the same repository as WorkspaceRepos[0].
+		req.Repo = newRepos[0].Repo
 	}
 	// base_image replaces the old container-kind image resolution. An explicit
 	// user --image always wins (never silently overridden); "recommended"
@@ -191,7 +193,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
 	// writable bind. Equal or nested targets across workspaces, defaults
 	// included, are the overlap check's, over every resolved target.
-	if verr := validatePolicyWorkspaces(*spec); verr != nil {
+	if verr := validatePolicyWorkspaces(*spec, true); verr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf("workspace %s conflicts with the policy: %w", ids[0], verr))
 	}
 	return seed, nil

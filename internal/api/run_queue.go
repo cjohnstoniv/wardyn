@@ -211,6 +211,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "create run", err)
 		return
 	}
+	s.recordPolicyApplyAudits(ctx, q.f.source)
 	abort := func(hint string) { s.abortQueuedRun(ctx, created.ID, hint) }
 	if err := s.persistRunComponents(ctx, created.ID, q.f.comps); err != nil {
 		abort(createRunComponentsAbortHint)
@@ -254,7 +255,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
 }
 
 // waitReason is why the launch waits: the pool is at its own cap, or (a pool with none) every runner
@@ -301,7 +302,9 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 // auditQueuedCreate is the run.create row of a launch that waits: the queue facts and no jti, since
 // nothing is minted.
 func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created types.AgentRun, e store.RunQueueEntry, waitSec, position int) {
-	createData := createRunAuditData(q.req, q.f.policyID, created.ConfinementClass, q.reqCC, "", q.f.policyWarns, q.f.autonomy, false, q.f.mpChoice)
+	// The same advisory the 201 carries (warnings): a below-floor credential run says so in its audit row too.
+	_, belowFloor := appendCredentialConfinementAdvisory(nil, q.f.spec, q.f.enforced, q.f.modelCred.Kind)
+	createData := createRunAuditData(q.req, q.f.policyID, created.ConfinementClass, q.reqCC, "", q.f.policyWarns, q.f.autonomy, belowFloor, q.f.mpChoice)
 	delete(createData, "jti") // nothing is minted while the run waits
 	createData["policy_source"] = q.f.source
 	stampConfinementDefault(createData, q.reqCC, q.f.confinementDefault)
@@ -337,6 +340,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
+	warnings, _ = appendCredentialConfinementAdvisory(warnings, q.f.spec, q.f.enforced, q.f.modelCred.Kind)
 	return append(warnings, noModelAccessWarning(q.req, q.f.mpChoice)...)
 }
 

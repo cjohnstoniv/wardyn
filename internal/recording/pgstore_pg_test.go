@@ -173,6 +173,40 @@ func TestPGStore_SizeCap(t *testing.T) {
 	}
 }
 
+// FUG-L759: a payload written in several statements reads back byte for byte, whatever its size
+// against the chunk, and a smaller save replaces a larger one whole.
+func TestPGStore_ChunkedWriteRoundTrips(t *testing.T) {
+	pool := pgPool(t)
+	s := recording.NewPGStore(pool)
+	ctx := context.Background()
+	const chunk = 1000
+	recording.SetCastWriteChunk(t, chunk)
+
+	payload := func(n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = byte(i*7 + i/chunk) // differs across chunk boundaries, so a lost or reordered chunk shows
+		}
+		return b
+	}
+	runID := "chunked-" + uuid.NewString()
+	for _, n := range []int{3*chunk + 17, 0, 1, chunk - 1, chunk, chunk + 1, 2 * chunk, 4*chunk + 1, 5} {
+		want := payload(n)
+		if err := s.SaveCast(ctx, runID, bytes.NewReader(want)); err != nil {
+			t.Fatalf("save %d bytes: %v", n, err)
+		}
+		rc, err := s.OpenCast(ctx, runID)
+		if err != nil {
+			t.Fatalf("open after %d bytes: %v", n, err)
+		}
+		got, _ := io.ReadAll(rc)
+		rc.Close()
+		if !bytes.Equal(got, want) {
+			t.Fatalf("saved %d bytes, read back %d (equal=%v)", n, len(got), bytes.Equal(got, want))
+		}
+	}
+}
+
 // DeleteRun is what a person's erasure reaches recordings through: the run's
 // casts go on every replica, another run's stay, and a repeat is harmless.
 func TestPGStoreDeleteRun(t *testing.T) {

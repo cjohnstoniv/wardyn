@@ -23,6 +23,7 @@ import { ThemeProvider } from "../../wardyn/theme-provider";
 import { BrandingCard } from "./branding-card";
 import { BRANDING } from "../../../lib/branding-copy";
 import { expandCard, startsWith } from "../../../lib/test-dom";
+import { unsavedSnapshot } from "../../../lib/unsaved-registry";
 
 function renderCard() {
   return render(
@@ -254,5 +255,22 @@ describe("Branding card (#1125)", () => {
     expect(within(dialog).getByText(BRANDING.REMOVE_BRANDING_BODY)).toBeInTheDocument();
     expect(within(dialog).getByText(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING)).toBeInTheDocument();
     expect(BRANDING.FILE_LOGO_DIALOG_LINE_BRANDING).toBe("The logo from your site configuration comes back once branding is set up again.");
+  });
+});
+
+describe("unsaved changes (DR-0021)", () => {
+  it("registers the edited branding with the navigation guard, and clears it once it is saved", async () => {
+    await validDraft();
+    expect(unsavedSnapshot()).toContain("Example Corp");
+    save.mockResolvedValue({ org_name: "Example Corp", name_format: "prefix", primary: "#7c3aed", primary_text: "#ffffff" });
+    await userEvent.click(saveButton());
+    await waitFor(() => expect(unsavedSnapshot()).toBeNull());
+  });
+
+  it("registers nothing for a card nobody has edited", async () => {
+    getSettings.mockResolvedValue({});
+    renderCard();
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+    expect(unsavedSnapshot()).toBeNull();
   });
 });

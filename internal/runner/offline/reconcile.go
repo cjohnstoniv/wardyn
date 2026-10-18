@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,9 +37,60 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &a.RunID, Data: b}); err != nil {
 			return err
 		}
+		if a.Kind == types.RunnerActionRetire && result.Outcome == "success" {
+			// The org holds the receipt now. A failed compaction keeps the full record, as before.
+			if err := m.compactRetired(a.RunID); err != nil {
+				slog.WarnContext(ctx, "runner kept a retired run's full record", "run_id", a.RunID, "error", err)
+			}
+		}
 	}
 	return nil
 }
+
+// replayedAction answers an action already applied: done with its saved result, or an error when the
+// org replays a different action under the same id. A retirement whose receipt was saved but whose
+// output release never ran (a crash between the two) releases it on the org's replay. Release is
+// idempotent and refuses unsettled output. m.mu is held.
+func (m *Manager) replayedAction(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, bool, error) {
+	old, ok := m.state.Actions[a.ID]
+	if !ok {
+		return runnerwire.ActionResult{}, false, nil
+	}
+	if !samePendingAction(old.Action, a) {
+		return runnerwire.ActionResult{}, false, errors.New("pending action identity changed")
+	}
+	if old.Result.Outcome == "" {
+		return runnerwire.ActionResult{}, false, nil
+	}
+	if r := m.state.Runs[a.RunID]; a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" && r.Retired && m.releaseOutput != nil {
+		if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
+			slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
+		}
+	}
+	return old.Result, true, m.save()
+}
+
+// acceptNodeRecord hands a security operator's node record to the substrate, an infrastructure fence
+// it checks against its own record before it can complete containment (design K1 §3.1 (b)). It runs
+// with m.mu unlocked; done means apply returns res and err now, and m.mu is then held again.
+func (m *Manager) acceptNodeRecord(ctx context.Context, a runnerwire.PendingAction, local string) (res runnerwire.ActionResult, done bool, err error) {
+	acc, ok := m.sub.(runner.NodeRecordAcceptor)
+	if !ok {
+		m.mu.Lock()
+		res, err = m.refuseAction(ctx, a, errors.New("this runner's substrate takes no node record"))
+		return res, true, err
+	}
+	if err = acc.AcceptNodeRecord(ctx, local, *a.NodeRecord); err != nil {
+		m.mu.Lock()
+		if errors.Is(err, runner.ErrNodeRecordRefused) {
+			res, err = m.refuseAction(ctx, a, err)
+			return res, true, err
+		}
+		return runnerwire.ActionResult{}, true, err
+	}
+	return runnerwire.ActionResult{}, false, nil
+}
+
 func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, error) {
 	m.actionMu.Lock()
 	defer m.actionMu.Unlock()
@@ -50,13 +103,8 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if err := m.ensureDurable(); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	if old, ok := m.state.Actions[a.ID]; ok {
-		if !samePendingAction(old.Action, a) {
-			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
-		}
-		if old.Result.Outcome != "" {
-			return old.Result, m.save()
-		}
+	if res, done, err := m.replayedAction(ctx, a); done || err != nil {
+		return res, err
 	}
 	r, err := m.pendingRun(a, proof)
 	if refused := (actionRefusal{}); errors.As(err, &refused) {
@@ -67,10 +115,16 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	}
 	local := r.Ref
 	if a.Kind == types.RunnerActionRetire {
-		return m.retireRun(ctx, a, r)
+		res, err := m.retireRun(ctx, a, r)
+		if refused := (actionRefusal{}); errors.As(err, &refused) {
+			return m.refuseAction(ctx, a, err)
+		}
+		return res, err
 	}
 	if a.Retirement != nil || r.Retired {
-		return runnerwire.ActionResult{}, errors.New("unexpected retirement proof or retired identity")
+		// Refused, not failed: a plain error would fail Pending on every
+		// fresh session and keep the runner from READY.
+		return m.refuseAction(ctx, a, refusal(errors.New("unexpected retirement proof or retired identity")))
 	}
 	if a.Kind == types.RunnerActionQuarantine {
 		return m.quarantineRun(ctx, a, r)
@@ -79,10 +133,17 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, errors.New("unexpected quarantine proof")
 	}
 	if r.ContainmentOnly && !missingIdentityAction(a) {
-		return runnerwire.ActionResult{}, errors.New("containment-only identity refuses this action")
+		// Refused for the same reason: a record kept only for containment never takes another action,
+		// and every control-plane boot queues an end for a terminal run that kept its sandbox ref.
+		return m.refuseAction(ctx, a, refusal(errors.New("containment-only identity refuses this action")))
 	}
 	if a.Kind == types.RunnerActionRecoverContainment {
-		return m.recoverContainment(a, r)
+		res, err := m.recoverContainment(a, r)
+		if refused := (actionRefusal{}); errors.As(err, &refused) {
+			// Refused, not failed: a plain error would fail Pending on every fresh session.
+			return m.refuseAction(ctx, a, err)
+		}
+		return res, err
 	}
 	if a.Kind == types.RunnerActionRecoverMutation {
 		return m.recoverMutation(a, r)
@@ -99,6 +160,11 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	case types.RunnerActionKill:
 		err = m.sub.KillSandbox(ctx, local)
 	case types.RunnerActionStopProxy:
+		if a.NodeRecord != nil {
+			if res, done, err := m.acceptNodeRecord(ctx, a, local); done {
+				return res, err
+			}
+		}
 		err = m.stopper.StopProxy(ctx, local)
 	case types.RunnerActionEnd:
 		end, ok := m.sub.(runner.SandboxEnder)
@@ -112,12 +178,29 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, errors.New("unknown pending action")
 	}
 	m.mu.Lock()
+	return m.settleApplied(ctx, a, err)
+}
+
+// settleApplied records what the substrate answered for a, with m.mu held: a containment-pending
+// answer is held and refused, any other error fails, and a stop is stamped and saved as a receipt.
+func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction, err error) (runnerwire.ActionResult, error) {
+	if pending := (*runner.ContainmentPendingError)(nil); errors.As(err, &pending) {
+		// Held pending as the tick holds it, and refused rather than failed: a plain
+		// error would fail Pending on every fresh session, so the runner would never
+		// reach READY or send the state page that reports the hold.
+		if perr := m.holdPendingLocked(a.RunID, pending); perr != nil {
+			return runnerwire.ActionResult{}, perr
+		}
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	r = m.state.Runs[a.RunID]
+	r := m.state.Runs[a.RunID]
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
+	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
+	r.ContainmentPending = nil
 	outcome := "deferred"
 	if m.mutationsDrained(a.RunID) && (r.Containment.Contained || r.Containment.Operation == string(a.Kind)) {
 		outcome = "success"
@@ -169,6 +252,9 @@ func (m *Manager) runIDs() []uuid.UUID {
 	return ids
 }
 
+// errReplayHeld ends one run's spool replay when the run was quarantined or retired while it ran.
+var errReplayHeld = errors.New("offline: the run was quarantined or retired during its spool replay")
+
 // Replay uses only the authenticated runner peer; expired run tokens are never
 // involved. Spool ACKs and durable exit results survive reconnect and restart.
 func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
@@ -181,6 +267,9 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 	if revoked {
 		return runnerwire.ErrRevoked
 	}
+	// A spool that will not open is that run's own fault: the other runs' evidence is still sent, and
+	// the error is returned last, so this runner does not come ready with a spool it never replayed.
+	var unopened []error
 	for _, id := range ids {
 		m.mu.Lock()
 		quarantined := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
@@ -190,9 +279,18 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 		}
 		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
 		if err != nil {
-			return err
+			unopened = append(unopened, fmt.Errorf("open the spool of run %s: %w", id, err))
+			continue
 		}
 		err = spool.Replay(ctx, func(ctx context.Context, rows []runnerspool.Record) error {
+			// A quarantine or retirement that lands mid-replay stops the rest of this run's backlog, as
+			// one that landed before the replay began does.
+			m.mu.Lock()
+			held := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
+			m.mu.Unlock()
+			if held {
+				return errReplayHeld
+			}
 			evs := make([]runnerwire.Event, len(rows))
 			for i, row := range rows {
 				b, err := row.Marshal()
@@ -204,6 +302,13 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 			return peer.EventsAck(ctx, evs)
 		})
 		closeErr := spool.Close()
+		if errors.Is(err, errReplayHeld) {
+			// Held mid-replay: like a run held before it began, its exit is not sent either.
+			if closeErr != nil {
+				return closeErr
+			}
+			continue
+		}
 		if err := errors.Join(err, closeErr); err != nil {
 			return err
 		}
@@ -236,5 +341,5 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 			return err
 		}
 	}
-	return nil
+	return errors.Join(unopened...)
 }

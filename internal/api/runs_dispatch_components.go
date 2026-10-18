@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -204,11 +205,13 @@ func (c credentialedHost) overlaps(o credentialedHost) bool {
 // host, over the FINAL composition: every injection rule — a policy's api_key
 // grants, a component's header deliveries, the model provider's, the Azure
 // DevOps lane's, a redirect's token, the AWS access-portal host of a Bedrock
-// sign-in — and every git_pat grant whose forge API the proxy credentials on
-// the intercepted connection. These are exactly what the proxy is handed, so
-// the answer here and the proxy's own refusal at boot cannot differ.
-func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[string]proxy.PATGrant) (grants []uuid.UUID, found bool) {
-	hosts := make([]credentialedHost, 0, len(injections)+len(patGrants))
+// sign-in — every git_pat grant whose forge API the proxy credentials on
+// the intercepted connection, and the GitHub CLI door's host. The door is one
+// lane however many owners its grants cover, so it is listed once. These are
+// exactly what the proxy is handed, so the answer here and the proxy's own
+// refusal at boot cannot differ.
+func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[string]proxy.PATGrant, githubAPI *proxy.GitHubAPIGrant) (grants []uuid.UUID, found bool) {
+	hosts := make([]credentialedHost, 0, len(injections)+len(patGrants)+1)
 	for _, in := range injections {
 		hosts = append(hosts, credentialedHost{grant: in.GrantID, host: in.Rule.Host})
 	}
@@ -216,6 +219,10 @@ func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[s
 		if g := patGrants[host]; g.API {
 			hosts = append(hosts, credentialedHost{grant: g.GrantID, host: host})
 		}
+	}
+	if githubAPI != nil && len(githubAPI.Grants) > 0 {
+		first := slices.Sorted(maps.Keys(githubAPI.Grants))[0]
+		hosts = append(hosts, credentialedHost{grant: githubAPI.Grants[first], host: ghscope.APIHost})
 	}
 	if i, j, found := firstCredentialCollision(hosts); found {
 		return []uuid.UUID{hosts[i].grant, hosts[j].grant}, true
@@ -249,7 +256,7 @@ func firstCredentialCollision(hosts []credentialedHost) (first, second int, foun
 //     that redirect's token out, so there is one credential on the host.
 //
 // A grant whose scope names no host binds nothing and is not listed.
-func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, subject string) []credentialedHost {
+func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, repo, owner string) []credentialedHost {
 	var hosts []credentialedHost
 	add := func(host string) {
 		if strings.TrimSpace(host) != "" {
@@ -268,7 +275,7 @@ func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, sub
 			}
 		}
 	}
-	laneHosts := resolvedLaneHosts(resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject))
+	laneHosts := resolvedLaneHosts(resolveADOEntraRun(sc, spec.WorkspaceRepos, repo, owner))
 	for _, h := range laneHosts {
 		add(h)
 	}
@@ -310,7 +317,7 @@ func resolvedLaneHosts(ado adoEntraRun, on bool) []string {
 	return ado.laneHosts()
 }
 
-// DRAFT (M2 canon pending) — the three doors' refusal of a run whose policy
+// The three doors' refusal of a run whose policy
 // and deployment bind two credentials to one host. It names no host: either
 // credential may be one an admin configured.
 const credentialHostCollisionRefusal = "Two of this run's credentials are bound to the same host, and a host carries only one. " +
@@ -326,7 +333,10 @@ const credentialHostCollisionRefusal = "Two of this run's credentials are bound 
 // included: the Azure DevOps lane and a redirect's token are credentials no
 // policy names, and they can land on one host between themselves (a package
 // feed on an Azure DevOps host that is also a redirect's target).
-func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec) *runRefusal {
+//
+// repo is the run's own repository (req.Repo), which the lane serves beside its
+// workspace repositories.
+func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec, repo string) *runRefusal {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
 		var err error
@@ -334,7 +344,7 @@ func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec
 			return runServerError("get site config", err)
 		}
 	}
-	hosts := admissionCredentialHosts(spec, sc, runIdentitySubject(r.Context(), principalFromRequest(r)))
+	hosts := admissionCredentialHosts(spec, sc, repo, adoLaneOwnerOf(r))
 	if _, _, found := firstCredentialCollision(hosts); !found {
 		return nil
 	}
@@ -352,7 +362,7 @@ func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec
 // The components' own grants are left out of the policy first, as the gate
 // asked before it added them; two of THEM on one host are two injection rules,
 // which credentialHostCollision finds.
-func componentHostCollision(c componentDispatch, site types.SiteConfig, policy types.RunPolicySpec, subject string,
+func componentHostCollision(c componentDispatch, site types.SiteConfig, policy types.RunPolicySpec, repo, owner string,
 	injections []runner.InjectionGrant,
 ) (grants []uuid.UUID, found bool) {
 	if len(c.HeaderHosts) == 0 {
@@ -361,7 +371,7 @@ func componentHostCollision(c componentDispatch, site types.SiteConfig, policy t
 	policy.EligibleGrants = slices.DeleteFunc(slices.Clone(policy.EligibleGrants), func(g types.GrantSpec) bool {
 		return g.Kind == types.GrantAPIKey && slices.ContainsFunc(c.HeaderHosts, func(h string) bool { return hostEqual(h, apiKeyGrantScopeHost(g.Scope)) })
 	})
-	others := credentialedDestinations(site, policy, subject)
+	others := credentialedDestinations(site, policy, repo, owner)
 	for _, host := range c.HeaderHosts {
 		d, err := types.ParseDestination(host)
 		if err == nil && !slices.ContainsFunc(others, d.OverlapsAtAnyPort) {
@@ -407,9 +417,9 @@ func (s *Server) settleCredentialHosts(ctx context.Context, run types.AgentRun, 
 		return nil, false
 	}
 	p.Components.pruneUnpaired(injections)
-	grants, found := componentHostCollision(p.Components, site, policy, runIdentitySubject(ctx, run.CreatedBy), injections)
+	grants, found := componentHostCollision(p.Components, site, policy, p.ADOLaneRepo, adoLaneOwnerOfRun(ctx, run), injections)
 	if !found {
-		grants, found = credentialHostCollision(injections, patGrants)
+		grants, found = credentialHostCollision(injections, patGrants, p.Components.GitHubAPI)
 	}
 	if !found {
 		return patGrants, true

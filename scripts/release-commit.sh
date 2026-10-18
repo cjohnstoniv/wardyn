@@ -69,6 +69,7 @@ mode,date,notes,V_OLD,V_NEW,highlights=sys.argv[1:7]
 edits=[  # (path, exact old, new, expected count)
  ("internal/version/version.go", f'const Version = "{V_OLD}"', f'const Version = "{V_NEW}"', 1),
  ("deploy/helm/wardyn/Chart.yaml", f"version: {V_OLD}\nappVersion: {V_OLD}\n", f"version: {V_NEW}\nappVersion: {V_NEW}\n", 1),
+ ("deploy/helm/wardyn-runnerd/Chart.yaml", f"version: {V_OLD}\nappVersion: {V_OLD}\n", f"version: {V_NEW}\nappVersion: {V_NEW}\n", 1),
  ("ui/package.json", f'"version": "{V_OLD}"', f'"version": "{V_NEW}"', 1),
  ("README.md", f"releases/download/v{V_OLD}/install.sh", f"releases/download/v{V_NEW}/install.sh", 1),
  ("install.sh", f"releases/download/v{V_OLD}/install.sh", f"releases/download/v{V_NEW}/install.sh", 1),
@@ -150,7 +151,7 @@ if not roadmap_has_row:
 print("edits applied")
 PY
 [ "$MODE" = apply ] || exit 0
-git add docs/DESKTOP.md deploy/helm/wardyn/values.yaml internal/db/migrations_documented_test.go internal/version/version.go deploy/helm/wardyn/Chart.yaml ui/package.json README.md install.sh docs/ci/github-actions.yml docs/ci/azure-pipelines.yml threatmodel/THREAT-MODEL.md CHANGELOG.md ROADMAP.md
+git add docs/DESKTOP.md deploy/helm/wardyn/values.yaml internal/db/migrations_documented_test.go internal/version/version.go deploy/helm/wardyn/Chart.yaml deploy/helm/wardyn-runnerd/Chart.yaml ui/package.json README.md install.sh docs/ci/github-actions.yml docs/ci/azure-pipelines.yml threatmodel/THREAT-MODEL.md CHANGELOG.md ROADMAP.md
 git commit -q -s -m "release: $TO"
 git log --format='%h %an %s' -1
 echo "NEXT: nice -n 10 make release-check   (must be green AFTER this commit, before any tag/push)"

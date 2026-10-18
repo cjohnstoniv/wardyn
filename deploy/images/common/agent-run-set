@@ -28,8 +28,11 @@ for h in "${harnesses[@]}"; do
     [[ "$h" =~ ^[a-z0-9-]+$ && -x "$harness_dir/$h/agent-run" ]] \
         || { echo "agent-run-set: harness '$h' is not installed in this image" >&2; exit 1; }
 done
-start="${WARDYN_START_HARNESS:-${harnesses[0]}}"
-[[ " ${harnesses[*]} " == *" $start "* ]] \
+# Unset starts the first harness; set but empty ("Your own tools") starts no CLI, so only unset takes the default.
+start="${WARDYN_START_HARNESS-${harnesses[0]}}"
+# runner is the launcher that owns PID 1: the start harness, or the first one when none starts a CLI.
+runner="${start:-${harnesses[0]}}"
+[[ -z "$start" || " ${harnesses[*]} " == *" $start "* ]] \
     || { echo "agent-run-set: start harness '$start' is not one of this run's harnesses" >&2; exit 1; }
 
 # prepare_others: --prepare-only for every harness except the start one. A failure
@@ -51,13 +54,13 @@ case "${1:-}" in
         ;;
     --idle)
         prepare_others
-        exec "$harness_dir/$start/agent-run" --idle
+        exec "$harness_dir/$runner/agent-run" --idle
         ;;
     --boot-seed|--continue|--revive)
-        exec "$harness_dir/$start/agent-run" "$@"
+        exec "$harness_dir/$runner/agent-run" "$@"
         ;;
     *)
         prepare_others
-        exec "$harness_dir/$start/agent-run" "$@"
+        exec "$harness_dir/$runner/agent-run" "$@"
         ;;
 esac

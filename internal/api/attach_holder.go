@@ -346,6 +346,8 @@ type attachHolderRegistry struct {
 	// slots counts each run's live attach sessions, writers and observers, until their
 	// recordings are finalized (reserveAttachSlot, attach_slots.go).
 	slots map[uuid.UUID]int
+	// principalSlots counts the same sessions per principal, on runs more than one principal can attach to.
+	principalSlots map[attachPrincipalKey]int
 }
 
 // runAttach is one run's attach state: the single writer, and the observers

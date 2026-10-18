@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,6 +123,21 @@ func TestReviveRun_KeptRunAtTheDeploymentCapIsRefused(t *testing.T) {
 				t.Fatalf("revive under the cap: lost %v, agent starts %v; want live with its agent started once", lostAt, sr.starts())
 			}
 		})
+	}
+}
+
+// TestReviveRun_UnreadableCountKeepsDriverTextOutOfTheBody: when the cap count
+// cannot be read, the 503 names the step and nothing of the store's own error.
+func TestReviveRun_UnreadableCountKeepsDriverTextOutOfTheBody(t *testing.T) {
+	f, _ := newRebootFixture(t)
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.countErr = errors.New("pq: connection refused at 10.0.0.9:5432")
+	code, body := f.reviveAs(t, false)
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "count active runs") {
+		t.Fatalf("revive = %d %s, want 503 naming the count step", code, body)
+	}
+	if strings.Contains(body, "10.0.0.9") || strings.Contains(body, "pq:") {
+		t.Errorf("body %s carries the store's error text", body)
 	}
 }
 

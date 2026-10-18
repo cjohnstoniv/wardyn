@@ -5,21 +5,27 @@
 
 import * as React from "react";
 import { Button } from "../../../ui/button";
-import { ADOAccessSummary } from "../../../wardyn/ado-access-summary";
+import { adoAccessSummary, HighRiskBadge } from "../../../wardyn/ado-access-summary";
+import { ADO_ACCESS } from "../../../../lib/ado-access-copy";
 import { Switch } from "../../../wardyn/form-primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { PUSH } from "../../../wardyn/copy/push";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
 import { BarrierChip } from "./barrier-chip";
+import { harnessName, loadRoster } from "../steps/harnesses/roster";
+import { useLoaded } from "../steps/shape/use-loaded";
 import { changedRows, policyRows } from "./policy-rows";
 import type { ReviewPreflight } from "./review-seams";
 
 export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraft; pre: ReviewPreflight | null; preview: PolicyPreviewResult | null }) {
   const [onlyChanged, setOnlyChanged] = React.useState(false);
   const changed = changedRows(draft.intent, draft.base);
-  const all = policyRows(draft, pre, preview);
+  // The harness names the Tools group shows: the roster's display name, the id until it answers.
+  const roster = useLoaded(loadRoster);
+  const all = policyRows(draft, pre, preview, (id) => (roster.status === "ready" ? harnessName(roster.value, id) : id));
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
+  const ado = adoAccessSummary(preview?.spec.azure_devops_capabilities);
   // Only a review rule holds a push; a deny rule refuses it attended or not, so the note needs one.
   const unattendedPush = draft.intent.experience === "background" && !!preview?.spec.push_rules?.require_review_paths?.length;
   return (
@@ -52,7 +58,13 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
         </dl>
       )}
       {/* What the run's policy grants on Azure DevOps, in one line; nothing for a policy that names none. */}
-      <ADOAccessSummary caps={preview?.spec.azure_devops_capabilities} className="border-t border-border px-[18px] py-3.5" />
+      {ado.parts.length > 0 && (
+        <div data-testid="ado-access-summary" className="flex flex-col gap-0.5 border-t border-border px-[18px] py-3.5">
+          <span className="label-eyebrow">{ADO_ACCESS.SECTION_TITLE}</span>
+          <strong className="font-medium">{ado.parts.join(" · ")}</strong>
+          {ado.highRisk && <HighRiskBadge />}
+        </div>
+      )}
       {unattendedPush && <p className="border-t border-border px-[18px] py-3.5 text-sm text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
     </aside>
   );

@@ -55,6 +55,11 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 			s.auditHealDecision(ctx, d, ws.OwnedBy, "failure", reason)
 			continue
 		}
+		// A list that already holds the verdict has nothing to heal: no write, no
+		// audit row, and not counted, so a restart re-audits only what it changed.
+		if healHolds(ws, d) {
+			continue
+		}
 		// Best-effort, exactly like the live write-back: a deleted workspace or a
 		// cap-reached list is skipped, not fatal to the rest of the reconcile.
 		written, err := s.cfg.Store.AddWorkspaceEgressDecision(ctx, d.workspace, d.host, d.allow, maxApprovedEgress)
@@ -66,6 +71,16 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 		reconciled++
 	}
 	return reconciled, nil
+}
+
+// healHolds reports whether ws already carries d: the host on d's own list and
+// off the opposite one, which is the state AddWorkspaceEgressDecision leaves.
+func healHolds(ws types.Workspace, d egressDecision) bool {
+	own, other := ws.ApprovedEgress, ws.DeniedEgress
+	if !d.allow {
+		own, other = other, own
+	}
+	return slices.Contains(own, d.host) && !slices.Contains(other, d.host)
 }
 
 // egressDecision is one `always`-scoped verdict the boot heal may re-apply: the

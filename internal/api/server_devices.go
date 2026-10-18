@@ -16,6 +16,9 @@ type deviceRouteState struct {
 	// peer, on its own: a flood of device enrolments cannot block runner registration, or the reverse.
 	// A registration that redeemed a valid token is refunded, so only failed attempts are charged.
 	registerLimiter principalLimiter
+	// runnerTokenLimiter bounds the tokens one person mints for themself (POST /me/runners/tokens), keyed on the
+	// person, so a loop cannot fill the table with unexpired rows. Ten an hour, refilled evenly.
+	runnerTokenLimiter principalLimiter
 	// The device routes' failure-row bounds (device_audit_bounds.go):
 	// enrolFailures is the anonymous route's one stream, ingestFailures one
 	// stream per device, ingestFailureLimiter that stream's per-device bucket.
@@ -33,6 +36,7 @@ func newDeviceRouteState() deviceRouteState {
 	return deviceRouteState{
 		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 		registerLimiter:      principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		runnerTokenLimiter:   principalLimiter{rate: 10.0 / 3600, burst: 10, max: enrolLimiterMaxPeers},
 		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 	}
 }

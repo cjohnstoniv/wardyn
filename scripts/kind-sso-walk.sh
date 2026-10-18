@@ -689,17 +689,6 @@ EFFECTIVE_INJECT="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deploym
   "the deployment runs WARDYN_AWS_SSO_PROXY_INJECT='${EFFECTIVE_INJECT:-<unset>}' but this walk intended '${PROXY_INJECT}' — the helm upgrade did not reach the pod (see ${EVIDENCE_DIR}/helm-upgrade.log); a walk that certifies the wrong posture is worse than no walk"
 echo "kill switch:     WARDYN_AWS_SSO_PROXY_INJECT=${EFFECTIVE_INJECT} (intended ${PROXY_INJECT})"
 
-manifest_images() {
-  local first=1
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    local h n
-    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
-    [[ ${first} -eq 1 ]] || printf ','
-    first=0
-    jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
-      '{image:$i, host_id:$h, node_id:$n, agree:($h==$n and $h!="")}'
-  done
-}
 FAKE_ENV="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${FAKE_SVC}" \
   -o json 2>/dev/null | jq -c '[.spec.template.spec.containers[0].env[]? | select(.name|startswith("AWSSSOFAKE_")) | {(.name): .value}] | add // {}')"
 # An unreadable deployment must not make `--argjson` choke on an empty string.
@@ -757,6 +746,14 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 [[ -n "${seen_ok}" ]] || die "the fake's /_seen never answered on ${SEEN_URL} (port-forward failed; is ${SEEN_PORT} taken?)"
+
+# The walk's first case (T-32, #692): the proxies reach this daemon over the
+# TLS hop, stated by the daemon itself, before any sign-in case that would
+# fail with a less direct symptom if the hop were plaintext.
+step "asserting /healthz reports proxy_hop_tls=true"
+hop_health="$(curl -s "${BASE_URL}/healthz" || true)"
+[[ "$(jq -r '.proxy_hop_tls // false' <<<"${hop_health}")" == "true" ]] \
+  || die "${BASE_URL}/healthz did not report proxy_hop_tls=true (the run proxies would dial this daemon in plaintext). Body: ${hop_health}"
 
 # WATCH the run pods' volumes for the whole walk, because a run pod does not
 # outlive its run for long and "was it there" asked afterwards is a race. -w

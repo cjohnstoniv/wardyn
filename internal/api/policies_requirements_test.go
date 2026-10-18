@@ -26,6 +26,11 @@ func (savePolicyStore) CreatePolicy(_ context.Context, p types.RunPolicy) (types
 	return p, nil
 }
 
+// GetPolicy is the read an update's audit row records the old policy from.
+func (savePolicyStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	return types.RunPolicy{ID: id, Name: "before"}, nil
+}
+
 func (savePolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	return types.RunPolicy{ID: id, Name: name, Spec: spec}, nil
 }

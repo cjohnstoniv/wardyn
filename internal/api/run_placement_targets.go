@@ -36,6 +36,8 @@ type poolTarget struct {
 	full bool
 	// limits is the runner's declared limit set, nil for none (set by placementDemand.withFit).
 	limits *types.RunnerLimits
+	// trust is a registered runner's stored trust class, which its credential plan is judged at.
+	trust types.RunnerTrustClass
 }
 
 // personalPoolDefaults is the signed-in person's own saved defaults: empty for a caller who is no
@@ -78,8 +80,12 @@ func poolOwner(ctx context.Context) string {
 // own. A class no executor and no runner of the deployment enforces at all is left to the confinement
 // step, whose sentence is the long-standing one for it; only a class SOME target enforces is held
 // against each candidate here.
-func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
-	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline, fits: s.runnerFits(ctx)}
+func (s *Server) placementDemand(ctx context.Context, in placementInput) (placementDemand, *runRefusal) {
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		return placementDemand{}, runServerError("read runner limits", err)
+	}
+	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline, fits: fits}
 	advertised := s.advertisedConfinement(ctx, *in.req)
 	// The org default barrier is left out ("") on purpose: it is chosen only from the advertised set,
 	// so it never changes whether the resulting class is enforced.
@@ -87,12 +93,13 @@ func (s *Server) placementDemand(ctx context.Context, in placementInput) placeme
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
 	}
-	return d
+	return d, nil
 }
 
 // poolTargets is the resolved pool's candidate set of both kinds, each candidate with its own facts,
 // before any demand is held against them. An organization pool yields its configured remote-hosted
-// runners, whom its use policy already admitted the person to. A user pool yields the launching person's
+// runners and its claimed organization runners, whom its use policy already admitted the person to (the
+// catalogue the pool was resolved from is the caller's permitted one). A user pool yields the launching person's
 // own claimed runners that are bound to this organisation (the claim path's check), and its configured
 // remote-hosted runners whose people policy admits the person now (admittedRemoteMembers). When none of
 // the person's own runners can be offered, the pool's remote-hosted ones still are, unless the request
@@ -102,7 +109,15 @@ func (s *Server) placementDemand(ctx context.Context, in placementInput) placeme
 func (s *Server) poolTargets(ctx context.Context, req *createRunRequest, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
 	read := func(e string) (runner.TargetFacts, bool) { return s.executorFacts(ctx, e) }
 	if row.Pool.Scope == types.RunnerPoolOrganization {
-		return executorTargets(row, s.configuredExecutors(), read)
+		remote, refusal := executorTargets(row, s.configuredExecutors(), read)
+		org, orgRefusal := s.orgRunnerTargets(ctx, ps, row)
+		if orgRefusal != nil {
+			return nil, orgRefusal
+		}
+		if len(org) == 0 {
+			return remote, refusal
+		}
+		return append(org, remote...), nil
 	}
 	admitted, refusal := s.admittedRemoteMembers(ctx, row)
 	if refusal != nil {
@@ -205,6 +220,47 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 	if len(ids) == 0 {
 		return nil, none()
 	}
+	return s.registeredRunnerTargets(ctx, ids, runners)
+}
+
+// orgRunnerTargets is an organization pool's claimed organization runners bound to this organisation:
+// none while runners are switched off or the store keeps none, so the pool's remote-hosted runners are
+// still offered. A member that is no longer a runner is skipped.
+func (s *Server) orgRunnerTargets(ctx context.Context, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) ([]poolTarget, *runRefusal) {
+	rs, ok := s.cfg.Store.(store.RunnerStore)
+	if !ok || s.runnersEnabled(ctx) != nil {
+		return nil, nil
+	}
+	members, err := ps.ListRunnerPoolMembers(ctx, row.Pool.ID)
+	if err != nil {
+		return nil, runServerError("list runner pool members", err)
+	}
+	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
+	var runners []types.Runner
+	for _, m := range members {
+		if m.RunnerID == nil {
+			continue
+		}
+		rn, err := rs.GetRunner(ctx, *m.RunnerID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return nil, runServerError("read runner", err)
+		}
+		if rn.OrgURLSHA256 == orgHash {
+			runners = append(runners, rn)
+		}
+	}
+	ids := runnerpool.OrgRunnerCandidates(members, runners)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return s.registeredRunnerTargets(ctx, ids, runners)
+}
+
+// registeredRunnerTargets is each runner of ids, among runners, with its facts, room and trust class.
+func (s *Server) registeredRunnerTargets(ctx context.Context, ids []uuid.UUID, runners []types.Runner) ([]poolTarget, *runRefusal) {
 	held, err := s.runnerSlotHolders(ctx, ids)
 	if err != nil {
 		return nil, runServerError("count runs by runner", err)
@@ -219,8 +275,11 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 		id := id
 		facts, known := s.runnerFacts(id)
 		i := slices.IndexFunc(runners, func(r types.Runner) bool { return r.ID == id })
-		full := i >= 0 && runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
-		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full})
+		if i < 0 {
+			continue
+		}
+		full := runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
+		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full, trust: runners[i].TrustClass})
 	}
 	slices.SortFunc(out, func(a, b poolTarget) int { return cmp.Compare(a.id, b.id) })
 	return out, nil
@@ -270,7 +329,7 @@ func (s *Server) runnerFacts(id uuid.UUID) (runner.TargetFacts, bool) {
 }
 
 // executorFacts is one configured executor's classes. A lone driver that is not an orchestrator is its
-// own and only executor, so its own capabilities are its facts.
+// own and only executor, so its own capabilities are its facts, and a failed read is its ProbeErr.
 func (s *Server) executorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
 	if ti, ok := s.targetInspector(); ok {
 		return ti.ExecutorFacts(ctx, executor)
@@ -280,9 +339,9 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return runner.TargetFacts{}, false
+		return runner.TargetFacts{ProbeErr: err}, false
 	}
 	_, keeps := s.cfg.Runner.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement,
-		KeepsEnded: keeps, UserDrives: caps.UserDrives}, true
+		KeepsEnded: keeps, UserDrives: caps.UserDrives, Records: caps.SessionRecording, ExecOutputUncaptured: caps.ExecOutputUncaptured}, true
 }

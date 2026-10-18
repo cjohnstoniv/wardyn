@@ -85,10 +85,12 @@ if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-
   mkdir -p "$HOME/.wardyn" 2>/dev/null
   : > "$HOME/.wardyn/agent-started" 2>/dev/null
   # The harnesses image carries several CLIs; dispatch names the one to start.
-  # Unset (an older dispatch, or a one-CLI image) keeps the fixed list.
-  case "${WARDYN_START_HARNESS:-}" in
+  # Unset (an older dispatch, or a one-CLI image) keeps the fixed list; set but empty
+  # ("Your own tools") starts no CLI.
+  case "${WARDYN_START_HARNESS-__unset}" in
     claude-code) _cmds="claude" ;;
     codex-cli) _cmds="codex" ;;
+    "") _cmds="" ;;
     *) _cmds="claude codex" ;;
   esac
   for _c in $_cmds; do

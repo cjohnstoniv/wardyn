@@ -70,7 +70,7 @@ const CAST: Array<[string, Want]> = [
 const REACHED = (status: number) => ![401, 403, 404].includes(status);
 
 function ssoControl(page: Page) {
-  return page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first();
+  return page.getByRole("link", { name: /^Sign in with (SSO|Microsoft)$/ }).or(page.getByRole("button", { name: /^Sign in with (SSO|Microsoft)$/ })).first();
 }
 
 async function api(page: Page, method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> {

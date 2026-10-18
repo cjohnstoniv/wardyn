@@ -131,14 +131,13 @@ const (
 // day; anything shorter is a notice that arrives after the fact.
 const modelAccessExpiringWindow = 24 * time.Hour
 
-// The action lines the states ship. DRAFT (M2 canon pending) — the frozen copy
+// The action lines the states ship — the frozen copy
 // is docs/design/workspace-providers-prompt.md §7.7
 // (MODEL_ACCESS_EXPIRING_ACTION, SIGN_IN_AWS), reproduced BYTE-EXACT here
 // because the console renders a server action line verbatim.
 const (
 	modelAccessExpiringAction = "Sign in again before %s"
-	// DRAFT (M2 canon pending)
-	modelAccessSignInAction = "Sign in to AWS"
+	modelAccessSignInAction   = "Sign in to AWS"
 	// modelAccessPinContradictedAction replaces "Sign in to AWS" for the one
 	// expired_signin the timestamp says nothing about: the session is live, and
 	// it is the wrong IDENTITY. It names both pairs because the person reading
@@ -170,7 +169,7 @@ const (
 // renewable: AWS refused its last renewal, so an EXPIRED session is dead (dispatch
 // refuses it too, and only a sign-in repairs it), and one inside the refresh skew
 // is `expiring` — dispatch serves it until it expires, then refuses it.
-func awsSSOCredentialState(blob awsSSOBlob, found, spent, refused bool, now time.Time) string {
+func awsSSOCredentialState(blob awsSSOBlob, found, spent, refused bool, now time.Time, skew time.Duration) string {
 	if !found {
 		return modelAccessNotConfigured
 	}
@@ -178,13 +177,13 @@ func awsSSOCredentialState(blob awsSSOBlob, found, spent, refused bool, now time
 		switch {
 		case blob.expired(now):
 			return modelAccessExpiredSignin
-		case blob.needsRefresh(now):
+		case blob.needsRefresh(now, skew):
 			return modelAccessExpiring
 		}
 	}
 	dead := modelAccessExpiredSignin
 	if spent {
-		if blob.needsRefresh(now) {
+		if blob.needsRefresh(now, skew) {
 			return dead
 		}
 		return modelAccessExpiring
@@ -225,15 +224,15 @@ func modelAccessAction(state, ts string) string {
 // spent is checked EXPLICITLY, ahead of the renewable arm: a spent
 // credential is never renewed again regardless of what registration timestamp
 // it carries, so the deadline that matters is the moment dispatch itself stops
-// serving the access token — ExpiresAt − awsSSORefreshSkew, the same instant
-// needsRefresh uses to grade it dead. A refused one is served until ExpiresAt
+// serving the access token — ExpiresAt − skew (the tuned awsSSORefreshSkew),
+// the same instant needsRefresh uses to grade it dead. A refused one is served until ExpiresAt
 // itself (refreshAWSSSOBlob serves a still-valid token after a refusal).
-func modelAccessDeadline(blob awsSSOBlob, found, spent, refused bool, now time.Time) string {
+func modelAccessDeadline(blob awsSSOBlob, found, spent, refused bool, now time.Time, skew time.Duration) string {
 	switch {
 	case !found:
 		return ""
 	case spent:
-		return blob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
+		return blob.ExpiresAt.Add(-skew).UTC().Format(time.RFC3339)
 	case refused:
 		return blob.ExpiresAt.UTC().Format(time.RFC3339)
 	case blob.renewable(now) && !blob.RegistrationExpiresAt.IsZero():

@@ -187,7 +187,7 @@ docker volume create \
    - Without it an admin reads a refusal about two paths that plainly do not nest.
    - And the one fact that explains it — the hop the link makes — is the one thing the console form cannot show them.
    - A root that no longer resolves on this host falls back to the lexical answer rather than to a refusal, so one dead row cannot block every new drive (`driveHostRootNesting`, `internal/api`).
-   - Two admins creating nested drives at the same instant can still both be stored — the gate is a read followed by an unconditional write, and the database-level form is 0.7.1.
+   - Two admins creating nested drives at the same instant can still both be stored — the gate is a read followed by an unconditional write, and no database-level guard exists yet (`user_drives` has no nesting constraint).
 
    - **And the drive ceiling must not overlap `WARDYN_USER_WORKSPACE_ROOTS` — the member ceiling defeats per-person isolation where they meet.**
    - Per-person isolation is the **bind of the subdirectory**: Wardyn hands a run one home out of the share and refuses a source that resolved to the root.

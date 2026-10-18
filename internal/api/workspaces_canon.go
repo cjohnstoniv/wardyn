@@ -22,8 +22,6 @@ import (
 // can start. 64 is far past any real composition.
 const maxWorkspaceSources = 64
 
-// DRAFT (M2 canon pending)
-
 const (
 	// workspaceSources400TooMany is the cap refusal for POST/PUT /workspaces.
 	// Spelled like its siblings' ("too many requirements (max %d)", "too many

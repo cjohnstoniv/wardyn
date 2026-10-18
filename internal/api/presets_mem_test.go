@@ -295,6 +295,30 @@ func TestPresetClosedToOtherUserTypesIsHidden(t *testing.T) {
 	}
 }
 
+// A member's read of a preset redacts its stored inline_policy as a policy read
+// does; the operator's read, and the stored row a launch expands, keep the path.
+func TestPresetReadRedactsTheInlinePolicyForAMember(t *testing.T) {
+	f := newMemPresetFixture(t)
+	inline := &client.RunPolicySpec{MinConfinementClass: types.CC2,
+		WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/team-data", Target: "/home/agent/data"}}}
+	if w := f.put(t, "open", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", InlinePolicy: inline}}); w.Code != http.StatusCreated {
+		t.Fatalf("put = %d: %s", w.Code, w.Body.String())
+	}
+	member := ssoSession(t, "sub-preset-redact", "member@corp.example", oidc.RoleUser)
+	for path, tc := range map[string]struct {
+		w    *httptest.ResponseRecorder
+		want bool
+	}{
+		"member get":  {doSSO(t, f.srv, http.MethodGet, "/api/v1/presets/open", member, ""), false},
+		"member list": {doSSO(t, f.srv, http.MethodGet, "/api/v1/presets", member, ""), false},
+		"admin get":   {do(t, f.srv, http.MethodGet, "/api/v1/presets/open", adminToken, ""), true},
+	} {
+		if tc.w.Code != http.StatusOK || strings.Contains(tc.w.Body.String(), "/srv/team-data") != tc.want {
+			t.Errorf("%s = %d, path visible=%v, want %v: %s", path, tc.w.Code, strings.Contains(tc.w.Body.String(), "/srv/team-data"), tc.want, tc.w.Body.String())
+		}
+	}
+}
+
 // TestExpandRunPreset drives the launch-side expansion directly: what a
 // preset launch may carry, what it is refused for, and what the expanded
 // request keeps of the caller's body.
@@ -383,5 +407,33 @@ func TestSetRunFieldsNamesOnlyNonZeroFieldsByJSONKey(t *testing.T) {
 	}
 	if got := setRunFields(createRunRequest{}); len(got) != 0 {
 		t.Errorf("zero request names %v, want none", got)
+	}
+}
+
+// TestPreset_UnappliedFieldSaysItCannotBeStored: the preset door reuses the run
+// contract, and a field this server does not apply yet is told in terms of the
+// preset, not of a run that was never being created.
+func TestPreset_UnappliedFieldSaysItCannotBeStored(t *testing.T) {
+	f := newMemPresetFixture(t)
+	image := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets", AllowedImage: "ghcr.io/acme/base:1"}
+	builtin := client.CreateRunRequest{Agent: "claude-code", Repo: "acme/widgets",
+		Components: []client.ComponentRef{{Builtin: "azure_devops", Org: "acme"}}}
+	for _, tc := range []struct {
+		name string
+		req  client.CreateRunRequest
+		want string
+	}{
+		{"allowed image", image, "request.allowed_image: this server does not apply an image choice yet, so it cannot be stored in a preset."},
+		{"built-in component", builtin, "request.components[0]: built-in azure_devops access is not available on this server yet, so it cannot be stored in a preset."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := f.put(t, "p", client.PresetRequest{Request: tc.req})
+			if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonRequestFieldUnavailable {
+				t.Fatalf("= %d %s, want 422 %s", w.Code, w.Body.String(), reasonRequestFieldUnavailable)
+			}
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Errorf("body %s lacks %q", w.Body.String(), tc.want)
+			}
+		})
 	}
 }

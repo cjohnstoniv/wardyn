@@ -74,7 +74,7 @@ func (m *Manager) proveLost(ctx context.Context, local string) error {
 		return fmt.Errorf("substrate cannot prove a sandbox is this runner's: %w", runner.ErrNotRunnerSandbox)
 	}
 	if err := prover.ProveRunnerSandbox(ctx, local, m.runnerID.String()); err != nil {
-		slog.WarnContext(ctx, "runner: left alone a container it cannot prove it created", slog.String("ref", local), slog.String("err", err.Error()))
+		slog.WarnContext(ctx, "runner: could not prove a container is one it created; left it alone", slog.String("ref", local), slog.String("err", err.Error()))
 		return fmt.Errorf("pending action names a container this runner cannot prove it created: %w", err)
 	}
 	return nil

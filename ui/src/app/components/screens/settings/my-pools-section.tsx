@@ -213,8 +213,8 @@ function PoolRow({ p, isDefault, onOpen, onEdit, onDelete, onAddRunner, onRemove
   );
 }
 
-/** My pools: the person's own user pools, their runners, their default, and Create a pool. */
-export function MyPoolsSection({ pools, runners }: { pools: Pools; runners: RunnerView[] }) {
+/** My pools: the person's own user pools, their runners, their default, and Create a pool. `bare` leaves out the heading, for My pools' own card. */
+export function MyPoolsSection({ pools, runners, bare = false }: { pools: Pools; runners: RunnerView[]; bare?: boolean }) {
   const navigate = useNavigate();
   const [openId, setOpenId] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState<MyPool | null>(null);
@@ -295,8 +295,8 @@ export function MyPoolsSection({ pools, runners }: { pools: Pools; runners: Runn
       </>
     );
   }
-  return (
-    <Sec label={MY_POOLS.TITLE} meta={MY_POOLS.ONLY_YOU} id="my-pools">
+  const body = (
+    <>
       <p className="mb-2 text-muted-foreground">{MY_POOLS.LEDE}</p>
       {pools.defaultGone && (
         <p role="alert" className="mb-2 rounded-lg border border-danger bg-danger-subtle p-2.5 text-body text-foreground">
@@ -329,6 +329,16 @@ export function MyPoolsSection({ pools, runners }: { pools: Pools; runners: Runn
         onDeleted={pools.reload}
       />
       <RemoveDialog removal={removal} onOpenChange={(o) => !o && setRemoval(null)} onDone={pools.reload} />
+    </>
+  );
+  return bare ? (
+    <div id="my-pools">
+      <p className="mb-1 text-meta text-muted-foreground">{MY_POOLS.ONLY_YOU}</p>
+      {body}
+    </div>
+  ) : (
+    <Sec label={MY_POOLS.TITLE} meta={MY_POOLS.ONLY_YOU} id="my-pools">
+      {body}
     </Sec>
   );
 }

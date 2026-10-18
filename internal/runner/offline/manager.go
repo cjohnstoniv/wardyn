@@ -10,8 +10,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -23,12 +27,14 @@ import (
 // Manager contains only local containment and evidence state. It cannot mint
 // credentials or grant authority, and never chooses a run's terminal state.
 type Manager struct {
-	actionMu      sync.Mutex
-	lock          *os.File
-	closed        bool
-	replayMu      sync.Mutex
-	mu            sync.Mutex
-	runnerID      uuid.UUID
+	actionMu sync.Mutex
+	lock     *os.File
+	closed   bool
+	replayMu sync.Mutex
+	mu       sync.Mutex
+	runnerID uuid.UUID
+	// pendingLogged is when each held run's containment-pending warning was last logged.
+	pendingLogged map[uuid.UUID]time.Time
 	dir           string
 	root          *os.Root
 	sub           substrate.Substrate
@@ -52,6 +58,23 @@ type Manager struct {
 	inflight      map[mutationKey]int
 	deadlines     map[uuid.UUID]deadline
 	pending       map[uuid.UUID]runnerwire.Lease
+	// selfLapse is Options.ProxySelfLapses (k8s runner): each proxy closes itself at its own
+	// deadline, so a restart keeps a running proxy on a provisional cleanup deadline instead of
+	// containing it, and the 30 s pod list records exits.
+	selfLapse    bool
+	observer     runner.ProxyObserver
+	lastObserved time.Time
+	tick         func(context.Context)
+}
+
+// Options are the manager's substrate-specific behaviours.
+type Options struct {
+	// ProxySelfLapses: the substrate's proxies lapse themselves (design K1 §6.2); the substrate must
+	// implement runner.ProxyObserver.
+	ProxySelfLapses bool
+	// Tick runs first on each containment tick, before lapses and retirement: the k8s runner's
+	// decision sink regrants and retries loss rows there.
+	Tick func(context.Context)
 }
 
 type deadline struct {
@@ -139,6 +162,9 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 	return m.clock.Hello(h, received)
 }
 
+// beforeReadyContainBound bounds the containment BeforeReady runs before a session is ready.
+var beforeReadyContainBound = 30 * time.Second
+
 // BeforeReady enables admission only after pending actions and fresh replay.
 // It does not write to peer; resumed peers have not started their read loop.
 func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool) error {
@@ -148,7 +174,12 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 	if revoked {
 		return runnerwire.ErrRevoked
 	}
-	if err := m.CheckLapses(ctx); err != nil {
+	// A resumed session calls this before its peer starts, so no link failure ends a stop that waits on
+	// a wedged engine: bound it as the containment loop bounds its own.
+	contain, done := context.WithTimeout(ctx, beforeReadyContainBound)
+	err := m.CheckLapses(contain)
+	done()
+	if err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -246,7 +277,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		d.endsLeft = old.endsLeft - m.since(old.receipt)
 	}
 	m.deadlines[l.RunID] = d
-	if r, ok := m.state.Runs[l.RunID]; ok {
+	if r, ok := m.state.Runs[l.RunID]; ok && !r.Tombstone {
 		r.Lease = l
 		m.state.Runs[l.RunID] = r
 		return m.save()
@@ -295,6 +326,33 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	return nil
 }
 
+// AdmitResident binds a runner_resident delivery to a run this runner may still create: online, not
+// revoked, a live initial lease and no creation intent yet (the Lease and BeforeCreate predicates).
+// Lock order: Resident calls this while holding its own mutex, so Resident.mu is always taken before
+// m.mu. The manager never calls into Resident; the revoke hook runs Revoked, which has released m.mu,
+// and only then the resident erase.
+func (m *Manager) AdmitResident(runID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.online || m.state.Revoked {
+		return runner.ErrRunnerOffline
+	}
+	if _, exists := m.state.Runs[runID]; exists {
+		return errors.New("runner resident delivery after the run's creation intent")
+	}
+	if _, ok := m.pending[runID]; !ok || m.expired(runID) {
+		return errors.New("runner resident delivery requires a live initial lease")
+	}
+	return nil
+}
+
+// IsRevoked reports the durable revocation latch.
+func (m *Manager) IsRevoked() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.Revoked
+}
+
 // liveRuns counts the runs whose sandbox this runner still holds: created or being created, not failed,
 // retired, quarantined, exited or stopped. It errs low, so the backstop to the control plane's count
 // never refuses a run the control plane rightly placed. m.mu must be held.
@@ -321,6 +379,9 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
+	// The dispatcher binds the output writer before Created, so a run whose
+	// create captured output says so here, before its sandbox is used.
+	r.OutputCapture = spec.ExecOutput != nil
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()
@@ -345,12 +406,24 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.expired(id)
 		m.mu.Unlock()
 		if r.Retired || r.Ref == "" || !expired {
 			continue
 		}
 		if err := m.stopper.StopProxy(ctx, r.Ref); err != nil {
+			var pending *runner.ContainmentPendingError
+			if errors.As(err, &pending) {
+				// Held as containment pending: contained for READY only. No ProxyStoppedAt, no
+				// receipt, no settlement; retried every tick until completion evidence (P2, R4-M2).
+				if perr := m.holdPending(id, pending); perr != nil {
+					errs = append(errs, perr)
+				}
+				if m.pendingLogDue(id) {
+					slog.WarnContext(ctx, "runner containment pending", "run_id", id, "kind", pending.Kind, "error", pending.Err)
+				}
+				continue
+			}
 			errs = append(errs, fmt.Errorf("contain run %s: %w", id, err))
 			continue
 		}
@@ -362,10 +435,12 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			continue
 		}
 		r = current
+		delete(m.pendingLogged, id)
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
 			at := m.now().UTC()
 			r.ProxyStoppedAt = &at
+			r.ContainmentPending = nil // promoted to plain containment only on completion evidence
 			if r.MutationFailure != nil {
 				confirmed := *r.MutationFailure
 				confirmed.Contained = true
@@ -398,7 +473,13 @@ func (m *Manager) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		err := errors.Join(m.CheckLapses(safety), m.eraseAssertedEvidence())
+		m.mu.Lock()
+		tick := m.tick
+		m.mu.Unlock()
+		if tick != nil {
+			tick(safety)
+		}
+		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
 		done()
 		if err != nil {
 			slog.ErrorContext(ctx, "runner containment will retry", "error", err)
@@ -459,4 +540,220 @@ func (m *Manager) clearPending() {
 		}
 	}
 	m.pending = map[uuid.UUID]runnerwire.Lease{}
+}
+
+// SetOptions applies Options before Run starts. ProxySelfLapses needs a substrate that observes its
+// proxies, and gives every run that has no deadline yet (a restart) a provisional one, restart +
+// RunTokenTTL: a cleanup bound, never sent to the proxy, which never clears an obligation. Call
+// ObserveProxies first, so a run whose proxy already exited or is still Pending past its start
+// timeout gets its obligation instead (P4).
+func (m *Manager) SetOptions(o Options) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tick = o.Tick
+	if !o.ProxySelfLapses {
+		m.selfLapse, m.observer = false, nil
+		return nil
+	}
+	obs, ok := m.sub.(runner.ProxyObserver)
+	if !ok {
+		return errors.New("proxy self-lapse requires a substrate that observes its proxies")
+	}
+	m.selfLapse, m.observer = true, obs
+	return nil
+}
+
+// ProvisionalDeadlines gives each held run with no deadline and no obligation the provisional
+// cleanup deadline restart + RunTokenTTL (design K1 §6.2 "After a restart"). The org's next lease
+// replaces it.
+func (m *Manager) ProvisionalDeadlines() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.selfLapse {
+		return
+	}
+	now := m.now()
+	for id, r := range m.state.Runs {
+		if _, ok := m.deadlines[id]; ok || r.Retired || r.Ref == "" || r.ProxyExited != nil || r.ProxyStoppedAt != nil {
+			continue
+		}
+		m.deadlines[id] = deadline{receipt: now, tokenLeft: identity.RunTokenTTL}
+	}
+}
+
+// proxyObserveInterval is the k8s runner's pod-list cadence (design K1 §6.2 P1).
+const proxyObserveInterval = 30 * time.Second
+
+func (m *Manager) observeProxiesDue(ctx context.Context) error {
+	m.mu.Lock()
+	due := m.selfLapse && m.now().Sub(m.lastObserved) >= proxyObserveInterval
+	m.mu.Unlock()
+	if !due {
+		return nil
+	}
+	return m.ObserveProxies(ctx)
+}
+
+// ObserveProxies lists every held run's proxy in one call and records a ProxyExited obligation for
+// each that is Failed, Succeeded, NotFound or Pending past its start timeout. A Running proxy, or
+// one Pending within its timeout, records nothing.
+func (m *Manager) ObserveProxies(ctx context.Context) error {
+	m.mu.Lock()
+	if !m.selfLapse {
+		m.mu.Unlock()
+		return nil
+	}
+	m.lastObserved = m.now()
+	// Every unretired run is listed, held ones included, so the substrate's per-tick checks (the
+	// name-reuse list, identity sampling) keep covering them; only open runs take an obligation.
+	var ids []uuid.UUID
+	open := map[uuid.UUID]bool{}
+	for _, id := range m.runIDs() {
+		if r := m.state.Runs[id]; !r.Retired && r.Ref != "" {
+			ids = append(ids, id)
+			open[id] = r.ProxyExited == nil && r.ProxyStoppedAt == nil
+		}
+	}
+	obs := m.observer
+	m.mu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	seen, err := obs.ObserveProxies(ctx, ids)
+	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for id, o := range seen {
+		if open[id] && (o.Exited() || o == runner.ProxyPendingPastStart) {
+			errs = append(errs, m.ProxyExited(id, string(o)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ProxyExited records the durable obligation that a run's proxy will not serve again: on the
+// proxy's validated lapsed frame, or an observed terminal phase or missing pod. A sink session
+// ending is not evidence. CheckLapses contains the obligation; a NotFound records it but never
+// ends it, since ProxyStoppedAt still needs completion evidence.
+func (m *Manager) ProxyExited(runID uuid.UUID, evidence string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.state.Runs[runID]
+	if !ok || r.Retired || r.ProxyExited != nil {
+		return nil
+	}
+	r.ProxyExited = &proxyExit{Evidence: evidence, At: m.now().UTC()}
+	m.state.Runs[runID] = r
+	return m.save()
+}
+
+// holdPending records (or refreshes) a run's containment-pending state.
+func (m *Manager) holdPending(id uuid.UUID, p *runner.ContainmentPendingError) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.holdPendingLocked(id, p)
+}
+
+// holdPendingLocked records a run as containment pending. m.mu is held.
+func (m *Manager) holdPendingLocked(id uuid.UUID, p *runner.ContainmentPendingError) error {
+	r, ok := m.state.Runs[id]
+	if !ok {
+		return nil
+	}
+	next := &runnerwire.ContainmentPending{Kind: p.Kind, Since: m.now().UTC(), NameReused: p.NameReused, NoCausalAssociation: p.NoCausalAssociation, Tuple: p.Tuple}
+	if old := r.ContainmentPending; old != nil {
+		next.Since = old.Since
+		if reflect.DeepEqual(old, next) {
+			return nil
+		}
+	}
+	r.ContainmentPending = next
+	m.state.Runs[id] = r
+	return m.save()
+}
+
+// pendingLogEvery bounds the containment-pending warning, which CheckLapses would otherwise repeat
+// every tick, to one per run per interval.
+const pendingLogEvery = time.Minute
+
+// pendingLogDue reports whether run id's containment-pending warning is due, and if so marks it.
+func (m *Manager) pendingLogDue(id uuid.UUID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	if last, ok := m.pendingLogged[id]; ok && now.Sub(last) < pendingLogEvery {
+		return false
+	}
+	if m.pendingLogged == nil {
+		m.pendingLogged = map[uuid.UUID]time.Time{}
+	}
+	m.pendingLogged[id] = now
+	return true
+}
+
+// LoadEvidence returns a run's substrate evidence record (nil when none).
+func (m *Manager) LoadEvidence(runID uuid.UUID) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.state.Runs[runID].Substrate), nil
+}
+
+// SaveEvidence writes a run's substrate evidence record with the state's atomic write and fsync. A
+// run the runner holds no record of (a lost identity met by the sweep) gets a containment-only
+// record, which CheckLapses contains.
+func (m *Manager) SaveEvidence(runID uuid.UUID, b []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if runID == uuid.Nil {
+		return errors.New("evidence for no run")
+	}
+	r, ok := m.state.Runs[runID]
+	if !ok {
+		ref := m.expectedRef(runID)
+		if ref == "" {
+			return errors.New("evidence for a run with no recoverable reference")
+		}
+		r = localRun{RunID: runID, Ref: ref, ContainmentOnly: true, Lease: runnerwire.Lease{RunID: runID}}
+	}
+	before := m.state.Runs[runID]
+	r.Substrate = slices.Clone(b)
+	m.state.Runs[runID] = r
+	if err := m.save(); err != nil {
+		if ok {
+			m.state.Runs[runID] = before
+		} else {
+			delete(m.state.Runs, runID)
+		}
+		return err
+	}
+	return nil
+}
+
+// SinkRunIDs lists the runs whose decision sink is registered again at startup: those holding a
+// substrate evidence record that are neither retired nor erased, so a spool is never reopened.
+func (m *Manager) SinkRunIDs() []uuid.UUID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for _, id := range m.runIDs() {
+		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired && !r.EvidenceErased {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// EvidenceRunIDs lists the unretired runs holding a substrate evidence record, for the relay's
+// fence replay: a fence is dropped with the run's offline state at retirement.
+func (m *Manager) EvidenceRunIDs() []uuid.UUID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for _, id := range m.runIDs() {
+		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

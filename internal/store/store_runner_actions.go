@@ -63,6 +63,10 @@ func decodeRunnerActionProof(a *types.RunnerPendingAction, raw []byte) error {
 	}
 	var dst any
 	switch a.Kind {
+	case types.RunnerActionStopProxy:
+		// A stop_proxy's proof is the node record it carries; the runner decodes it strictly.
+		a.NodeRecord = append(json.RawMessage(nil), raw...)
+		return nil
 	case types.RunnerActionRecoverMutation, types.RunnerActionRecoverContainment:
 		a.Recovery = new(types.RunnerMutationFailure)
 		dst = a.Recovery
@@ -92,16 +96,20 @@ func sameRunnerAction(a, b types.RunnerPendingAction) bool {
 	lost := (a.LostAt == nil) == (b.LostAt == nil) && (a.LostAt == nil || a.LostAt.Equal(*b.LostAt))
 	return a.Bound && b.Bound && a.Asserted == b.Asserted && a.RunnerID == b.RunnerID && a.RunID == b.RunID && a.Kind == b.Kind &&
 		a.Ref == b.Ref && a.Owner == b.Owner && a.Generation == b.Generation && lost &&
-		equalPtr(a.Recovery, b.Recovery) && equalPtr(a.Quarantine, b.Quarantine) && equalPtr(a.Retirement, b.Retirement)
+		equalPtr(a.Recovery, b.Recovery) && equalPtr(a.Quarantine, b.Quarantine) && equalPtr(a.Retirement, b.Retirement) &&
+		SameJSON(a.NodeRecord, b.NodeRecord)
 }
 
 // lockRunnerActionRun takes the shared order runner FOR SHARE → run FOR UPDATE
-// → execution FOR UPDATE. The owner comes from the stored claimed runner only.
-// A runner that is not claimed, or a run that is gone, is ErrNotFound; a run
-// bound to another runner, owner or placement is ErrRunnerActionRefused.
+// → execution FOR UPDATE. The action's owner is the run's creator: on a
+// person's runner that must be the stored owner, and an org runner (owner
+// empty) binds to whoever created the run. A runner that is not claimed, or a
+// run that is gone, is ErrNotFound; a run bound to another runner, owner or
+// placement is ErrRunnerActionRefused.
 func lockRunnerActionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (string, types.AgentRun, uuid.UUID, error) {
-	var owner string
-	err := tx.QueryRow(ctx, `SELECT owner FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL AND owner <> '' FOR SHARE`, runnerID).Scan(&owner)
+	var owner, ownerKind string
+	err := tx.QueryRow(ctx, `SELECT owner, owner_kind FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL
+		AND (owner <> '' OR owner_kind = 'org') FOR SHARE`, runnerID).Scan(&owner, &ownerKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", types.AgentRun{}, uuid.Nil, ErrNotFound
 	}
@@ -112,9 +120,11 @@ func lockRunnerActionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UU
 	if err != nil {
 		return "", types.AgentRun{}, uuid.Nil, err
 	}
-	if run.RunnerID == nil || *run.RunnerID != runnerID || run.CreatedBy != owner || run.Placement != types.PlacementLocal {
+	if run.RunnerID == nil || *run.RunnerID != runnerID || run.CreatedBy == "" || !runnerReportsOn(ownerKind, owner, run.CreatedBy) ||
+		run.Placement != types.PlacementLocal {
 		return "", types.AgentRun{}, uuid.Nil, ErrRunnerActionRefused
 	}
+	owner = run.CreatedBy
 	current, err := readRunnerExecution(ctx, tx, runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return owner, run, uuid.Nil, nil
@@ -280,15 +290,32 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 	return has, nil
 }
 
+// LastRunnerTeardown reports the runner's latest answer to a queued end or kill
+// of runID at ref: its kind and outcome, or answered false when it has answered none.
+func (s PG) LastRunnerTeardown(ctx context.Context, runID uuid.UUID, ref string) (kind types.RunnerActionKind, outcome string, answered bool, err error) {
+	err = s.Pool.QueryRow(ctx, `SELECT kind, outcome FROM runner_pending_actions
+		WHERE run_id = $1 AND ref = $2 AND kind IN ('end', 'kill') AND applied_at IS NOT NULL
+		ORDER BY applied_at DESC, id DESC LIMIT 1`, runID, ref).Scan(&kind, &outcome)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("store: read last runner teardown: %w", err)
+	}
+	return kind, outcome, true, nil
+}
+
 // RunHeldContainedOnRunner reports whether the run's runner holds it contained: a kill, end, stop_proxy
-// or quarantine was queued for it and no later recover_containment succeeded. Such a runner refuses any
-// lease for the run, and a refused lease ends its session.
+// or quarantine was queued for it and no later recover_containment succeeded, or the runner reported it
+// containment pending. Such a runner refuses any lease for the run, and a refused
+// lease ends its session.
 func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
 	var held bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = $1
 		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
-			AND r.outcome = 'success' AND r.queued_at > c.queued_at))`, runID).Scan(&held)
+			AND r.outcome = 'success' AND r.queued_at > c.queued_at))
+		OR EXISTS (SELECT 1 FROM run_containment_pending WHERE run_id = $1)`, runID).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("store: check runner containment: %w", err)
 	}
@@ -299,7 +326,8 @@ func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool
 // the stream's stored identity and runID the event's run; both must be the
 // action's own. The outcomes are success, deferred and refused; only refused
 // carries a reason, and its first receipt closes the action and writes
-// runner.action.refuse in the same transaction. observedAt is the
+// runner.action.refuse in the same transaction, and a first success writes
+// runner.action.apply. observedAt is the
 // runner's assertion and applied_at is the org clock. The first receipt
 // rechecks the owner, ref and execution generation the action was bound to;
 // a stop_proxy success on the still-kept loss records late containment in the
@@ -344,30 +372,155 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return a, false, tx.Commit(ctx)
 	}
 	// A refusal changed nothing on the runner, so it closes the action even
-	// when the run has since moved on.
+	// when the run has since moved on. A retirement's kill or retire_run is
+	// held instead to the binding snapshot its run's cleared ref left.
 	if outcome != types.RunnerActionRefused && (run.SandboxRef != a.Ref || generation != a.Generation) {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		bound, err := retirementBindsResultTx(ctx, tx, a)
+		if err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
+		if !bound {
+			return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		}
 	}
 	a, err = scanAction(tx.QueryRow(ctx, `UPDATE runner_pending_actions SET applied_at = clock_timestamp(), outcome = $2, observed_at = $3
 		WHERE id = $1 AND applied_at IS NULL RETURNING `+actionCols, actionID, outcome, observedAt))
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	if outcome == types.RunnerActionRefused {
+	if err := s.recordRunnerActionReceiptTx(ctx, tx, a, run, reason, observedAt, prepare); err != nil {
+		return types.RunnerPendingAction{}, false, err
+	}
+	return a, true, tx.Commit(ctx)
+}
+
+// recordRunnerActionReceiptTx writes what a first receipt of a bound action
+// records, in RecordRunnerActionResult's transaction: the refuse or apply
+// audit row, the retirement it settles, and a stop_proxy's late containment.
+func (s PG) recordRunnerActionReceiptTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, run types.AgentRun, reason string, observedAt time.Time,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
+	runID := a.RunID
+	if a.Outcome == types.RunnerActionRefused {
 		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
+			return err
 		}
+	}
+	if a.Outcome == types.RunnerActionSuccess {
+		if err := recordRunnerActionApplyTx(ctx, tx, a, &runID, observedAt, prepare); err != nil {
+			return err
+		}
+	}
+	// A kill's success settles the deferred kills of its own obligation, the links
+	// ReissueDeferredRunKills chained to it; a fresh kill has an obligation of its
+	// own and settles none.
+	if a.Outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionKill {
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2
+			WHERE obligation_id = $1 AND id <> $2 AND kind = 'kill' AND settled_at IS NULL AND outcome = 'deferred'`, a.ObligationID, a.ID); err != nil {
+			return fmt.Errorf("store: settle deferred kills: %w", err)
+		}
+	}
+	// A recovery's final answer settles the deferred recoveries of its own obligation, the links a revive
+	// chained to it, so the run's fence lifts; a refusal answers the obligation as finally as a success.
+	if a.Kind == types.RunnerActionRecoverContainment && a.Outcome != types.RunnerActionDeferred {
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2
+			WHERE obligation_id = $1 AND id <> $2 AND kind = 'recover_containment' AND settled_at IS NULL AND outcome = 'deferred'`, a.ObligationID, a.ID); err != nil {
+			return fmt.Errorf("store: settle deferred recoveries: %w", err)
+		}
+	}
+	if err := settleRetirementResultTx(ctx, tx, a, a.Outcome); err != nil {
+		return err
+	}
+	if err := settleRunNodeRecordTx(ctx, tx, a, a.Outcome, reason); err != nil {
+		return err
 	}
 	// A run that has since left the kept loss (killed, ended) has its own
 	// teardown record; the receipt still settles this exact action.
-	if outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionStopProxy && keptIncarnation(run, a.LostAt) {
+	if a.Outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionStopProxy && keptIncarnation(run, a.LostAt) {
 		proof := RunnerContainmentProof{
-			RunnerContainment: RunnerContainment{RunnerID: runnerID, RunID: runID, Generation: a.Generation, Ref: a.Ref, LostAt: *a.LostAt},
+			RunnerContainment: RunnerContainment{RunnerID: a.RunnerID, RunID: runID, Generation: a.Generation, Ref: a.Ref, LostAt: *a.LostAt},
 			ActionID:          a.ID, ObservedAt: observedAt,
 		}
-		if err := s.RecordRunnerContainmentTx(ctx, tx, proof, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
-		}
+		return s.RecordRunnerContainmentTx(ctx, tx, proof, prepare)
 	}
-	return a, true, tx.Commit(ctx)
+	return nil
+}
+
+// ReissueDeferredRunKills is ReissueDeferredAssertedRunnerActions for a run's own
+// kill: a deferred receipt is final for its action, so the kill continues in one
+// successor per completed inventory of the runner's previous session, with the
+// identical binding and obligation, until a success settles the chain. It returns
+// how many successors it queued. Conservatively, it queues none for:
+//   - a retirement's kill, whose retirement bounds its own successors;
+//   - a run that no longer carries the kill's binding (its ref cleared, its
+//     generation or owner moved on): the runner's receipt would be refused;
+//   - a run with an open kill already, which is the one the runner will answer;
+//   - a successor the runner refused: nothing in its refusal says a further kill
+//     would be taken, so the deferred link stays the run's last word, as before.
+func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, sessionID string) (int, error) {
+	tx, err := beginRunnerActionTx(ctx, s)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	var claimed bool
+	err = tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrRunnerExecutionRefused
+	}
+	if err != nil {
+		return 0, err
+	}
+	var completed bool
+	err = tx.QueryRow(ctx, `SELECT complete FROM runner_inventories WHERE runner_id = $1 AND session_id::text <> $2`, runnerID, sessionID).Scan(&completed)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !completed) {
+		return 0, tx.Commit(ctx)
+	}
+	if err != nil {
+		return 0, err
+	}
+	tips, err := collect(ctx, tx, "list", "deferred run kills", `SELECT `+actionCols+` FROM runner_pending_actions a
+		WHERE runner_id = $1 AND subject = 'run' AND binding_version = 1 AND kind = 'kill' AND outcome = 'deferred'
+		AND settled_at IS NULL AND NOT superseded
+		AND NOT EXISTS (SELECT 1 FROM runner_retirements r WHERE r.obligation_id = a.obligation_id)
+		ORDER BY queue_seq LIMIT $2`, []any{runnerID, runnerActionPageLimit}, scanAction)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for _, tip := range tips {
+		// The shared order: runner, run, then the action.
+		owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, tip.RunID)
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrRunnerActionRefused) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if owner != tip.Owner || run.SandboxRef != tip.Ref || generation != tip.Generation {
+			continue
+		}
+		var skip bool
+		if err := tx.QueryRow(ctx, `SELECT a.superseded OR a.settled_at IS NOT NULL OR EXISTS (SELECT 1 FROM runner_pending_actions o
+			WHERE o.run_id = a.run_id AND o.kind = 'kill' AND o.applied_at IS NULL AND o.settled_at IS NULL)
+			FROM runner_pending_actions a WHERE a.id = $1 FOR UPDATE OF a`, tip.ID).Scan(&skip); err != nil {
+			return 0, err
+		}
+		if skip {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET superseded = true WHERE id = $1`, tip.ID); err != nil {
+			return 0, fmt.Errorf("store: supersede deferred kill: %w", err)
+		}
+		var gen *uuid.UUID
+		if tip.Generation != uuid.Nil {
+			gen = &tip.Generation
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner,
+			execution_generation, obligation_id, supersedes) VALUES ($1, $2, $3, 'kill', $4, 1, $5, $6, $7, $8)`,
+			uuid.New(), runnerID, tip.RunID, tip.Ref, tip.Owner, gen, tip.ObligationID, tip.ID); err != nil {
+			return 0, fmt.Errorf("store: queue kill successor: %w", err)
+		}
+		queued++
+	}
+	return queued, tx.Commit(ctx)
 }

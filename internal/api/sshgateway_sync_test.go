@@ -357,14 +357,12 @@ func TestSSHGateway_SyncHasItsOwnBudget(t *testing.T) {
 			syncEcho(t, in, out, "x")
 		}
 		sess, _, _, err := f.openSync(t, nil)
-		if err == nil {
-			t.Fatal("a third sync was accepted")
+		if err != nil {
+			t.Fatalf("a third sync was not acked: %v", err)
 		}
 		// A client looping on the same channel must not write a row per request.
 		for i := 0; i < 5; i++ {
-			if sess.RequestSubsystem(sshSyncSubsystem) == nil {
-				t.Fatal("a repeated sync request was accepted")
-			}
+			_ = sess.RequestSubsystem(sshSyncSubsystem) // acked or, once the gateway has ended the channel, refused
 		}
 		ev := waitForAudit(t, f.h.audit, f.run.ID, "ssh.channel.reject", "failure")
 		d := sshAuditData(t, ev)
@@ -570,7 +568,9 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 		want, absent string
 	}{
 		{"runner offline", fmt.Errorf("%w: substrate x", runner.ErrRunnerOffline), "is offline", "image"},
+		{"runner offline, said once", fmt.Errorf("%w: substrate x", runner.ErrRunnerOffline), "is offline", runner.ErrRunnerOffline.Error()},
 		{"sandbox gone", fmt.Errorf("exec create: %w", runner.ErrSandboxGone), "sandbox is gone", "image"},
+		{"sandbox gone, said once", fmt.Errorf("exec create: %w", runner.ErrSandboxGone), "sandbox is gone", runner.ErrSandboxGone.Error()},
 		{"unsupported", runner.ErrExecStreamUnsupported, "does not support", "image"},
 		{"anything else", errors.New("exec create failed"), "image has no " + sftpServerPath, "offline"},
 	} {

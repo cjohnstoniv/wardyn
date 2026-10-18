@@ -10,15 +10,14 @@
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { shortTime } from "../../../../lib/format";
+import { ordinal } from "../../../../lib/ordinal";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../../lib/runner-pool-refusals";
 import type { AgentRun, RunQueue } from "../../../../lib/types/runs";
 
 /** A run as the Launched screen reads it: AgentRun plus the warnings a create answers with. */
 export type LaunchedRun = AgentRun & { warnings?: string[] };
 
-const SUFFIX: Record<string, string> = { one: "st", two: "nd", few: "rd", other: "th" };
-const ORDINALS = new Intl.PluralRules("en-US", { type: "ordinal" });
-export const ordinal = (n: number): string => `${n}${SUFFIX[ORDINALS.select(n)]}`;
+export { ordinal };
 
 /** The place in line the person is told: the wire counts the runs ahead, so the run itself is one more. */
 export const placeInLine = (queue: RunQueue): string => NR_LAUNCH.IN_LINE(ordinal(queue.position + 1));
@@ -31,7 +30,8 @@ export const waitingSince = (queuedAt: string, now: number): string =>
 
 /** "In N hours" while an hour or more is left; inside the last hour, the time it gives up. */
 export function givesUp(deadlineAt: string, now: number): string {
-  const hours = Math.round((Date.parse(deadlineAt) - now) / HOUR);
+  const left = Date.parse(deadlineAt) - now;
+  const hours = left < HOUR ? 0 : Math.round(left / HOUR);
   return hours >= 1 ? NR_LAUNCH.GIVES_UP_IN(hours === 1 ? NR_SHARED.HOUR_ONE : NR_SHARED.HOURS(hours)) : shortTime(deadlineAt);
 }
 
@@ -40,5 +40,6 @@ export function waitingBody(reason: string, pool: { name: string; max?: number }
   if (!pool) return undefined;
   if (reason === RUN_WAIT_REASON.NO_RUNNER_FREE) return RUN_WAIT.NO_RUNNER_FREE(pool.name);
   if (reason === RUN_WAIT_REASON.RUNNERS_AT_CAPACITY) return RUN_WAIT.RUNNERS_AT_CAPACITY(pool.name);
+  if (reason === RUN_WAIT_REASON.RECORDING_STORE_OFF) return RUN_WAIT.RECORDING_STORE_OFF();
   return pool.max === undefined ? undefined : NR_LAUNCH.WAITING_BODY(pool.name, pool.max);
 }

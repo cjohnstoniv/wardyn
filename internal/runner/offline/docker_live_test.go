@@ -19,16 +19,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
-	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	dockerclient "github.com/moby/moby/client"
 )
 
-// The real proxy enforces cached policy and writes the private mounted spool;
-// authenticated transport loss then exercises the real Docker containment.
-// Only elapsed monotonic time is advanced, not a sleep standing in for lapse.
-func TestLiveDockerOfflineLapsePreservesAgentFilesAndAudit(t *testing.T) {
+// The real proxy enforces cached policy offline; authenticated transport loss
+// then exercises the real Docker containment. Only elapsed monotonic time is
+// advanced, not a sleep standing in for lapse. That the decision itself reaches
+// runnerd's spool through its decision sink, and survives the proxy's stop, is
+// pinned with runnerd's own sink (TestDockerProxySendsDecisionsToTheSink_Live
+// in cmd/wardyn-runnerd).
+func TestLiveDockerOfflineLapsePreservesAgentFiles(t *testing.T) {
 	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
 		t.Skip("WARDYN_TEST_DOCKER=1 not set")
 	}
@@ -67,7 +69,7 @@ func liveOfflineDocker(t *testing.T, binary string, realWire bool) {
 		_, _ = cli.NetworkRemove(clean, network.ID, dockerclient.NetworkRemoveOptions{})
 	}()
 	dir := t.TempDir()
-	sub, err := docker.New(docker.Config{ProxyImage: "busybox:latest", ProxyBinaryHostPath: binary, InternalNetwork: network.ID, RunnerStateDir: dir})
+	sub, err := docker.New(docker.Config{ProxyImage: "busybox:latest", ProxyBinaryHostPath: binary, InternalNetwork: network.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +93,9 @@ func liveOfflineDocker(t *testing.T, binary string, realWire bool) {
 	if err := f.manager.Created(ctx, spec, sb.Ref); err != nil {
 		t.Fatal(err)
 	}
-	code, out := liveExec(t, ctx, sub, sb.Ref, "printf kept >/tmp/wardyn-offline-kept; test ! -e /var/lib/wardyn/decision-spool")
+	code, out := liveExec(t, ctx, sub, sb.Ref, "printf kept >/tmp/wardyn-offline-kept")
 	if code != 0 {
-		t.Fatalf("agent mount separation: %d %s", code, out)
+		t.Fatalf("agent write: %d %s", code, out)
 	}
 	f.drop(t)
 	code, out = liveExec(t, ctx, sub, sb.Ref, "http_proxy=http://wardyn-proxy:3128 wget -S -T 5 -O - http://denied.invalid/offline 2>&1")
@@ -116,24 +118,6 @@ func liveOfflineDocker(t *testing.T, binary string, realWire bool) {
 	proxyName := "wardyn-proxy-" + spec.RunID.String()
 	if _, err := cli.ContainerInspect(ctx, proxyName, dockerclient.ContainerInspectOptions{}); err == nil {
 		t.Fatal("expired proxy still exists")
-	}
-	spool, err := runnerspool.Open(filepath.Join(dir, "spools", spec.RunID.String()), spec.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer spool.Close()
-	rows, err := spool.After(ctx, 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, row := range rows {
-		if row.Decision.Request.Host == "denied.invalid" && row.ValidHash() {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("proxy decision did not survive containment: %+v", rows)
 	}
 	if err := f.manager.BeforeCreate(ctx, runner.SandboxSpec{RunID: uuid.New()}); err == nil {
 		t.Fatal("offline create admitted")

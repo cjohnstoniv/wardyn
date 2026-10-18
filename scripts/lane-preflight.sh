@@ -119,10 +119,22 @@ if [ "${candidate}" = 1 ]; then
   # probes), not the package's whole suite. A throwaway tmpfs postgres:17, as ci-parity-local.sh, with
   # the pool guard on, superuser asserted and -p 1. Exit 1 with "no PG tests found" means none to run;
   # any other selector failure fails the step.
+  #
+  # The internal/api set is ~510 s, so it runs only when a NON-test file of internal/api or of
+  # internal/store changed (store is what api's handlers sit on, so a store change runs api's PG tests,
+  # which a package-local list never did). A change confined to api test files leaves its PG tests to
+  # hosted CI; every other changed package keeps its own PG tests.
+  # go_pkgs holds import paths by now (the go list above), so match the directory as a path segment.
+  pg_pkgs=()
+  for p in "${go_pkgs[@]}"; do
+    [[ "${p}" =~ /internal/api(/|$) ]] || pg_pkgs+=("${p}")
+  done
+  api_src=$(grep -E '^internal/(api|store)(/.*)?\.go$' <<<"${changed}" | grep -v '_test\.go$' || true)
+  [ -z "${api_src}" ] || pg_pkgs+=("./internal/api/...")
   pg_re=""
-  if [ "${#go_pkgs[@]}" -gt 0 ]; then
+  if [ "${#pg_pkgs[@]}" -gt 0 ]; then
     sel_err=$(mktemp)
-    if pg_re=$("${G[@]}" scripts/pg-test-select.sh "${go_pkgs[@]}" 2>"${sel_err}"); then
+    if pg_re=$("${G[@]}" scripts/pg-test-select.sh "${pg_pkgs[@]}" 2>"${sel_err}"); then
       :
     elif grep -q 'no PG tests found' "${sel_err}"; then
       pg_re=""
@@ -140,12 +152,12 @@ if [ "${candidate}" = 1 ]; then
     # The image restarts its server once after initdb: ready is the second "ready to accept connections".
     step "4 wait for postgres" timeout 90 awk '/ready to accept connections/ { if (++n == 2) exit }' < <(docker logs -f "${name}" 2>&1)
     port=$(docker port "${name}" 5432/tcp | head -1 | sed 's/.*://')
-    step "4 Postgres-gated tests (${#go_pkgs[@]} packages)" "${G[@]}" env \
+    step "4 Postgres-gated tests (${#pg_pkgs[@]} packages)" "${G[@]}" env \
       WARDYN_TEST_PG="postgres://postgres:wardyn@localhost:${port}/wardyn?sslmode=disable" \
       WARDYN_TEST_PG_SUPERUSER=1 WARDYN_TEST_POOL_GUARD=1 \
-      go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${go_pkgs[@]}"
+      go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${pg_pkgs[@]}"
   else
-    log "[candidate] 4 Postgres-gated tests: no changed package has any, skipped"
+    log "[candidate] 4 Postgres-gated tests: no changed package has any (internal/api only runs on a non-test api or store change), skipped"
   fi
 
   # vitest files that read outside ui/ (Go sources, docs, the repo root): ci.yml's discovery, verbatim.
@@ -185,11 +197,18 @@ if [ "${candidate}" = 1 ]; then
   done < <(grep -E '^ui/e2e/[^/]+\.spec\.ts$' <<<"${changed}" || true)
   if [ "${#e2e_specs[@]}" -gt 0 ]; then
     ss -ltn 2>/dev/null | grep -q ':8088 ' && log "[candidate] note: :8088 is held by another process; run-ui-e2e.sh picks free ports itself, so this does not collide"
+    # As in ci.yml: governance-changes needs the second-human switch on in the daemon, which changes every
+    # other spec's writes, so it skips by name beside them and runs on its own with the switch on.
+    four_eyes=0
+    for s in "${e2e_specs[@]}"; do [ "${s}" = governance-changes ] && four_eyes=1; done
     for pass in 1 2 3; do
       if [ "${pass}" = 1 ]; then
-        step "6 playwright pass 1/3 (${e2e_specs[*]})" "${G[@]}" scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+        step "6 playwright pass 1/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes scripts/run-ui-e2e.sh "${e2e_specs[@]}"
       else
-        step "6 playwright pass ${pass}/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+        step "6 playwright pass ${pass}/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"
+      fi
+      if [ "${four_eyes}" = 1 ]; then
+        step "6 playwright pass ${pass}/3 (governance-changes, second-human switch on)" "${G[@]}" env WARDYN_GOVERNANCE_SECOND_HUMAN=true WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh governance-changes
       fi
     done
   else

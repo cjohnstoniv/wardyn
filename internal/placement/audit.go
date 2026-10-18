@@ -23,6 +23,9 @@ const (
 	ActionRunnersEnabledSet       = "runners.enabled.set"
 	ActionRunnerInventoryHold     = "runner.inventory.hold"
 	ActionRunnerUpdate            = "runner.update"
+	ActionRunnerTrustWrite        = "runner.trust.write"
+	// ActionRunnerRecoveryRequest: a revive queued recover_containment for a run its runner held contained.
+	ActionRunnerRecoveryRequest = "runner.recovery.request"
 )
 
 // AuditActions lists them all.
@@ -31,4 +34,5 @@ var AuditActions = []string{
 	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply, ActionRunnerActionRefuse,
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
+	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest,
 }

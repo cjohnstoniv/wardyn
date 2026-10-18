@@ -27,6 +27,7 @@ curl -fsS -X POST "$WARDYN_URL/api/v1/runs" -H "Authorization: Bearer $TOKEN" \
 | Stale version | `409` | `preset_version_changed` | `preset_version` pins a version the preset has since moved past |
 
 - The run records `preset` and `preset_version` it was launched from.
+- Deleting a preset and creating one under the same name starts its version at 1 again, so a `preset_version` pin or a run's recorded version from before the delete can name different content. Edit a preset in place to keep counting up.
 
 ## Routes
 

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pkg preinstall (runs as root): on an upgrade, stop the managed agent in the logged-in person's
+# session so the binary is replaced while it is not running. postinstall starts it again.
+set -u
+uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
+if [ "$uid" != 0 ]; then
+  launchctl bootout "gui/$uid/com.wardyn.runnerd.managed" >/dev/null 2>&1 || true
+fi
+exit 0

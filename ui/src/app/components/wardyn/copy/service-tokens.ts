@@ -19,8 +19,9 @@ export function inWords(iso: string, now: number = Date.now()): string {
   const D = 86_400_000;
   let s: string;
   if (a < 60_000) return "just now";
-  if (a < H) s = plural(Math.round(a / 60_000), "minute");
-  else if (a < D) s = plural(Math.round(a / H), "hour");
+  // A count that rounds up to the next unit's size is said in that unit: 59.5 minutes is "1 hour", not "60 minutes".
+  if (a < H && Math.round(a / 60_000) < 60) s = plural(Math.round(a / 60_000), "minute");
+  else if (a < D && Math.round(a / H) < 24) s = plural(Math.round(a / H), "hour");
   else s = plural(Math.round(a / D), "day");
   return d >= 0 ? `in ${s}` : `${s} ago`;
 }
@@ -147,5 +148,5 @@ export const TOKEN_DIALOG = {
   CLOSE_UNCOPIED: "Close without copying",
 } as const;
 
-/** The role the new token carries, as the reveal names it: "you (Member)". */
-export const ROLE_WORDS: Record<string, string> = { user: "Member", security_admin: "Security admin", admin: "Super admin" };
+/** The role the new token carries, as the reveal names it: "you (User)". */
+export const ROLE_WORDS: Record<string, string> = { user: "User", security_admin: "Security admin", admin: "Super admin" };

@@ -188,7 +188,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // the run's owner for one they defined. A model's host is never one (the gate refuses it), so #4
 // cannot reach #1's traffic.
 func (p *Proxy) isMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
@@ -211,7 +211,7 @@ func (p *Proxy) mitmLLMHost(host string, port int) bool {
 // compileMITMHosts does) so case/trailing-dot can't miss the entry and read as any-port. 0 means the
 // entry named no port and stays any-port (legacy).
 func (p *Proxy) mitmPortAllowed(host string, port int) bool {
-	cport := p.mitmPorts[strings.TrimSuffix(strings.ToLower(host), ".")]
+	cport := p.mitmPorts[hostKey(host)]
 	return cport == 0 || cport == port
 }
 
@@ -223,7 +223,7 @@ func (p *Proxy) mitmPortAllowed(host string, port int) bool {
 // api.anthropic.com/api.openai.com, this check alone stops a corp artifact token from silently
 // landing on real Anthropic/OpenAI traffic, bypassing the mitmLLM intent gate.
 func (p *Proxy) isCorpMITMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return false
 	}
@@ -233,10 +233,15 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // channelForHost maps a model host to its request schema for inspection. A non-LLM host (e.g. a
 // corp artifact host MITM'd only for token injection) maps to ChannelGeneric, so the content scanner
 // never runs against package-registry traffic. A method, not a free function, so a configured
-// gateway host classifies as its vendor's channel, not generic.
+// gateway host classifies as its vendor's channel, not generic. A gateway both vendors share is
+// channelSharedGateway: only a brokered route names the schema, so a direct request's body is
+// marked uninspected (refused under fail-closed blocking), never read as one vendor's by chance.
 func (p *Proxy) channelForHost(host string) contentscan.Channel {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	if vendor, ok := p.gatewayVendor[h]; ok {
+	h := hostKey(host)
+	if vendor, ok := p.gatewayVendorOf(h); ok {
+		if vendor == "" {
+			return channelSharedGateway
+		}
 		h = vendor
 	} else if vendor, ok := p.channelHosts[h]; ok {
 		h = vendor
@@ -331,6 +336,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	if err != nil {
 		return
 	}
+	defer p.trackTunnel(clientConn)()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = clientConn.Close()
 		return
@@ -374,10 +380,19 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	}
 	// Otherwise the client speaks plaintext and `served` stays raw; the same strip-inject-forward
 	// path runs below either way, via a real http.Server for correct framing/keep-alive/timeouts.
+	// Serve returns as soon as the one-conn listener's second Accept fails, while the conn is still
+	// being served; wait for the conn itself to end so the tunnel stays tracked for a drain to close.
+	connDone := make(chan struct{})
+	var connOnce sync.Once
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, rr *http.Request) {
 			p.serveMITMRequest(rw, rr, host, port)
 		}),
+		ConnState: func(_ net.Conn, st http.ConnState) {
+			if st == http.StateClosed || st == http.StateHijacked {
+				connOnce.Do(func() { close(connDone) })
+			}
+		},
 		ReadHeaderTimeout: 30 * time.Second,
 		// ReadTimeout bounds the whole request incl. body (anti slow-loris); WriteTimeout stays 0
 		// since model responses legitimately stream for a long time.
@@ -385,6 +400,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		IdleTimeout: 90 * time.Second,
 	}
 	_ = srv.Serve(&oneConnListener{conn: served})
+	<-connDone
 }
 
 // mitmReadTimeout is the inner server's per-request read bound. A var only so
@@ -421,7 +437,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	var release func()
-	r, release = p.admitSpoolHTTP(w, r)
+	r, release = p.admitSpoolHTTP(w, r, host)
 	if r == nil {
 		return
 	}
@@ -441,7 +457,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		}
 		// memoed=false: built right here (policy:method on an inner request), never from the
 		// private-IP memo.
-		p.writeEgressDeny(w, host, port, &log, false)
+		p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
 		return
 	}
 
@@ -476,9 +492,9 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitVetFailed(r, host, port, mitmSource, terr)
-		// AWS lane: modelled, valid-JSON error body — MITM-terminated sibling of
+		// An LLM or AWS host gets its SDK's error body: MITM-terminated sibling of
 		// llm_routes.go's vet-failed site.
-		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
+		p.httpErrorShaped(w, p.shapeOfHost(host), host, "llm upstream vet failed", terr, http.StatusBadGateway, vetFault(port, mitmSource, terr))
 		return
 	}
 
@@ -558,9 +574,10 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		// AWS lane: 401 UnauthorizedException, generalizing writeSSOUnauthorized's precedent above —
-		// a credential resolve failure is non-retryable the same way a spent hold is.
-		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
+		// AWS lane: 401 UnauthorizedException (reasonStatus), generalizing writeSSOUnauthorized's
+		// precedent above — a credential resolve failure is non-retryable the same way a spent hold is.
+		p.httpErrorShaped(w, p.shapeOfHost(host), host, "llm credential refresh failed", ierr, http.StatusBadGateway,
+			brokeredFault{port: port, ruleSource: mitmSource, reason: reasonCredentialUnavailable})
 		return
 	}
 	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)

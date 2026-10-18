@@ -63,6 +63,10 @@ type Options struct {
 	// session's authenticated runner id. It runs on the peer read loop, so it
 	// must not block; an error refuses the stream. Nil refuses every relay.
 	Relay func(runnerID string, conn net.Conn) error
+	// OutputAccepted, when set, durably records that the org accepted run's
+	// output up to accepted (an absolute end that only grows) before the
+	// runner is told. It must be idempotent: a resent prefix repeats it.
+	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -95,6 +99,7 @@ var (
 	_ runner.ProxyStopper    = (*Substrate)(nil)
 	_ runner.ProxyReviver    = (*Substrate)(nil)
 	_ runner.SandboxStarter  = (*Substrate)(nil)
+	_ runner.Selftester      = (*Substrate)(nil)
 	_ runner.SubstrateProber = (*Substrate)(nil)
 	_ runner.DriveProber     = (*Substrate)(nil)
 	_ runner.OutputRecoverer = (*Substrate)(nil)
@@ -127,7 +132,8 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	// then holds no candidate to it.
 	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
-		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives}, true
+		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives,
+		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.
@@ -191,10 +197,12 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
 	}
+	var registered *outputSink
 	if spec.ExecOutput != nil {
 		s.mu.Lock()
 		if s.outputs[spec.RunID] == nil {
-			s.outputs[spec.RunID] = &outputSink{writer: spec.ExecOutput}
+			registered = &outputSink{writer: spec.ExecOutput}
+			s.outputs[spec.RunID] = registered
 		}
 		s.mu.Unlock()
 	}
@@ -211,9 +219,25 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err != nil {
 		// A lost reply cannot tell whether the runner created the sandbox. Keep
 		// the output cursor for a retry or reconnect instead of dropping its tail.
+		// A refusal the runner itself answered created nothing, so its sink goes.
+		if registered != nil && refusedCreate(err) {
+			s.mu.Lock()
+			if s.outputs[spec.RunID] == registered {
+				delete(s.outputs, spec.RunID)
+			}
+			s.mu.Unlock()
+		}
 		return runner.Sandbox{}, err
 	}
 	return res.Sandbox, nil
+}
+
+// refusedCreate is whether err is the runner's own reply declining the create (refused, or an image of
+// the wrong architecture), as opposed to a dropped link or an internal failure after which it may
+// have created the sandbox.
+func refusedCreate(err error) bool {
+	var re *runnerwire.Error
+	return errors.As(err, &re) && (re.Code == runnerwire.CodeRefused || re.Code == runnerwire.CodeImageArch)
 }
 
 // checkClass refuses a class the runner did not advertise, before anything is sent.
@@ -262,6 +286,27 @@ func (s *Substrate) Exec(ctx context.Context, ref string, argv []string) (string
 		return "", err
 	}
 	return res.ExecID, nil
+}
+
+// Selftest runs the BYOI selftest on the runner under the task's issued
+// generation, which the runner checks and does not spend. A runner that does
+// not advertise it is refused here, so the check is never skipped.
+func (s *Substrate) Selftest(ctx context.Context, ref string) (int, error) {
+	if err := s.own(ref); err != nil {
+		return 0, err
+	}
+	if c, ok := s.Caps(); !ok || !c.BYOISelftest {
+		return 0, runnerwire.Refuse("this runner does not support the BYOI selftest; upgrade it to run BYOI images")
+	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodSelftest, ref)
+	if err != nil {
+		return 0, err
+	}
+	var res runnerwire.SelftestResult
+	if err := s.call(ctx, runnerwire.MethodSelftest, runnerwire.SelftestArgs{Ref: ref, ExecutionGeneration: generation}, &res); err != nil {
+		return 0, err
+	}
+	return res.ExitCode, nil
 }
 
 // Wait is a long call: a link drop answers runner.ErrRunnerOffline, which is
@@ -363,34 +408,76 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 	return res, err
 }
 
-// RecoverOutput reads the runner-side output buffer into w.
+// RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
+// sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it.
 func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
-	var res runnerwire.RecoverResult
-	if err := s.refCall(ctx, runnerwire.MethodRecoverOutput, ref, &res); err != nil {
+	if err := s.own(ref); err != nil {
 		return err
 	}
-	if res.Unrecoverable {
-		return runner.ErrOutputUnrecoverable
-	}
-	st, err := s.t.TakeStream(res.Stream)
+	// The stream is claimed on the session that answered the call, as Attach does.
+	sess, err := s.pin()
 	if err != nil {
 		return err
 	}
-	if id, ok := runner.OutputRun(ctx); ok {
+	var adopted *outputSink
+	id, adopting := runner.OutputRun(ctx)
+	if adopting {
 		s.mu.Lock()
 		if s.outputs[id] == nil {
-			// A live run adopted after a restart: ACK what w accepts, as
-			// receiveOutput does, and let the runner's next OPEN resume into w.
-			sink := &outputSink{writer: w}
-			s.outputs[id] = sink
-			s.mu.Unlock()
-			return s.receiveOutput(id, sink, st, 0)
+			adopted = &outputSink{writer: w}
+			s.outputs[id] = adopted
 		}
 		s.mu.Unlock()
 	}
+	drop := func() {
+		if adopted == nil {
+			return
+		}
+		s.mu.Lock()
+		if s.outputs[id] == adopted {
+			delete(s.outputs, id)
+		}
+		s.mu.Unlock()
+	}
+	gapper, canGap := w.(runner.OutputGapMarker)
+	var res runnerwire.RecoverResult
+	if err := sess.Call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RecoverOutputArgs{Ref: ref, Gap: canGap}, &res); err != nil {
+		drop()
+		return err
+	}
+	if res.Unrecoverable {
+		drop()
+		return runner.ErrOutputUnrecoverable
+	}
+	st, err := sess.TakeStream(res.Stream)
+	if err != nil {
+		drop()
+		return err
+	}
+	if res.Gap < 0 || (res.Gap > 0 && !canGap) {
+		_ = st.Close()
+		drop()
+		return runner.ErrOutputUnrecoverable
+	}
+	if res.Gap > 0 {
+		gapper.OutputGap(res.Gap)
+	}
+	if adopted != nil {
+		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
+		adopted.mu.Lock()
+		adopted.offset = res.Gap
+		adopted.mu.Unlock()
+		return s.receiveOutput(id, adopted, st, res.Gap)
+	}
 	defer st.Close()
+	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this
+	// goroutine and the stream slot past the finaliser's deadline.
+	defer context.AfterFunc(ctx, func() { _ = st.Close() })()
 	_ = st.CloseWrite()
 	_, err = io.Copy(w, st)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	return err
 }
 
@@ -422,8 +509,14 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 
 // DeliverResident hands one runner_resident value to the runner's keystore,
 // after claim and before CreateSandbox. It is the only way the value travels:
-// never /internal/*, never inside CreateSandbox.
+// never /internal/*, never inside CreateSandbox. The Dispatch gate is read
+// first, as for CreateSandbox: with runners turned off nothing is sent.
 func (s *Substrate) DeliverResident(ctx context.Context, a runnerwire.DeliverResidentArgs) error {
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.call(ctx, runnerwire.MethodDeliverResident, a, nil); err != nil {
 		return err
 	}

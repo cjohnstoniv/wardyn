@@ -55,8 +55,8 @@ func TestBrokeredLLMRouteKeepsSSRFGuardOnPublicVendorHost(t *testing.T) {
 			"unconditional private-IP guard like any other host",
 			anthropicHost, rec.Code, cu.header.Get("X-Api-Key"))
 	}
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (the SSRF vet refused the target)", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 egress_denied (the SSRF vet refused the target)", rec.Code)
 	}
 }
 

@@ -22,8 +22,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// PROVIDERS_400_ENTRA — the refusal bodies this file writes. DRAFT, on the
-// same M2 canon footing as the constants in workspace_providers.go, and
+// PROVIDERS_400_ENTRA — the refusal bodies this file writes. frozen as shipped like the
+// constants in workspace_providers.go, and
 // asserted through the constants for the same reason.
 const (
 	providers400EntraHost = "git[%d].entra: the entra lane is available on dev.azure.com and <org>.visualstudio.com only — %q does not accept Entra tokens"

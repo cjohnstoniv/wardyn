@@ -5,9 +5,22 @@ import * as React from "react";
 // puts focus back there when focus would otherwise be lost: not if the consumer handled it, the caller already
 // moved focus elsewhere, the element is gone, or it was only the body.
 
+/**
+ * A dialog opened from a dropdown item has that item as the focused element, and the item unmounts with
+ * its menu. The element to return to is then the menu's trigger, the one whose aria-controls is the menu's id.
+ */
+function openerOf(active: Element | null): Element | null {
+  const menu = active?.closest('[role="menu"]');
+  if (!menu?.id) return active;
+  for (const el of document.querySelectorAll("[aria-controls]")) {
+    if (el.getAttribute("aria-controls") === menu.id) return el;
+  }
+  return active;
+}
+
 /** Rendered inside the dialog content, so its first render reads the focused element before autofocus moves it. */
 export function RememberOpener({ into }: { into: React.MutableRefObject<Element | null> }) {
-  if (into.current === null) into.current = document.activeElement;
+  if (into.current === null) into.current = openerOf(document.activeElement);
   return null;
 }
 

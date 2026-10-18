@@ -119,6 +119,17 @@ describe("Shape step: workload", () => {
 });
 
 describe("Shape step: Start from", () => {
+  it("names what each picker is loading while its list is on the way", async () => {
+    wfetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_SHAPE.SOURCE_TEMPLATE }));
+    const templates = await screen.findByRole("combobox", { name: NR_SHAPE.TEMPLATE_LABEL });
+    expect(templates).toHaveAttribute("aria-busy", "true");
+    expect(templates).toHaveTextContent("Loading saved templates…");
+    await userEvent.click(screen.getByRole("button", { name: NR_SHAPE.SOURCE_AGAIN }));
+    expect(await screen.findByRole("combobox", { name: NR_SHAPE.PREVIOUS_LABEL })).toHaveTextContent("Loading previous runs…");
+  });
+
   it("hides the workloads, lists both kinds of template as plain options, and Continue opens Review on the one chosen", async () => {
     serve({ templates: { templates: [NIGHTLY, POLICY], publish: SCENARIO_TEMPLATES.governed.publish } });
     show();

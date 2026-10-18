@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -109,7 +112,7 @@ func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
@@ -151,7 +154,7 @@ func TestReconcileOnBoot_OrphanSweepRetriesRevoke(t *testing.T) {
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
 	cfg.Broker = h.broker
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
@@ -184,7 +187,7 @@ func TestReconcileOnBoot_OrphanSweepFailureAudited(t *testing.T) {
 	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}, failRef: "still-stuck"}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
@@ -208,5 +211,75 @@ func TestReconcileOnBoot_OrphanSweepFailureAudited(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("a still-failing orphan-sweep teardown must be audited with teardown_error")
+	}
+}
+
+// refusedStopRunner answers each ref's direct stop and kill with the error given, and records kills.
+type refusedStopRunner struct {
+	*fakeRunner
+	mu     sync.Mutex
+	stops  map[string]error
+	kills  map[string]error
+	killed []string
+}
+
+func (r *refusedStopRunner) StopSandbox(_ context.Context, ref string) error { return r.stops[ref] }
+
+func (r *refusedStopRunner) KillSandbox(_ context.Context, ref string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.killed = append(r.killed, ref)
+	return r.kills[ref]
+}
+
+// TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused: an online runner's record kept only
+// for containment refuses the sweep's direct stop and leaves no answer to follow at the next boot, so
+// the sweep follows the refusal with one kill, which such a record takes. A stop queued for an offline
+// runner and a sandbox on no runner get no kill, and each failed chain is audited once.
+func TestReconcileOrphanSweep_KillsARunnerSandboxWhoseStopIsRefused(t *testing.T) {
+	h := newHarness(t)
+	runnerID := uuid.New()
+	refused := placement.RunnerRefPrefix(runnerID.String()) + "refused"
+	pending := placement.RunnerRefPrefix(runnerID.String()) + "pending"
+	stuck := placement.RunnerRefPrefix(runnerID.String()) + "stuck"
+	local := "local"
+	now := time.Now().UTC()
+	var runs []types.AgentRun
+	for _, ref := range []string{refused, pending, stuck, local} {
+		run := types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+			Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunFailed, RunnerTarget: "docker", SandboxRef: ref}
+		if ref != local {
+			run.RunnerID = &runnerID
+		}
+		runs = append(runs, run)
+	}
+	st := &orphanSweepStore{runs: runs}
+	refusal := errors.New("containment-only identity refuses this operation")
+	rn := &refusedStopRunner{fakeRunner: &fakeRunner{},
+		stops: map[string]error{refused: refusal, pending: runner.ErrPendingOnRunner, stuck: refusal, local: refusal},
+		kills: map[string]error{stuck: context.DeadlineExceeded}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	srv := testServer(t, cfg)
+
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rn.killed, ","); got != refused+","+stuck {
+		t.Fatalf("kills %q, want one each for the refused stops on the runner", got)
+	}
+	for i, want := range []string{"", pending, stuck, local} {
+		if got := st.runs[i].SandboxRef; got != want {
+			t.Errorf("run %d: ref %q, want %q", i, got, want)
+		}
+		failures := 0
+		for _, ev := range h.audit.snapshot() {
+			if ev.RunID != nil && *ev.RunID == st.runs[i].ID && ev.Action == "sandbox.orphan.sweep" && ev.Outcome == "failure" {
+				failures++
+			}
+		}
+		if wantFailures := min(len(want), 1); failures != wantFailures {
+			t.Errorf("run %d: %d failure rows, want %d", i, failures, wantFailures)
+		}
 	}
 }

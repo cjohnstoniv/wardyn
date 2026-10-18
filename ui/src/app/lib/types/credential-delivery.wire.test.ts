@@ -71,6 +71,7 @@ describe("credential delivery wire", () => {
     ["internal/placement/delivery.go", "PostureRequirement", "PostureRequirement"],
     ["internal/placement/delivery.go", "ClassPolicy", "ClassPolicy"],
     ["internal/placement/delivery.go", "DeliveryPolicy", "DeliveryPolicy"],
+    ["internal/placement/delivery.go", "TrustPolicy", "TrustPolicy"],
     ["internal/types/runner.go", "CredentialDeliveryPolicyDoc", "CredentialDeliveryPolicyDoc"],
   ])("%#: %s has full parity with its TS mirror", (file, goName, tsName) => {
     const tags = goJSONTags(read(file), goName);

@@ -133,10 +133,81 @@ func TestGoawayCarriesTheOrgReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := goaway(payload); !errors.Is(err, ErrGoaway) || !strings.Contains(err.Error(), "runner_unclaimed") {
-		t.Fatalf("goaway = %v", err)
+	if err := goaway(payload); !errors.Is(err, ErrGoaway) || !strings.Contains(err.Error(), "runner_unclaimed") || !strings.Contains(err.Error(), "wardyn runner claim") {
+		t.Fatalf("goaway = %v, want the reason code and what to do", err)
 	}
 	if err := goaway(nil); err != ErrGoaway { //nolint:errorlint // the bare sentinel is the expected value
 		t.Fatalf("goaway without a reason = %v", err)
+	}
+}
+
+// A runner whose connection attempt waits says it is still offline, with the last failure, at
+// offlineLogEvery: offline and silent cannot pass for connected.
+func TestClientRunSaysItIsStillOfflineWhileAConnectWaits(t *testing.T) {
+	logs := captureLog(t)
+	prev := offlineLogEvery
+	offlineLogEvery = 20 * time.Millisecond
+	t.Cleanup(func() { offlineLogEvery = prev })
+	waiting := make(chan struct{})
+	dials := 0
+	dial := func(ctx context.Context) (Conn, error) {
+		if dials++; dials == 1 {
+			return nil, errors.New("boom")
+		}
+		close(waiting)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	client, err := NewClient(ClientConfig{OrgURL: "https://org.example", RunnerID: uuid.NewString(), PrivateKey: key, Hooks: idleHooks(), Dial: dial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Run(ctx) }()
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal("the second dial never started")
+	}
+	offline := func() []map[string]any {
+		var out []map[string]any
+		for _, r := range logs.records(t, "WARN") {
+			if r["msg"] == "runner still offline, retrying" {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	before := len(offline())
+	for len(offline()) <= before && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := offline() // read while the dial still waits, before cancelling changes the last error
+	cancel()
+	<-done
+	if len(got) <= before {
+		t.Fatal("no \"runner still offline, retrying\" while the dial waited")
+	}
+	if last := got[len(got)-1]; last["last_error"] != "boom" || last["offline_for"] == nil {
+		t.Fatalf("offline warning lacks the last failure or how long: %v", last)
+	}
+}
+
+// A link that is up logs nothing.
+func TestOfflineLogIsQuietWhileTheLinkIsUp(t *testing.T) {
+	logs := captureLog(t)
+	prev := offlineLogEvery
+	offlineLogEvery = time.Millisecond
+	t.Cleanup(func() { offlineLogEvery = prev })
+	var l linkState
+	l.set(true, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	l.logWhileOffline(ctx)
+	if warns := logs.records(t, "WARN"); len(warns) != 0 {
+		t.Fatalf("an up link logged %v", warns)
 	}
 }

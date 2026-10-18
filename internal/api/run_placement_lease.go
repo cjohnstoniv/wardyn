@@ -44,10 +44,20 @@ func (e runnerExecution) bind(ctx context.Context) context.Context {
 	return context.WithValue(ctx, runnerExecutionKey{}, e)
 }
 
+// selftest is e's BYOI selftest: it rides the task's issued Exec generation without spending it, and
+// carries an operation of its own, so it authorizes the selftest call only and never the task's Exec.
+func (e runnerExecution) selftest() runnerExecution {
+	if e.operation != runnerwire.MethodExec {
+		return runnerExecution{}
+	}
+	e.operation = runnerwire.MethodSelftest
+	return e
+}
+
 var (
 	errRunnerExecutionUnbound = runnerwire.Refuse("this call carries no execution generation the organisation issued")
 	// errRunnerContained: the runner contained the run while it was offline and refuses it a lease until a
-	// recovery the server does not send yet.
+	// revive's recovery (reviveRecoverContainment) has been applied.
 	errRunnerContained   = errors.New("the run was contained on its runner while it was offline and cannot be leased again")
 	errRunnerLeaseLapsed = errors.New("the run's token lapsed before its lease reached its runner")
 	errRunnerLeaseEnded  = errors.New("the run's end passed before its lease reached its runner")
@@ -305,11 +315,15 @@ func (s *Server) bindRunnerExecution(ctx context.Context, e runnerExecution, exe
 
 // dispatchedGeneration is runner runnerID's remote.Options.ExecutionGeneration: the generation the calling
 // dispatch or revive bound to its context, still the run's persisted, unattempted intent for this method
-// on this runner and this sandbox. Anything else refuses before the call reaches the runner.
+// on this runner and this sandbox. Anything else refuses before the call reaches the runner. A BYOI
+// selftest checks the task's unattempted Exec intent and binds nothing: it is not that execution.
 func (s *Server) dispatchedGeneration(ctx context.Context, runnerID uuid.UUID, method, ref string) (uuid.UUID, error) {
 	e, ok := ctx.Value(runnerExecutionKey{}).(runnerExecution)
 	if !ok || e.runnerID != runnerID || e.operation != method {
 		return uuid.Nil, errRunnerExecutionUnbound
+	}
+	if method == runnerwire.MethodSelftest {
+		method = runnerwire.MethodExec
 	}
 	st, err := s.runnerExecutionStore()
 	if err != nil {

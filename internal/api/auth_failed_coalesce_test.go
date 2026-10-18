@@ -553,3 +553,29 @@ func suppressedTotal(t *testing.T, h *harness) int {
 	}
 	return n
 }
+
+// A streak that opened behind a trusted proxy keeps that proxy's connection on its summary row: the summary
+// is recorded outside any request, and its source_ip is the opening address the proxy reported.
+func TestAuthFailedCoalesce_SummaryKeepsTheOpeningProxyPeer(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	if absorbed, _ := c.srv.coalesceAuthFailed("unknown", "invalid_run_token", "/x", "198.51.100.7:1", "10.0.0.1:4000"); absorbed {
+		t.Fatal("the opening refusal was absorbed")
+	}
+	if absorbed, _ := c.srv.coalesceAuthFailed("unknown", "invalid_run_token", "/x", "198.51.100.8:2", "10.0.0.2:4001"); !absorbed {
+		t.Fatal("the second refusal was not folded")
+	}
+	c.flush()
+	rows := authFailedEvents(c.harness)
+	if len(rows) != 1 {
+		t.Fatalf("auth.fail rows = %d, want the summary alone", len(rows))
+	}
+	var d struct {
+		ProxyPeer string `json:"proxy_peer"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].SourceIP != "198.51.100.7:1" || d.ProxyPeer != "10.0.0.1:4000" {
+		t.Errorf("summary source_ip=%q proxy_peer=%q, want the opening request's 198.51.100.7:1 and 10.0.0.1:4000", rows[0].SourceIP, d.ProxyPeer)
+	}
+}

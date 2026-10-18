@@ -40,14 +40,27 @@ fake_cli() {
 # unless the file sets allowManagedHooksOnly, or always when $FAKE_HOOK_FIRES is set; it never touches the
 # marker when $FAKE_NO_HOOK is set (a CLI that runs no repository hook at all, control run included). Every
 # init event lists the tools Bash, Read and WebFetch, less those the file's permissions.deny names, unless
-# $FAKE_DENY_IGNORED is set (a CLI that ignores the deny list).
+# $FAKE_DENY_IGNORED is set (a CLI that ignores the deny list). A stub run (the probe's offline Messages API
+# stand-in is mounted) reports a refused WebFetch when the file asks for it, unless $FAKE_ASK_BYPASSED is set and
+# the run launches bypass (a CLI where bypass beats ask), or $FAKE_REPO_ALLOW_WINS is set and the workspace
+# carries a permissions.allow (a CLI where a repository allow lifts a managed ask); $FAKE_NO_RESULT makes it
+# print no result event at all (a CLI that cannot run the stub).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
-for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; bypassPermissions) by=1 ;; manual) man=1 ;; esac; done
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; *:/probe/stub.js:ro) st=1 ;; *:/ws:ro) w="${a%%:*}" ;; --dangerously-skip-permissions) skip=1 ;; bypassPermissions) by=1 ;; manual) man=1 ;; esac; done
 if [ -n "${m:-}" ]; then
     [ -z "${FAKE_NO_HOOK:-}" ] || exit 1
     if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
+    exit 1
+fi
+if [ -n "${st:-}" ]; then
+    [ -z "${FAKE_NO_RESULT:-}" ] || exit 1
+    denied=""
+    if [ -n "${d:-}" ] && sed -n '/"ask": \[/,/\]/p' "$d/managed-settings.json" | grep -q '"WebFetch"'; then denied=1; fi
+    [ -z "${skip:-}" ] || [ -z "${FAKE_ASK_BYPASSED:-}" ] || denied=""
+    if [ -n "${FAKE_REPO_ALLOW_WINS:-}" ] && grep -q '"allow"' "${w:-/nonexistent}/.claude/settings.json" 2>/dev/null; then denied=""; fi
+    if [ -n "$denied" ]; then echo '{"type":"result","permission_denials":[{"tool_name":"WebFetch","tool_input":{}}]}'; else echo '{"type":"result","permission_denials":[]}'; fi
     exit 1
 fi
 mode=""; tools=""
@@ -59,6 +72,10 @@ done
 mode="${FAKE_MODE:-$mode}"
 [ -z "${by:-}" ] || [ -z "${FAKE_BYPASS:-}" ] || mode=bypassPermissions
 [ -z "${man:-}" ] || mode="${FAKE_MANUAL_MODE:-default}"
+if [ -n "${FAKE_NO_INIT_FROM:-}" ]; then
+    n=$(( $(cat "$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_COUNT"
+    [ "$n" -lt "$FAKE_NO_INIT_FROM" ] || exit 1
+fi
 echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\",\"tools\":[$tools]}"
 exit 1
 FAKE
@@ -155,6 +172,41 @@ fake_cli "$pin" "${all[@]}"
 if out="$(FAKE_DENY_IGNORED=1 probe)"; then fail "a CLI that still lists a denied tool must FAIL"; fi
 grep -q "attended-rules/L0.json: Claude Code $pin still lists 'Bash'" <<<"$out" || fail "an ignored deny list must be named; got: $out"
 echo "ok  an ignored deny list fails"
+
+# 8f2. A CLI that prints no init event with a tools array for the managed-file runs => fail: an absent list
+# must not read as "the denied tools are gone". Count the init runs of a good pass, then starve the last
+# ones (one tools run per attended-rules document, after the unfiled control).
+: > "$TMP/n"; rm -f "$TMP/n"
+inits=$(FAKE_NO_INIT_FROM=99999 FAKE_COUNT="$TMP/n" probe >/dev/null; cat "$TMP/n")
+docs=$(ls "$TMP/internal/agentpolicy"/testdata/attended-rules/*.json | wc -l)
+rm -f "$TMP/n"
+if out="$(FAKE_NO_INIT_FROM=$((inits - docs + 1)) FAKE_COUNT="$TMP/n" probe)"; then fail "a CLI that prints no tools list for a managed run must FAIL"; fi
+grep -q "printed no init event with a tools array" <<<"$out" || fail "a missing tools list must be named; got: $out"
+echo "ok  a managed run with no tools list fails"
+
+# 8g. A CLI where bypass beats a managed ask => fail naming the document.
+if out="$(FAKE_ASK_BYPASSED=1 probe)"; then fail "a CLI that lets --dangerously-skip-permissions through a managed ask must FAIL"; fi
+grep -q "WebFetch ran under --dangerously-skip-permissions although the file's permissions.ask names it" <<<"$out" || fail "an ask lost to bypass must be named; got: $out"
+echo "ok  a managed ask that loses to bypass fails"
+
+# 8h. A CLI where a repository allow lifts a managed ask => fail naming the document.
+if out="$(FAKE_REPO_ALLOW_WINS=1 probe)"; then fail "a CLI where a repository allow lifts a managed ask must FAIL"; fi
+grep -q "a repository permissions.allow let WebFetch run although the file sets allowManagedPermissionRulesOnly" <<<"$out" || fail "a repository allow that wins must be named; got: $out"
+grep -q "would pass vacuously" <<<"$out" && fail "the controls (no managed file) must run WebFetch; got: $out"
+echo "ok  a repository allow that lifts a managed ask fails"
+
+# 8i. A CLI that cannot run the stub => the control cannot show WebFetch running, and the probe must say so.
+if out="$(FAKE_NO_RESULT=1 probe)"; then fail "a CLI that reports no result event must FAIL the control run"; fi
+grep -q "the ask-under-bypass check would pass vacuously" <<<"$out" || fail "an unrunnable control must be named; got: $out"
+echo "ok  a control that cannot run WebFetch fails"
+
+# 8j. No attended-rules document asks for WebFetch => fail: the ask and repository-allow checks would prove nothing.
+cp -r "$TMP/internal/agentpolicy" "$TMP/internal/agentpolicy.bak"
+sed -i 's/"WebFetch"/"WebSearch"/' "$TMP/internal/agentpolicy"/testdata/attended-rules/*.json
+if out="$(probe)"; then fail "no attended-rules document asking for WebFetch must FAIL"; fi
+grep -q "the ask and repository-allow checks have nothing to prove" <<<"$out" || fail "an empty ask check must be named; got: $out"
+rm -r "$TMP/internal/agentpolicy" && mv "$TMP/internal/agentpolicy.bak" "$TMP/internal/agentpolicy"
+echo "ok  an ask check with no document to prove fails"
 
 # 9. An unpinned Dockerfile (a channel) => fail before anything is installed. Last: it leaves the copy unpinned.
 fake_cli "$pin" "${all[@]}"

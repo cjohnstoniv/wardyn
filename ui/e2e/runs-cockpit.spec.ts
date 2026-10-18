@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, layoutSettled, navTo, sql } from "./fixtures";
 import { RUN_COCKPIT, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
@@ -19,6 +19,8 @@ import type { Page } from "@playwright/test";
 // oldest seeded run to RUNNING and does not restore it — it deletes only the
 // approval row it inserts; nothing else in this file mutates state at all.
 test.describe.configure({ mode: "serial" });
+// Keep the first attempt's trace: the click-loss flake fails only there, and the config records a trace on retry only.
+test.use({ trace: "retain-on-first-failure" });
 
 // Open the Runs screen and wait for the seeded page to render. PENDING
 // fixture 0 is always live, so it always renders (as "Queued" now — #1197 D2
@@ -164,6 +166,30 @@ test.describe("Run cockpit — a long kill outcome scrolls instead of clipping",
     const audit = block.getByRole("button", { name: "Open audit trail" });
     await audit.scrollIntoViewIfNeeded();
     await expect(audit).toBeInViewport();
+  });
+});
+
+// A kill whose sandbox stop was queued for an offline runner (run.kill success with data.sandbox_stop
+// "queued", from a lifetime or sweep kill) says the sandbox waits on the runner, never that it was removed.
+// The kill row is spliced: the hermetic backend has no offline runner to queue a stop for.
+test.describe("Run cockpit — a kill queued for an offline runner", () => {
+  test("says the credentials are revoked and the sandbox stays until the runner reconnects", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
+    const id = list.find((r) => r.task === "e2e fixture 7")!.id;
+    const at = new Date().toISOString();
+    await page.route(/\/api\/v1\/audit\?/, async (route) => {
+      if (new URL(route.request().url()).searchParams.get("action") === "run.kill") {
+        return route.fulfill({ json: [{ id: "k1", time: at, actor_type: "system", actor: "wardynd", action: "run.kill", outcome: "success", data: { reason: "lifetime_cap", sandbox_stop: "queued" } }] });
+      }
+      return route.fallback();
+    });
+    await page.goto(`runs/${id}`);
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toHaveAttribute("data-evidence", "queued");
+    await expect(block).toContainText("Its credentials were revoked at once");
+    await expect(block).toContainText("was told to remove the sandbox when it next connects");
+    await expect(block).not.toContainText(/stopped and removed the sandbox|reported it removed the sandbox/);
   });
 });
 
@@ -405,7 +431,9 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     // A DOOR, not a signpost: the sign-in opens here, on the run's own page.
     const before = new URL(page.url()).pathname;
-    await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click();
+    const signIn = block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+    await layoutSettled(signIn);
+    await signIn.click();
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(before);

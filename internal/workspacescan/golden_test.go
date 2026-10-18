@@ -74,7 +74,7 @@ func TestGenerateDevcontainer_ZeroPinsIsTheGoldenPlusThePinFile(t *testing.T) {
 }
 
 func TestEmitEnvAsCode_Golden(t *testing.T) {
-	files, err := EmitEnvAsCode(goldenProfile("Go", "JavaScript", "Python"), nil, "")
+	files, err := EmitEnvAsCode(goldenProfile("Go", "JavaScript", "Python"), nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

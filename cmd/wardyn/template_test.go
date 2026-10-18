@@ -28,8 +28,8 @@ func writeTemplateFile(t *testing.T, name, body string) string {
 }
 
 // TestTemplateCommandsCallTheTemplateRoutes drives each leaf against a server
-// that answers what the real one does until the store lands (501
-// templates_unavailable) and checks the request each one made.
+// that answers as one with no template store does (501 templates_unavailable)
+// and checks the request each one made.
 func TestTemplateCommandsCallTheTemplateRoutes(t *testing.T) {
 	id := uuid.New().String()
 	yamlFile := writeTemplateFile(t, "t.yaml", templateYAML)

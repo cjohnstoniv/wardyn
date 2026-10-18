@@ -331,6 +331,11 @@ export const PROVIDERS_EXTRA = {
   // document is never last-writer-wins from this banner. #217: now a ghost
   // button, not the banner's only exit — Copy my changes sits before it.
   DISCARD_AND_RELOAD: "Discard mine and reload",
+  // The same banner on a screen that has already reloaded the saved version by the time it shows
+  // (Runner credentials): nothing is left to reload, so it says what the screen now holds.
+  SAVED_ELSEWHERE_RELOADED_BODY:
+    "Your copy is out of date, so saving it would overwrite their change. The screen now shows what they saved. Copy your edits somewhere safe, then make them again.",
+  DISCARD_RELOADED: "Dismiss",
   // #460 (Q460-3): the 412 banner's FIRST control — reversed from #217's
   // "changed fields only" rule. It now copies the WHOLE document as the
   // editor holds it (saved-elsewhere-banner.tsx), so nothing typed is left
@@ -351,17 +356,20 @@ export const PROVIDERS_EXTRA = {
 } as const;
 
 // MEMBER_DRIVES — the two Storage controls for people creating their own drives
-// (site config storage.user_drive.member_create). Not in the frozen §7 doc
+// (site config storage.user_drive.member_create), plus the size each one gets
+// on Kubernetes. Not in the frozen §7 doc
 // tables, so a separate export beside them, as PROVIDERS_EXTRA is.
 export const MEMBER_DRIVES = {
   FIELD_ENABLED: "Let people create their own drives",
   FIELD_MAX: "Drives per person",
+  FIELD_SIZE: "Size of each drive",
+  SIZE_HINT: "Each person's drive gets this much space.",
 } as const;
 
 // ADO_ENTRA_EDITOR / ADO_GROUP_COPY / ADO_CAP_COPY — the Azure DevOps row's
 // Entra section (entra-editor.tsx), transcribed from the approved G1 mock's
 // strings table. Not in the frozen §7 doc tables, so separate exports, the
-// PROVIDERS_DRAFT way. The mock's "See Part 2." (a pointer inside the review
+// way PROVIDERS_EXTRA is. The mock's "See Part 2." (a pointer inside the review
 // packet itself) is left off PER_RUN_POINTER.
 export const ADO_ENTRA_EDITOR = {
   SECTION_TITLE: "Azure DevOps sign-in (Entra)",
@@ -374,6 +382,13 @@ export const ADO_ENTRA_EDITOR = {
   REST_TOGGLE: "Allow REST API calls",
   REST_TOGGLE_HINT:
     "Off restricts every run on this row to git only — clone and push. On allows the capabilities below through the same proxy gate.",
+  // A token Wardyn creates can stay in a self-hosted runner's keystore for the run (row.entra.runner_resident),
+  // and optionally also go into the sandbox (runner_resident_sandbox, which needs the first). Off by default.
+  RUNNER_TOGGLE: "Allow tokens to be held on a person's own runner",
+  RUNNER_TOGGLE_HINT:
+    "Off by default. Saved and audited, but this release does not hold Azure DevOps tokens on a runner yet, so a run that needs one there is refused.",
+  SANDBOX_TOGGLE: "Also put the token in the sandbox",
+  SANDBOX_TOGGLE_HINT: "Needs the switch above, and takes effect with it.",
   CEILING_TITLE: "What runs may ever do",
   CEILING_LEAD:
     "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",

@@ -94,6 +94,8 @@ func segmentHazard(seg string) string {
 		return "is a dot segment"
 	case isDotWithParam(seg):
 		return "is a dot segment carrying a path parameter"
+	case strings.TrimFunc(seg, unicode.IsSpace) != seg:
+		return "has leading or trailing whitespace"
 	case strings.ContainsAny(seg, `/\`):
 		return "holds a separator"
 	case strings.ContainsFunc(seg, unicode.IsControl):

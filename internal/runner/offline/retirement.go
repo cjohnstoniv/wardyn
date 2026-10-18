@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -41,6 +42,9 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 		return m.actionReceipt(a, "deferred")
 	}
 	end, settled, err := m.outputSettled(ctx, a.RunID, r.Ref)
+	if p.NoOutput {
+		end, settled, err = noOutputSettled(ctx, r, err)
+	}
 	if errors.Is(err, runner.ErrOutputUnrecoverable) {
 		return m.actionReceipt(a, "deferred")
 	}
@@ -87,6 +91,33 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 	return result, nil
 }
 
+// compactRetired shrinks a retired run, once the org has acknowledged its retirement receipt, to an
+// identity tombstone, and drops the run's applied actions. The org sends none of them again, and the
+// tombstone alone still refuses the run's id to every later create and action. Until that
+// acknowledgement the full record stays, so a replayed receipt gets its saved answer.
+func (m *Manager) compactRetired(id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.state.Runs[id]
+	if !ok || !r.Retired || r.Tombstone {
+		return nil
+	}
+	dropped := map[uuid.UUID]appliedAction{}
+	for aid, a := range m.state.Actions {
+		if a.Action.RunID == id {
+			dropped[aid] = a
+			delete(m.state.Actions, aid)
+		}
+	}
+	m.state.Runs[id] = localRun{RunID: id, Ref: r.Ref, Lease: runnerwire.Lease{RunID: id}, Retired: true, Tombstone: true}
+	if err := m.save(); err != nil {
+		m.state.Runs[id] = r
+		maps.Copy(m.state.Actions, dropped)
+		return err
+	}
+	return nil
+}
+
 // ReleaseSettledOutput sets the hook that deletes a retired run's output. The
 // hook must refuse output that is not settled (complete and fully
 // acknowledged). Without it, retirement keeps all output.
@@ -96,16 +127,33 @@ func (m *Manager) ReleaseSettledOutput(release func(runID uuid.UUID, ref string)
 	m.mu.Unlock()
 }
 
+// noOutputSettled answers output settlement for a receipt that says the org
+// never asked for this run's output. Only a run that recorded no capture and
+// holds no buffer (outputSettled's ErrOutputUnrecoverable) settles, at 0; a
+// run with output refuses the receipt, as its evidence disagrees.
+func noOutputSettled(ctx context.Context, r localRun, err error) (int64, bool, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, false, ctxErr
+	}
+	if r.OutputCapture || !errors.Is(err, runner.ErrOutputUnrecoverable) {
+		return 0, false, refusal(errors.New("retirement says the run had no output, but it has output"))
+	}
+	return 0, true, nil
+}
+
+// retirementProof refuses (the action closes as refused) a receipt whose
+// identity or containment this runner cannot match: replaying it can never
+// change the answer.
 func retirementProof(a runnerwire.PendingAction, r localRun) error {
 	p := a.Retirement
 	if p == nil || p.ID == uuid.Nil || a.Recovery != nil || a.Quarantine != nil || r.Quarantine != nil || r.Retired {
-		return errors.New("retirement requires exact nonquarantined settlement")
+		return refusal(errors.New("retirement requires exact nonquarantined settlement"))
 	}
-	if p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || (r.Generation == uuid.Nil && len(r.Executions) != 0) || p.OutputEnd < 0 || p.Spool.SpoolID == uuid.Nil {
-		return errors.New("retirement evidence identity changed")
+	if p.Generation != r.Generation || p.ExecID != r.ExecID || p.ExitHash != exitDigest(r.Exit) || (r.Generation == uuid.Nil && len(r.Executions) != 0) || p.OutputEnd < 0 || p.Spool.SpoolID == uuid.Nil || (p.NoOutput && p.OutputEnd != 0) {
+		return refusal(errors.New("retirement evidence identity changed"))
 	}
 	if r.Containment == nil || r.Containment.ID == uuid.Nil || r.Containment.Generation != r.Generation || r.Containment.Operation != string(types.RunnerActionKill) || !r.Containment.Contained || r.ProxyStoppedAt == nil {
-		return errors.New("retirement requires settled terminal containment")
+		return refusal(errors.New("retirement requires settled terminal containment"))
 	}
 	return nil
 }

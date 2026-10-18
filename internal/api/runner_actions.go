@@ -10,8 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -106,7 +109,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
-	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
+	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
 		}})
@@ -120,12 +123,27 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	return ep
 }
 
+// runnerOutputAccepted commits a runner run's accepted output end before the
+// runner is told (remote.Options.OutputAccepted).
+func (s *Server) runnerOutputAccepted(ctx context.Context, runID uuid.UUID, accepted int64) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return nil
+	}
+	return st.AdvanceRunnerOutputWatermark(ctx, runID, accepted)
+}
+
 func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind types.RunnerActionKind, ref string) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return store.ErrRunnerActionRefused
 	}
-	_, _, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	a, queued, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	if err == nil && queued {
+		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
+		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
+			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
+	}
 	return err
 }
 
@@ -157,21 +175,37 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 	}
 	id := rn.ID
 	ep := s.runnerEndpoint(id)
+	var session atomic.Pointer[string] // this connection's fresh session id, once BeginInventory has run
 	return remote.Admission{Substrate: ep.sub, Link: ep.link,
-		Pending:        func(ctx context.Context) ([]runnerwire.PendingAction, error) { return s.PendingFromRunner(ctx, id) },
-		BeginInventory: func(ctx context.Context, session string) error { return s.BeginInventoryFromRunner(ctx, id, session) },
+		Pending: func(ctx context.Context) ([]runnerwire.PendingAction, error) { return s.PendingFromRunner(ctx, id) },
+		BeginInventory: func(ctx context.Context, sessionID string) error {
+			session.Store(&sessionID)
+			s.noteRunnerSession(id, sessionID)
+			return s.BeginInventoryFromRunner(ctx, id, sessionID)
+		},
 		StatePage: func(ctx context.Context, session string, page runnerwire.StatePage) error {
 			return s.StatePageFromRunner(ctx, id, session, page)
 		},
-		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
+		Event: func(ctx context.Context, ev runnerwire.Event) error {
+			var sessionID string
+			if p := session.Load(); p != nil {
+				sessionID = *p
+			}
+			return s.eventFromRunner(ctx, id, sessionID, ev)
+		},
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
-		Ready:    func() { go s.releaseRunnerLeases(s.cfg.BaseCtx, id) },
+		Ready: func() {
+			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
+			s.startResidentErase(id)
+			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub)
+		},
 	}, nil
 }
 
 // BeginInventoryFromRunner is Admission.BeginInventory, off the read loop:
 // when the previous session completed its inventory, an asserted subject's
-// deferred action continues in one successor, then the new inventory begins.
+// deferred action, and a run's deferred kill, each continue in one successor,
+// then the new inventory begins.
 // The successor is in this session's PENDING.
 func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string) error {
 	st, ok := s.cfg.Store.(store.PG)
@@ -181,6 +215,9 @@ func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUI
 	if _, err := st.ReissueDeferredAssertedRunnerActions(ctx, runnerID, sessionID); err != nil {
 		return err
 	}
+	if _, err := st.ReissueDeferredRunKills(ctx, runnerID, sessionID); err != nil {
+		return err
+	}
 	return st.BeginRunnerInventory(ctx, runnerID, sessionID)
 }
 
@@ -188,6 +225,12 @@ func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUI
 // events. caps and waiting are the substrate's own; a kind with no org
 // ingestion refuses rather than being acknowledged unrecorded.
 func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) error {
+	return s.eventFromRunner(ctx, runnerID, "", ev)
+}
+
+// eventFromRunner is EventFromRunner for the connection whose fresh session is session ("" when it has
+// none), so a caps event settles only that session's runner.connect row.
+func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
 	switch ev.Kind {
 	case runnerwire.EventActionResult:
 		return s.ActionResultFromRunner(ctx, runnerID, ev)
@@ -200,7 +243,7 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 	case runnerwire.EventResidentErase:
 		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventCaps:
-		s.capsFromRunner(ctx, runnerID, ev)
+		s.capsFromRunner(ctx, runnerID, session, ev)
 		return nil
 	case runnerwire.EventWaiting:
 		return nil
@@ -223,8 +266,17 @@ func (s *Server) PendingFromRunner(ctx context.Context, runnerID uuid.UUID) ([]r
 	}
 	out := make([]runnerwire.PendingAction, 0, len(page))
 	for _, a := range page {
-		out = append(out, runnerwire.PendingAction{Retirement: a.Retirement, Quarantine: a.Quarantine, Recovery: a.Recovery,
-			ID: a.ID, Kind: a.Kind, RunID: a.RunID, Ref: a.Ref})
+		p := runnerwire.PendingAction{Retirement: a.Retirement, Quarantine: a.Quarantine, Recovery: a.Recovery,
+			ID: a.ID, Kind: a.Kind, RunID: a.RunID, Ref: a.Ref}
+		if a.NodeRecord != nil {
+			p.NodeRecord = new(runner.NodeRecord)
+			dec := json.NewDecoder(bytes.NewReader(a.NodeRecord))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(p.NodeRecord); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }

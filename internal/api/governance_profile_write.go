@@ -231,7 +231,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	}
 	req, msg := decodeGovernanceProfileRequest(w, r)
 	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, msg)
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonGovernanceProfileRequestInvalid), msg)
 		return
 	}
 	if msg := req.parseComposition(); msg != "" {
@@ -241,14 +241,11 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	var effective *ResolvedProfile
 	var held *heldProfileWrite
 	createdBy := principalFromRequest(r)
-	exemptCtx := r.Context()
-	if mode == govQueue {
-		exemptCtx = s.withGovernanceAssignments(exemptCtx) // read before the write's transaction holds a connection
-	}
 	saved, err := s.cfg.Store.WriteGovernanceProfile(r.Context(), id,
-		func(all []types.GovernanceProfile) (types.GovernanceProfile, error) {
+		func(all []types.GovernanceProfile, assignments []types.GovernanceAssignment) (types.GovernanceProfile, error) {
 			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
 			effective = res
+			exemptCtx := withGovernanceAssignments(r.Context(), assignments)
 			if err == nil && mode == govQueue && !s.profileWriteExempt(exemptCtx, all, p, res) {
 				held = &heldProfileWrite{all: all, row: p, res: res}
 				return p, errHoldForApproval
@@ -282,6 +279,9 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		warns = governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits)
 	}
 	warns = append(warns, effective.AdminWarnings...)
+	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
+		warns = append(warns, posture)
+	}
 	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
 }
 
@@ -360,6 +360,11 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 	p := types.GovernanceProfile{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 	}
+	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
+	// and not left pending to fail at every approval.
+	if slices.ContainsFunc(all, func(x types.GovernanceProfile) bool { return x.ID != id && x.Name == req.Name }) {
+		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict, "a governance profile named %q already exists", req.Name)
+	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
 	switch {
 	case overlay == nil && base != nil:
@@ -376,7 +381,7 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 	} else {
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
 		if err := validatePolicySpec(req.Ceiling); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, "invalid ceiling: %v", err)
+			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceProfileRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
 		// deployment's credential eligibility; it may never mint eligibility the
@@ -493,7 +498,7 @@ func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.Governanc
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
 		if verr := validatePolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
-			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "invalid overlay: %v", verr)
+			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}
 	return nil
@@ -569,11 +574,18 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		s.holdProfileDelete(w, r, id)
 		return
 	}
-	if s.writeProfileDeleteError(w, r, s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)) {
+	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
+		row, err := store.GetGovernanceProfileQ(r.Context(), q, id, false)
+		return map[string]any{"name": row.Name}, err
+	})
+	if err == nil {
+		err = s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
+	}
+	if s.writeProfileDeleteError(w, r, err) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.delete", id.String(), "success", nil))
+		"governance.profile.delete", id.String(), "success", mustJSON(data)))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindProfile, id.String(), "success", nil)
 	}

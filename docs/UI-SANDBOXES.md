@@ -88,6 +88,7 @@
 | `X-Wardyn-Egress-Reason` | which rule decided it |
 | `X-Wardyn-Policy` | on a refusal the run's policy decided: `profile; name="<percent-encoded name>"` for a run launched under a governance profile, or `deployment` for the deployment's default |
 | `X-Wardyn-Policy-Request` | where to ask for a change: the profile's (or the site's) request link, else `mailto:<email>`; absent when none is set |
+| `X-Wardyn-Reason` | the fixed reason of an egress deny or a brokered error (see [A refusal an SDK reads](#a-refusal-an-sdk-reads)) |
 
 - The **reason** matters because `denied` alone is ambiguous, and the right next
   action differs completely:
@@ -104,9 +105,9 @@
 
 - Those are the same static strings the decision log records, so nothing is
   disclosed here that the audit trail does not already hold.
-- The two policy headers, and one added line in the body ("This run is governed by
-  the profile "Team A".
-  To request a change: …").
+- The two policy headers, and the attribution ("This run is governed by the profile
+  "Team A". To request a change: …"): the JSON `attribution` field on the forward
+  lane, a trailing sentence in the provider-shaped message on the SDK lanes.
 - These come only with `policy:denied`,
   `policy:default-deny`, `policy:method` and `approval:denied`, and with the git,
   PAT and Azure DevOps broker refusals the policy decides (a repository or host not
@@ -129,6 +130,34 @@
 > assigns a governance profile, the proxy image must be the 0.8.6 image before
 > wardynd is upgraded; if you pin `WARDYN_PROXY_IMAGE` or `k8s.proxyImage` by
 > digest, move the pin with wardynd.
+
+### A refusal an SDK reads
+
+- On a brokered LLM route, or in a tunnel the proxy terminates (an LLM host,
+  Bedrock, the AWS SSO portal), a refusal is the provider's own JSON error.
+- Its message: `wardyn: <reason>: <host:port> (<rule_source>) — <fix>`, then the
+  masked cause; `rule_source` matches the audit row. An audit refusal
+  (`audit_record_too_large`, `audit_spool_unavailable`) reads
+  `wardyn: <reason>: <sentence>`.
+- `X-Wardyn-Reason` carries the reason; so does the OpenAI `error.code`.
+- A brokered route answers in its own vendor's shape; an AWS host in the AWS one.
+  A tunnel to a gateway both vendors share answers in plain text.
+  A POST, PUT or PATCH sent straight to that gateway (plain or through a tunnel)
+  is `uninspected_channel` (channel `shared-gateway`), refused under fail-closed.
+
+| Reason | Anthropic, OpenAI | AWS |
+|---|---|---|
+| `egress_denied` | 403 `permission_error` | 403 `AccessDeniedException` |
+| `tls_untrusted` | 403 `permission_error` | 403 `AccessDeniedException` |
+| `upstream_unreachable` | 502 `api_error` | 500 `InternalServerException` |
+| `credential_unavailable` | 502 `api_error`; 404 with no credential | 401 `UnauthorizedException`; 404 `ResourceNotFoundException` with no credential |
+| `upstream_error` | 502 `api_error` | 500 `InternalServerException` |
+| `unsupported_path` | 400 `invalid_request_error` | 400 `ValidationException` |
+| `llm_content_blocked` | 403 `permission_error` | 403 `AccessDeniedException` |
+| `request_not_inspected` | 400 (unreadable body) or 502 (scan busy) | 400 or 502 |
+| `upstream_protocol_mismatch` | 400 `invalid_request_error` | 400 `UpstreamProtocolMismatchException` |
+| `audit_record_too_large` | 414 `invalid_request_error` | 414 `ValidationException` |
+| `audit_spool_unavailable` | 503 `api_error` | 503 `ServiceUnavailableException` |
 
 ## Extensions are not installable by default
 

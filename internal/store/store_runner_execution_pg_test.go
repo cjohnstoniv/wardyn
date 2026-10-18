@@ -66,6 +66,10 @@ func TestPG_RunnerExitAtomicReceiptAndGenerationBarrier(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE run_id=$1 AND action='run.complete'`, run.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("audit count %d %v", count, err)
 	}
+	var paired bool
+	if err := pool.QueryRow(ctx, `SELECT a."time" = r.ended_at FROM audit_events a, agent_runs r WHERE a.run_id=$1 AND a.action='run.complete' AND r.id=a.run_id`, run.ID).Scan(&paired); err != nil || !paired {
+		t.Fatalf("the run's ended_at is not the run.complete row's time: %v %v", paired, err)
+	}
 	calls := 0
 	tail := func(context.Context, types.AgentRun, runnerwire.AgentExit) error { calls++; return fail }
 	if err := st.RetryRunnerExitTail(ctx, rn.ID, run.ID, gen, tail); !errors.Is(err, fail) {

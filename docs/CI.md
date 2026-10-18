@@ -78,7 +78,7 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   - It then launches on exactly that provider (`--model-provider`).
 
 * The CI principal is a **service identity**, `service:<name>`: automation that runs under its own name, with a named person as its sponsor.
-  * An admin creates it (`wardyn service-identity create --name ci --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
+  * An admin creates it (`wardyn service-identity create --name ci-bot --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
   * It stores its own model-provider credential once (`PUT /model-providers/{id}/credential`, with its own token) — see "[Provisioning the CI principal](#driving-an-existing-control-plane-instead)" below.
 * Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
@@ -275,6 +275,14 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - every Dex identity — admin, allowlist-only operator, security admin, two members and one that matches no role — signed in through the real console on each shape.
   - It brings up its own uniquely-named compose project per shape and tears it down on every exit path, so it runs in `nightly.yml`'s `compose-sso-roles` job rather than `ci.yml`, and remains runnable by hand.
   - Needs Docker; self-skips unless `WARDYN_TEST_SSO_ROLES=1`.
+- **[`scripts/k6-kind-conformance.sh`](../scripts/k6-kind-conformance.sh)** — the Kubernetes runner's kind conformance:
+  - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
+  - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
+  - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job; self-skips unless `WARDYN_TEST_K8S=1`.
+- **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
+  - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
+  - the released `wardyn-runnerd` serves a candidate runner's state directory and completes a run, then registers with this tree's organisation and completes one.
+  - Runs in `nightly.yml`'s `runner-compat-walk` job, which `release.yml` watches; needs a native Docker engine; self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **[`scripts/run-e2e-ssh-k8s.sh`](../scripts/run-e2e-ssh-k8s.sh)** (`make test-e2e-ssh-k8s`) — the SSH gateway proven against a **Pod** rather than a container: the run's sandbox confirmed through `kubectl`, `ssh <run-id>@host <cmd>` over the k8s exec lane,
   - a nonzero exit code surviving that lane's out-of-band status channel, the interactive shell reaching tmux, the `ssh.exec` / `session.attach{transport:ssh}` rows for both,
   - and both authorization arms — a second principal's `member` key refused on a run it does not own (audited `ssh.authenticate` failure) and a third principal's `admin` key reaching that same run with `data.override=true`.
@@ -301,11 +309,11 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 
 | Go-suite control | Where | Rule |
 |---|---|---|
-| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
-Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
+Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files, and `WARDYN_TRUSTED_CA_PATH` to a stand-in for the mounted `/etc/wardyn-trusted-ca.pem`.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 
 **Before and after #211**, measured from the GitHub Actions API:
@@ -367,6 +375,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `trivy-agent-aws-sso` (check `trivy (agent-aws-sso)`) | 52 | 1.3 | 1.8 | 40 |
 | `gates (gitleaks)` | 60 | 0.8 | 1.0 | 15 |
 | `trivy-wardyn-proxy` (check `trivy (wardyn-proxy)`) | 53 | 0.9 | 1.2 | 40 |
+| `trivy-wardyn-runnerd` (check `trivy (wardyn-runnerd)`) | – | pending | pending | 40 |
 | `gates (govulncheck)` | 60 | 0.7 | 1.0 | 15 |
 | `diagrams` | 60 | 0.6 | 0.9 | 10 |
 | `compose` | 60 | 0.3 | 0.5 | 10 |
@@ -407,6 +416,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
+- `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
 ### Incremental CI
 
@@ -443,7 +453,7 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
    | `code` | any ui or backend path | `ui-e2e`, `helm-install-test` |
    | `backend` | any backend path (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
-   | `images` | a `backend` path other than a Go `*_test.go` file | the eight `trivy (<image>)` jobs |
+   | `images` | a `backend` path other than a Go `*_test.go` file | the nine `trivy (<image>)` jobs |
    | `notices` | `images`, [`ui/package.json`](../ui/package.json), [`ui/pnpm-lock.yaml`](../ui/pnpm-lock.yaml), `THIRD-PARTY-NOTICES.md` | `notices` |
 
    - A path that matches no earlier rule counts as backend, so a new directory runs everything until someone classifies it.
@@ -496,12 +506,12 @@ Three mechanisms (#932), on top of the per-job Go cache (#470) and the single ra
   - A required job with a **matrix** never skips at the job level.
     - GitHub does not expand a skipped matrix: it reports one check with the name unexpanded (`gates (${{ matrix.gate }})`, the same row [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) documents for the nightly),
       - so `gates (gitleaks)` would never report and the pull request would wait on it forever.
-    - This is why the image scans are eight jobs (`trivy-wardynd` … `trivy-agent-novnc`, reporting as `trivy (<image>)`) and not a matrix:
+    - This is why the nine image scans are separate jobs, not a matrix:
       - their steps are written once and shared through a YAML anchor, and each job skips on `images == 'false'`.
 
 So:
 
-- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the eight `trivy (<image>)` jobs on `images == 'false'`.
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on `backend == 'false'`, `notices` on `notices == 'false'`, the nine `trivy (<image>)` jobs on `images == 'false'`.
 - `build` needs every `go` leg and runs with `if: !cancelled()`.
   - Its first step fails unless every leg passed, so the `build` context is green only when all four legs and the union floor are.
   - The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an explicit docs- or console-only classification skips them.
@@ -557,7 +567,7 @@ So:
 
 - A change to Go still asks for 35 runners.
 - Branch protection requires 24 contexts and a change to Go can affect every one of them,
-  - so that count moves only if contexts are merged (the eight image scans into one or two jobs, the five `gates` into one), which is a branch-protection change.
+  - so that count moves only if contexts are merged (the image scans into one or two jobs, the five `gates` into one), which is a branch-protection change.
 - What changed for it is the wall time: `test-pg` and `ui-e2e` are split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran 341 (547 s).
 - A console-only change is held at 10.5 minutes by the whole vitest suite in `ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two more jobs.
 - A run of everything (a push to `main`, a `train/*` pull request) runs that same `ui` job, so `ui` is its longest job as well.
@@ -569,8 +579,10 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - [`deploy/base-images.txt`](../deploy/base-images.txt) lists them. Digest pins are the Dockerfile `FROM` pins, the compose pins and kind's node image. Tag pins (`tag ` lines), kept by hand, are images CI pulls by tag.
 - [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each entry, digest unchanged, into `ghcr.io/cjohnstoniv/base-images`: on a list change on `main`, weekly, and on dispatch.
   - Dependabot cannot run it: add the bump's digest to the list on its branch, dispatch with `ref` set to that branch, then re-run the pull request's checks.
-- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls. It adds a loopback mirror over the copy to dockerd's `registry-mirrors` by a `SIGHUP` reload, which leaves service containers running. It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
-  - Anything the copy lacks, and any tag not listed, falls through to Docker Hub as before.
+- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls, instead of a separate `mirror.gcr.io` step.
+  - It puts a loopback mirror over the copy, then `mirror.gcr.io`, in dockerd's `registry-mirrors`. One dockerd restart applies it (a `SIGHUP` reload resets the host-gateway address), and the job's service containers start again.
+  - It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
+  - Anything the copy lacks, and any tag not listed, goes to `mirror.gcr.io`, then Docker Hub. If the loopback mirror does not start, `mirror.gcr.io` is still configured.
 - The Postgres service containers start before any step, so they name the copy directly and pull it with the job's `GITHUB_TOKEN` (`packages: read`).
 - Dockerfiles keep their `docker.io` `FROM` lines for Dependabot and release provenance.
 - Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
@@ -602,7 +614,7 @@ wardyn audit <id> --json       # likewise
 
 ```sh
 # 1. An admin creates the service identity, naming its sponsor:
-#      wardyn service-identity create --name ci --sponsor <principal>
+#      wardyn service-identity create --name ci-bot --sponsor <principal>
 #    The sponsor signs in to the console and mints its token from Account,
 #    "Service identities I sponsor" — shown exactly once. Store it as the
 #    pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN for the calls

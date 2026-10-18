@@ -36,6 +36,8 @@ const (
 	GovernanceTargetRemoteRunnerPeople     = "remote_runner_people_policy"
 	GovernanceTargetCredentialDelivery     = "local_credential_delivery"
 	GovernanceTargetServiceIdentity        = "service_identity"
+	GovernanceTargetRunnerTrust            = "runner_trust"
+	GovernanceTargetRunNodeRecord          = "run_node_record"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

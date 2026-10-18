@@ -198,6 +198,15 @@ func cloneHostDropWarningJSON(host, ws string) string {
 	return `dropped clone host \"` + host + `\" of workspace \"` + ws + `\"`
 }
 
+// TestRunCloneEgress_ACeilingThatListsTheAddressKeepsIt: a member's workspace whose clone host is a
+// private-range address is kept when the ceiling lists that address bare, and nothing is dropped.
+func TestRunCloneEgress_ACeilingThatListsTheAddressKeepsIt(t *testing.T) {
+	kept, dropped := runCloneEgress(cloneLiteralWorkspace(govMemberSub), []string{"10.0.0.5"})
+	if !slices.Contains(kept, "10.0.0.5") || len(dropped) != 0 {
+		t.Errorf("kept = %q, dropped = %q; want 10.0.0.5 kept and nothing dropped", kept, dropped)
+	}
+}
+
 // TestCloneHostDropWarning: the warning names a place the host can actually be allowed. A
 // workspace's approved egress takes dotted hosts, so an IPv6 literal and a library source's host
 // are pointed at the ceiling.
@@ -205,7 +214,7 @@ func TestCloneHostDropWarning(t *testing.T) {
 	for _, tc := range []struct{ host, kind, want string }{
 		{"10.0.0.5", "workspace", `dropped clone host "10.0.0.5" of workspace "app": a private address not in operator allowlist; allow it in the workspace's approved egress`},
 		{"fd12:3456::1", "workspace", `dropped clone host "fd12:3456::1" of workspace "app": a private address not in operator allowlist; list it in the ceiling's allowed_domains`},
-		{"10.0.0.5", "source", `dropped clone host "10.0.0.5" of source "app": a private address not in operator allowlist; list it in the deployment ceiling's allowed_domains`},
+		{"10.0.0.5", "source", `dropped clone host "10.0.0.5" of source "app": a private address not in operator allowlist; list it in the allowed_domains of the launching operator's ceiling`},
 	} {
 		if got := cloneHostDropWarning(tc.host, tc.kind, "app"); got != tc.want {
 			t.Errorf("warning = %q, want %q", got, tc.want)
@@ -282,6 +291,41 @@ func TestWorkspaceCloneHost_ScanRunIsBounded(t *testing.T) {
 			})
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("dispatched clone hosts = %q, want %q (allowed_domains %q)", got, tc.want, fr.lastSpec.ProxyConfig.Policy.AllowedDomains)
+			}
+		})
+	}
+}
+
+// TestWorkspaceCloneHost_AnOperatorRunningAMembersWorkspaceIsBoundedByTheCeiling: the bound follows who
+// owns the workspace, not who launches it. An operator (the admin token) running a member-owned
+// workspace does not get the private clone host the deployment ceiling does not list, however the
+// ceiling is spelled.
+func TestWorkspaceCloneHost_AnOperatorRunningAMembersWorkspaceIsBoundedByTheCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ceiling []string
+		want    bool
+	}{
+		{"the ceiling does not list the address", nil, false},
+		{"a ceiling entry for one port", []string{"10.0.0.5:8443"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := govEscapeFixture(t, &capStore{})
+			srv.cfg.DefaultPolicy.AllowAllEgress = true
+			srv.cfg.DefaultPolicy.AllowedDomains = append(slices.Clone(srv.cfg.DefaultPolicy.AllowedDomains), tc.ceiling...)
+			ws := cloneLiteralWorkspace(govMemberSub)
+			st.workspaces = []types.Workspace{ws}
+			body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2"},"workspaces":[{"workspace_id":"` + ws.ID.String() + `"}]}`
+			for _, door := range []string{previewDoor, preflightDoor} {
+				w := do(t, srv, http.MethodPost, door, adminToken, body)
+				if w.Code != http.StatusOK {
+					t.Fatalf("%s = %d: %s", door, w.Code, w.Body)
+				}
+				if slices.ContainsFunc(provRows(t, w), func(r provenanceRow) bool {
+					return r.Field == fieldAllowed && r.Value == "10.0.0.5"
+				}) != tc.want {
+					t.Errorf("%s: allowed 10.0.0.5 = %v, want %v: %s", door, !tc.want, tc.want, w.Body)
+				}
 			}
 		})
 	}

@@ -260,7 +260,7 @@ export const health = {
     const body: Record<string, unknown> = { ...cfg };
     for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
     const res = await wfetch("/site-config", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       ...(etag ? { headers: { "If-Match": etag } } : {}),
       body: JSON.stringify(body),
     });
@@ -356,6 +356,10 @@ export const health = {
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;
+    // The OIDC issuer's brand when it is one the sign-in button words
+    // specially: "microsoft" for Entra ID, "" for any other IdP or no OIDC.
+    // Absent on an older daemon, which must read the same as "".
+    sso_provider?: string;
     // token_login (#378/#379): whether the sign-in screen should offer the
     // admin-token form at all — a token is actually configured, and neither
     // sso_only nor member mode is set (internal/api/healthz.go's
