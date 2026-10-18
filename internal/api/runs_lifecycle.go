@@ -165,8 +165,23 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// A run its lease ended is KEPT with its agent stopped on purpose: that
 		// stop is what ended this Wait, and finalizing here would tear down the
 		// files the run is kept for. The end marks the run before it stops the
-		// agent, so this read always sees it.
-		if cur, gerr := s.cfg.Store.GetRun(base, runID); gerr == nil && runIsKept(cur) {
+		// agent, so this read always sees it. A read that fails twice leaves the run RUNNING: this
+		// watcher's lease then lapses, and the stale-watcher sweep (sweepRunWatchers) re-derives it
+		// through reconcileFinalize, which reads whether it is kept. Never a finalize that could not tell.
+		cur, gerr := s.cfg.Store.GetRun(base, runID)
+		if gerr != nil {
+			select {
+			case <-time.After(completionWatcherReadRetryDelay):
+			case <-base.Done():
+			}
+			cur, gerr = s.cfg.Store.GetRun(base, runID)
+		}
+		if gerr != nil {
+			slog.WarnContext(base, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
+				slog.String("run_id", runID.String()), slog.Int("exit_code", exitCode), slog.Any("err", gerr))
+			return
+		}
+		if runIsKept(cur) {
 			return
 		}
 

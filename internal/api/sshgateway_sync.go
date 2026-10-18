@@ -159,7 +159,7 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	defer s.sshSyncOpened(runID, dir)()
-	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
+	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut}
 	outcome := "success"
 	if exit != 0 {

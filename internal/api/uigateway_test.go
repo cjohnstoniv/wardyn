@@ -1244,6 +1244,44 @@ func TestUIGateway_PerRunConnectionCap(t *testing.T) {
 	}
 }
 
+// TestUIGateway_ConcurrentRequestsWaitForAPooledConnection: one page load over HTTP/2 keeps more
+// requests in flight than the per-run cap. The ones past it wait for a pooled connection instead of
+// dialing into the cap's 503, and no more than the cap are ever open.
+func TestUIGateway_ConcurrentRequestsWaitForAPooledConnection(t *testing.T) {
+	var mu sync.Mutex
+	var inFlight, most int
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		inFlight++
+		most = max(most, inFlight)
+		mu.Unlock()
+		defer func() { mu.Lock(); inFlight--; mu.Unlock() }()
+		time.Sleep(200 * time.Millisecond)
+		_, _ = io.WriteString(w, "sandbox app")
+	}))
+	cookie := h.openSession()
+	const requests = maxUIConnsPerRun + 4
+	codes := make(chan int, requests)
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- h.relay("/ide", cookie, nil).Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	for code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("a concurrent request answered %d, want every one 200", code)
+		}
+	}
+	if most > maxUIConnsPerRun {
+		t.Errorf("%d requests reached the sandbox at once, want at most the cap of %d", most, maxUIConnsPerRun)
+	}
+}
+
 // TestUIGateway_RelayTouchesTheRun: a human reading code in an editor is not
 // idle. The touch is debounced (one per window), like every other keepalive.
 func TestUIGateway_RelayTouchesTheRun(t *testing.T) {

@@ -449,10 +449,30 @@ func TestSpoolSinkSucceedHandsTheRunToANewProxy(t *testing.T) {
 	}
 }
 
+// lockedLog is a log destination a logging goroutine and the test reading it can share.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
 // Tick forgets a run whose spool was erased, with no loss-row warning on every tick, and a settled run
 // whose spool is sealed: neither keeps its handles or is read again.
 func TestSpoolSinkTickForgetsErasedAndSealedRuns(t *testing.T) {
-	var logs bytes.Buffer
+	// The default logger is the process's: a session of an earlier test's sink can still log into it
+	// while this test reads it, so the buffer is locked.
+	var logs lockedLog
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

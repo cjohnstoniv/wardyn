@@ -611,6 +611,41 @@ func TestCompletionWatcher_LeavesAKeptRunAlone(t *testing.T) {
 	}
 }
 
+// unreadableAfterStore serves its first ok reads of a run, then fails every read: a pool exhausted
+// between the watcher's start and the agent's exit.
+type unreadableAfterStore struct {
+	*leaseStore
+	mu sync.Mutex
+	ok int
+}
+
+func (s *unreadableAfterStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ok == 0 {
+		return types.AgentRun{}, errors.New("pool exhausted")
+	}
+	s.ok--
+	return s.leaseStore.GetRun(ctx, id)
+}
+
+// The kept check fails closed: a watcher that cannot read its run when the agent exits leaves it to
+// the lease sweep, never finalizing what may be a kept run's files.
+func TestCompletionWatcher_UnreadableRunIsNotFinalized(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.sweep(t) // kept
+	f.srv.cfg.Store = &unreadableAfterStore{leaseStore: f.st, ok: 1}
+
+	f.srv.startCompletionWatcher(f.run.ID, f.run.SandboxRef, "exec-lease")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+			t.Fatalf("the watcher finalized a run it could not read: state %s, StopSandbox %d", f.st.State(), f.rn.stopCount())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // TestReconcileFinalize_LeavesAKeptRunAlone is the reconciler's side of the
 // same rule: an adopted watcher probing the stopped agent must not finalize.
 func TestReconcileFinalize_LeavesAKeptRunAlone(t *testing.T) {

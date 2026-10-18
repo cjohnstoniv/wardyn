@@ -125,6 +125,21 @@ func TestCreateSandbox_RejectsMounts(t *testing.T) {
 	}
 }
 
+// A runner's own bundle joins the staged CA in one environment string. A pair too big for one is
+// refused at create, naming why, before anything exists; every exec would otherwise fail E2BIG. A
+// pair under it is not refused.
+func TestCreatePreflight_RefusesACATrustOverOneEnvString(t *testing.T) {
+	d, _ := newTestDriver(t, Config{RunnerID: testRunnerID, Arch: "amd64", Evidence: &memEvidence{}, HardDeny: &HardDeny{}, TrustedCAPEM: strings.Repeat("r", runner.MaxEnvTrustedCAPEM)})
+	spec := runner.SandboxSpec{RunID: uuid.New(), Env: map[string]string{mitmCAPEMEnv: strings.Repeat("o", 64<<10)}}
+	if _, _, _, err := d.createPreflight(context.Background(), spec); !errors.Is(err, errTrustedCATooBig) {
+		t.Fatalf("createPreflight with 128 KiB of CA trust = %v, want %v", err, errTrustedCATooBig)
+	}
+	spec.Env[mitmCAPEMEnv] = strings.Repeat("o", 60<<10)
+	if _, _, _, err := d.createPreflight(context.Background(), spec); errors.Is(err, errTrustedCATooBig) {
+		t.Fatalf("createPreflight with 124 KiB of CA trust = %v, want no CA refusal", err)
+	}
+}
+
 // TestCreateSandbox_OrderAndRef covers the required creation order — BOTH
 // NetworkPolicies before any pod exists, proxy pod before agent pod — and
 // that the returned Sandbox.Ref is the agent pod name.
@@ -1500,5 +1515,13 @@ func TestWaitPodIP_ReportsTheProxyPodsReason(t *testing.T) {
 	}
 	if len(seen) != 1 || !strings.HasPrefix(seen[0], "pod: Unschedulable: ") || !strings.Contains(seen[0], taint) {
 		t.Fatalf("OnWaiting calls = %q, want exactly one carrying the scheduler's own verdict", seen)
+	}
+}
+
+// A Kubernetes runner tells the org it cannot keep an ended sandbox (runnerwire.Caps.EndsUnkept),
+// which wardyn-runnerd derives from the Driver not being a runner.SandboxEnder.
+func TestDriverIsNoSandboxEnder(t *testing.T) {
+	if _, ok := any(&Driver{}).(runner.SandboxEnder); ok {
+		t.Fatal("the k8s Driver keeps an ended sandbox; runnerd would advertise the keep its pods cannot give")
 	}
 }

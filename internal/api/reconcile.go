@@ -247,7 +247,11 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	swept, err := sweeper.SweepOrphanedSandboxes(ctx, undispatchedGrace, isOrphan)
+	// A wedged substrate must not hold boot or the single-threaded sweeper (reconcileFinalizeTimeout's
+	// hazard); what one sweep leaves, the next takes.
+	sctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	defer cancel()
+	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
 	}
@@ -303,11 +307,11 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		case answered && (kind == types.RunnerActionKill || outcome == types.RunnerActionRefused):
 			// A record the runner keeps only for containment refuses an end, every boot, but takes
 			// a kill, which stops its agent.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", s.cfg.Runner.KillSandbox)
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.KillSandbox))
 		case s.cfg.Runner != nil && run.RunnerID != nil && strings.HasPrefix(run.SandboxRef, placement.RunnerRefPrefix(run.RunnerID.String())):
 			// The same record refuses a direct stop from an online runner, which leaves no answer to
 			// follow next boot, so a refused stop is followed by one kill. One audit row covers both.
-			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", func(ctx context.Context, ref string) error {
+			torn = s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(func(ctx context.Context, ref string) error {
 				err := s.cfg.Runner.StopSandbox(ctx, ref)
 				if err == nil || errors.Is(err, runner.ErrPendingOnRunner) {
 					return err // stopped, or an end queued for an offline runner, whose answer the next boot follows
@@ -316,9 +320,9 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 					return errors.Join(err, kerr)
 				}
 				return nil
-			})
+			}))
 		default:
-			torn = s.stopSandboxOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep")
+			torn = s.cfg.Runner == nil || s.teardownOrAudit(ctx, run.ID, run.SandboxRef, "sandbox.orphan.sweep", boundedTeardown(s.cfg.Runner.StopSandbox))
 		}
 		if !torn {
 			continue // still stuck; audited above, ref stays set for the next boot
@@ -329,6 +333,17 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// boundedTeardown bounds one teardown call of the boot orphan pass like a finalize
+// (reconcileFinalizeTimeout): a substrate that never answers would otherwise hold boot before the
+// control plane serves, every restart. A timed-out teardown is audited and keeps its ref for the next boot.
+func boundedTeardown(teardown func(context.Context, string) error) func(context.Context, string) error {
+	return func(ctx context.Context, ref string) error {
+		ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+		defer cancel()
+		return teardown(ctx, ref)
+	}
 }
 
 // lastRunnerTeardown is the runner's latest answer to a queued end or kill of

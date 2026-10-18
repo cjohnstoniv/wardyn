@@ -203,7 +203,7 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 	_, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true,
-			Labels: wardynLabels(runID, componentDriveSeed, extra)},
+			Labels: d.labels(runID, componentDriveSeed, extra)},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "none",
 			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},
