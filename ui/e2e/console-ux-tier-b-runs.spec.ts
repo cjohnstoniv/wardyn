@@ -180,3 +180,15 @@ test.describe("Tier B run tabs", () => {
     await expect(page.getByText(RUN_COCKPIT.loadError)).toHaveCount(0);
   });
 });
+
+test.describe("Tier B run layout editor", () => {
+  // #2928: the editor and the cockpit name the main tile the same.
+  test("Edit layout: an autonomous run's main tile handle reads Output, like its pane", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("button", { name: "Edit layout" }).click();
+    const handle = page.getByTestId("run-terminal-pane").locator("[data-drag-handle]");
+    await expect(handle).toContainText("Output");
+  });
+});

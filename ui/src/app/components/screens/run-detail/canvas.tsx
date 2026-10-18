@@ -291,7 +291,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                 >
                   {editing && (
                     <TileHandle
-                      def={def}
+                      // The pane calls itself Output on an autonomous run; the handle says the same (#2928).
+                      def={id === "terminal" && !ctx.run.interactive ? { ...def, label: RUN_COCKPIT.outputPane } : def}
                       size={active?.i === id ? sizeLabel(active.w, active.h) : undefined}
                       onRemove={def.required ? undefined : () => toggleWidget(id)}
                     />

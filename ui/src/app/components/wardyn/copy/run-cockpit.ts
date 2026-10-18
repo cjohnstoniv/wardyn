@@ -162,6 +162,8 @@ export const RUN_COCKPIT = {
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,
+  // The terminal tile's edit handle on an autonomous run, where the pane is headed Output (terminal-notice.tsx).
+  outputPane: "Output",
 
   // --- Focus mode (design board 2c) ---
   enterFocus: "Focus",
