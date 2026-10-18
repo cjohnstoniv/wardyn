@@ -31,16 +31,43 @@ In your report, please include:
   [`ARCHITECTURE.md`](ARCHITECTURE.md) "Security invariants" #5).
 - A clear description, impact, and the most minimal reproduction you can provide.
 - Which **security invariant** you believe is broken (see [`ARCHITECTURE.md`](ARCHITECTURE.md)):
-  - (1) secrets never enter the sandbox, (2) approval mints the credential, (3) L0 structural egress, (4) per-run identity with full attribution, (5) fail-closed / never overclaim, (6) audit append-only.
+  - (1) credentials stay out of the sandbox wherever Wardyn can broker them (the kinds that enter are in [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) section 5.1a),
+  - (2) approval mints the credential, (3) L0 structural egress, (4) per-run identity with full attribution, (5) fail-closed / never overclaim, (6) audit append-only.
+
+## Which credentials enter the sandbox
+
+Wardyn keeps credentials out of the sandbox wherever it can broker them. The run's egress proxy adds these on the way out, and the sandbox holds a placeholder or nothing:
+
+- Model-provider keys and tokens: Anthropic and OpenAI API keys, custom endpoints, Bedrock bearer keys and a Claude subscription sign-in.
+- `api_key` grants, and the header secrets of components and integrations.
+- GitHub App tokens.
+- `git_pat` tokens while the PAT broker is on (the default).
+- Each person's Azure DevOps credential.
+- The Entra token behind the Azure CLI, and the GitHub CLI's token.
+- The AWS sign-in session behind Bedrock and the AWS CLI (the default).
+
+Some kinds do enter the sandbox:
+
+- `env_secret` and `file_secret` grants, and component secrets delivered as a variable or a file. These stay for the whole run and cannot be revoked.
+- `ssh_key` grants: the key file exists in the sandbox during the clone.
+- `git_pat` with `WARDYN_GIT_PAT_BROKER=off`.
+- The AWS sign-in token with `WARDYN_AWS_SSO_PROXY_INJECT=off`.
+- The short-lived AWS role credentials that every `bedrock_sso` run and every AWS CLI component derives inside the sandbox.
+- The Wardyn-minted toolgate credential file, a local credential the sandbox's own tool gate reads.
+- The new credential inside a provider sign-in sandbox, which exists to create it.
+
+Each of these is opt-in or depends on a setting. Wardyn scopes them where it can, masks them in the output it relays, and audits each delivery by name. On a laptop runner or a cluster runner, the runner host also holds values for the run. An allowed destination that echoes request headers can send a proxy-added credential back to the sandbox. [docs/CREDENTIALS.md](docs/CREDENTIALS.md) lists every kind, and [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) section 5.1a bounds each one.
 
 ## What is in scope
 
 Reports that demonstrate a break of a **claimed, shipped** control, for example:
 
-- A path by which a credential or secret value reaches the sandbox process
-  (env, disk, args, or a leaked bearer token) — invariant 1.
-- Minting a credential whose scope exceeds the approved scope, or minting without
-  an `APPROVED` approval in the same transaction — invariant 2.
+- A path by which a credential reaches the sandbox (env, disk, args, or a leaked bearer token) — invariant 1.
+  - It must not be one of the documented exceptions in [THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) section 5.1a.
+  - A credential that outlives or exceeds the bounds stated there is also in scope.
+- Minting a credential whose scope exceeds the approved scope, or minting a
+  `requires_approval: true` grant without an `APPROVED` approval in the same transaction —
+  invariant 2. A grant without `requires_approval` is policy-eligible and mints by design.
 - Egress from a sandbox that does not traverse `wardyn-proxy` (a default route, a
   direct-IP path, a metadata-server reach) — invariant 3.
 - Forging or stripping the `sub`/`act`/`sponsor` attribution chain — invariant 4.

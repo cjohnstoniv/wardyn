@@ -1366,7 +1366,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A component's `env` or `file` delivery is not governed by it: that is a person's own secret, under the `custom_component` feature ([POLICIES.md](POLICIES.md#custom-components)).
 - On EVERY route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default) and whatever the caller's governance assignment.
 - Because the rule is a role check plus this switch rather than a ceiling check.
-- Every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` reaches git through the helper, `ssh_key` is wiped after the clone).
+- Every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` is set at the proxy (or, with the broker off, reaches git through the helper), `ssh_key` is wiped after the clone).
 - While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
