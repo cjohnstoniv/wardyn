@@ -7,7 +7,7 @@
 // by-scope erase of a person, POST /people/{principal}/erasure. It sits beside
 // the shipped credentials-only erase and leaves it untouched. By email, so the
 // rule is the shipped by-email one: no second type-to-confirm. Everything is
-// ticked when it opens except Recordings, which stays opt-in.
+// ticked when it opens except the opt-in scopes (OPT_IN).
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { credentials as credentialsApi, ErasureIncomplete, type ErasureScope } from "../../lib/api/credentials";
@@ -31,6 +31,9 @@ const SCOPES: ErasureScope[] = [
   "components",
   "mask_copies",
   "recordings",
+  "run_setups",
+  "runner_pools",
+  "member_drives",
 ];
 
 // The saved-components scope's words live with the rest of the component copy (lazy).
@@ -39,7 +42,10 @@ const scopeCopy = (s: ErasureScope) =>
     ? { label: COMPONENTS_ADMIN.ERASE_SCOPE_LABEL, hint: COMPONENTS_ADMIN.ERASE_SCOPE_HINT }
     : ERASE_DATA.SCOPE[s];
 
-const DEFAULT_SCOPES = new Set<ErasureScope>(SCOPES.filter((s) => s !== "recordings"));
+// Opt-in: recordings, and the three scopes added after the dialog (deleting a person's runner pool
+// ends the runs waiting for it).
+const OPT_IN = new Set<ErasureScope>(["recordings", "run_setups", "runner_pools", "member_drives"]);
+const DEFAULT_SCOPES = new Set<ErasureScope>(SCOPES.filter((s) => !OPT_IN.has(s)));
 
 type Result = { person: string; erased: Set<string>; chosen: ErasureScope[]; complete: boolean };
 
