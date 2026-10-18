@@ -295,6 +295,27 @@ test.describe("Tier B computed styles", () => {
   });
 });
 
+test.describe("New policy template menu (#2836)", () => {
+  // Option C: one toolbar button opens a menu of the five templates, each label over its hint; picking one
+  // replaces the source.
+  test("the menu opens with the five templates and their hints, and picking one replaces the source", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
+    await expect(page.getByRole("button", { name: "CI baseline", exact: true })).toHaveCount(0);
+    await dialog.getByTestId("policy-template-menu").click();
+    const items = page.getByRole("menuitem");
+    await expect(items).toHaveCount(5);
+    for (const id of ["minimal", "model-provider", "registries", "ci", "allow-all"]) {
+      await expect(page.getByTestId(`policy-template-${id}`)).toBeVisible();
+    }
+    await expect(page.getByTestId("policy-template-ci")).toContainText("No egress, no grants, stopped after an idle hour");
+    await page.getByTestId("policy-template-ci").click();
+    await expect(dialog.getByLabel(/^Spec \((YAML|JSON)\)/)).toHaveValue(/min_confinement_class: CC1/);
+  });
+});
+
 test.describe("Page header (#2831)", () => {
   const header = (page: Page) => ({
     title: page.getByRole("heading", { name: "Policies", level: 1 }),

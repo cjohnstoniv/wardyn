@@ -159,8 +159,9 @@ describe("NewRunPolicyPanelBody — reading is the default", () => {
   it("offers the templates and the tool and push rule sections inside the editor", async () => {
     const user = userEvent.setup();
     render(<Screen initial={{ editing: true }} />);
-    expect(screen.getByText("Start from a template")).toBeInTheDocument();
-    await user.click(button("CI baseline"));
+    expect(button("Start from a template")).toBeInTheDocument();
+    await user.click(button("Start from a template"));
+    await user.click(await screen.findByTestId("policy-template-ci"));
     expect(parseSpec(draft.source).ok && parseSpec(draft.source)).toMatchObject({ spec: { min_confinement_class: "CC1" } });
     expect(draft.format).toBe("yaml");
     expect(button("Add rule")).toBeInTheDocument();
@@ -327,7 +328,7 @@ describe("NewRunPolicyPanelBody — invalid source", () => {
     expect(screen.queryByText("This preview includes your selections. Launch checks may change it.")).toBeNull();
     expect(button("Copy YAML")).toBeDisabled();
     expect(button("Check again")).toBeDisabled();
-    expect(button("CI baseline")).toBeDisabled();
+    expect(button("Start from a template")).toBeDisabled();
     expect(button("Copy source")).toBeEnabled();
   });
 

@@ -372,7 +372,8 @@ test("picking a template chip fills the spec, and an edit to it is reflected on 
   await dialog.getByLabel("Name", { exact: true }).fill(name);
 
   // "CI baseline" replaces the textarea body wholesale with its template spec.
-  await dialog.getByRole("button", { name: "CI baseline" }).click();
+  await dialog.getByTestId("policy-template-menu").click();
+  await page.getByTestId("policy-template-ci").click();
   const specBox = dialog.getByLabel(SPEC_LABEL);
   await expect(specBox).toHaveValue(/min_confinement_class: CC1/);
 

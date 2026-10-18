@@ -29,12 +29,13 @@
 // instance="policies" is consumed by policies.tsx's PolicyEditor; instance="run"
 // by new-run-screen.tsx's "Policy" SectionCard.
 import * as React from "react";
-import { Globe, Plus, ShieldCheck, Timer } from "lucide-react";
+import { ChevronDown, Globe, Plus, ShieldCheck, Timer } from "lucide-react";
 import type { PolicySourceEditResult } from "../../lib/policy-document";
 import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
 import { templateProviders } from "./policy-template-providers";
 import { Button } from "../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { cn } from "../ui/utils";
 import { Chip, ConfinementChip, SectionLabel } from "./primitives";
 import { SafetyMeter } from "./safety-meter";
@@ -48,6 +49,7 @@ import { GitPATSection } from "./policy-git-pat";
 import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 import { egressSummary, lifecycleSummary } from "./policy-document/policy-facts";
 import { PolicyEditor } from "./policy-document/policy-editor";
+import { POLICY_COPY_BUTTON } from "./policy-document/policy-document";
 import {
   applySpecChange,
   parseSpec,
@@ -405,29 +407,34 @@ export function PolicyPanel({
               </>
             )
           }
+          toolbarLead={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" className={POLICY_COPY_BUTTON} data-testid="policy-template-menu">
+                  {C.START}
+                  <ChevronDown className="size-3.5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-w-sm">
+                {templates.map((t) => (
+                  <DropdownMenuItem
+                    key={t.id}
+                    data-testid={`policy-template-${t.id}`}
+                    className="flex-col items-start gap-0.5"
+                    onClick={() => setSource(templateText(t, fmt))}
+                  >
+                    <span className={cn("text-sm font-semibold", t.id === "allow-all" ? "text-warning" : "text-foreground")}>{t.label}</span>
+                    <span className="text-xs text-muted-foreground">{t.hint}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
+          toolbarNote={
+            providerNames.length > 0 ? <p className="text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p> : undefined
+          }
           structured={
             <>
-              <div>
-                <SectionLabel className="mb-1.5">{C.START}</SectionLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {templates.map((t) => (
-                    <Button
-                      key={t.id}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      title={t.hint}
-                      onClick={() => setSource(templateText(t, fmt))}
-                    >
-                      {t.label}
-                    </Button>
-                  ))}
-                </div>
-                {providerNames.length > 0 && (
-                  <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
-                )}
-              </div>
-
               {/* The four sections below edit a LIST or a closed set that is easy
                   to get wrong by hand (a duplicate tool, a typo'd effect, a wire
                   word the server refuses). Each needs a parsed spec to edit, so
