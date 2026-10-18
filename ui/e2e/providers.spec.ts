@@ -18,7 +18,7 @@ import {
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
-import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
 import { PROVIDERS_SUPER_ONLY, VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
@@ -383,7 +383,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 });
 
 test.describe("providers — the door is SUPER's alone", () => {
-  test("a security admin sees the tier refusal — OperatorOnlyHint, and no form at all", async ({ page }) => {
+  test("a security admin sees the super-admin refusal, and no form at all", async ({ page }) => {
     await mockSecurityAdminRole(page);
     await gotoConsole(page);
 
@@ -394,29 +394,29 @@ test.describe("providers — the door is SUPER's alone", () => {
     await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("providers-card")).toHaveCount(0);
 
-    // Reaching /providers directly: GET is operatorOnly, so a real security
-    // admin's read genuinely answers 403 — routed here as the real server's
-    // shape (the role splice leaves the bearer admin, exactly as
-    // drives.spec.ts's equivalent test documents).
-    await page.route("**/api/v1/workspace-providers", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
+    // Reaching /admin/providers directly: since #2880 the page refuses this tier up front with the Settings-shaped
+    // card (it no longer draws the page header over an "admin role" hint), and reads nothing.
+    const reads: string[] = [];
+    await page.route("**/api/v1/workspace-providers", (route) => {
+      reads.push(route.request().method());
+      return route.fallback();
     });
     await navToRoute(page, "/admin/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
-    // No form of any kind — no tabs, no Save, no rows.
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.BODY, { exact: true })).toBeVisible();
+    // No form of any kind — no heading, tabs, Save or rows.
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
+    expect(reads, "the refused page read the providers anyway").toEqual([]);
   });
 
   // M-1b: /providers is deleted — only /admin/providers exists now, so a
   // member reaching it directly hits the admin-view REFUSAL page
   // (console-view.tsx) before anything is fetched, not the screen's own
-  // inline OPERATOR_ONLY_REASON (that still covers the security-admin case
-  // above, whose SSO tier passes the view gate but not the server's operator
-  // check).
+  // super-admin refusal (that covers the security-admin case above, whose
+  // SSO tier passes the view gate but is not a super admin).
   test("a member sees no nav, no card, and the admin-view refusal page if they reach the URL directly", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);

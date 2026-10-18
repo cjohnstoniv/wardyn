@@ -81,7 +81,11 @@ test.describe("Tier B at desktop width", () => {
     const host = page.getByRole("textbox", { name: KIND.egress_host.valueLabel, exact: true });
     await expect(host).toBeVisible();
     await expect(capability).toBeVisible();
-    expect((await boxOf(host)).y).toBeCloseTo((await boxOf(capability)).y, 0);
+    // Hosted Chromium's font metrics move sub-pixels, so compare in whole pixels: the Host label row (marker
+    // included) is as tall as the Capability one, and the two controls start on one line.
+    const rowOf = (forId: string) => page.locator(`label[for="${forId}"]`).locator("xpath=..");
+    expect(Math.abs((await boxOf(rowOf("grant-value"))).height - (await boxOf(rowOf("grant-capability"))).height)).toBeLessThanOrEqual(1);
+    expect(Math.abs((await boxOf(host)).y - (await boxOf(capability)).y)).toBeLessThanOrEqual(2);
   });
 
   // #2892: Open and Delete… both lead with an icon, so their labels start at one x.
