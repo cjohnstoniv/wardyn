@@ -202,6 +202,18 @@ describe("RunnerCredentials — save", () => {
     expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"saved"']);
   });
 
+  it("a save of an unrelated row keeps the stored per-trust overrides", async () => {
+    const by_trust = { personal: { classes: { env_secret: { mode: "refuse" as const } } } };
+    getMock.mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), policy: { classes: { env_secret: { mode: "runner_resident" } }, by_trust } });
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][0]).toMatchObject({ by_trust });
+  });
+
   it("a minimum that is not a version blocks Save and says so on its field", async () => {
     const user = userEvent.setup();
     renderTab();
