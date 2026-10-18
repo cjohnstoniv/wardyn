@@ -320,7 +320,7 @@ func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour)
+	got, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour, store.Page{})
 	if err != nil {
 		t.Fatal(err)
 	}
