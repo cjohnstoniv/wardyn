@@ -214,10 +214,17 @@ func ecosystemMirrorRows(sc types.SiteConfig) map[string]types.EgressRedirect {
 	return out
 }
 
-// artifactGoSumDBOff reports whether the go mirror artifactBaseURLs picks opts
-// out of checksum-database verification.
+// artifactGoSumDBOff reports whether the LAST go row opts out of checksum-database
+// verification, as it always has; the row that names the mirror (ecosystemMirrorRows)
+// does not decide it.
 func artifactGoSumDBOff(sc types.SiteConfig) bool {
-	return ecosystemMirrorRows(sc)["go"].GoChecksumDBOff
+	off := false
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "go" {
+			off = r.GoChecksumDBOff
+		}
+	}
+	return off
 }
 
 // planArtifactRedirect builds the dispatch-time egress-redirect plan for a run

@@ -2488,9 +2488,11 @@ Delivery per install path:
 - Each substitutes a public/upstream URL or host for a corporate-internal one in every run's egress, with an optional token injected proxy-side as a Bearer credential for `to`'s host (the sandbox never holds it).
 
 - The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of its scheme (`80` for an explicit `http://`, `443` otherwise).
-- TLS termination and token injection use the same port, so a `to` on a literal IP is never trusted on another port of that address. To reach the mirror on a different port, name it in `to`.
+- That is the same port its TLS termination and token injection use.
+- So a `to` on a literal IP is never trusted on some other port of that address.
+- Reach the mirror on a different port by naming that port in `to`.
 
-- It replaced the old `artifact_overrides` map with a list of From → To pairs over any URL, host, or IP.
+- It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too: a list of From → To pairs over any URL, host, or IP.
 - The token comes from either of two places, mutually exclusive — a row setting both is rejected.
 - `token_secret_ref` names a bare secret directly.
 - `token_integration_ref` instead names an [**Integration**](operations/integrations.md) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
@@ -2507,7 +2509,7 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
-- Several rows on one `ecosystem` (the console suggests two hosts each for pip, cargo and go): the row whose `from` is the index host (`registry.npmjs.org`, `pypi.org`, `proxy.golang.org`, `crates.io`) names the mirror in the config. With none, the last row does.
+- Several rows can share one `ecosystem` (pip, go and maven name two public hosts, cargo three): the row whose `from` is the first public host (`registry.npmjs.org`, `pypi.org`, `crates.io`, `repo.maven.apache.org`, `proxy.golang.org`, `api.nuget.org`) names the mirror in the config. With none, the last row does.
 - A `go` redirect keeps Go's checksum database on, reached through the mirror: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so the mirror must proxy that path.
 - A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed.
 - Setting `go_checksum_db_off` shows a warning on the `artifact_repo` setup check and is recorded in `site_config.write`; it is accepted only on a `go` row.

@@ -259,14 +259,25 @@ func TestArtifactBaseURLs_IndexHostRowWins(t *testing.T) {
 		if got := artifactBaseURLs(sc); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: artifactBaseURLs\n got: %v\nwant: %v", name, got, want)
 		}
-		if artifactGoSumDBOff(sc) {
-			t.Errorf("%s: GOSUMDB opt-out read off the companion sumdb row, not the go mirror row", name)
-		}
 	}
 	// No index row: the last row of the ecosystem wins, as before.
 	only := types.SiteConfig{EgressRedirects: companion}
 	if got := artifactBaseURLs(only); got["go"] != "https://art.corp/api/go/sumdb" || got["pip"] != "https://art.corp/api/pypi/pypi-remote" {
 		t.Errorf("without an index row the last row must win, got %v", got)
+	}
+}
+
+// TestArtifactBaseURLs_GoSumDBOptOutStaysOnTheLastGoRow: the checksum-database
+// opt-out is still read from the last go row, so a [proxy, sum(off)] config keeps
+// writing GOSUMDB=off.
+func TestArtifactBaseURLs_GoSumDBOptOutStaysOnTheLastGoRow(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://proxy.golang.org", To: "https://art.corp/api/go/go-remote", Ecosystem: "go"},
+		{From: "https://sum.golang.org", To: "https://art.corp/api/go/sumdb", Ecosystem: "go", GoChecksumDBOff: true},
+	}}
+	_, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
+	if env["GOPROXY"] != "https://art.corp/api/go/go-remote" || env["GOSUMDB"] != "off" {
+		t.Errorf("env = %v, want GOPROXY from the proxy row and GOSUMDB=off from the last go row", env)
 	}
 }
 
