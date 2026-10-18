@@ -24,15 +24,16 @@ import (
 // run lock proven held around it, and a run whose sandbox may not match its row
 // is recorded (store.PauseSettler) until one does.
 
-// pauseSettleTries bounds the tries of one read or runtime call in a
-// compensation or a settle; what still fails is left to the settle record.
-const pauseSettleTries = 3
+// retryTries bounds the tries of one read or runtime call in a compensation, a
+// settle or a kill's revocations; what still fails is left to the settle record
+// or the kill's audit data.
+const retryTries = 3
 
-// retrying calls fn until it succeeds, pauseSettleTries times at most, a short
+// retrying calls fn until it succeeds, retryTries times at most, a short
 // and growing wait apart, while ctx lasts.
 func retrying(ctx context.Context, fn func() error) error {
 	err := fn()
-	for i := 1; err != nil && i < pauseSettleTries; i++ {
+	for i := 1; err != nil && i < retryTries; i++ {
 		select {
 		case <-ctx.Done():
 			return err
