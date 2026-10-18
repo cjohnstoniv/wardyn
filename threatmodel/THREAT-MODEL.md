@@ -2822,7 +2822,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go).)
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
-    - The run's sandbox reaches it over the run's own network; nothing checks the caller's address.
+    - The run's sandbox reaches it over the run's own network; the proxy does not yet restrict callers to its own sandbox's address.
     - A check that serves only the run's sandbox address, with no change to how the proxy is addressed, is planned for 0.10 once proven on Docker and Podman.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
