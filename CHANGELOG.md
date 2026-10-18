@@ -68,6 +68,7 @@ These are covered by tests against simulated parts only; check them on your esta
 - A kill a runner deferred is asked again once that runner completes its next inventory, and the run's fence lifts when
   the runner confirms it; before, the deferred answer stayed the run's last word until someone killed the run again.
 - A policy apply is audited together with the run's creation, so a refused launch leaves no policy apply row, and a recording upload for a run that no longer exists answers 404.
+- A runner's version and last-seen time are recorded when it connects, so the runners list and its runner.connect audit rows show which release each runner runs.
 
 ## [0.9.3-rc.3] — 2026-10-17
 

@@ -41,6 +41,35 @@ func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid
 	return nil
 }
 
+func (f *runnerRegistrationFake) TouchRunner(_ context.Context, id uuid.UUID, version string, now time.Time) error {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	if row, ok := f.rows[id]; ok {
+		if version != "" {
+			row.Version = version
+		}
+		row.LastSeenAt = &now
+		f.rows[id] = row
+	}
+	return nil
+}
+
+// A caps event records the version the runner reports and a last_seen_at, whatever the row held.
+func TestRunnerCapsRecordTheVersionAndLastSeen(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	data, _ := json.Marshal(runnerwire.Caps{Version: "0.9.3-test"})
+	if err := srv.EventFromRunner(context.Background(), row.ID, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	f.lock.Lock()
+	got := f.rows[row.ID]
+	f.lock.Unlock()
+	if got.Version != "0.9.3-test" || got.LastSeenAt == nil {
+		t.Fatalf("runner row = version %q, last seen %v; want 0.9.3-test and a time", got.Version, got.LastSeenAt)
+	}
+}
+
 // testRunnerLimits is a valid limit set: 2 runs at once, each of them half the totals.
 func testRunnerLimits() *types.RunnerLimits {
 	return &types.RunnerLimits{RunsAtOnce: 2, Total: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 102400},

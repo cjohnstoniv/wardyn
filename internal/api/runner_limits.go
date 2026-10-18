@@ -51,6 +51,9 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runn
 	if runnerwire.Unmarshal(ev.Data, &caps) != nil {
 		return
 	}
+	if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
+		s.recordRunnerVersion(ctx, rs, runnerID, strings.TrimSpace(caps.Version))
+	}
 	if ms, ok := s.cfg.Store.(machineNameStore); ok {
 		s.recordMachineName(ctx, ms, runnerID, strings.TrimSpace(caps.MachineName))
 	}
@@ -68,6 +71,20 @@ func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runn
 			slog.WarnContext(ctx, "wardynd: record runner retire capability", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 		}
 	}
+}
+
+// recordRunnerVersion stamps the runner's session (last_seen_at) with the version it reported, then writes
+// the runner.connect row Connected owed, so the row carries that version. A version that is not bounded
+// printable text is not stored; neither it nor a failed write refuses the event.
+func (s *Server) recordRunnerVersion(ctx context.Context, st store.RunnerStore, runnerID uuid.UUID, version string) {
+	if !types.ValidMachineName(version) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unusable version", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(version)))
+		version = ""
+	}
+	if err := st.TouchRunner(ctx, runnerID, version, s.cfg.Now()); err != nil {
+		slog.WarnContext(ctx, "wardynd: record runner version", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+	}
+	s.writeOwedRunnerConnect(ctx, st, runnerID, version)
 }
 
 func (s *Server) recordMachineName(ctx context.Context, ms machineNameStore, runnerID uuid.UUID, name string) {
