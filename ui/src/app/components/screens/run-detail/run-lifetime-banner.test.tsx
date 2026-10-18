@@ -112,12 +112,12 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     expect(toastInfoMock).toHaveBeenCalledWith("Policy updated at revive: 2 hosts now blocked.");
   });
 
-  it("a wait that ended before the runner answered says the runner is still starting the run, not an error", async () => {
+  it("a wait that ended before the runner answered says the result is unknown, not an error", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
     renderBanner(detail({ lost_reason: "reboot" }));
     await user.click(screen.getByRole("button", { name: "Revive" }));
-    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("The runner is still starting this run. Check back in a minute."));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -242,6 +242,27 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     await waitFor(() => expect(order).toEqual(["end", "revive"]));
     const [, patchBody] = setRunEndAndWaitMock.mock.calls[0];
     expect(Date.parse(patchBody.endsAt)).toBeGreaterThan(Date.now());
+  });
+
+  it("Extend and revive: a revive whose wait ended says the result is unknown, and the page still refreshes for the moved end", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."));
+    const onChanged = vi.fn();
+    renderBanner(detail({ lost_reason: "ended", interactive: true }), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(toastInfoMock).toHaveBeenCalledWith("No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again."));
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("Extend and revive: a revive that fails outright still refreshes the page, because the end already moved", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    reviveRunMock.mockRejectedValueOnce(new Error("boom"));
+    const onChanged = vi.fn();
+    renderBanner(detail({ lost_reason: "ended", interactive: true }), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "Extend and revive" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't extend and revive this run", expect.anything()));
+    expect(onChanged).toHaveBeenCalled();
   });
 
   // R2-2 (PR #1317 round-2 review, F9 REJECTED): reviveEligible always
