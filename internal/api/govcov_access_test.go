@@ -214,18 +214,21 @@ func TestGovCovApplyRoleMappingChangeStopsEarly(t *testing.T) {
 		}
 	})
 
-	t.Run("a failed target lock stops the apply", func(t *testing.T) {
-		s := govCovAccessServer(t, &govCovStore{}, nil)
-		q := &govCovQuerier{execFn: govCovExecFailingOn(1, boom)}
-		if _, err := applyRoleMappingChange(s, r, q, ch); !errors.Is(err, boom) || len(q.seen) != 1 {
-			t.Errorf("error = %v after %v", err, q.seen)
-		}
-	})
+	// The map's lock is taken first, then the row's.
+	for n, lock := range []string{"map", "row"} {
+		t.Run("a failed "+lock+" lock stops the apply", func(t *testing.T) {
+			s := govCovAccessServer(t, &govCovStore{}, nil)
+			q := &govCovQuerier{execFn: govCovExecFailingOn(n+1, boom)}
+			if _, err := applyRoleMappingChange(s, r, q, ch); !errors.Is(err, boom) || len(q.seen) != n+1 {
+				t.Errorf("error = %v after %v", err, q.seen)
+			}
+		})
+	}
 
 	t.Run("a failed read of the mappings stops the apply before any write", func(t *testing.T) {
 		s := govCovAccessServer(t, &govCovStore{}, nil)
 		q := &govCovQuerier{queryErr: boom}
-		if _, err := applyRoleMappingChange(s, r, q, ch); !errors.Is(err, boom) || len(q.writes()) != 0 || len(q.seen) != 2 {
+		if _, err := applyRoleMappingChange(s, r, q, ch); !errors.Is(err, boom) || len(q.writes()) != 0 || len(q.seen) != 3 {
 			t.Errorf("error = %v after %v", err, q.seen)
 		}
 	})

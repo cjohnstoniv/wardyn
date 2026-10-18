@@ -235,15 +235,19 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			if ref == "" {
 				continue
 			}
-			// A name the member OWNS is exempt from capSecret: that capability
-			// bounds access to OPERATOR material, and a member's own row widens
-			// nothing (6c).
-			if s.ownsSecretMemoized(ctx, owner, ref) {
-				continue
-			}
+			owned := s.ownsSecretMemoized(ctx, owner, ref)
 			ok, err := cap.allowed(ctx, capSecret, ref)
 			if err != nil {
 				return nil, nil, err
+			}
+			// A name the member OWNS is exempt from capSecret: that capability
+			// bounds access to OPERATOR material, and a member's own row widens
+			// nothing (6c). That holds only while the grant reads the own row
+			// alone, so an exempted grant is owner_only: a row deleted after
+			// launch never falls back to the operator's.
+			if !ok && owned {
+				g.OwnerOnly = true
+				continue
 			}
 			if !ok {
 				refused = ref
@@ -280,12 +284,17 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		if err != nil {
 			return nil, nil, fmt.Errorf("api: list workspaces: %w", err)
 		}
-		idx := indexWorkspacesBySource(all)
+		// A repo several workspaces carry is admitted by a grant on any carrier
+		// the member may use (their own or a shared one), never on another
+		// person's private one; with none, the carrier it is held to is judged
+		// as before and the onboarding gate refuses it.
+		usable := func(ws types.Workspace) bool { return ws.OwnedBy == "" || (owner != "" && ws.OwnedBy == owner) }
+		idx := indexWorkspacesFor(all, usable)
 		keptRepos := spec.WorkspaceRepos[:0:0]
 		for _, wr := range spec.WorkspaceRepos {
 			ws, onboarded := idx.repo[wr.Repo]
 			if onboarded {
-				ok, err := cap.allowed(ctx, capWorkspace, ws.ID.String())
+				ok, err := anyCarrierGranted(ctx, cap, ws, idx.repoAll[wr.Repo], usable)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -300,6 +309,22 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 	}
 
 	return warns, drops, nil
+}
+
+// anyCarrierGranted reports whether capWorkspace is granted on one of the
+// carriers usable admits or, when held (the carrier the source is held to) is
+// not one of them, on held alone, judged as before.
+func anyCarrierGranted(ctx context.Context, cap *capBatch, held types.Workspace, carriers []types.Workspace, usable func(types.Workspace) bool) (bool, error) {
+	judged := []types.Workspace{held}
+	if usable(held) {
+		judged = slices.DeleteFunc(slices.Clone(carriers), func(c types.Workspace) bool { return !usable(c) })
+	}
+	for _, c := range judged {
+		if ok, err := cap.allowed(ctx, capWorkspace, c.ID.String()); err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }
 
 // dropUncoveredPrivateLiterals removes, from the allowlist of a spec a member

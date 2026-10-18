@@ -45,7 +45,8 @@ var kernelDoors = map[string][]string{
 	// policy's entries, then the image a workspace seeds and the git rows its
 	// repos resolve to, then the model provider it will use.
 	"runRequestGovernance":      {"capAgent", "capImage", "capPolicy", "capWorkspace"},
-	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret", "capWorkspace"},
+	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret"},
+	"anyCarrierGranted":         {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound
 	"seededImageRefusal":        {"capImage"},
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},
@@ -168,9 +169,16 @@ func paramNames(fn *ast.FuncDecl) []string {
 	return names
 }
 
-// capBatchVars is the identifiers fn assigns a *capBatch to.
+// capBatchVars is the identifiers fn takes a *capBatch as or assigns one to.
 func capBatchVars(fn *ast.FuncDecl) map[string]bool {
 	vars := map[string]bool{}
+	for _, field := range fn.Type.Params.List {
+		if star, ok := field.Type.(*ast.StarExpr); ok && isIdent(star.X, "capBatch") {
+			for _, n := range field.Names {
+				vars[n.Name] = true
+			}
+		}
+	}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		as, ok := n.(*ast.AssignStmt)
 		if !ok || len(as.Lhs) != len(as.Rhs) {
