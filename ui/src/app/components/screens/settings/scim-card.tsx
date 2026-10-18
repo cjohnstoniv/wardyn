@@ -16,7 +16,7 @@ import * as React from "react";
 import { scim as scimApi } from "../../../lib/api/scim";
 import { appURL } from "../../../lib/base-path";
 import { absoluteTime, relativeTime } from "../../../lib/format";
-import { SCIM, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
+import { SCIM, SCIM_LIST_CAP, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
 import type { SCIMStatus } from "../../../lib/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
@@ -178,8 +178,10 @@ export function ScimCard() {
 
   // Absent while unloaded or failed: ErrorState's own heading already says so once the card is open.
   const unfinished = status ? new Set(status.pending.map((p) => p.person)).size : 0;
+  // A full page means the server stopped listing, not that this many people are deactivated.
+  const deactivated = status && status.deactivated.length >= SCIM_LIST_CAP ? `${SCIM_LIST_CAP}+` : status?.deactivated.length;
   const summary =
-    state !== "ready" || !status ? undefined : status.configured ? SCIM.SUMMARY_ON(status.deactivated.length, unfinished) : SCIM.SUMMARY_OFF;
+    state !== "ready" || !status ? undefined : status.configured ? SCIM.SUMMARY_ON(deactivated ?? 0, unfinished) : SCIM.SUMMARY_OFF;
 
   return (
     <CollapsibleCard title={SCIM.TITLE} summary={summary} testId="scim-card">

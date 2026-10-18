@@ -10,9 +10,12 @@ import { DRIVES } from "./user-drives-copy";
 /** The leaver runbook, OPERATIONS.md's "Leavers and SCIM". */
 export const SCIM_RUNBOOK_URL = "https://github.com/cjohnstoniv/wardyn/blob/main/docs/OPERATIONS.md#leavers-and-scim";
 
+/** /scim/status lists at most this many deactivated people (scimStatusListCap in internal/api/scim_status.go) and returns no total. */
+export const SCIM_LIST_CAP = 200;
+
 export const SCIM = {
   TITLE: "SCIM provisioning",
-  SUMMARY_ON: (deactivated: number, unfinished: number) => `${deactivated} deactivated · ${unfinished} unfinished`,
+  SUMMARY_ON: (deactivated: number | string, unfinished: number) => `${deactivated} deactivated · ${unfinished} unfinished`,
   SUMMARY_OFF: "Not set up",
   LEAD: "Your identity provider tells Wardyn when someone leaves or changes groups. Wardyn then cuts their sessions, tokens, SSH keys and runs, and erases their stored credentials after the purge delay.",
   OFF_BODY: "Not set up. Someone removed in your identity provider keeps their sessions, tokens and runs here until an admin revokes them.",

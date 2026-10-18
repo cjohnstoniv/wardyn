@@ -78,6 +78,13 @@ describe("ScimCard", () => {
     expect(within(card).queryByText(/^A purge lists these/)).toBeNull();
   });
 
+  it("a full 200-row page reads '200+', not '200': the server stops listing there and sends no total", async () => {
+    const page = Array.from({ length: 200 }, (_, i) => ({ person: `p${i}@example.com`, deactivated_at: ago(DAY) }));
+    getStatusMock.mockReset().mockResolvedValue(status({ deactivated: page }));
+    render(<ScimCard />);
+    expect(await screen.findByRole("button", { name: /^SCIM provisioning\s*200\+ deactivated · 0 unfinished/ })).toBeInTheDocument();
+  });
+
   it("set up with work to show: the three lists, their hints, the summary counts", async () => {
     const card = await open(
       status({
