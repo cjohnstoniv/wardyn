@@ -17,8 +17,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -309,5 +311,73 @@ func TestPG_GovernanceChanges_RoleMappingSwitchOffIsUnchanged(t *testing.T) {
 		if strings.HasPrefix(ev.Action, "governance.change.") {
 			t.Errorf("a switch-off write recorded %s", ev.Action)
 		}
+	}
+}
+
+// TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap: two held deletes of the last
+// two console rows, approved at once, are judged one after the other. Each alone leaves the other row
+// and moves nothing; whichever is applied second would empty the map, so it is judged against the map
+// the first left and refused for the flip its proposal never acknowledged.
+func TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap(t *testing.T) {
+	t.Setenv(envGovernanceSecondHuman, "true")
+	pool := throwawayPGPool(t)
+	pg := store.NewPG(pool)
+	auth := newAccessAuth(t, nil, "", []string{"approver@corp.example", "proposer@corp.example"}, nil, func(c *oidc.Config) {
+		c.RoleMappings, c.UserTypes = pgOIDCRoleMappings{pg}, pg
+	})
+	e := &roleMapEnv{govEnv: newGovEnvOn(t, pool, func(c *Config) { c.OIDC = auth })}
+	proposer := accessSession(t, "sub-proposer", "proposer@corp.example", oidc.RoleAdmin, nil)
+	approver := accessSession(t, "sub-approver", "approver@corp.example", oidc.RoleAdmin, nil)
+	ctx := context.Background()
+	e.seedMapping("dev-a", oidc.RoleUser)
+	e.seedMapping("dev-b", oidc.RoleUser)
+	var changes []types.GovernanceChange
+	for _, m := range e.mappings() {
+		changes = append(changes, e.pending(e.call(proposer, http.MethodDelete, "/api/v1/access/mappings/"+m.ID.String(), "")))
+	}
+
+	// A barrier the deletes queue behind but the map reads do not: both approvals read the map and
+	// reach their DELETE (or wait on each other) before either can commit. On a pool of its own, since
+	// this goroutine also probes with it (WARDYN_TEST_POOL_GUARD).
+	holdPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	hold, err := holdPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback(ctx) //nolint:errcheck
+	if _, err := hold.Exec(ctx, `LOCK TABLE role_mappings IN SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	codes := make(chan int, len(changes))
+	for _, ch := range changes {
+		go func() { codes <- e.call(approver, http.MethodPost, approvePath(ch.ID), "").Code }()
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		var waiting int
+		if err := hold.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == len(changes) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d approvals parked on a lock", waiting, len(changes))
+		}
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	applied := 0
+	for range changes {
+		if <-codes == http.StatusOK {
+			applied++
+		}
+	}
+	if left := e.mappings(); applied != 1 || len(left) != 1 {
+		t.Fatalf("applied %d of the two deletes, %d rows left; want one applied and one row left", applied, len(left))
 	}
 }
