@@ -26,5 +26,6 @@
 # docs/POLICIES.md 18380 = 18368 + 12, measured: a GitHub CLI row is refused, not withheld, under a profile that blocks GitHub.
 # docs/POLICIES.md 18382 adds 2 over 18380, measured: the run policy is under spec (0.9.3 ASK-6 review).
 docs/POLICIES.md=18382 share=12
-examples/policies/README.md=1349 share=5
+# examples/policies/README.md 1374 = 1349 + 25, measured: the remote-workspace bullet names the shipped ceiling.
+examples/policies/README.md=1374 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
