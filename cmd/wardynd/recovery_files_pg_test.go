@@ -133,6 +133,33 @@ func TestRecoveryFiles_GoodPGAndFSRecordingsPass(t *testing.T) {
 	}
 }
 
+// An image without asciinema stores its plain log as the cast, and an erasure leaves an empty fence
+// marker under .erased/: neither is a damaged recording, and neither may fail an intact set.
+func TestRecoveryFiles_PlainLogsAndErasureFencesDoNotFailAnIntactSet(t *testing.T) {
+	rg := newRehearseRig(t)
+	rg.addCasts(map[string]string{"run-good": goodCast, "run-plain": "plain log, no asciinema\n"})
+	r := rg.runSet(rg.stagedSet())
+	if r.err != nil {
+		t.Fatalf("pg store: %v\n%s", r.err, r.out)
+	}
+	if c, _ := r.check("recordings"); c.Result != resultPass || c.Counts["checked"] != 2 {
+		t.Errorf("pg recordings = %+v; want both checked and passing", c)
+	}
+
+	dir := rg.stagedSetWith("fs", func(dir string) {
+		stage(t, dir, "recordings/run-a.cast", goodCast)
+		stage(t, dir, "recordings/run-plain.cast", "plain log, no asciinema\n")
+		stage(t, dir, "recordings/.erased/"+uuid.NewString()+".cast", "")
+	})
+	r = rg.runSet(dir)
+	if r.err != nil {
+		t.Fatalf("fs store: %v\n%s", r.err, r.out)
+	}
+	if c, _ := r.check("recordings"); c.Result != resultPass || c.Counts["checked"] != 2 {
+		t.Errorf("fs recordings = %+v; want the two recordings checked and the fence marker left out", c)
+	}
+}
+
 func TestRecoveryFiles_ATruncatedFSCastFailsNamingIt(t *testing.T) {
 	rg := newRehearseRig(t)
 	dir := rg.stagedSetWith("fs", func(dir string) {

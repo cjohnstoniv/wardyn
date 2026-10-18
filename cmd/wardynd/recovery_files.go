@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -226,7 +227,7 @@ func (s *rehearseSession) pgRecordings(ctx context.Context) (rehearseCheck, erro
 			return c, fmt.Errorf("read the recordings: %w", err)
 		}
 		c.Counts["checked"]++
-		if err := recording.CopyOutput(ctx, io.Discard, bytes.NewReader(payload)); err != nil {
+		if err := checkCast(ctx, bytes.NewReader(payload)); err != nil {
 			c.Failing = append(c.Failing, "cast "+key+": "+castProblem(err))
 		}
 	}
@@ -235,6 +236,24 @@ func (s *rehearseSession) pgRecordings(ctx context.Context) (rehearseCheck, erro
 	}
 	return finish(c), nil
 }
+
+// checkCast parses one stored recording. A body that does not begin like an asciicast is a plain log: an
+// image without asciinema stores its log as the cast (the upload path tells the two apart the same way,
+// by this prefix), and it has no structure to check.
+func checkCast(ctx context.Context, r io.Reader) error {
+	br := bufio.NewReaderSize(r, 4096)
+	head, err := br.Peek(len(castHeadPrefix))
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		return err
+	}
+	if !bytes.HasPrefix(head, []byte(castHeadPrefix)) {
+		return nil
+	}
+	return recording.CopyOutput(ctx, io.Discard, br)
+}
+
+// castHeadPrefix opens every asciicast v2 header (the same test internal/api's upload path applies).
+const castHeadPrefix = `{"version"`
 
 // castProblem is a cast's parse error without any of its content: the recording package never puts
 // sandbox-controlled bytes in ErrInvalidCast, and anything else is reduced to the sentinel.
@@ -294,8 +313,19 @@ func parseCasts(ctx context.Context, root *os.Root) (castRun, error) {
 	}
 	defer sub.Close()
 	err = fs.WalkDir(sub.FS(), ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".cast") {
+		if err != nil {
 			return err
+		}
+		// A dot-directory is the store's own bookkeeping: .erased/ holds the
+		// empty fence markers that keep an erasure durable, not recordings.
+		if d.IsDir() {
+			if p != "." && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".cast") {
+			return nil
 		}
 		run.checked++
 		if !d.Type().IsRegular() {
@@ -312,7 +342,7 @@ func parseCasts(ctx context.Context, root *os.Root) (castRun, error) {
 			run.failing = append(run.failing, "cast "+p+": is not a regular file")
 			return nil
 		}
-		if err := recording.CopyOutput(ctx, io.Discard, f); err != nil {
+		if err := checkCast(ctx, f); err != nil {
 			run.failing = append(run.failing, "cast "+p+": "+castProblem(err))
 		}
 		return nil
