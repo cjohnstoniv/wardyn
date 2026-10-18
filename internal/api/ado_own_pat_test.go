@@ -388,14 +388,15 @@ func TestGitCredentialRefusal_OwnPAT(t *testing.T) {
 	}
 	repo := "https://dev.azure.com/contoso/proj/_git/app"
 	for _, tc := range []struct {
-		name string
-		exp  time.Time
-		want string // "" = admitted
+		name      string
+		exp       time.Time
+		want      string // "" = admitted
+		wantCause string
 	}{
-		{"not added", time.Time{}, gitCredentialNotConnectedRefusal},
-		{"expired", ownPATNow.Add(-time.Minute), gitCredentialOwnPATExpiredRefusal},
-		{"expiring", ownPATNow.Add(48 * time.Hour), ""},
-		{"live", ownPATNow.AddDate(0, 0, 20), ""},
+		{"not added", time.Time{}, gitCredentialNotConnectedRefusal, ""},
+		{"expired", ownPATNow.Add(-time.Minute), gitCredentialOwnPATExpiredRefusal, scmAccessCauseTokenExpired},
+		{"expiring", ownPATNow.Add(48 * time.Hour), "", ""},
+		{"live", ownPATNow.AddDate(0, 0, 20), "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newSCMTestServer(t, adoSite(row), false)
@@ -410,6 +411,11 @@ func TestGitCredentialRefusal_OwnPAT(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("refusal = %q, want %q", got, tc.want)
+			}
+			// The cause rides the 422 so the console opens Connect only for one a sign-in repairs.
+			var gcErr *gitCredentialRefusalError
+			if errors.As(err, &gcErr) && gcErr.Cause != tc.wantCause {
+				t.Errorf("cause = %q, want %q", gcErr.Cause, tc.wantCause)
 			}
 		})
 	}

@@ -512,11 +512,15 @@ func (s *Server) adoSignInPresenceFact(ctx context.Context, sc types.SiteConfig,
 // any preflight verdict exists — a 422 can be the very FIRST thing this
 // caller hears about the row, so the dialog cannot depend on a
 // `git_credential` preflight fact having already landed. No row id — see
-// SCMAccess's own doc comment.
+// SCMAccess's own doc comment. Cause is why the row is unusable when it is
+// more than "not connected" (an scmAccessCause value or
+// ReasonADOPATNeedsConsoleApp), so the console opens Connect only for one a
+// sign-in repairs; absent means not connected.
 type gitCredentialErrorBody struct {
 	Error  string `json:"error"`
 	Reason string `json:"reason"`
 	Org    string `json:"org,omitempty"`
+	Cause  string `json:"cause,omitempty"`
 }
 
 // gitCredentialRefusalReason is the 422 `reason` the New Run rail recognises
@@ -569,7 +573,7 @@ var errGitCredentialRefused = errors.New(gitCredentialRefusalReason)
 // gitCredentialErrorBody needs (the org) through an error return — Unwrap
 // makes it match errGitCredentialRefused for a caller that only wants to
 // know WHICH refusal this is, errors.As for one that wants the org too.
-type gitCredentialRefusalError struct{ Org, Sentence string }
+type gitCredentialRefusalError struct{ Org, Sentence, Cause string }
 
 func (e *gitCredentialRefusalError) Error() string { return e.Sentence }
 func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefused }
@@ -648,17 +652,17 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		case access.State == modelAccessLive, access.State == modelAccessExpiring:
 			continue
 		case access.Cause == scmAccessCauseTokenExpired:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialOwnPATExpiredRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialOwnPATExpiredRefusal, Cause: scmAccessCauseTokenExpired}
 		case access.Cause == scmAccessCauseEnded:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal, Cause: scmAccessCauseEnded}
 		case access.Cause == scmAccessCauseConsentNeeded:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal, Cause: scmAccessCauseConsentNeeded}
 		case access.Cause == scmAccessCauseBlocked:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal, Cause: scmAccessCauseBlocked}
 		case access.Cause == scmAccessCausePermissionsMissing:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal, Cause: scmAccessCausePermissionsMissing}
 		case access.Cause == ReasonADOPATNeedsConsoleApp:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal, Cause: ReasonADOPATNeedsConsoleApp}
 		}
 		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}
@@ -693,7 +697,7 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 	// unaudited; only a run that actually DISPATCHES and then fails audits,
 	// under run.create.
 	writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
-		Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+		Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org, Cause: gcErr.Cause,
 	})
 	return true
 }
