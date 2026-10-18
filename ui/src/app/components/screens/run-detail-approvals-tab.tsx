@@ -28,6 +28,8 @@ import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { PUSH } from "../wardyn/copy/push";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
+import { ReauthRow } from "../wardyn/live-approvals-rows";
 import { SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { isTerminalRunState } from "../../lib/types";
 import { useRunAdoTokens } from "../../lib/hooks/use-run-ado-tokens";
@@ -54,6 +56,7 @@ export function ApprovalsTab({
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();
+  const adminView = useConsoleMode() === "admin";
   // The id of the row currently deciding, and which of its two actions
   // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
   // boolean isn't enough. The push card follows the same rule.
@@ -189,7 +192,14 @@ export function ApprovalsTab({
                 {a.reason && <> · {a.reason}</>}
               </div>
             )}
-            {pending && (
+            {pending && a.kind === "credential_reauth" && (
+              // A door, not a decision: no tier can approve or deny this kind (the server answers 409), so the pair
+              // is absent, not disabled. The same row the live strip and /approvals offer, so the three cannot drift.
+              <div className="mt-3 border-t border-border pt-3" data-testid="approvals-tab-reauth">
+                <ReauthRow request={a} runId={run.id} adminView={adminView} />
+              </div>
+            )}
+            {pending && a.kind !== "credential_reauth" && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
                 {/* Gated on the SECURITY tier (canDecideApproval reads
                     securityOperator, admin-OR-security-admin), not plain
