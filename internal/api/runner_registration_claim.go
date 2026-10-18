@@ -41,7 +41,7 @@ func (s *Server) handleRunnerClaim(w http.ResponseWriter, r *http.Request) {
 	row, err := rs.GetRunner(r.Context(), id)
 	// Another person's runner and an absent one are the same answer, so a refusal never says whose runner it is.
 	if errors.Is(err, store.ErrNotFound) || (err == nil && row.Owner != owner) {
-		writeErrorReason(w, http.StatusForbidden, string(placement.ReasonRunnerClaimMismatch), "runner claim does not match the owner or fingerprint")
+		writeErrorReason(w, http.StatusForbidden, string(placement.ReasonRunnerClaimMismatch), runnerClaimUnknownMsg)
 		return
 	}
 	if err != nil {
@@ -162,6 +162,10 @@ func (s *Server) handleRunnerClaimOrg(w http.ResponseWriter, r *http.Request) {
 }
 
 const runnerClaimAlreadyMsg = "this runner has already been claimed"
+
+// runnerClaimUnknownMsg answers a claim naming a row that is another person's, absent or swept alike:
+// the 24 hour sweep deletes an unclaimed registration, so the row's owner cannot be told apart.
+const runnerClaimUnknownMsg = "no unclaimed runner of yours has this id; a runner not claimed within 24 hours is removed, so register it again with a new token and a fresh state directory"
 
 // runnerClaimRefusal says why the owner's own runner row cannot be claimed, or "" when it can. It runs only
 // after the owner matched, so naming the cause tells the owner nothing about anyone else's runner.
