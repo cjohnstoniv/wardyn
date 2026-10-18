@@ -865,8 +865,8 @@ test.describe("drives — an admin's New run says none of the member's sentences
     }
     await dialog.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
 
-    // …and the surfaces that ARE the admin's are live on the same session. The draft has a shape by now,
-    // so leaving it is confirmed.
+    // …and this User-view session offers no door to the admin's drive registry (#2887). The draft has a shape
+    // by now, so leaving it is confirmed.
     await navTo(page, "Workspaces");
     await page.getByRole("alertdialog", { name: UNSAVED_GUARD.TITLE }).getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
     // The User view's Workspaces has no door to /admin/drives (#2887); the Admin view keeps it.
