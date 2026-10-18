@@ -63,6 +63,10 @@ export interface PolicyEditorProps {
   operationError?: PolicySourceError | null;
   /** Controls that write the source through a parse; held while it does not parse. */
   structured?: React.ReactNode;
+  /** A control that leads the format-switch row (the template menu); held while the source does not parse. */
+  toolbarLead?: React.ReactNode;
+  /** A line under that row. */
+  toolbarNote?: React.ReactNode;
   rows?: number;
   className?: string;
 }
@@ -78,6 +82,8 @@ export function PolicyEditor({
   validExtras,
   operationError,
   structured,
+  toolbarLead,
+  toolbarNote,
   rows = 10,
   className,
 }: PolicyEditorProps) {
@@ -111,9 +117,17 @@ export function PolicyEditor({
         )}
       </div>
 
-      <div data-testid="policy-format-switch">
-        <Segmented value={format} options={FORMATS} onChange={requestFormat} disabled={invalid} />
+      <div className="flex flex-wrap items-center gap-2" data-testid="policy-toolbar">
+        {toolbarLead && <fieldset disabled={invalid} className="m-0 min-w-0 border-0 p-0">{toolbarLead}</fieldset>}
+        <div data-testid="policy-format-switch">
+          <Segmented value={format} options={FORMATS} onChange={requestFormat} disabled={invalid} />
+        </div>
+        {/* The text as typed, comments and mistakes included: never held. */}
+        <CopyButton text={source} label={D.COPY_SOURCE} className={POLICY_COPY_BUTTON}>
+          {D.COPY_SOURCE}
+        </CopyButton>
       </div>
+      {toolbarNote}
 
       <Field label={json ? D.SPEC_JSON : D.SPEC_YAML} htmlFor={id} required>
         <Textarea
@@ -154,13 +168,6 @@ export function PolicyEditor({
       <p id={commentsId} className="text-xs text-muted-foreground">
         {D.COMMENTS}
       </p>
-      <div>
-        {/* The text as typed, comments and mistakes included: never held. */}
-        <CopyButton text={source} label={D.COPY_SOURCE} className={POLICY_COPY_BUTTON}>
-          {D.COPY_SOURCE}
-        </CopyButton>
-      </div>
-
       {operationError && <OperationError error={operationError} />}
 
       {structured && (

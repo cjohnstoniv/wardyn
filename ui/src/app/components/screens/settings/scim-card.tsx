@@ -20,9 +20,11 @@ import { SCIM, SCIM_LIST_CAP, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
 import type { SCIMStatus } from "../../../lib/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
-import { Mono } from "../../wardyn/code-block";
+import { Mono, makeMono } from "../../wardyn/code-block";
 import { SectionLabel } from "../../wardyn/primitives";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
+
+const withMono = makeMono(["WARDYN_SCIM_TOKEN"]);
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -193,7 +195,7 @@ export function ScimCard() {
           <>
             <p className="text-body text-foreground">{SCIM.OFF_BODY}</p>
             <p className="mt-2 text-body text-muted-foreground">
-              {SCIM.OFF_HOW}{" "}
+              {withMono(SCIM.OFF_HOW)}{" "}
               <a href={SCIM_RUNBOOK_URL} target="_blank" rel="noreferrer" className="text-info underline-offset-2 hover:underline">
                 {SCIM.OFF_LINK}
               </a>

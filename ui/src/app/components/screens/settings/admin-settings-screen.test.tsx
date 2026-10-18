@@ -91,6 +91,7 @@ import { ADMIN_SSH_KEYS } from "./admin-ssh-keys-card";
 import { APPROVAL_NOTIFY } from "../../wardyn/copy/approval-notify";
 import { SCIM } from "../../../lib/scim-copy";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
+import { HOST_CARD } from "../../wardyn/copy/host-card";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
 
@@ -193,7 +194,8 @@ describe("AdminSettingsScreen", () => {
 describe("AdminSettingsScreen — S-5, a security admin is refused (nothing fetched)", () => {
   it("shows the refusal, names the tier, and asks neither /setup/status nor /site-config", async () => {
     renderScreen(/* operator */ false, /* operatorResolved */ true);
-    expect(await screen.findByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: SETTINGS_SUPER_ONLY.TITLE })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: VIEW_REFUSAL.TITLE })).not.toBeInTheDocument();
     expect(screen.getByText(SETTINGS_SUPER_ONLY.BODY)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: SETTINGS_SUPER_ONLY.CTA })).toBeInTheDocument();
     expect(getSetupStatusMock).not.toHaveBeenCalled();
@@ -234,6 +236,17 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     await expandCard(ADMIN_SSH_KEYS.TITLE);
     expect(await card.findByText(ADMIN_SSH_KEYS.EMPTY_TITLE)).toBeInTheDocument();
     expect(card.queryByText("laptop")).not.toBeInTheDocument();
+  });
+
+  // #2873: inside a card the empty state is the quiet one: a level-4 title in the standard icon tile.
+  it("an empty card says so with a quiet level-4 title in the icon tile", async () => {
+    listKeysMock.mockResolvedValue([]);
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
+    expect(await card.findByRole("heading", { name: ADMIN_SSH_KEYS.EMPTY_TITLE, level: 4 })).toBeInTheDocument();
+    expect(card.getByTestId("empty-state-tile")).toBeInTheDocument();
   });
 
   it("shows an admin-stamped key with its Admin override chip", async () => {
@@ -419,7 +432,7 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
   });
 
   // …and a retry that succeeds must recover: the failure state is per-load,
-  // not sticky. "Re-check this host" is the control that drives it.
+  // not sticky. "Re-check" is the control that drives it.
   it("recovers on a re-check that succeeds", async () => {
     getSiteConfigMock
       .mockRejectedValueOnce(new Error("HTTP 500 store unavailable"))
@@ -431,7 +444,7 @@ describe("AdminSettingsScreen — a FAILED site-config read is not a proxy postu
     await expandCard("Host");
     expect(screen.queryByText(/^Internet$/)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^re-check$/i }));
     expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
     expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
   });
@@ -449,5 +462,69 @@ describe("AdminSettingsScreen — an operator's Image builder row", () => {
     await expandCard("Host");
     expect(screen.getByText("Image builder")).toBeInTheDocument();
     expect(screen.getByText(/devcontainer builds and --image wraps are unavailable/)).toBeInTheDocument();
+  });
+});
+
+// #2876 (owner option A): the Host card's three facts are status tiles, a state pill says the whole host at a glance,
+// and the sentences are the console's own, split at their dash.
+describe("AdminSettingsScreen — the Host card's status tiles", () => {
+  const BUILDER_OK = { id: "env_builder", label: "Sandbox image builder", status: "ok" as const };
+  const openHost = async () => {
+    await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
+    await expandCard("Host");
+  };
+
+  it("a broken host says Can't launch in red; each fact is a tile with a coloured word and its sub-line", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "none", confinement_classes: [] } }));
+    renderScreen();
+    await openHost();
+    expect(within(screen.getByTestId("host-state-pill")).getByText(HOST_CARD.CANT_LAUNCH)).toBeInTheDocument();
+    expect(screen.getByTestId("host-state-pill")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("host-state-tile")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("host-tile-image-builder-pill")).toHaveTextContent(/^Off$/);
+    expect(screen.getByTestId("host-tile-image-builder-pill")).toHaveAttribute("data-tone", "warning");
+    expect(screen.getByTestId("host-tile-image-builder-sub")).toHaveTextContent(
+      "devcontainer builds and --image wraps are unavailable",
+    );
+    expect(screen.getByTestId("host-tile-recording-store-pill")).toHaveTextContent(/^Ephemeral$/);
+    expect(screen.getByTestId("host-tile-recording-store-pill")).toHaveAttribute("data-tone", "warning");
+    expect(screen.getByTestId("host-tile-recording-store-sub")).toHaveTextContent("recordings are lost on restart");
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Direct$/);
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveAttribute("data-tone", "neutral");
+    expect(screen.queryByTestId("host-tile-internet-sub")).toBeNull();
+  });
+
+  it("a healthy host says what runs default to, in green, and its good facts are green with no sub-line", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ checks: [BUILDER_OK], age_key: { durable: true } }));
+    getSiteConfigMock.mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
+    renderScreen();
+    await openHost();
+    expect(screen.getByTestId("host-state-pill")).toHaveTextContent(/^Runs default to /);
+    expect(screen.getByTestId("host-state-pill")).toHaveAttribute("data-tone", "success");
+    expect(screen.getByTestId("host-tile-image-builder-pill")).toHaveTextContent(/^Wired$/);
+    expect(screen.getByTestId("host-tile-recording-store-pill")).toHaveTextContent(/^Enabled$/);
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
+    for (const id of ["image-builder", "recording-store", "internet"]) {
+      expect(screen.getByTestId(`host-tile-${id}-pill`)).toHaveAttribute("data-tone", "success");
+      expect(screen.queryByTestId(`host-tile-${id}-sub`)).toBeNull();
+    }
+  });
+
+  it("keeps its gating: no builder tile on a redacted body, no Internet tile when the read failed", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ checks_redacted: true }));
+    getSiteConfigMock.mockRejectedValue(new Error("HTTP 500"));
+    renderScreen();
+    await openHost();
+    expect(screen.queryByTestId("host-tile-image-builder")).toBeNull();
+    expect(screen.queryByTestId("host-tile-internet")).toBeNull();
+    expect(screen.getByTestId("host-tile-recording-store")).toBeInTheDocument();
+  });
+
+  it("puts the proxy link and Re-check in one footer", async () => {
+    renderScreen();
+    await openHost();
+    const footer = within(screen.getByTestId("host-footer"));
+    expect(footer.getByRole("button", { name: /corporate proxy & egress/i })).toBeInTheDocument();
+    expect(footer.getByRole("button", { name: /^re-check$/i })).toBeInTheDocument();
   });
 });

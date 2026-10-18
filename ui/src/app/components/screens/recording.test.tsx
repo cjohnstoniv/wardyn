@@ -125,6 +125,19 @@ describe("RecordingScreen", () => {
     expect(getRecordingMock).not.toHaveBeenCalled();
   });
 
+  // #2858: "Go to Runs" leads somewhere, so it carries an arrow, not the create glyph; the copy has no internals.
+  it("both empty states point on with an arrow, not a plus, and name no recorder internals", async () => {
+    for (const runs of [[], [run("run_2", { task: "no cast", has_recording: false })]]) {
+      listRunsMock.mockResolvedValue(page(runs));
+      const { container, unmount } = renderScreen();
+      const link = await screen.findByRole("link", { name: /go to runs/i });
+      expect(link.querySelector("svg.lucide-arrow-right")).not.toBeNull();
+      expect(link.querySelector("svg.lucide-plus")).toBeNull();
+      expect(container.textContent).not.toMatch(/PTY|wardyn-rec|\bcast\b/);
+      unmount();
+    }
+  });
+
   // The core F077 pin: rendering the library must issue ZERO cast fetches —
   // has_recording alone decides which runs get a card, straight off the one
   // listRuns() response.

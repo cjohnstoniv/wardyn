@@ -15,7 +15,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { NO_BARRIER } from "../wardyn/copy";
-import { TIER } from "../wardyn/copy";
+import { SHELL, TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -196,7 +196,7 @@ export function TopBar({
               <ChevronsUpDown className="size-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-64">
             <DropdownMenuLabel>
               <div className="flex items-center gap-1.5">
                 <span className="min-w-0 truncate text-xs" title={display}>
@@ -232,7 +232,9 @@ export function TopBar({
                 {meta.method === "sso"
                   ? "signed in via SSO"
                   : meta.method === "token"
-                    ? "admin token"
+                    ? meta.operator
+                      ? "admin token"
+                      : SHELL.SIGNED_IN_WITH_TOKEN
                     : meta.method === "local"
                       ? "local mode — no login on this install"
                       : ""}

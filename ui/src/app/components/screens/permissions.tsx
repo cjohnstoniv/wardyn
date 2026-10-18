@@ -688,7 +688,7 @@ export function AddGrantForm({
 
   const body = (
     <>
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-[auto_1fr_1fr_auto]">
         <Field label={PERM.FIELD_WHO} hint={fixed ? undefined : whoHint}>
           {fixed ? (
             <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input-background px-3 text-body">

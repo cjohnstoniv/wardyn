@@ -82,6 +82,15 @@ beforeEach(() => {
   listUserTypesMock.mockReset().mockResolvedValue([]);
 });
 
+describe("PermissionsScreen — the add-a-grant row", () => {
+  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
+  it("sizes the Who and effect columns to their content at lg", async () => {
+    const { container } = renderScreen();
+    await screen.findByText(PERM.DEFAULT_POSTURE);
+    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr_auto]"]')).not.toBeNull();
+  });
+});
+
 describe("PermissionsScreen — fresh install (every kind off, zero grants)", () => {
   it("states the default posture, the doctrine and the exemption", async () => {
     renderScreen();

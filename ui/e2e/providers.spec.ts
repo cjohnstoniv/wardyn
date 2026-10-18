@@ -18,8 +18,8 @@ import {
 import { ADO_CAP_COPY, ADO_ENTRA_EDITOR, PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY } from "../src/app/lib/availability-copy";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
-import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
-import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import { UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { PROVIDERS_SUPER_ONLY, VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -346,27 +346,18 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
   });
 
-  // #217 — a disabled control states its reason BESIDE it, never only in a
-  // title tooltip. GET/PUT /workspace-providers are admin-only server-side
-  // (requireOperator), so a real security admin's read would 403 before this
-  // control ever paints — this spec's own documented ceiling (BROWSER VS API,
-  // top of file) is what makes the state reachable at all: the harness's
-  // bearer stays real admin, so the GET genuinely succeeds while the spliced
-  // client role reads !operator, exactly the race a stale /me can produce.
-  test("a security-admin session sees Save disabled WITH its reason beside it", async ({ page }) => {
+  // #2880 — a security admin is not a super admin, so /admin/providers refuses with the Settings-shaped card instead of
+  // drawing a page of disabled controls. The harness bearer stays real admin; the spliced /me role is what the page reads.
+  test("a security-admin session is refused the page, with the way back (#2880)", async ({ page }) => {
     await mockSecurityAdminRole(page);
-    // NOT gotoProviders(): the Settings card itself is operator-gated
-    // (ProvidersCard returns null for !operator — the sibling describe
-    // block's own test above), so that entry point is gone for this role.
-    // The GET still succeeds for real (the harness's bearer stays admin),
-    // so the route itself renders.
+    // NOT gotoProviders(): the Settings card itself is operator-gated (ProvidersCard returns null for
+    // !operator), so that entry point is gone for this role. A typed or bookmarked URL still reaches the route,
+    // and the page refuses it rather than drawing a disabled Save.
     await gotoConsole(page);
     await navToRoute(page, "/admin/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
-    await expect(saveBtn).toBeVisible();
-    await expect(saveBtn).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA, exact: true })).toBeVisible();
   });
 
   test("the funnel step badge and Settings card both read the real enabled-provider count", async ({ page }) => {
@@ -392,7 +383,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
 });
 
 test.describe("providers — the door is SUPER's alone", () => {
-  test("a security admin sees the tier refusal — OperatorOnlyHint, and no form at all", async ({ page }) => {
+  test("a security admin sees the super-admin refusal, and no form at all", async ({ page }) => {
     await mockSecurityAdminRole(page);
     await gotoConsole(page);
 
@@ -403,29 +394,29 @@ test.describe("providers — the door is SUPER's alone", () => {
     await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("providers-card")).toHaveCount(0);
 
-    // Reaching /providers directly: GET is operatorOnly, so a real security
-    // admin's read genuinely answers 403 — routed here as the real server's
-    // shape (the role splice leaves the bearer admin, exactly as
-    // drives.spec.ts's equivalent test documents).
-    await page.route("**/api/v1/workspace-providers", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
+    // Reaching /admin/providers directly: since #2880 the page refuses this tier up front with the Settings-shaped
+    // card (it no longer draws the page header over an "admin role" hint), and reads nothing.
+    const reads: string[] = [];
+    await page.route("**/api/v1/workspace-providers", (route) => {
+      reads.push(route.request().method());
+      return route.fallback();
     });
     await navToRoute(page, "/admin/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
-    // No form of any kind — no tabs, no Save, no rows.
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(PROVIDERS_SUPER_ONLY.BODY, { exact: true })).toBeVisible();
+    // No form of any kind — no heading, tabs, Save or rows.
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1, exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
     await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
+    expect(reads, "the refused page read the providers anyway").toEqual([]);
   });
 
   // M-1b: /providers is deleted — only /admin/providers exists now, so a
   // member reaching it directly hits the admin-view REFUSAL page
   // (console-view.tsx) before anything is fetched, not the screen's own
-  // inline OPERATOR_ONLY_REASON (that still covers the security-admin case
-  // above, whose SSO tier passes the view gate but not the server's operator
-  // check).
+  // super-admin refusal (that covers the security-admin case above, whose
+  // SSO tier passes the view gate but is not a super admin).
   test("a member sees no nav, no card, and the admin-view refusal page if they reach the URL directly", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);

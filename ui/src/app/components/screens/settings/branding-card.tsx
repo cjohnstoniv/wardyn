@@ -268,7 +268,8 @@ export function BrandingCard() {
                   selected={draft.nameFormat === f}
                   onClick={() => set({ nameFormat: f })}
                   title={orgName ? (f === "prefix" ? BRAND_NAME.PREFIX(orgName) : BRAND_NAME.SUFFIX(orgName)) : (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT)}
-                  hint={f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT}
+                  // With no name typed the title is already the placeholder shape; saying it twice adds nothing.
+                  hint={orgName ? (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT) : undefined}
                 />
               ))}
             </div>

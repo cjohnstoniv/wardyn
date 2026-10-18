@@ -70,6 +70,15 @@ beforeEach(() => {
   listUserTypesMock.mockReset().mockResolvedValue([STANDARD]);
 });
 
+describe("AssignmentsBlock — the add-a-grant row", () => {
+  // #2900: the Who column sizes to its content on wide screens so the type switch stays on one line.
+  it("sizes the Who column to its content at lg", async () => {
+    const { container } = renderBlock();
+    await screen.findByLabelText(PREVIEW.FIELD_CLAIMS);
+    expect(container.querySelector('[class~="lg:grid-cols-[auto_1fr_1fr]"]')).not.toBeNull();
+  });
+});
+
 describe("AssignmentsBlock — the resolved preview", () => {
   // `result` must clear when `claims` changes — otherwise the previous
   // group's resolved profile sits under new, unrun input as if it were the
@@ -95,6 +104,9 @@ describe("AssignmentsBlock — the resolved preview", () => {
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "eng");
     expect(listUserTypesMock).toHaveBeenCalled();
     expect(screen.queryByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL })).not.toBeInTheDocument();
+    // #2901: with no picker the lead does not tell the reader to use one.
+    expect(screen.getByText(GOV.PREVIEW_LEAD_NO_TYPES)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_LEAD)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }));
     expect(previewGovernanceMock).toHaveBeenCalledWith(expect.objectContaining({ user_type: "standard" }));
   });
@@ -106,6 +118,8 @@ describe("AssignmentsBlock — the resolved preview", () => {
     const picker = await screen.findByRole("combobox", { name: GOV.PREVIEW_USER_TYPE_LABEL });
     expect(picker).toHaveTextContent("Standard user");
     expect(screen.getByText(GOV.PREVIEW_USER_TYPE_HINT)).toBeInTheDocument();
+    expect(screen.getByText(GOV.PREVIEW_LEAD)).toBeInTheDocument();
+    expect(screen.queryByText(GOV.PREVIEW_LEAD_NO_TYPES)).not.toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "eng");
     await userEvent.click(picker);

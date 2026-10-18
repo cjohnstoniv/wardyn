@@ -367,5 +367,5 @@ export const MEMBER_WORKSPACE = {
   // Deliberately NOT the `Your runs · ${n}` shape (runs.tsx) — handleListWorkspaces
   // returns a member's own rows UNION every operator-owned row, so "Your" would
   // overclaim exclusivity for rows actually shared with every other member.
-  WORKSPACES_HEADER_MEMBER: (n: number) => `Workspaces · ${n}`,
+  WORKSPACES_HEADER_MEMBER: "A repo or directory a run can attach — including the ones shared with you.",
 };

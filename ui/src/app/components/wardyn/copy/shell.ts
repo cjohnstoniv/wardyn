@@ -15,6 +15,8 @@ import { MEMBER_GETTING_STARTED } from "./getting-started";
 // authz breach to the human reading it — and a failed sign-out must not
 // silently console.error with nobody seeing it.
 export const SHELL = {
+  // The account menu's line for a bearer token that is not an operator's: a member's own token (#2882).
+  SIGNED_IN_WITH_TOKEN: "signed in with a token",
   // B1: settled, but /me never answered. Rendered instead of a guessed nav, so
   // it has to say that the emptiness is ignorance and not a denial.
   UNKNOWN_BODY:

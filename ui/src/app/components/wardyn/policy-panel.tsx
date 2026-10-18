@@ -48,6 +48,7 @@ import { GitPATSection } from "./policy-git-pat";
 import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 import { egressSummary, lifecycleSummary } from "./policy-document/policy-facts";
 import { PolicyEditor } from "./policy-document/policy-editor";
+import { PolicyTemplateMenu } from "./policy-document/policy-template-menu";
 import {
   applySpecChange,
   parseSpec,
@@ -392,29 +393,12 @@ export function PolicyPanel({
               </>
             )
           }
+          toolbarLead={<PolicyTemplateMenu templates={templates} onPick={(t) => setSource(templateText(t, fmt))} />}
+          toolbarNote={
+            providerNames.length > 0 ? <p className="text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p> : undefined
+          }
           structured={
             <>
-              <div>
-                <SectionLabel className="mb-1.5">{C.START}</SectionLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {templates.map((t) => (
-                    <Button
-                      key={t.id}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      title={t.hint}
-                      onClick={() => setSource(templateText(t, fmt))}
-                    >
-                      {t.label}
-                    </Button>
-                  ))}
-                </div>
-                {providerNames.length > 0 && (
-                  <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
-                )}
-              </div>
-
               {/* The four sections below edit a LIST or a closed set that is easy
                   to get wrong by hand (a duplicate tool, a typo'd effect, a wire
                   word the server refuses). Each needs a parsed spec to edit, so

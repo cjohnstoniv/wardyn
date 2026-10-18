@@ -100,7 +100,9 @@ describe("ImagesTab", () => {
     listMock.mockResolvedValue([]);
     render(<ImagesTab />);
 
-    expect(await screen.findByText(IMAGES.EMPTY_TITLE)).toBeInTheDocument();
+    // #2873: inside a tab the empty state is the quiet one, a level-4 title in the standard icon tile.
+    expect(await screen.findByRole("heading", { name: IMAGES.EMPTY_TITLE, level: 4 })).toBeInTheDocument();
+    expect(screen.getByTestId("empty-state-tile")).toBeInTheDocument();
     expect(screen.getByText(IMAGES.EMPTY_BODY)).toBeInTheDocument();
     expect(teal().map((b) => b.textContent)).toEqual([IMAGES.ADD_CTA]);
   });

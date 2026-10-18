@@ -97,6 +97,15 @@ beforeEach(() => {
 });
 
 describe("AgentsTab", () => {
+  // #2879: "none" is the BYOA row's real id; printed under "Your own tools" it reads as a failed lookup.
+  it("shows each harness id under its name except the no-managed-auth row's", async () => {
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const own = await screen.findByTestId("agent-row-none");
+    expect(within(own).getByText("Your own tools")).toBeInTheDocument();
+    expect(within(own).queryByText("none")).toBeNull();
+    expect(within(await screen.findByTestId("agent-row-claude-code")).getByText("claude-code")).toBeInTheDocument();
+  });
+
   it("renders one row per harness from the roster", async () => {
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();

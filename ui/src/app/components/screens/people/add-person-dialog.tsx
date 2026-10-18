@@ -54,10 +54,10 @@ export function AddPersonDialog({ open, onOpenChange, onAdded }: { open: boolean
         </DialogHeader>
         <form onSubmit={submit} className="space-y-3">
           <p className="text-body text-muted-foreground">{P.ADD_HINT}</p>
-          <Field label="Subject" htmlFor="add-person-principal">
-            <Input id="add-person-principal" autoFocus autoComplete="off" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
+          <Field label={P.ADD_SUBJECT} htmlFor="add-person-principal" hint={P.ADD_SUBJECT_HINT} required>
+            <Input id="add-person-principal" required autoFocus autoComplete="off" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
           </Field>
-          <Field label="Email" htmlFor="add-person-email">
+          <Field label={P.ADD_EMAIL} htmlFor="add-person-email">
             <Input id="add-person-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
           {error && (

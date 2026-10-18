@@ -33,7 +33,7 @@
 // once. The summary is read from the same SiteConfig, so it can't go stale.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, CircleDot, Globe, Package, RotateCw, Server } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
@@ -57,14 +57,46 @@ import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
 import { ViewNotice } from "../../wardyn/console-view";
-import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
+import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
+import { HOST_CARD } from "../../wardyn/copy/host-card";
+import { Chip } from "../../wardyn/primitives";
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+type FactTone = "success" | "warning" | "neutral";
+
+// One fact of the Host card: a name, a coloured status word and, where the console's sentence goes on after
+// its dash, that rest under the word. The sentences are unchanged; only where they are split is new.
+function FactTile({
+  id,
+  icon: Icon,
+  label,
+  text,
+  tone,
+}: {
+  id: string;
+  icon: React.ElementType;
+  label: string;
+  text: string;
+  tone: FactTone;
+}) {
+  const [word, ...rest] = text.split(" — ");
+  const sub = rest.join(" — ");
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-body text-muted-foreground">{label}</span>
-      <span className="text-right text-body text-foreground">{value}</span>
+    <div data-testid={`host-tile-${id}`} className="flex flex-col gap-2.5 rounded-xl border border-border bg-surface-2 p-3.5">
+      <span className="flex items-center gap-2 text-body leading-snug text-muted-foreground">
+        <Icon className="size-4 shrink-0" aria-hidden />
+        {label}
+      </span>
+      <span data-testid={`host-tile-${id}-pill`} data-tone={tone} className="w-fit max-w-full">
+        <Chip tone={tone} dot className="rounded-full">
+          {word}
+        </Chip>
+      </span>
+      {sub && (
+        <span data-testid={`host-tile-${id}-sub`} className="text-meta leading-snug text-muted-foreground">
+          {sub}
+        </span>
+      )}
     </div>
   );
 }
@@ -132,10 +164,30 @@ function HostCard({
 
   return (
     <CollapsibleCard title="Host" summary={hostSummary} testId="host-card">
-      <p className="text-body leading-snug text-muted-foreground">
-        The barriers this machine can build, and what every run inherits by
-        default.
-      </p>
+      <div className="flex items-start justify-between gap-3" data-testid="host-header">
+        <div className="flex items-center gap-3">
+          <span
+            data-testid="host-state-tile"
+            data-tone={noRunner ? "danger" : "success"}
+            className={
+              noRunner
+                ? "flex size-10 shrink-0 items-center justify-center rounded-xl border border-danger/35 bg-danger-subtle text-danger"
+                : "flex size-10 shrink-0 items-center justify-center rounded-xl border border-success/35 bg-success-subtle text-success"
+            }
+          >
+            <Server className="size-[18px]" aria-hidden />
+          </span>
+          <p className="text-body leading-snug text-muted-foreground">
+            The barriers this machine can build, and what every run inherits by
+            default.
+          </p>
+        </div>
+        <span data-testid="host-state-pill" data-tone={noRunner ? "danger" : "success"} className="shrink-0">
+          <Chip tone={noRunner ? "danger" : "success"} dot className="rounded-full">
+            {noRunner ? HOST_CARD.CANT_LAUNCH : hostSummary}
+          </Chip>
+        </span>
+      </div>
 
       <div className="mt-3 space-y-3">
         {/* #1200 review P1-1 — the canon no-runner card, byte-identical to
@@ -159,65 +211,64 @@ function HostCard({
         {!noRunner && <TierPicker tiers={installed} mode="display" recommended={selected} />}
       </div>
 
-      <div className="mt-4 divide-y divide-border border-t border-border pt-1">
+      {/* The three facts, one tile each; one column until the card has the width for three (#2876). */}
+      <div data-testid="host-tiles" className="mt-4 grid grid-cols-1 gap-2.5 lg:grid-cols-3">
         {/* The check's LABEL is "Sandbox image builder" — echoing it next to a
-            row already labelled "Image builder" says nothing. Its status is the
+            tile already labelled "Image builder" says nothing. Its status is the
             fact: "ok" means the per-run builder is wired (devcontainer builds
             and --image wraps fire), "info" means it's off. */}
-        {/* X3-F1: gated exactly like the Internet row below — a row that states
+        {/* X3-F1: gated exactly like the Internet tile below — a tile that states
             a deployment fact is drawn only when this caller was actually told
             it. `checks_redacted` marks a body whose checks list was stripped
             for the reader's tier, so [] there means WITHHELD, not "no builder":
             rendering the Off sentence over it told a member their admin's
             builder was off. Absent/false (every operator body) is unchanged. */}
         {!status.checks_redacted && (
-          <Row
+          <FactTile
+            id="image-builder"
+            icon={Package}
             label="Image builder"
-            value={
-              envBuilder?.status === "ok" ? (
-                "Wired"
-              ) : (
-                <span className="text-muted-foreground">
-                  Off — devcontainer builds and --image wraps are unavailable
-                </span>
-              )
+            text={
+              envBuilder?.status === "ok"
+                ? "Wired"
+                : "Off — devcontainer builds and --image wraps are unavailable"
             }
+            tone={envBuilder?.status === "ok" ? "success" : "warning"}
           />
         )}
-        <Row
+        <FactTile
+          id="recording-store"
+          icon={CircleDot}
           label="Recording store"
-          value={
-            status.age_key?.durable ? (
-              "Enabled"
-            ) : (
-              <span className="text-warning">
-                Ephemeral — recordings are lost on restart
-              </span>
-            )
-          }
+          text={status.age_key?.durable ? "Enabled" : "Ephemeral — recordings are lost on restart"}
+          tone={status.age_key?.durable ? "success" : "warning"}
         />
         {operator && !configUnknown && (
-          <Row
+          <FactTile
+            id="internet"
+            icon={Globe}
             label="Internet"
-            value={proxied ? "Through the corporate proxy" : "Direct"}
+            text={proxied ? "Through the corporate proxy" : "Direct"}
+            tone={proxied ? "success" : "neutral"}
           />
         )}
       </div>
 
-      {/* Delegated, not duplicated — see the file header. Operator-only: it
-          states the deployment's proxy posture and opens a setup step. */}
-      {operator && (
-        <button
-          type="button"
-          onClick={() => navigate("/admin/setup?step=corp_network")}
-          className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
-        >
-          <span>
-            <span className="block text-body font-medium text-foreground">
+      <div data-testid="host-footer" className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3.5">
+        {/* Delegated, not duplicated — see the file header. Operator-only: it
+            states the deployment's proxy posture and opens a setup step. */}
+        {operator && (
+          <button
+            type="button"
+            onClick={() => navigate("/admin/setup?step=corp_network")}
+            className="rounded-md text-left outline-none transition-colors hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring"
+          >
+            <span className="flex items-center gap-1 text-body font-medium leading-snug text-foreground">
               Corporate proxy &amp; egress
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             </span>
             {!configUnknown && (
-              <span className="block text-meta text-muted-foreground">
+              <span className="block text-meta leading-snug text-muted-foreground">
                 {proxied ? (
                   <>
                     Upstream proxy set —{" "}
@@ -228,17 +279,12 @@ function HostCard({
                 )}
               </span>
             )}
-          </span>
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onRecheck}
-        className="mt-2 text-meta text-muted-foreground underline-offset-2 hover:underline"
-      >
-        Re-check this host
-      </button>
+          </button>
+        )}
+        <Button variant="outline" size="sm" className="ml-auto" onClick={onRecheck}>
+          <RotateCw className="size-3.5" /> Re-check
+        </Button>
+      </div>
     </CollapsibleCard>
   );
 }
@@ -301,7 +347,7 @@ export function AdminSettingsScreen() {
 
   if (refused) {
     return (
-      <ViewNotice title={VIEW_REFUSAL.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
+      <ViewNotice title={SETTINGS_SUPER_ONLY.TITLE} body={SETTINGS_SUPER_ONLY.BODY}>
         <Button size="sm" onClick={() => navigate("/admin/runs")}>
           {SETTINGS_SUPER_ONLY.CTA}
         </Button>

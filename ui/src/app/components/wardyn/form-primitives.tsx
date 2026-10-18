@@ -62,7 +62,7 @@ export function Field({
       <div className="flex items-center gap-1">
         <Label htmlFor={htmlFor}>{label}</Label>
         {required && (
-          <span className="text-muted-foreground" aria-hidden="true">
+          <span className="text-sm leading-none text-muted-foreground" aria-hidden="true">
             *
           </span>
         )}

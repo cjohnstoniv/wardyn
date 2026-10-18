@@ -245,6 +245,8 @@ export function AddWorkspaceDialog({
                 selected={kind === "local_dir"}
                 onClick={() => setKind("local_dir")}
                 title={localDirUnavailable ? MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_OPTION : "Local directory"}
+                // Stays selectable (it explains itself below), but reads as unavailable (#2889).
+                className={localDirUnavailable ? "border-dashed text-muted-foreground" : undefined}
               />
             )}
             <OptionCard selected={kind === "ephemeral"} onClick={() => setKind("ephemeral")} title="Empty" />

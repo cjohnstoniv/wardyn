@@ -567,3 +567,20 @@ describe("AddSecretDialog — reveal state", () => {
     expect(toggle()).toHaveAccessibleName("Show value");
   });
 });
+
+// #2890, #2891: the dialog's save is the teal primary like every other dialog, and the count stays whole.
+describe("SecretsScreen / AddSecretDialog — chrome (#2890, #2891)", () => {
+  it("Save secret is the default (teal) variant, not info", () => {
+    render(<AddSecretDialog open onOpenChange={() => {}} existingNames={[]} />);
+    const save = screen.getByRole("button", { name: /save secret/i });
+    expect(save).toHaveClass("bg-primary");
+    expect(save).not.toHaveClass("bg-info");
+  });
+
+  it("the list count stays on one line and the search box may shrink to make room", async () => {
+    listSecretsMock.mockReset().mockResolvedValue(["anthropic-api-key"]);
+    render(<SecretsScreen />);
+    expect(await screen.findByText(/^1 of 1 secret$/)).toHaveClass("whitespace-nowrap");
+    expect(screen.getByPlaceholderText(/search secrets by name/i)).toHaveClass("min-w-0");
+  });
+});

@@ -240,6 +240,8 @@ export const GOVERNANCE = {
   PREVIEW_TITLE: "Resolved profile",
   PREVIEW_LEAD:
     "Paste the roles, groups, or email a person's token would carry, choose their user type, and see which profile would bind their runs.",
+  // The same lead when no user-type picker is shown (no custom user type exists), so it does not point at a control that is not there.
+  PREVIEW_LEAD_NO_TYPES: "Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs.",
   PREVIEW_USER_TYPE_LABEL: "User type",
   PREVIEW_USER_TYPE_HINT: "The type the person signs in as. Most people sign in as Standard user.",
   PREVIEW_RUN_CTA: "Resolve",
@@ -435,8 +437,9 @@ export const CHANGES = {
     set: "Set",
   } as Record<string, string>,
   EMPTY_TITLE: "Nothing is waiting for a second person",
-  EMPTY_BODY:
-    "When this deployment requires a second person for governance changes, they wait here until someone approves or rejects them. Decided changes are in the audit trail.",
+  EMPTY_BODY: "A covered governance change applies only when someone other than its proposer approves it. It waits here until then.",
+  // The empty state's one door: the decided changes are in the audit trail (#2907, owner option B).
+  EMPTY_CTA: "Open the audit trail →",
   META: (who: string, when: string, expires: string) => `Proposed by ${who} ${when} · expires ${expires}`,
   DIFF_FIELD: "Field",
   DIFF_BEFORE: "Before",

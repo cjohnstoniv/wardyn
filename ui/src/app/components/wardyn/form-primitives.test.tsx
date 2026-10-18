@@ -9,6 +9,19 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Field, Switch } from "./form-primitives";
 
+// #2899: the required marker must not grow the label row, or the control under it drops against its neighbours.
+describe("Field — the required marker", () => {
+  it("is set at the label's size and line height like the label beside it", () => {
+    render(
+      <Field label="Host" htmlFor="host-input" required>
+        <input id="host-input" />
+      </Field>,
+    );
+    expect(screen.getByText("*")).toHaveClass("leading-none", "text-sm");
+    expect(screen.getByLabelText("Host")).toBeInTheDocument();
+  });
+});
+
 describe("Field — hint is wired to the control via aria-describedby", () => {
   it("gives the hint an id and describes the control with it", () => {
     render(

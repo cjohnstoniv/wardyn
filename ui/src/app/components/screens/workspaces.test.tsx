@@ -54,7 +54,8 @@ import { WorkspacesScreen, sourceSubLine, workspaceImage } from "./workspaces";
 import { WorkspaceLLMCredDialog } from "./workspace-llm-cred";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
-import { DENIED } from "../../lib/permissions-copy";
+import { DENIED, MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { setField } from "../../../test/set-field";
@@ -662,5 +663,68 @@ describe("WorkspacesScreen — a member may delete the row they own", () => {
     renderAs(true, "dana@corp.example", false);
     await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
     expect(screen.getByRole("menuitem", { name: /delete/i })).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+// #2886, #2889, #2891, #2892: the row menu and the list header read well for a member and on a phone.
+describe("WorkspacesScreen — row menu and list chrome (#2886, #2891, #2892)", () => {
+  beforeEach(() => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, { owned_by: "someone-else" })]);
+    myCapabilitiesMock.mockReset().mockReturnValue(null);
+  });
+
+  async function openMenuAsMember() {
+    render(
+      <OperatorProvider operator={false} principal="me@corp.example">
+        <RoleProvider role="user">
+          <MemoryRouter>
+            <WorkspacesScreen />
+          </MemoryRouter>
+        </RoleProvider>
+      </OperatorProvider>,
+    );
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("button", { name: /workspace actions/i }));
+    return screen.getByRole("menu");
+  }
+
+  it("a member's disabled Delete keeps its reason outside the faded item, where it stays readable", async () => {
+    const menu = await openMenuAsMember();
+    const del = within(menu).getByRole("menuitem", { name: /delete/i });
+    expect(del).toHaveAttribute("aria-disabled", "true");
+    expect(del).not.toHaveTextContent(OPERATOR_ONLY_REASON);
+    const reason = within(menu).getByText(OPERATOR_ONLY_REASON);
+    expect(reason.closest('[role="menuitem"]')).toBeNull();
+  });
+
+  it("Open leads with an icon like Delete, so the two labels start together", async () => {
+    const menu = await openMenuAsMember();
+    expect(within(menu).getByRole("menuitem", { name: "Open" }).querySelector("svg")).not.toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: /delete/i }).querySelector("svg")).not.toBeNull();
+  });
+
+  it("the list count stays on one line and the search box may shrink to make room", async () => {
+    renderScreen();
+    const count = await screen.findByText(/^1 of 1 workspace$/);
+    expect(count).toHaveClass("whitespace-nowrap");
+    expect(screen.getByPlaceholderText(/search by name or source/i)).toHaveClass("min-w-0");
+  });
+});
+
+// #2889: the member header describes the page instead of echoing its title and count.
+describe("WorkspacesScreen — the member header (#2889)", () => {
+  it("reads the description, not 'Workspaces · N'", async () => {
+    listWorkspacesMock.mockReset().mockResolvedValue([ws({}, {})]);
+    myCapabilitiesMock.mockReset().mockReturnValue(null);
+    render(
+      <OperatorProvider operator={false}>
+        <RoleProvider role="user">
+          <MemoryRouter>
+            <WorkspacesScreen />
+          </MemoryRouter>
+        </RoleProvider>
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER)).toBeInTheDocument();
+    expect(screen.queryByText(/^Workspaces · \d+$/)).toBeNull();
   });
 });

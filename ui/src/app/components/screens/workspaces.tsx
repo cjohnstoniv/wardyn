@@ -32,11 +32,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Mono } from "../wardyn/code-block";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
-import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
+import { Chip } from "../wardyn/primitives";
+import { OPERATOR_ONLY_REASON } from "../wardyn/copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -103,10 +105,13 @@ export function workspaceImage(ws: Workspace): { kind: WorkspaceImageKind; label
 function DeleteMenuItem({ ws, onPick }: { ws: Workspace; onPick: () => void }) {
   const allowed = useCanMutate(ws.owned_by);
   return (
-    <DropdownMenuItem onClick={onPick} disabled={!allowed} className="text-danger focus:text-danger">
-      <Trash2 className="size-4" /> Delete…
-      {!allowed && <OperatorOnlyHint />}
-    </DropdownMenuItem>
+    <>
+      <DropdownMenuItem onClick={onPick} disabled={!allowed} className="text-danger focus:text-danger">
+        <Trash2 className="size-4" /> Delete…
+      </DropdownMenuItem>
+      {/* Beside the item, not in it: a disabled item is drawn at half opacity and would fade its own reason (#2886). */}
+      {!allowed && <DropdownMenuLabel className="pt-0 text-meta font-normal text-muted-foreground">{OPERATOR_ONLY_REASON}</DropdownMenuLabel>}
+    </>
   );
 }
 
@@ -164,7 +169,7 @@ export function WorkspacesScreen() {
   // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
   const description =
     role === "user"
-      ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
+      ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 
   return (
@@ -198,9 +203,9 @@ export function WorkspacesScreen() {
             placeholder="Search by name or source…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="max-w-sm"
+            className="min-w-0 max-w-sm"
           />
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto whitespace-nowrap text-sm text-muted-foreground">
             {filtered.length} of {workspaces.length} workspace{workspaces.length === 1 ? "" : "s"}
           </span>
           <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
@@ -344,7 +349,9 @@ export function WorkspacesScreen() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openDetail(w.id)}>Open</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openDetail(w.id)}>
+                            <FolderOpen className="size-4" /> Open
+                          </DropdownMenuItem>
                           <DeleteMenuItem ws={w} onPick={() => setToDelete(w)} />
                         </DropdownMenuContent>
                       </DropdownMenu>

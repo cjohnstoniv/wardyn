@@ -125,6 +125,7 @@ const rendered: Record<string, string> = {
   EMPTY_ASSIGN_BODY: GOVERNANCE.EMPTY_ASSIGN_BODY,
   PREVIEW_TITLE: GOVERNANCE.PREVIEW_TITLE,
   PREVIEW_LEAD: GOVERNANCE.PREVIEW_LEAD,
+  PREVIEW_LEAD_NO_TYPES: GOVERNANCE.PREVIEW_LEAD_NO_TYPES,
   PREVIEW_USER_TYPE_LABEL: GOVERNANCE.PREVIEW_USER_TYPE_LABEL,
   PREVIEW_USER_TYPE_HINT: GOVERNANCE.PREVIEW_USER_TYPE_HINT,
   PREVIEW_RUN_CTA: GOVERNANCE.PREVIEW_RUN_CTA,
@@ -212,8 +213,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 141 frozen keys in the doc", () => {
-    expect(doc.size).toBe(141);
+  it("finds all 142 frozen keys in the doc", () => {
+    expect(doc.size).toBe(142);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

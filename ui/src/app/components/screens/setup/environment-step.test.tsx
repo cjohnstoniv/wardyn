@@ -177,6 +177,15 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(within(group).getByText("Vault")).toBeInTheDocument();
   });
 
+  // #2875, #2877: the danger icon keeps its size in a narrow flex row, and both build flags read as commands.
+  it("(9b) no runner without a driver: the icon cannot shrink and both flags are mono", () => {
+    renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: [] } }) });
+    const card = screen.getByText(/No sandbox runner/).closest("div.rounded-xl") as HTMLElement;
+    expect(card.querySelector("svg")).toHaveClass("shrink-0");
+    expect(within(card).getByText("-runner docker")).toHaveClass("font-mono");
+    expect(within(card).getByText("-tags docker")).toHaveClass("font-mono");
+  });
+
   it("(10) exactly one Recommended chip renders, tone=neutral (CONSOLE-RULES §2 — a recommendation is not an action)", () => {
     const status = baseStatus({ platform: { os: "linux", wsl: false, kvm: false } });
     renderStep({ status });

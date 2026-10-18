@@ -50,9 +50,9 @@ describe("ScimCard", () => {
     expect(
       within(card).getByText("Not set up. Someone removed in your identity provider keeps their sessions, tokens and runs here until an admin revokes them."),
     ).toBeInTheDocument();
-    expect(
-      within(card).getByText(/^Set WARDYN_SCIM_TOKEN on wardynd, then point your Entra ID provisioning at the endpoint below\./),
-    ).toBeInTheDocument();
+    // #2877: the env var is set in mono like every other literal on the page, so the sentence spans two nodes.
+    expect(card.textContent).toMatch(/Set WARDYN_SCIM_TOKEN on wardynd, then point your Entra ID provisioning at the endpoint below\./);
+    expect(within(card).getByText("WARDYN_SCIM_TOKEN")).toHaveClass("font-mono");
     expect(within(card).getByRole("link", { name: "Leaver runbook" })).toHaveAttribute("href", expect.stringContaining("OPERATIONS.md#leavers-and-scim"));
     expect(within(card).getByText("Endpoint")).toBeInTheDocument();
     expect(within(card).getByText(/\/scim\/v2$/)).toBeInTheDocument();

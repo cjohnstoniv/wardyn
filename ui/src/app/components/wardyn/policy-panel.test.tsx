@@ -119,12 +119,13 @@ describe("PolicyPanel — templates", () => {
     expect(t.spec.allowed_domains).toEqual([]);
   });
 
-  it("clicking a chip replaces the textarea body with that template", async () => {
+  it("picking a template replaces the textarea body with that template", async () => {
     const user = userEvent.setup();
     render(<Harness initial="{}" />);
     const t = POLICY_TEMPLATES.find((x) => x.id === "registries")!;
 
-    await user.click(screen.getByRole("button", { name: t.label }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId(`policy-template-${t.id}`));
 
     expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBe(specBox());
     expect(specBox().value).toBe(templateText(t));
@@ -216,10 +217,31 @@ describe("PolicyPanel — live derivations", () => {
     expect(screen.getByText("Invalid YAML — Policy source must be a mapping.")).toBeInTheDocument();
   });
 
+  // #2836 (owner option C): the five templates live in one toolbar menu; each item shows its label over its hint,
+  // and picking one replaces the source exactly as the old buttons did.
+  it("the template menu lists the five templates with their hints, and picking one replaces the source", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial="{}" />);
+    expect(screen.queryByRole("button", { name: "CI baseline" })).toBeNull();
+    await user.click(screen.getByTestId("policy-template-menu"));
+    const ids = ["minimal", "model-provider", "registries", "ci", "allow-all"];
+    for (const id of ids) expect(await screen.findByTestId(`policy-template-${id}`)).toBeInTheDocument();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(5);
+    expect(screen.getByTestId("policy-template-ci")).toHaveTextContent(
+      "CI baselineNo egress, no grants, stopped after an idle hour — the unattended default.",
+    );
+    expect(screen.getByTestId("policy-template-allow-all")).toHaveTextContent(
+      "Allow-all — observe firstReaches almost any site (except a block-list); watch the audit log, then tighten.",
+    );
+    await user.click(screen.getByTestId("policy-template-ci"));
+    expect(specBox().value).toMatch(/min_confinement_class: CC1/);
+  });
+
   it("derives egress, lifecycle and the barrier floor from a valid spec", async () => {
     const user = userEvent.setup();
     render(<Harness initial="{}" />);
-    await user.click(screen.getByRole("button", { name: "CI baseline" }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId("policy-template-ci"));
 
     const status = screen.getByRole("status");
     expect(within(status).getByText("Valid YAML")).toBeInTheDocument();
@@ -232,7 +254,8 @@ describe("PolicyPanel — live derivations", () => {
   it("allow-all egress always reads as block-list only, never 'unrestricted'", async () => {
     const user = userEvent.setup();
     render(<Harness initial="{}" />);
-    await user.click(screen.getByRole("button", { name: "Allow-all — observe first" }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId("policy-template-allow-all"));
 
     expect(screen.getByText("Allow-all egress (block-list only)")).toBeInTheDocument();
     expect(screen.getByText("Runs until stopped")).toBeInTheDocument();
@@ -563,7 +586,8 @@ describe("PolicyPanel — one source string, YAML unless JSON is chosen", () => 
     expect(within(screen.getByRole("status")).getByText("Valid JSON")).toBeInTheDocument();
 
     const t = POLICY_TEMPLATES.find((x) => x.id === "ci")!;
-    await user.click(screen.getByRole("button", { name: t.label }));
+    await user.click(screen.getByTestId("policy-template-menu"));
+    await user.click(await screen.findByTestId(`policy-template-${t.id}`));
     expect(box).toHaveValue(templateText(t, "json"));
   });
 

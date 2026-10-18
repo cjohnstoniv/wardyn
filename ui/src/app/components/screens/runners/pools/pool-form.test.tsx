@@ -56,6 +56,17 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+describe("pool form layout", () => {
+  // #2894: the back link sits above the title and lines up with the page edge (no sm padding inset).
+  it("puts the back link above the title, flush to the left edge", async () => {
+    renderAt("/account/pools/new", "mine");
+    const title = await screen.findByRole("heading", { level: 1 });
+    const back = screen.getByRole("button", { name: "← Back to My runner" });
+    expect(back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(back).toHaveClass("-ml-3");
+  });
+});
+
 describe("new user pool", () => {
   it("creates the pool with wire units and goes back to My runner", async () => {
     createMineMock.mockResolvedValue({});

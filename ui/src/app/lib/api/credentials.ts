@@ -125,8 +125,11 @@ export const credentials = {
   async listAdminMintedTokens(includeRevoked = false): Promise<AdminMintedToken[]> {
     const res = await wfetch(`/tokens?minted_for_others=true${includeRevoked ? "&include_revoked=true" : ""}`, { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
+    // The same older daemon lists expired tokens too, so with the toggle off both revoked and lapsed rows go.
+    const now = Date.now();
+    const lapsed = (t: AdminMintedToken) => !!t.expires_at && Date.parse(t.expires_at) <= now;
     return unwrapList<AdminMintedToken>(await asJson<unknown>(res)).filter(
-      (t) => !!t.minted_by && t.minted_by !== t.principal && (includeRevoked || !t.revoked_at),
+      (t) => !!t.minted_by && t.minted_by !== t.principal && (includeRevoked || (!t.revoked_at && !lapsed(t))),
     );
   },
 

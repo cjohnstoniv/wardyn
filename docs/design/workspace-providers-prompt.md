@@ -732,7 +732,7 @@ rule's 403 — is in §7.1's second table, unparsed.
 | Key | String |
 |---|---|
 | `CARD_LEAD` | Which git hosts a run may clone, and the storage ceilings it works inside. |
-| `CARD_EMPTY` | No providers enabled. |
+| `CARD_EMPTY` | No providers enabled |
 | `CARD_PROVIDERS(n)` | {n} git provider / {n} git providers |
 | `CARD_AGENTS(n)` | {n} agent / {n} agents |
 | `CARD_SUMMARY(providers, agents)` | {providers} · {agents} |

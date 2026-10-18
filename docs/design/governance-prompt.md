@@ -79,7 +79,7 @@ operator decides. Nothing in this round adds an approvals surface.
 
 **`/policies` — the ceiling, read-only for members.** `PoliciesScreen`
 (`ui/src/app/components/screens/policies.tsx:130-142`) already discloses the default ceiling
-in a `<details>` labelled "Default (ceiling) policy — applied to runs with no policy_id, and
+in a `<details>` labelled "Default (ceiling) policy — applied to runs that name no policy, and
 to every member's inline policy" (`:134`). `PolicyPanel` (`policy-panel.tsx:6-27`) is ONE
 spec-JSON authoring surface with two instances — `instance="policies"` (the admin editor body)
 and `instance="run"` (the New Run card) — carrying the template row, the JSON editor, the
@@ -588,6 +588,7 @@ is what an operator can actually do.
 | `EMPTY_ASSIGN_BODY` | A profile with no assignment bounds nobody. Assign one to a group to start. |
 | `PREVIEW_TITLE` | Resolved profile |
 | `PREVIEW_LEAD` | Paste the roles, groups, or email a person's token would carry, choose their user type, and see which profile would bind their runs. |
+| `PREVIEW_LEAD_NO_TYPES` | Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs. |
 | `PREVIEW_USER_TYPE_LABEL` | User type |
 | `PREVIEW_USER_TYPE_HINT` | The type the person signs in as. Most people sign in as Standard user. |
 | `PREVIEW_RUN_CTA` | Resolve |

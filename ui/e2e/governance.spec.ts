@@ -399,7 +399,9 @@ test.describe("governance — the resolved preview", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
-    await expect(page.getByText(GOV.PREVIEW_LEAD)).toBeVisible();
+    // Only the built-in user type exists here, so there is no picker and the lead does not tell the reader to use
+    // one (#2901). The with-types lead is pinned below, where a type is created.
+    await expect(page.getByText(GOV.PREVIEW_LEAD_NO_TYPES)).toBeVisible();
     // The People step's own field and hint, verbatim — one accepted shape.
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS, { exact: true })).toBeVisible();
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS_HINT)).toBeVisible();
@@ -520,7 +522,8 @@ test.describe("governance — the security admin's console (real per-person toke
     );
 
     await gotoConsole(page);
-    await navToRoute(page, "/approvals");
+    // The Admin view's queue: /approvals is the User view, which the server narrows to the caller's own runs.
+    await navToRoute(page, "/admin/approvals");
 
     // authorizeUserDecision early-returns for isSecurityOperator
     // (approvals.go:392), so this tier decides ANY kind on ANY run org-wide —

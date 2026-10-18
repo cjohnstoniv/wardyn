@@ -6,11 +6,11 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import {
+  ArrowRight,
   CircleX,
   FilterX,
   Loader2,
   Play,
-  Plus,
   RotateCw,
   Search,
   SquareTerminal,
@@ -219,7 +219,7 @@ export function RecordingScreen() {
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
         title="Recordings"
-        description="Captured terminal sessions, replayed byte-for-byte. Built from the run list alone — a run's own cast is fetched only when you press play."
+        description="Captured terminal sessions, replayed byte-for-byte. A recording is fetched only when you press play."
         actions={
           <Button variant="outline" size="sm" onClick={load}>
             <RotateCw className="size-3.5" /> Refresh
@@ -245,7 +245,7 @@ export function RecordingScreen() {
               recordingDisabled ? undefined : (
                 <Button asChild size="sm">
                   <Link to="/runs">
-                    <Plus className="size-4" /> Go to Runs
+                    Go to Runs <ArrowRight className="size-4" />
                   </Link>
                 </Button>
               )
@@ -260,13 +260,13 @@ export function RecordingScreen() {
             description={
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
-                : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
+                : "A recording appears once an agent runs in its sandbox terminal."
             }
             action={
               recordingDisabled ? undefined : (
                 <Button asChild size="sm">
                   <Link to="/runs">
-                    <Plus className="size-4" /> Go to Runs
+                    Go to Runs <ArrowRight className="size-4" />
                   </Link>
                 </Button>
               )

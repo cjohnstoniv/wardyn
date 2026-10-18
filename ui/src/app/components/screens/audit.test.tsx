@@ -229,6 +229,24 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // #2852: chips differ in width (HUMAN vs SYSTEM, success vs failure); the cells that hold them do not.
+  it("holds the actor chip and the outcome in fixed-width cells", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", actor_type: "human", action: "authz.denied", outcome: "denied" }),
+      ev({ id: "e2", actor_type: "system", action: "run.complete", outcome: "failure", run_id: "run_333" }),
+    ]);
+    renderScreen();
+    await screen.findByText("authz.denied");
+    const actors = screen.getAllByTestId("audit-actor-cell");
+    const outcomes = screen.getAllByTestId("audit-outcome-cell");
+    expect(actors).toHaveLength(2);
+    expect(outcomes).toHaveLength(2);
+    for (const cell of actors) expect(cell.className).toContain("w-[88px]");
+    for (const cell of outcomes) expect(cell.className).toContain("w-[72px]");
+    expect(actors[0]).toHaveTextContent(/human/i);
+    expect(actors[1]).toHaveTextContent(/system/i);
+  });
+
   it("shows a truncation indicator when the global window is capped at 1000", async () => {
     const many = Array.from({ length: 1000 }, (_, i) => ev({ id: `e${i}`, action: `act.${i}` }));
     listAuditMock.mockResolvedValue(many);
