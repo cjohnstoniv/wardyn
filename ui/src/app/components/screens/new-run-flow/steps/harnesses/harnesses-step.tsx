@@ -32,8 +32,6 @@ const LEDES: Record<HarnessMode, string> = {
   autonomous: NR_HARNESSES.LEDE_AUTONOMOUS,
 };
 const EMPTY: Roster = { harnesses: [], sets: [] };
-// Local, not in the frozen harnesses copy: the canon doc lists no loading line for this step.
-const LOADING = "Loading harnesses…";
 const ADD_ID = "nr-harness";
 const UNAVAILABLE_ID = "nr-harness-unavailable";
 
@@ -112,7 +110,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
         ))}
       </div>
       {loaded.status === "loading" ? (
-        <p role="status" className="text-sm text-muted-foreground">{LOADING}</p>
+        <p role="status" className="text-sm text-muted-foreground">{NR_HARNESSES.LOADING}</p>
       ) : (
         <div className="flex items-center gap-3">
           <Button

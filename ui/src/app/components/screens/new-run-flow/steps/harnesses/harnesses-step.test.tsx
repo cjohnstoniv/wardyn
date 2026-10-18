@@ -234,14 +234,14 @@ describe("Harnesses step: while the roster loads", () => {
 
   it.each([["Interactive", INTERACTIVE], ["Autonomous", AUTONOMOUS]])("%s: a loading line, no Add button, no 'can continue without one'", async (_n, intent) => {
     showPending(intent);
-    expect(await screen.findByText("Loading harnesses…")).toBeInTheDocument();
+    expect(await screen.findByText(NR_HARNESSES.LOADING)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: NR_HARNESSES.ADD_HARNESS })).not.toBeInTheDocument();
     expect(screen.queryByText(NR_HARNESSES.EMPTY_BODY)).not.toBeInTheDocument();
   });
 
   it("an environment, whose harnesses are optional, still says it can continue without one", async () => {
     showPending({ shape: "environment", experience: "interactive" });
-    expect(await screen.findByText("Loading harnesses…")).toBeInTheDocument();
+    expect(await screen.findByText(NR_HARNESSES.LOADING)).toBeInTheDocument();
     expect(screen.getByText(NR_HARNESSES.EMPTY_BODY)).toBeInTheDocument();
   });
 });
