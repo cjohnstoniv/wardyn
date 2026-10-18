@@ -22,7 +22,7 @@ func TestResealAndVerifyOnAPostgresThatDoesNotAnswerAreOutages(t *testing.T) {
 	defer cancel()
 	aad := func(int) []byte { return []byte("aad") }
 
-	// Reseal asks Current first; nothing is opened or sealed without a generation.
+	// Reseal reads the source generation first; nothing is opened or sealed without it.
 	if v, sealed, err := m.Reseal(ctx, "alice", PurposeCred, 1, []byte("sealed"), []byte("aad"), aad); !errors.Is(err, secretstore.ErrUnavailable) || v != 0 || sealed != nil {
 		t.Errorf("Reseal = %d, %v, %v; want ErrUnavailable and nothing sealed", v, sealed, err)
 	}

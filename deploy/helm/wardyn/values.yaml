@@ -328,7 +328,8 @@ secretStore:
     clientIdPlatform: ""
     # Entra authority host; empty = the public cloud's.
     authorityHost: ""
-    # Start of every secret name (empty = the release namespace).
+    # Start of every secret name (empty = the release namespace). Fixed once
+    # rows exist: a changed prefix, or namespace when empty, refuses their reads.
     prefix: ""
     # Versions a secret holds before the next write starts a new name.
     maxVersions: 100
