@@ -227,8 +227,12 @@ func (s *rehearseSession) pgRecordings(ctx context.Context) (rehearseCheck, erro
 			return c, fmt.Errorf("read the recordings: %w", err)
 		}
 		c.Counts["checked"]++
-		if err := checkCast(ctx, bytes.NewReader(payload)); err != nil {
+		plain, err := checkCast(ctx, bytes.NewReader(payload))
+		if err != nil {
 			c.Failing = append(c.Failing, "cast "+key+": "+castProblem(err))
+		}
+		if plain {
+			c.Counts["plain_log"]++
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -237,19 +241,23 @@ func (s *rehearseSession) pgRecordings(ctx context.Context) (rehearseCheck, erro
 	return finish(c), nil
 }
 
-// checkCast parses one stored recording. A body that does not begin like an asciicast is a plain log: an
-// image without asciinema stores its log as the cast (the upload path tells the two apart the same way,
-// by this prefix), and it has no structure to check.
-func checkCast(ctx context.Context, r io.Reader) error {
+// checkCast parses one stored recording and reports whether it was a plain log. A non-empty body that does
+// not begin like an asciicast is a plain log: an image without asciinema stores its log as the cast (the
+// upload path tells the two apart the same way, by this prefix), and it has no structure to check. An empty
+// body, or one that starts with a NUL byte, is damage, not a log, and fails.
+func checkCast(ctx context.Context, r io.Reader) (plain bool, err error) {
 	br := bufio.NewReaderSize(r, 4096)
 	head, err := br.Peek(len(castHeadPrefix))
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
-		return err
+		return false, err
+	}
+	if len(head) == 0 || head[0] == 0 {
+		return false, recording.ErrInvalidCast
 	}
 	if !bytes.HasPrefix(head, []byte(castHeadPrefix)) {
-		return nil
+		return true, nil
 	}
-	return recording.CopyOutput(ctx, io.Discard, br)
+	return false, recording.CopyOutput(ctx, io.Discard, br)
 }
 
 // castHeadPrefix opens every asciicast v2 header (the same test internal/api's upload path applies).
@@ -291,6 +299,9 @@ func fsRecordings(ctx context.Context, set rehearseSet, root *os.Root) rehearseC
 	}
 	casts, err := parseCasts(ctx, root)
 	c.Counts["checked"] = casts.checked
+	if casts.plain > 0 {
+		c.Counts["plain_log"] = casts.plain
+	}
 	c.Failing = append(c.Failing, casts.failing...)
 	if err != nil {
 		c.Failing = append(c.Failing, "recordings/ could not be read")
@@ -300,6 +311,7 @@ func fsRecordings(ctx context.Context, set rehearseSet, root *os.Root) rehearseC
 
 type castRun struct {
 	checked int
+	plain   int // recordings that are plain logs, passed unparsed
 	failing []string
 }
 
@@ -342,8 +354,12 @@ func parseCasts(ctx context.Context, root *os.Root) (castRun, error) {
 			run.failing = append(run.failing, "cast "+p+": is not a regular file")
 			return nil
 		}
-		if err := checkCast(ctx, f); err != nil {
+		plain, err := checkCast(ctx, f)
+		if err != nil {
 			run.failing = append(run.failing, "cast "+p+": "+castProblem(err))
+		}
+		if plain {
+			run.plain++
 		}
 		return nil
 	})
