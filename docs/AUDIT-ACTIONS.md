@@ -882,7 +882,7 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - A person with no identity row (one who never signed in through SSO) keeps their name in `actor`, and `person.erasure`, `credential.erase` and `principal_key.destroyed` keep theirs.
 - A row whose subject could not be had waits in the spool with the actor sealed under the pending key and `subject:pending` in the column, and the drain stores the subject.
 - Erasing a person who has no key yet still records a destroyed generation, so a row of theirs waiting in the spool stores `[erased]`, never a fresh subject.
-- An erasure also records a destroyed generation under `subject:<uuid>` itself, so a row written before it reads `[erased]` even after that identity row is unbound and bound to someone else; that person's own later rows read as them.
+- An erasure also records a destroyed generation under `subject:<uuid>` itself, so a row written before it reads `[erased]` even after that identity row is unbound and bound to someone else; that person's own later rows read as them. An erasure run before 0.9.4 gains this when it is run again.
 - The `audit.retention.partition_dropped` row and its anchor, which the database writes, carry the dropping operator's subject too; a drop is refused (`503` `audit_retention_drop_failed`) while the subject cannot be had.
 - `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a `wdn_` token, a `/people/{principal}` path, the `sub` of `POST /sessions/revoke` or the `?owner=` of the secrets routes carrying it is refused with `reserved_principal`.
 
