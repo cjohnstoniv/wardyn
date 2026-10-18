@@ -2190,6 +2190,7 @@ hiding them would repeat the failure mode we are designed to avoid.
         - A request to remove every trace of a subject id from the database has to treat this row as a table of its own.
         - Residual: a store with no generation falls back to in-process locks (`write_fence` `locks_only`), and a pre-upgrade daemon in a mixed fleet is unfenced.
       - **Outside every erasure scope (0.9):** a person's saved preferences (`principal_prefs`: the chosen view and the default runner pool) and the `created_by` and `updated_by` columns of organization runner pools and remote-hosted runners keep their name.
+        - So does an Azure DevOps token row of their runs that is still live at the erasure: the sweep needs it to revoke the token. An erasure run again after the token is revoked or expired removes it.
       - **Who a name is (0.9):** every route that erases, deletes or assigns by name resolves the name once, through `PrincipalsNamed`.
         - The order is: an exact principal (sign-in, admin-created person, API-token owner, workspace owner); then `entra:<tenant>:<object>` from recorded ids; then the principal case-folded; then, only for a name with an `@`, every recorded email together.
         - Two principals in a tier, or an unreadable directory, refuses; nothing falls through to a guess.

@@ -95,6 +95,18 @@ export const ERASE_DATA = {
       hint: "Their secret values, kept so run output can hide them.",
     },
     recordings: { label: "Recordings", hint: "Not erased unless you choose it." },
+    run_setups: {
+      label: "Run templates",
+      hint: "Their saved templates, and their name on shared ones. Not erased unless you choose it.",
+    },
+    runner_pools: {
+      label: "Runner pools",
+      hint: "Their own runner pools; runs waiting for one end. Not erased unless you choose it.",
+    },
+    member_drives: {
+      label: "Drives",
+      hint: "Drives they created, with their files. Not erased unless you choose it.",
+    },
   },
   SEALING_NOTE:
     "Personal details are erasable only for events recorded while audit sealing was on. Earlier events keep them until retention drops their partition.",

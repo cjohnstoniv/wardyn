@@ -76,7 +76,10 @@ export type ErasureScope =
   | "run_outputs"
   | "components"
   | "mask_copies"
-  | "recordings";
+  | "recordings"
+  | "run_setups"
+  | "runner_pools"
+  | "member_drives";
 
 /** The 200: every scope asked for finished. `outcome` maps each to "done". */
 export interface PersonErasureResult {
