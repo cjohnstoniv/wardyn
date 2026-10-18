@@ -41,6 +41,9 @@ const (
 	auditRunContainmentPending = "run.containment.hold"
 
 	maxNodeRecordSourceID = 256
+
+	// nodeRecordReasonWithheld is what a reader below the security tier reads for a refused record.
+	nodeRecordReasonWithheld = "The runner refused this record. A security operator can see why."
 )
 
 // The sentences the reviewer of a held node record reads beside the diff.
@@ -112,10 +115,14 @@ func (s *Server) handleGetRunContainment(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "read node records", err)
 		return
 	}
-	// A record's source id names infrastructure, as the tuple does: security operators only.
+	// A record's source id names infrastructure, as the tuple does: security operators only. So does
+	// the runner's refusal text, which can quote a Node's name; others read a fixed sentence.
 	if !s.isSecurityOperator(r.Context()) {
 		for i := range out.Records {
 			out.Records[i].SourceID = ""
+			if out.Records[i].Reason != "" {
+				out.Records[i].Reason = nodeRecordReasonWithheld
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

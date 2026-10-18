@@ -167,7 +167,8 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 
 // auditRowsFor is how rows leave for this caller, on both feed reads: sealed
 // fields opened, and for anyone auditScope narrowed to a run of their own, no
-// reference to an organisation's shared secret (sharedRefs). The caller it
+// reference to an organisation's shared secret (sharedRefs) and no node record's
+// source id (withoutNodeRecordSource). The caller it
 // exempts is the one auditScope hands the whole log — the same predicate, so
 // the two cannot drift: the security tier reads every operator row there is,
 // the rows that name the operator's secrets among them.
@@ -184,7 +185,10 @@ func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.Au
 		if evs, err = s.unsealed(ctx, evs, err); err != nil {
 			return nil, err
 		}
-		return refs.events(evs)
+		if evs, err = refs.events(evs); err != nil {
+			return nil, err
+		}
+		return withoutNodeRecordSource(evs), nil
 	}
 }
 

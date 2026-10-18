@@ -296,8 +296,9 @@ func TestPG_NodeRecordOnePerson(t *testing.T) {
 	if got.Records[0].SourceID != "i-0abc123" {
 		t.Fatalf("a security operator's record source id = %q", got.Records[0].SourceID)
 	}
-	if owner := e.containment(e.person); len(owner.Records) != 1 || owner.Records[0].SourceID != "" {
-		t.Fatalf("the owner's records = %+v, want the source id withheld", owner.Records)
+	if owner := e.containment(e.person); len(owner.Records) != 1 || owner.Records[0].SourceID != "" ||
+		owner.Records[0].Reason != nodeRecordReasonWithheld {
+		t.Fatalf("the owner's records = %+v, want the source id and the runner's reason withheld", owner.Records)
 	}
 
 	// A new record goes out, the runner accepts it, and its stop report clears the run.
