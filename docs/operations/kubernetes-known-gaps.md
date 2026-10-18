@@ -34,6 +34,12 @@ flowchart LR
 | 🟡 `replicas` stays 1 on k8s unless `ha.enabled` is set | HA is supported on Kubernetes only. See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks | |
 
 
+## The proxy's DNS peer
+
+- The peer is fixed to `kube-system` and `k8s-app=kube-dns`; no chart value changes it.
+- If your DNS pods carry other labels, it matches nothing and DNS falls back to the broad rule.
+- Check with `kubectl -n kube-system get pods --show-labels`.
+
 ## Eviction, priority and PIDs
 
 - **Eviction and priority.** Sandbox pods take `k8s.sandbox.priorityClassName` and `k8s.sandbox.podAnnotations` (`WARDYN_K8S_SANDBOX_PLACEMENT`, [docs/ENV.md](../ENV.md)).

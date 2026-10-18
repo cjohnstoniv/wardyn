@@ -21,5 +21,6 @@ docs/operations/monitoring.md=2159 share=13
 # docs/operations/run-lifetime.md 2077 adds 33 over 2044 (0.9.3 FIN-E), measured: the pool idle-stop default and maximum.
 docs/operations/run-lifetime.md=2077 share=21
 # docs/operations/kubernetes-known-gaps.md 2110 adds 50 over 2060, measured: the proxy DNS rule's coverage and what needs an operator policy (0.9.3 ASK-6 review).
-docs/operations/kubernetes-known-gaps.md=2110 share=15
+# docs/operations/kubernetes-known-gaps.md 2153 = 2110 + 43, measured: the proxy DNS peer's fixed namespace and label, and how to check yours
+docs/operations/kubernetes-known-gaps.md=2153 share=15
 # docs/operations/secrets-and-keys.md 9534 adds 44 (0.9 G-sec-rest, #1977): the 'Requiring it' paragraph says the flag covers new writes only, existing local-key rows are not moved, and kek_local_rows reports them.

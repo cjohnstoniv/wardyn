@@ -91,7 +91,11 @@ func runOutputNotice(o sdk.RunOutput) string {
 		parts = append(parts, "truncated: the output does not start at the run's first byte")
 	}
 	if o.Incomplete {
-		parts = append(parts, "incomplete: some bytes may be missing")
+		if o.Source == "recording" {
+			parts = append(parts, "incomplete: recovered output cannot be vouched complete; only a capture gap means capture failed")
+		} else {
+			parts = append(parts, "incomplete: some bytes may be missing")
+		}
 	}
 	if o.CaptureGap {
 		parts = append(parts, "capture gap: the output could not be captured")

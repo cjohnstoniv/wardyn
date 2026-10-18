@@ -248,6 +248,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | The computer is registered again under a new identity | At first start `serve` stops the old registration's run proxies, then moves `offline/`, `spools/` and `output/` into `previous/` (Docker; spooled decisions are kept, not delivered). If one cannot be stopped, it exits naming the fix and retries next start |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |
 
+On a runner older than 0.9.3, a run kept only for containment could loop on refusals until the runner forgot it. Keeping `spools/` and `offline/` was not enough there: deleting the state was the only recovery, at the cost of undelivered audit records.
+
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.
 
 - Switching runners off, and revoking a runner, close the live session on the replica that served the request.
