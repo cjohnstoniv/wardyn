@@ -276,7 +276,10 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 			"Cloud STS grant confers broad cloud credentials (and requires a SPIRE identity provider; the embedded IdP refuses it).", "5")
 	case types.GrantGitPAT:
 		add(field, "git_pat", RiskHigh,
-			"Stored PAT: Wardyn cannot expire or down-scope the token itself. With the PAT broker on (the default) it never enters the sandbox and the grant's repos, access and api bound what the run can do with it; with WARDYN_GIT_PAT_BROKER=off it is minted into the agent's process. Prefer a GitHub App, or a fine-grained repo-scoped short-expiry token.", "2")
+			"Stored PAT: Wardyn cannot expire or down-scope the token itself. "+
+				"With the PAT broker on (the default) it never enters the sandbox and the grant's repos, access and api bound what the run can do with it; "+
+				"with WARDYN_GIT_PAT_BROKER=off it is minted into the agent's process. "+
+				"Prefer a GitHub App, or a fine-grained repo-scoped short-expiry token.", "2")
 	case types.GrantSSHKey:
 		add(field, "ssh_key", RiskHigh,
 			"Resident, agent-readable SSH private key for the clone window (git's SSH transport has no broker seam) — Wardyn can neither scope nor expire it. Prefer a single-repo read-only deploy key over a personal identity.", "2")

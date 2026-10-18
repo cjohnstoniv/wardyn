@@ -149,9 +149,9 @@ test.describe("Approvals screen", () => {
 
   test("renders the approvals page header and HITL copy", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
-    // The page description explains an approval only AUTHORIZES a later broker mint.
+    // The page description says each card states exactly what approving grants.
     await expect(
-      page.getByText(/Approving a credential authorizes the broker to mint/i),
+      page.getByText(/Each card says exactly what approving grants/i),
     ).toBeVisible();
     // Both tabs exist.
     await expect(page.getByRole("tab", { name: /Pending/ })).toBeVisible();
