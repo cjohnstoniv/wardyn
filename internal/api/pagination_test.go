@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -198,5 +199,39 @@ func TestAuditPerRunOrderDesc(t *testing.T) {
 	}
 	if got := targets("&limit=2&order=desc&offset=2"); got != "ba" {
 		t.Errorf("order=desc offset=2 = %q, want ba", got)
+	}
+}
+
+// TestAuditPerRunOrderDescWithoutAPager pins the same newest-first window on the fetch-all arm, which a store
+// that is not a store.Pager takes: it must reverse the trail before windowing, not ignore order=desc.
+func TestAuditPerRunOrderDescWithoutAPager(t *testing.T) {
+	runID := uuid.New()
+	evs := makeEvents(4, &runID)
+	for i := range evs {
+		evs[i].Target = string(rune('a' + i))
+	}
+	srv := auditDoors(t, &unpagedAuditStore{run: types.AgentRun{ID: runID}, rows: evs})
+	token := ssoSession(t, "ops@acme.io", capEmail, oidc.RoleAdmin)
+	targets := func(q string) string {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/audit?run_id="+runID.String()+q, token, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d (%s)", w.Code, w.Body.String())
+		}
+		var out []types.AuditEvent
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, ev := range out {
+			b.WriteString(ev.Target)
+		}
+		return b.String()
+	}
+	if got := targets("&limit=2"); got != "ab" {
+		t.Errorf("default order = %q, want the oldest window ab", got)
+	}
+	if got := targets("&limit=2&order=desc"); got != "dc" {
+		t.Errorf("order=desc = %q, want the newest window dc", got)
 	}
 }
