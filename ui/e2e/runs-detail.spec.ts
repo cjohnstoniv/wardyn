@@ -650,7 +650,9 @@ test.describe("Run detail — the Azure DevOps decline", () => {
     await expect(block).toBeVisible();
     await expect(block.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
     await expect(block.getByRole("alert")).toHaveText(detail);
-    await page.unroute("**/api/v1/audit*");
+    // The console polls /audit: a handler still awaiting route.fetch() when the
+    // route is removed would fulfill a request that already fell through.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 
   test("an ordinary run's Credentials panel says nothing of the Azure DevOps lane", async ({ page }) => {
