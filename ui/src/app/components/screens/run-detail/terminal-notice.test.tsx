@@ -52,6 +52,17 @@ describe("TerminalPane — the finished run's Recording link", () => {
   });
 });
 
+// #2910: the pane is near-black in both themes, so its header and body copy must
+// resolve their tokens from the dark block, not the light theme's.
+describe("TerminalPane — always-dark token scope", () => {
+  it("scopes the pane frame to the dark tokens", () => {
+    pane("ready", false);
+    const frame = screen.getByText(RUN_COCKPIT.recordingMissing).closest(".bg-\\[\\#0d1117\\]");
+    expect(frame).not.toBeNull();
+    expect(frame).toHaveClass("dark");
+  });
+});
+
 // 0.9 (M-RN-3 RS6): a live interactive run on a person's computer that is offline cannot be attached to, so
 // the pane says so by name; the captured replay is still offered, and the terminal stays when it is online.
 describe("TerminalPane — a run on an offline computer", () => {

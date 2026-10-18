@@ -549,6 +549,17 @@ describe("RunDetailScreen — the Policy tab", () => {
     expect(getPolicyMock).toHaveBeenCalledWith("run-1");
   });
 
+  // #2911: in the light theme the transparent TabsList hides the primitive's white
+  // active pill, so the run tabs carry their own selected treatment.
+  it("every tab has a muted label and a visible fill when selected", async () => {
+    renderRun(RUN);
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs).toHaveLength(6);
+    for (const tab of tabs) {
+      expect(tab).toHaveClass("text-muted-foreground", "data-[state=active]:bg-muted", "data-[state=active]:text-foreground");
+    }
+  });
+
   it("the identity rail's Policy row is a View link that opens the tab, for a run with no saved policy", async () => {
     renderRun(RUN);
     expect(RUN).not.toHaveProperty("policy_id");
