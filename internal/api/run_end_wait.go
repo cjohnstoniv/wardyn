@@ -337,8 +337,8 @@ func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, lifetime
 		return
 	}
 	if lifetime.at != nil && !lifetime.at.After(now) {
-		p.refuse(http.StatusBadRequest, "run.end.set", reasonRunEndMustBeFuture,
-			"This run is past "+endSourceLabel(lifetime.source, "")+"'s lifetime limit, so its end cannot move later")
+		p.refuse(http.StatusConflict, "run.end.set", reasonRunEndWaitMaxLifetime,
+			"run has reached its maximum lifetime and is being ended; its end and wait cannot be changed")
 		return
 	}
 	end := asked.UTC()
