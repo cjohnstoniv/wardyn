@@ -505,6 +505,31 @@ test.describe("sign in returns to the page asked for (#2099)", () => {
   });
 });
 
+// #2110 — a cold load whose SSO session ended says so; a 401 that names no session stays a first visit.
+test.describe("a cold load finds the session ended (#2110)", () => {
+  const probe = (page: Page, body: Record<string, string>) =>
+    page.route("**/api/v1/runs?limit=1", (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(body) }),
+    );
+
+  test("an expired session shows the signed-out notice", async ({ page }) => {
+    await probe(page, { error: "your session expired — sign in again", reason: "expired_session" });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(page.getByText(SESSION_ENDED_REASON)).toBeVisible();
+  });
+
+  test("a 401 naming no session shows no notice", async ({ page }) => {
+    await probe(page, { error: "missing bearer token" });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(signInToken(page)).toBeVisible();
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
+  });
+});
+
 // R4/F027 — a 5xx from the daemon is not a statement about the caller.
 //
 // probeAuth used to return a bare boolean, so a 500 on the mount probe was
