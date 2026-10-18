@@ -482,6 +482,22 @@ test.describe("admin-written help under a sign-in refusal (#484)", () => {
   });
 });
 
+// #2099 — a signed-out visit to a deep link keeps the page for the SSO sign-in to return to.
+test.describe("sign in returns to the page asked for (#2099)", () => {
+  test("the SSO link carries the console path the person opened", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", sso: true, token_login: true }) }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/runs/abc?tab=logs");
+
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      /\/auth\/login\?return_to=%2Fruns%2Fabc%3Ftab%3Dlogs$/,
+    );
+  });
+});
+
 // R4/F027 — a 5xx from the daemon is not a statement about the caller.
 //
 // probeAuth used to return a bare boolean, so a 500 on the mount probe was

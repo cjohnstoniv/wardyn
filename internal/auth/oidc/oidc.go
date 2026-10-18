@@ -479,8 +479,10 @@ func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
 
 // LoginHandler initiates the OIDC authorization code flow. It generates a
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
-// redirects the user to the IdP authorization endpoint.
+// redirects the user to the IdP authorization endpoint. An optional ?return_to=<console path> is where
+// the approved sign-in lands instead of the console root (return_to.go).
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	a.rememberReturnTo(w, r)
 	a.startLogin(w, r, true, a.silentEligible(r))
 }
 
@@ -686,6 +688,7 @@ const (
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code>, a real page it can act
 // on, rather than a bare http.Error text response with no way back to the console.
 func (a *Authenticator) redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+	a.expireCookie(w, returnCookieName)
 	http.Redirect(w, r, a.cfg.BasePath+"/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
@@ -762,6 +765,9 @@ const (
 	// has not signed out since (SilentReauth), and the account it used (LoginHint). Sign-out clears both.
 	reauthCookieName = "wardyn_oidc_reauth"
 	hintCookieName   = "wardyn_oidc_hint"
+	// returnCookieName holds the console page a sign-in began from (return_to.go), read once by the
+	// callback. No secret.
+	returnCookieName = "wardyn_oidc_return"
 )
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { apiURL, appURL, basePath, routerPath, wsURL } from "./base-path";
+import { apiURL, appURL, basePath, routerPath, signInURL, wsURL } from "./base-path";
 
 function serveUnder(base: string) {
   document.documentElement.dataset.wardynBase = base;
@@ -47,5 +47,17 @@ describe("base-path", () => {
     expect(routerPath("/wardyn/")).toBe("/");
     expect(routerPath("/wardynx/runs")).toBe("/wardynx/runs");
     expect(routerPath("/runs")).toBe("/runs");
+  });
+
+  it("builds the sign-in link with the page to return to, under the base, and none from the root", () => {
+    serveUnder("/wardyn");
+    window.history.pushState({}, "", "/wardyn/runs/abc?x=1");
+    try {
+      expect(signInURL()).toBe("/wardyn/auth/login?return_to=%2Fruns%2Fabc%3Fx%3D1");
+      window.history.pushState({}, "", "/wardyn/");
+      expect(signInURL()).toBe("/wardyn/auth/login");
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
   });
 });

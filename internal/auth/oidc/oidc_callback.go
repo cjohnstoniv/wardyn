@@ -338,7 +338,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	a.rememberDevice(w, cc)
-	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+	http.Redirect(w, r, a.consumeReturnTo(w, r), http.StatusFound)
 }
 
 // loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed

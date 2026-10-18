@@ -90,6 +90,20 @@ describe("SignIn — SSO entry point", () => {
     expect(link).toHaveAttribute("href", "/auth/login");
   });
 
+  // #2099: off the console root the SSO link names the page the person asked for, so the sign-in
+  // returns there; the server checks it again (internal/auth/oidc/return_to.go).
+  it("asks the sign-in to return to the page the person was on", async () => {
+    healthMock.mockResolvedValue({ sso: true });
+    window.history.pushState({}, "", "/runs/abc?tab=logs");
+    try {
+      renderSignIn();
+      const link = await screen.findByRole("link", { name: /sign in with sso/i });
+      expect(link).toHaveAttribute("href", "/auth/login?return_to=%2Fruns%2Fabc%3Ftab%3Dlogs");
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   // #457: SIGNIN.ROLE_SOURCE (the "comes from your SSO role assignment"
   // caveat) is REMOVED everywhere, not just conditionally hidden — no cell
   // renders it any more, combined deployment included.
