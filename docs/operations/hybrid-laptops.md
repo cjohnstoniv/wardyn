@@ -290,7 +290,7 @@ Three routes are open to callers with no credential yet. Each has its own rate-l
 | `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
 
 - A runner that proves its key, or a registration that redeems a valid token, is refunded. Anonymous traffic and failed attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
-- Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket, or allow-list your runners' source networks on these three paths, or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
+- Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
 - The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 
 The runner stream has two more anonymous limits and one per-runner limit, all per replica:
