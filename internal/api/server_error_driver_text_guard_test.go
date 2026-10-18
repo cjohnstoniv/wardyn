@@ -136,7 +136,7 @@ type serverErrorForwarder struct {
 // uiFail is uigateway.go's UI-relay dial-error constructor.
 var serverErrorForwarders = map[string]serverErrorForwarder{
 	"refuseCapture": {statusArg: 3, msgArg: 5}, // s.refuseCapture(w, r, claims, status, reason, msg, scope)
-	"uiFail":        {statusArg: 1, msgArg: 2}, // uiFail(ctx, status, msg)
+	"uiFail":        {statusArg: 1, msgArg: 3}, // uiFail(ctx, status, reason, msg)
 	// #445: the member-visible run failure hint (run.FailureHint), which
 	// refuseADOEntraDispatch also copies into the run.create audit detail.
 	"failAndRevoke":          {statusArg: -1, msgArg: 3}, // s.failAndRevoke(ctx, runID, from, hint)
@@ -443,6 +443,95 @@ func (s *Server) dispatchRun(ctx context.Context) {
 			t.Fatalf("%s: want exactly one site under %q, got %d: %v", name, key, got, found[key])
 		}
 	}
+}
+
+// TestScanFileForLeaks_FlagsUiFailMessage pins the uiFail hop: its driver text
+// rides in the FOURTH argument (the third is the reason code), so a
+// err.Error() there must be found, and a logged message must not be.
+func TestScanFileForLeaks_FlagsUiFailMessage(t *testing.T) {
+	const src = `package api
+
+func (s *Server) dialRelay(ctx context.Context) error {
+	return uiFail(ctx, http.StatusBadGateway, reasonX, "dial relay: "+err.Error())
+}
+
+func (s *Server) dialRelayLogged(ctx context.Context) error {
+	return uiFail(ctx, http.StatusBadGateway, reasonX, uiExecFailMsg(ctx, "dial relay", err))
+}
+`
+	fset := token.NewFileSet()
+	file, perr := parser.ParseFile(fset, "uigateway.go", src, 0)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	found := scanFileForLeaks(fset, "uigateway.go", file, []byte(src))
+	if got := len(found["uigateway.go:Server.dialRelay:uiFail"]); got != 1 {
+		t.Fatalf("want the err.Error() uiFail message flagged once, got %d: %v", got, found)
+	}
+	if len(found) != 1 {
+		t.Fatalf("the logged-message uiFail was flagged, or another key appeared: %v", found)
+	}
+}
+
+// TestServerErrorForwarders_ArgsMatchSignatures keeps the table honest: each
+// forwarder's msgArg indexes a string parameter and its statusArg (when it
+// has one) an int, read off the real declaration, so a signature change
+// (uiFail gained a reason parameter and the table silently pointed at it) is
+// a failure here instead of a guard that checks the wrong argument.
+func TestServerErrorForwarders_ArgsMatchSignatures(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	params := map[string][]string{} // forwarder -> parameter type names, receiver excluded
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		file, perr := parser.ParseFile(fset, e.Name(), nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", e.Name(), perr)
+		}
+		for _, d := range file.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if _, want := serverErrorForwarders[fd.Name.Name]; !want {
+				continue
+			}
+			var ptypes []string
+			for _, f := range fd.Type.Params.List {
+				for range max(1, len(f.Names)) {
+					ptypes = append(ptypes, exprSourceString(f.Type))
+				}
+			}
+			params[fd.Name.Name] = ptypes
+		}
+	}
+	for name, fwd := range serverErrorForwarders {
+		ptypes, ok := params[name]
+		if !ok {
+			t.Errorf("forwarder %q has no declaration in internal/api: remove it from serverErrorForwarders", name)
+			continue
+		}
+		if fwd.msgArg >= len(ptypes) || ptypes[fwd.msgArg] != "string" {
+			t.Errorf("forwarder %q: msgArg %d is not a string parameter (parameters: %v)", name, fwd.msgArg, ptypes)
+		}
+		if fwd.statusArg >= 0 && (fwd.statusArg >= len(ptypes) || ptypes[fwd.statusArg] != "int") {
+			t.Errorf("forwarder %q: statusArg %d is not an int parameter (parameters: %v)", name, fwd.statusArg, ptypes)
+		}
+	}
+}
+
+// exprSourceString renders a parameter type that is a plain identifier ("string",
+// "int") and anything else as "?", which is all the signature check compares.
+func exprSourceString(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return "?"
 }
 
 // is5xxStatusArg reports whether arg is a status this guard recognizes as a
