@@ -72,7 +72,7 @@ export function StartingFolder({ items, text, onText, onStart }: {
         </div>
         <div className="flex flex-col gap-1.5">
           <label htmlFor={SUBFOLDER_ID} className="flex items-center justify-between gap-2 text-xs font-semibold">
-            {NR_FILES.SUBFOLDER_LABEL} <Chip tone="info">{NR_SHARED.OPTIONAL}</Chip>
+            {NR_FILES.SUBFOLDER_LABEL} <Chip>{NR_SHARED.OPTIONAL}</Chip>
           </label>
           <Input
             id={SUBFOLDER_ID}
