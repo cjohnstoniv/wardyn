@@ -175,7 +175,8 @@ export function ApprovalsTab({
                 <Label className="text-meta uppercase tracking-wide text-muted-foreground">
                   Requested scope
                 </Label>
-                <JsonBlock value={a.requested_scope} className="mt-1.5" />
+                {/* Wrapped here only: the command is what the person is deciding on, so it is never cut off (#2924). */}
+                <JsonBlock value={a.requested_scope} className="mt-1.5 [&_pre]:whitespace-pre-wrap [&_pre]:break-all" />
               </div>
             )}
             {a.decided_by && (

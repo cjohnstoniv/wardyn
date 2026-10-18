@@ -267,3 +267,41 @@ test.describe("Tier B guided setup", () => {
     await expect(page.getByText(/1 of 1 harnesses/)).toHaveCount(0);
   });
 });
+
+test.describe("Tier B run tabs at 390px", () => {
+  test.use({ viewport: PHONE });
+
+  // #2917: the time stays on one line and the target gets a second line of its own instead of vanishing.
+  test("Audit tab: rows keep the time whole and show the target on a second line", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    await page.setViewportSize(PHONE);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Audit/ }).click();
+    const row = page.getByTestId("run-audit-row").first();
+    await expect(row).toBeVisible();
+    const target = row.getByTestId("run-audit-target");
+    const [r, t, time] = [(await row.boundingBox())!, (await target.boundingBox())!, (await row.locator("span").first().boundingBox())!];
+    expect(time.height).toBeLessThan(20);
+    expect(t.y).toBeGreaterThan(time.y + time.height - 1);
+    expect(t.width).toBeGreaterThan(100);
+    expect(t.x + t.width).toBeLessThanOrEqual(r.x + r.width + 1);
+  });
+
+  // #2924: the requested command wraps inside its block, so none of it is hidden behind a sideways scroll.
+  test("Approvals tab: a pending tool call's command is not clipped", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page);
+    sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${id}'`);
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${id}','tool_call','{"tool":"Bash","command":"rm -rf node_modules && pnpm install --frozen-lockfile"}'::jsonb,'PENDING',now())`,
+    );
+    await page.setViewportSize(PHONE);
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByRole("tab", { name: /^Approvals/ }).click();
+    const pre = page.locator("pre", { hasText: "rm -rf node_modules" }).first();
+    await expect(pre).toBeVisible();
+    expect(await pre.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  });
+});
