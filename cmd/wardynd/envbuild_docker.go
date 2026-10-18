@@ -131,8 +131,18 @@ func (w *slogLineWriter) Write(p []byte) (int, error) {
 		}
 		w.buf = w.buf[i+1:]
 	}
+	// Build output is untrusted and can be one endless line: flush a line that
+	// outgrows the cap rather than hold it, or it grows wardynd's memory without
+	// bound (internal/api's buildLogWriter applies the same cap to its own buffer).
+	if len(w.buf) > maxSlogLineBytes {
+		slog.Info("envbuild: " + strings.TrimSpace(string(w.buf)))
+		w.buf = w.buf[:0]
+	}
 	return len(p), nil
 }
+
+// maxSlogLineBytes caps slogLineWriter's pending partial line.
+const maxSlogLineBytes = 8 << 10
 
 func newEnvBuilder(envbuilderImage, cacheRepo string) (api.ImageBuilder, error) {
 	b, err := envbuild.New(envbuilderImage, cacheRepo)
