@@ -13,7 +13,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -384,5 +386,55 @@ func TestRecordPromote_BulkSubsetSkipsModelProviderRowHosts(t *testing.T) {
 	}
 	if _, ok := fake.ws.Requirements["egress:bedrock-runtime.us-east-1.amazonaws.com"]; ok {
 		t.Errorf("the Bedrock runtime host was promoted: %v", fake.ws.Requirements)
+	}
+}
+
+// TestRecordPromote_BulkSkipIsNamedInTheHeaderAndTheAudit: the skip is otherwise silent (the
+// body is the Workspace), so the response names the skipped hosts in
+// X-Wardyn-Record-Skipped-Hosts and the workspace.egress.approve row lists them beside domains.
+func TestRecordPromote_BulkSkipIsNamedInTheHeaderAndTheAudit(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = bedrockAndGatewaySite()
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken,
+		`{"hosts":["Bedrock-Runtime.us-east-1.amazonaws.com","api.stripe.com"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Wardyn-Record-Skipped-Hosts"); got != "bedrock-runtime.us-east-1.amazonaws.com" {
+		t.Errorf("X-Wardyn-Record-Skipped-Hosts = %q, want the Bedrock runtime host", got)
+	}
+	var found bool
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "workspace.egress.approve" {
+			continue
+		}
+		var d struct {
+			Domains []string `json:"domains"`
+			Skipped []string `json:"skipped"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		found = true
+		if !slices.Equal(d.Domains, []string{"api.stripe.com"}) || !slices.Equal(d.Skipped, []string{"bedrock-runtime.us-east-1.amazonaws.com"}) {
+			t.Errorf("audit domains=%v skipped=%v, want [api.stripe.com] and the Bedrock host", d.Domains, d.Skipped)
+		}
+	}
+	if !found {
+		t.Error("no workspace.egress.approve row")
+	}
+
+	// Nothing skipped: no header.
+	w = do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, `{"hosts":["api.stripe.com"]}`)
+	if w.Code != http.StatusOK || w.Header().Get("X-Wardyn-Record-Skipped-Hosts") != "" {
+		t.Errorf("code=%d header=%q, want 200 and no header", w.Code, w.Header().Get("X-Wardyn-Record-Skipped-Hosts"))
 	}
 }

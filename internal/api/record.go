@@ -790,7 +790,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 
 	// wantHosts is what THIS request actually promotes: the full promotable
 	// set, unless the operator narrowed it to a validated subset.
-	var wantHosts []string
+	var wantHosts, skipped []string
 	if req.Hosts != nil {
 		// The console's bulk promote sends every checked host, plumbing included: a model
 		// provider row's host is never promoted, and is skipped rather than refused.
@@ -801,6 +801,9 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 				continue
 			}
 			if _, plumbing := providerHosts[h]; plumbing {
+				if !slices.Contains(skipped, h) {
+					skipped = append(skipped, h)
+				}
 				continue
 			}
 			if _, ok := promotable[h]; !ok {
@@ -898,13 +901,24 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		}
 		updated.Requirements = wsAfter.Requirements
 		updated.EffectiveRequirements = wsAfter.EffectiveRequirements
+		auditData := map[string]any{"domains": promoted, "source": "record:" + taskKey}
+		if len(skipped) > 0 {
+			auditData["skipped"] = skipped
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&res.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.egress.approve", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{
-				"domains": promoted, "source": "record:" + taskKey,
-			})))
+			"workspace.egress.approve", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, auditData)))
+	}
+	// The skip is otherwise silent (the body is the Workspace): name the skipped hosts so
+	// the console can say so. Additive; absent when nothing was skipped.
+	if len(skipped) > 0 {
+		w.Header().Set(recordSkippedHostsHeader, strings.Join(skipped, ","))
 	}
 	writeJSON(w, http.StatusOK, updated)
 }
+
+// recordSkippedHostsHeader lists, comma-separated, the requested hosts a bulk promote skipped
+// because they are a model provider row's plumbing; absent when none were.
+const recordSkippedHostsHeader = "X-Wardyn-Record-Skipped-Hosts"
 
 // controlPlaneHost extracts the lowercase hostname of the configured control
 // plane URL ("" when unparseable/unset).
