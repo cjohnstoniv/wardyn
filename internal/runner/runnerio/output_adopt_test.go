@@ -282,13 +282,6 @@ func TestOutputAdoption_OpenAheadOfCatchUp(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the retained bytes never arrived")
 	}
-	opened := 0
-	for len(watch.opens) > 0 {
-		if err := <-watch.opens; err == nil {
-			opened++
-		}
-	}
-	t.Logf("OPENs accepted while catching up: %d", opened)
 	if _, err = w.Write(p3); err != nil {
 		t.Fatal(err)
 	}
@@ -298,5 +291,14 @@ func TestOutputAdoption_OpenAheadOfCatchUp(t *testing.T) {
 	}
 	if !bytes.Equal(capture.Bytes(), want) || capture.err != nil {
 		t.Fatalf("adopted %d bytes, end %v; want %d bytes, end nil", capture.Len(), capture.err, len(want))
+	}
+	// The runner's OPEN that waited for the catch-up must have been accepted, not refused.
+	for accepted := false; !accepted; {
+		select {
+		case err := <-watch.opens:
+			accepted = err == nil
+		case <-time.After(10 * time.Second):
+			t.Fatal("the runner's OPEN ahead of the catch-up was never accepted")
+		}
 	}
 }
