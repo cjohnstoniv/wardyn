@@ -374,6 +374,16 @@ describe("WorkspaceDetailScreen — Delete workspace", () => {
     renderDetail("ws-1", false);
     expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
   });
+
+  // #2885: the reason is a paragraph beside the control, not text inside a 32px icon button.
+  it("a viewer's reason is visible text outside the icon button", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail("ws-1", false);
+    const trigger = await screen.findByRole("button", { name: /delete this workspace/i });
+    const reason = screen.getAllByText(OPERATOR_ONLY_REASON).find((el) => !trigger.contains(el));
+    expect(reason).toBeDefined();
+    expect(trigger).toHaveTextContent("");
+  });
 });
 
 describe("WorkspaceDetailScreen — three cards only", () => {

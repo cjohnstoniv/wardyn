@@ -29,7 +29,7 @@ import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
-import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
@@ -412,7 +412,6 @@ export function WorkspaceDetailScreen() {
             onClick={() => setConfirmDelete(true)}
           >
             <Trash2 className="size-4" />
-            {!canMutate && <OperatorOnlyHint />}
           </Button>
         </div>
 
@@ -422,6 +421,8 @@ export function WorkspaceDetailScreen() {
         {workspaceUnavailable && (
           <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
         )}
+        {/* The reason is visible text beside the control, never inside the 32px icon button (#2885). */}
+        {!canMutate && <p className="mt-2 text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
 
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
           <div className="min-w-0 flex-1">
