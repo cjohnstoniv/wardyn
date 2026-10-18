@@ -255,6 +255,29 @@ func h2ResendClass(err error) string {
 	return "failed"
 }
 
+// peerTextClass is a fixed phrase for an upstream error whose text the upstream
+// wrote: an HTTP/2 error (a GOAWAY's debug data, a stream reset's cause) or a
+// response net/http could not parse, whose error quotes the line it read. The
+// phrase names the class; the peer's words never become Wardyn's explanation.
+func peerTextClass(err error) (string, bool) {
+	//lint:ignore SA1019 see h2ResendClass
+	var goAway http2.GoAwayError
+	var stream http2.StreamError
+	var conn http2.ConnectionError
+	if errors.As(err, &goAway) || errors.As(err, &stream) || errors.As(err, &conn) {
+		return "HTTP/2 error from the upstream: " + h2ResendClass(err), true
+	}
+	// net/http's own HTTP/2 and parse errors are unexported types; their text
+	// is fixed up to the quoted part, so the prefix names them.
+	switch s := err.Error(); {
+	case strings.Contains(s, "malformed HTTP"), strings.Contains(s, "malformed MIME header"):
+		return "malformed HTTP response from the upstream", true
+	case strings.Contains(s, "GOAWAY"), strings.Contains(s, "stream error:"):
+		return "HTTP/2 error from the upstream", true
+	}
+	return "", false
+}
+
 // roundTripUpstream is the MITM/LLM and plain lanes' round trip. A host
 // already known to speak HTTP/2 unasked goes straight to the fallback
 // transport; otherwise the request goes out on p.transport, and if the peer
