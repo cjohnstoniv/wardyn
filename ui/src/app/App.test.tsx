@@ -231,6 +231,15 @@ describe("roleCanReach — pure", () => {
     expect(roleCanReach("/account", "user")).toBe(true);
   });
 
+  // #2607: Getting started and the first-run landing are in a member's own nav; without them a member
+  // renewing or re-signing in on /setup was told the page was no longer theirs.
+  it("a member reaches Getting started and the first-run landing", () => {
+    expect(roleCanReach("/setup", "user")).toBe(true);
+    expect(roleCanReach("/", "user")).toBe(true);
+    expect(roleCanReach("/demos", "user")).toBe(true);
+    expect(roleCanReach("/admin/setup", "user")).toBe(false);
+  });
+
   // Negative control: a route with no special tier (neither member-scoped
   // nor operator-only) is reachable by any non-member role.
   it("neg: an ungated route is reachable by admin and security_admin alike", () => {
