@@ -410,6 +410,13 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
     await expect(alert).toHaveText(SIGNIN.UNREACHABLE_ERROR);
   });
 
+  test("a provider refusal names its own cause (#2125)", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=oidc_refused");
+
+    await expect(page.getByRole("alert")).toHaveText(SIGNIN.OIDC_REFUSED);
+  });
+
   test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
     await clearTokenInit(page);
     await page.goto("/?auth_error=email_domain");

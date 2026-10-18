@@ -680,6 +680,9 @@ const (
 	authErrorOIDCTransient = "oidc_transient"
 	// authErrorOIDCConfig: exchange failed with an unretriable error; the SAME attempt can't be redone.
 	authErrorOIDCConfig = "oidc_config"
+	// authErrorOIDCRefused: the provider returned to the callback with an error of its own (user not
+	// assigned to the app, consent declined) rather than a code.
+	authErrorOIDCRefused = "oidc_refused"
 	// authErrorSignInRefused: a refusal (DenialReservedPrincipal) the sign-in screen shows a generic
 	// sentence for; the cause is in the log, not shown to the person.
 	authErrorSignInRefused = "sign_in_refused"

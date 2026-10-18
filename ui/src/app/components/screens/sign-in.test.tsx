@@ -516,6 +516,14 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () 
     expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.OIDC_TRANSIENT);
   });
 
+  // #2125: the provider's own refusal (not assigned to the app, consent declined) lands here.
+  it("renders the oidc_refused message", async () => {
+    window.history.pushState({}, "", "/?auth_error=oidc_refused");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.OIDC_REFUSED);
+  });
+
   it("shows no error banner when the URL carries no auth_error", () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});

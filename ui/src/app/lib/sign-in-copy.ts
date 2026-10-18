@@ -71,6 +71,8 @@ export const SIGNIN = {
     "Your identity provider didn't respond in time. This is usually temporary — try signing in again.",
   OIDC_CONFIG:
     "Sign-in with your identity provider failed. Try again; if it keeps happening, ask your Wardyn admin to check the sign-in configuration.",
+  OIDC_REFUSED:
+    "Your identity provider didn't complete the sign-in. If you declined a prompt, try again; otherwise ask your Wardyn admin whether you are assigned to Wardyn in your identity provider.",
   AUTH_FAILED: "Sign-in failed. Try again, or ask your Wardyn admin.",
 } as const;
 

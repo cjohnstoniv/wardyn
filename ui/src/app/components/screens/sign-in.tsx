@@ -84,6 +84,8 @@ function authErrorMessage(code: string): string {
       return SIGNIN.OIDC_TRANSIENT;
     case "oidc_config":
       return SIGNIN.OIDC_CONFIG;
+    case "oidc_refused":
+      return SIGNIN.OIDC_REFUSED;
     default:
       return SIGNIN.AUTH_FAILED;
   }
