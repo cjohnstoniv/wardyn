@@ -212,3 +212,17 @@ func TestADOEntraByRow_FindsADisabledRow(t *testing.T) {
 		t.Fatalf("an unknown id: found=%v err=%v, want not found", found, err)
 	}
 }
+
+// A row switched to bearer or own_pat after tokens were minted through it still
+// revokes them: the by-row source asks as minted_pat whatever the row says now,
+// else every revoke fails validation and is retried until the token expires.
+func TestADOEntraByRow_RevokesAsMintedWhateverTheRowSaysNow(t *testing.T) {
+	for _, mode := range []types.ADOTokenMode{types.ADOTokenModeBearer, types.ADOTokenModeOwnPAT, ""} {
+		sc := mintedSite(testLoginClient, testTenant)
+		sc.WorkspaceProviders.Git[0].Entra.TokenMode = mode
+		cfg, found, err := adoEntraByRow(sc, testLogin)(context.Background(), "ado")
+		if err != nil || !found || cfg.TokenMode != types.ADOTokenModeMintedPAT || cfg.ClientSecret != "console-secret" {
+			t.Errorf("mode %q: found=%v err=%v cfg=%+v, want minted_pat with the console secret", mode, found, err, cfg)
+		}
+	}
+}

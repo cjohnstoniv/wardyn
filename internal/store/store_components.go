@@ -131,29 +131,7 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 	if len(comps) == 0 {
 		return errors.New("store: put run components: no components; a run without any writes no snapshot")
 	}
-	defs := make([][]byte, len(comps))
-	for i, c := range comps {
-		def, err := marshalComponentDefinition(c.Definition)
-		if err != nil {
-			return err
-		}
-		defs[i] = def
-	}
-	err := s.inTx(ctx, func(q Querier) error {
-		const ins = `
-			INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
-		for i, c := range comps {
-			harnesses := c.MCPHarnesses
-			if harnesses == nil {
-				harnesses = []string{}
-			}
-			if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, defs[i], c.SelfDefined, harnesses); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := s.inTx(ctx, func(q Querier) error { return insertRunComponents(ctx, q, runID, comps) })
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == "23503":
@@ -162,6 +140,27 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 		return ErrConflict
 	case err != nil:
 		return fmt.Errorf("store: put run components: %w", err)
+	}
+	return nil
+}
+
+// insertRunComponents writes comps as runID's snapshot rows on q.
+func insertRunComponents(ctx context.Context, q Querier, runID uuid.UUID, comps []types.RunComponent) error {
+	const ins = `
+		INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	for i, c := range comps {
+		def, err := marshalComponentDefinition(c.Definition)
+		if err != nil {
+			return err
+		}
+		harnesses := c.MCPHarnesses
+		if harnesses == nil {
+			harnesses = []string{}
+		}
+		if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, def, c.SelfDefined, harnesses); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -741,6 +741,46 @@ func TestPG_RunnerLease_DispatchAdmittedRefusesADeniedPlacement(t *testing.T) {
 	}
 }
 
+// A revive of a run on a runner sends the runner the laptop copy, which carries no declared
+// workspace-secret corpus, and stores the organisation's form: the org engine a fresh replica builds
+// from the stored row still scans with the corpus dispatch kept.
+func TestPG_RunnerLease_ReviveKeepsTheOrgInspectionCorpus(t *testing.T) {
+	const value = "WS-DECLARED-VALUE-65a1"
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	f.running(t, &run, nil)
+	f.placed(t, &run)
+	pol := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true,
+		WorkspaceSecretNames: []string{"ws-deploy-key"}, WorkspaceSecretValues: []string{value}}}
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081", Policy: pol}); err != nil {
+		t.Fatal(err)
+	}
+	for round := range 2 { // the second revive starts from the row the first one stored
+		if lost, err := f.st.MarkRunLost(f.ctx, run.ID, types.LostReboot, time.Now(), 0); err != nil || !lost {
+			t.Fatalf("round %d: mark lost = %v, %v", round, lost, err)
+		}
+		stored, err := f.st.GetRun(f.ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.fake.Calls = nil
+		if _, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true); rerr != nil {
+			t.Fatalf("round %d: revive = %+v", round, rerr)
+		}
+		sent := slices.IndexFunc(f.fake.Calls, func(c string) bool { return strings.HasPrefix(c, "replace_proxy ") })
+		if sent < 0 || strings.Contains(f.fake.Calls[sent], value) || strings.Contains(f.fake.Calls[sent], "ws-deploy-key") {
+			t.Fatalf("round %d: the runner's copy carries the corpus, or no proxy was replaced: %v", round, f.fake.Calls)
+		}
+		cfg, err := f.srv.viaOrgEngineConfig(f.ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if li := cfg.Policy.LLMInspection; li == nil || !slices.Contains(li.WorkspaceSecretValues, value) || !slices.Contains(li.WorkspaceSecretNames, "ws-deploy-key") {
+			t.Fatalf("round %d: the stored org config lost the declared corpus: %+v", round, li)
+		}
+	}
+}
+
 // fix-r1 Fable M3 and Opus I1: a run on a runner revives through the door (reviveRunProxy) on the real
 // runner side: re-leased on the claim's stamp, its proxy replaced, its stopped agent started under a fresh
 // generation. Once the owner's profile denies its placement, the next revive is refused placement_denied.

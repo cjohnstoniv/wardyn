@@ -617,6 +617,10 @@ func (p *Peer) Open(ctx context.Context, o Open) (*Stream, error) {
 	}
 }
 
+// ErrOpenCapacity is what an OnOpen handler returns to answer the OPEN with ResetCapacity, as a full
+// stream table does, so the opener may retry; any other OnOpen error is answered ResetRefused.
+var ErrOpenCapacity = errors.New("runnerwire: no room for this stream yet")
+
 func (p *Peer) onOpen(f Frame) error {
 	var o Open
 	if err := Unmarshal(f.Payload, &o); err != nil {
@@ -655,7 +659,9 @@ func (p *Peer) onOpen(f Frame) error {
 		if p.cfg.OnOpen == nil {
 			return s.resetQueued(ResetRefused)
 		}
-		if err := p.cfg.OnOpen(s, o); err != nil {
+		if err := p.cfg.OnOpen(s, o); errors.Is(err, ErrOpenCapacity) {
+			return s.resetQueued(ResetCapacity)
+		} else if err != nil {
 			return s.resetQueued(ResetRefused)
 		}
 	}

@@ -102,7 +102,16 @@ func driveSetCmd(client clientFn) *cobra.Command {
 			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse drives document JSON: %w", err)
 			}
+			// The scheme each drive was exported under: ApplyDrivesResult
+			// replaces doc's entries with what each write saved.
+			legacy := map[uuid.UUID]bool{}
+			for _, d := range doc.Drives {
+				if d.ObjectScheme == "slug" && d.ID != uuid.Nil {
+					legacy[d.ID] = true
+				}
+			}
 			res, err := client().ApplyDrivesResult(cmd.Context(), doc)
+			warnRehomedDrives(cmd.ErrOrStderr(), legacy, doc.Drives)
 			if err != nil {
 				if len(res.Steps) > 0 {
 					printApplySteps(cmd.ErrOrStderr(), res.Steps)
@@ -111,6 +120,19 @@ func driveSetCmd(client clientFn) *cobra.Command {
 			}
 			return emitJSON(cmd.OutOrStdout(), res.Document)
 		},
+	}
+}
+
+// warnRehomedDrives names each drive the file exported under the legacy slug
+// object naming that the server saved under the id naming: it held no such
+// drive, so it created one, and the scheme is the server's to set. Its homes
+// will mint new, empty storage objects; the old ones are left where they are.
+func warnRehomedDrives(w io.Writer, legacy map[uuid.UUID]bool, saved []sdk.UserDriveListItem) {
+	for _, d := range saved {
+		if legacy[d.ID] && d.ObjectScheme == "id" {
+			fmt.Fprintf(w, "warning: drive %q (%s) was exported under the legacy slug object naming, and this server did not hold it, so it was created under the id naming: "+
+				"its homes will get new, empty storage objects, and the old wardyn-drive-<slug>-<home> objects are left in place, unused\n", d.Name, d.ID)
+		}
 	}
 }
 

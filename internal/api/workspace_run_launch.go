@@ -39,7 +39,11 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 
 // referencedWorkspacesIn is referencedWorkspaces over a list already read.
 func referencedWorkspacesIn(all []types.Workspace, spec types.RunPolicySpec) []types.Workspace {
-	idx := indexWorkspacesBySource(all)
+	return referencedWorkspacesBy(indexWorkspacesBySource(all), spec)
+}
+
+// referencedWorkspacesBy is referencedWorkspacesIn over an index already built.
+func referencedWorkspacesBy(idx workspaceSourceIndex, spec types.RunPolicySpec) []types.Workspace {
 	var out []types.Workspace
 	seen := map[uuid.UUID]bool{}
 	add := func(ws types.Workspace, ok bool) {

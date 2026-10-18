@@ -235,3 +235,44 @@ func TestPG_RevokeBySponsorEmailThatOwnsKeysRevokesTheServiceTokens(t *testing.T
 		t.Errorf("the revoke by %s (%d %s) left the sponsored service's token live", email, rw.Code, rw.Body)
 	}
 }
+
+// revokeBeforeServiceInsert holds a service-token insert until revoke has run to completion: the mint has
+// passed its late re-check of the sponsor and not yet inserted the token.
+type revokeBeforeServiceInsert struct {
+	store.PG
+	revoke func()
+}
+
+func (s revokeBeforeServiceInsert) CreateServiceToken(ctx context.Context, name, sponsor string, maxLive int, t types.APIToken, raw string) (types.APIToken, error) {
+	s.revoke()
+	return s.PG.CreateServiceToken(ctx, name, sponsor, maxLive, t, raw)
+}
+
+// A revoke by the sponsor's email, with SSH keys registered under the email itself, that lands between a
+// service-token mint's late re-check and its insert leaves no working token: the cut reaches the subject
+// the email names, the one the token's sponsor check reads.
+func TestPG_RevokeBySponsorEmailThatOwnsKeysEndsATokenMintedAcrossIt(t *testing.T) {
+	e := newQueueEnv(t)
+	si, cookie := e.sponsoredService(e.revocations())
+	const email = "person@corp.example"
+	if _, err := e.pg.AddSSHKey(context.Background(), types.SSHPublicKey{Fingerprint: "SHA256:email-owned-key", Principal: email, Name: "k",
+		PublicKey: "ssh-ed25519 AAAA " + email, Role: oidc.RoleUser, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	var rw *httptest.ResponseRecorder
+	e.srv.cfg.Store = revokeBeforeServiceInsert{PG: e.pg, revoke: func() {
+		rw = httptest.NewRecorder()
+		e.srv.handleRevokeSessions(rw, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/revoke", strings.NewReader(`{"sub":"`+email+`"}`)))
+	}}
+	w := e.mintServiceToken(cookie, si)
+	e.srv.cfg.Store = e.pg
+	if rw == nil || rw.Code/100 != 2 {
+		t.Fatalf("the revoke did not complete inside the mint (%v); mint = %d %s", rw, w.Code, w.Body)
+	}
+	if w.Code != http.StatusCreated {
+		t.Fatalf("mint = %d %s, want the insert to land after the revoke", w.Code, w.Body)
+	}
+	if tok := decodeToken(t, w); do(t, e.srv, http.MethodGet, "/api/v1/me", tok.Token, "").Code != http.StatusUnauthorized {
+		t.Fatalf("a service token minted across a revoke by its sponsor's email works (rev_seq %d)", tokenRevSeq(t, e.pool, tok.ID))
+	}
+}

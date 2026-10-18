@@ -122,7 +122,7 @@ func (s *memberDriveStore) BeginMemberDriveDeleteAdmin(ctx context.Context, id u
 	return s.BeginMemberDriveDelete(ctx, "", id)
 }
 
-func (s *memberDriveStore) MemberDriveOwnerStarting(_ context.Context, owner string) (bool, error) {
+func (s *memberDriveStore) MemberDriveOwnerStarting(_ context.Context, owner string, _ time.Duration) (bool, error) {
 	return s.starting[owner], nil
 }
 
