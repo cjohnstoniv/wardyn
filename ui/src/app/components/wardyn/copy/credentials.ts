@@ -118,8 +118,8 @@ export const MINTED = {
   CHIP: (n: number) => (n === 1 ? "1 still works" : `${n} still work`),
   COUNT: (n: number) =>
     n === 1
-      ? "1 token was created by an admin for another person. It keeps working until revoked. Values are never shown."
-      : `${n} tokens were created by an admin for another person. They keep working until revoked. Values are never shown.`,
+      ? "1 token was created by an admin for another person. It keeps working until it expires or is revoked. Values are never shown."
+      : `${n} tokens were created by an admin for another person. They keep working until they expire or are revoked. Values are never shown.`,
   NOTE: "No one can create a token that acts as another person. They sign in and create their own.",
   EMPTY: "No admin has created a token for someone else.",
   COL_PERSON: "Person",
