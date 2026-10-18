@@ -188,6 +188,19 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(getRunMock).toHaveBeenCalledTimes(2);
   });
 
+  // #2849: below sm the row wraps so the description keeps its own line, and the run chip is the short id with the full id on hover.
+  it("wraps a row on a phone and prints a short run id with the full id in its title", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "w1", run_id: "run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab", action: "run.create", target: "t" }),
+    ]);
+    renderScreen();
+    const chip = await screen.findByTitle("run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab");
+    expect(chip).toHaveTextContent(/^3f2a91c0$/);
+    const row = chip.parentElement!;
+    expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
+    expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
+  });
+
   it("preserves the server append order (does not re-sort by wall-clock time)", async () => {
     // Server returns seq order e1 then e2, but e2 has an EARLIER timestamp.
     // A buggy client re-sort by time would flip them; we must keep e1 first.
@@ -285,6 +298,26 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText(/Deleted an integration — corp-anthropic/)).toBeInTheDocument();
     expect(screen.getByText(/Added a workspace requirement — ws-1/)).toBeInTheDocument();
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
+  });
+
+  // #2851: four backend actions printed as raw keys beside plain-English rows,
+  // and a run that ended in failure read "Completed" next to a failure badge.
+  it("renders prose for workspace.create, setup, authz and auth rows, and run.complete does not claim success", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "p1", action: "workspace.create", target: "ws-1" }),
+      ev({ id: "p2", action: "setup.onboarding.complete", target: "site_config" }),
+      ev({ id: "p3", action: "authz.denied", target: "/api/v1/drives" }),
+      ev({ id: "p4", action: "auth.fail", target: "/api/v1/runs" }),
+      ev({ id: "p5", action: "run.complete", target: "run-1", outcome: "failure" }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Created a workspace — ws-1")).toBeInTheDocument();
+    expect(screen.getByText("Finished setup — site_config")).toBeInTheDocument();
+    expect(screen.getByText("Was refused access to — /api/v1/drives")).toBeInTheDocument();
+    expect(screen.getByText("Failed to sign in to — /api/v1/runs")).toBeInTheDocument();
+    expect(screen.getByText("The run ended — run-1")).toBeInTheDocument();
+    expect(screen.queryByText(/^Completed/)).not.toBeInTheDocument();
   });
 
   // credential.revoke ends a run's own credentials and touches no stored
@@ -754,7 +787,9 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       }),
     ]);
     renderScreen();
-    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("min-w-[10rem]");
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("sm:min-w-[10rem]");
+    // Below sm the wrapper's own minimum keeps the sentence from collapsing and wraps the row instead.
+    expect(screen.getByText("Failed egress to flaky.example.com:443").parentElement).toHaveClass("min-w-[12rem]");
   });
 });
 
