@@ -669,7 +669,7 @@ export default function App() {
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
               tier={setupStatus?.tier}
-              onSignOut={async () => {
+              onSignOut={async (sso) => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token
                 // left the HttpOnly session cookie alive, so the next auth probe
@@ -697,6 +697,9 @@ export default function App() {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });
+                } else if (sso) {
+                  // #2100: only the Wardyn session ended; the identity provider's is still live.
+                  toast.info(SHELL.SIGN_OUT_SSO_TITLE, { description: SHELL.SIGN_OUT_SSO_BODY });
                 }
                 setToken(null);
                 resetReauth();

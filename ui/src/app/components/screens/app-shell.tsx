@@ -431,7 +431,8 @@ export function AppShell({
 }: {
   pendingApprovals: number;
   attentionCount: number;
-  onSignOut: () => void;
+  // sso: this session came from the identity provider (the sign-out toast says to leave it too).
+  onSignOut: (sso: boolean) => void;
   // The daemon didn't answer App.tsx's setup-status poll, and when it last did.
   // Every screen's background refresh keeps its last-good data on failure, so
   // this banner is the ONLY thing that tells a quiet board from a dead one.
@@ -541,7 +542,7 @@ export function AppShell({
           (WCAG 2.4.3) and in the accessibility tree. */}
             {!focus && (
               <TopBar
-                onSignOut={onSignOut}
+                onSignOut={() => onSignOut(meta.method === "sso")}
                 meta={meta}
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
