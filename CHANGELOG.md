@@ -45,6 +45,7 @@ These are covered by tests against simulated parts only; check them on your esta
 
 ### Changed
 
+- On a deployment that signs in with Microsoft Entra ID, the sign-in screen's button reads "Sign in with Microsoft", with "Use your work or school account" under it.
 - A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
   error names the setting the proxy refused and says to upgrade the organisation before its runners, or to pin a proxy
   image at least as new as the runner, followed by the proxy's own output.

@@ -50,6 +50,12 @@ at the call site, not baked into the string.
 8. **The shared default error** (`ui/src/app/components/wardyn/states.tsx`'s `ErrorState`, every
    pane that renders it with no `message` of its own) reads `STATES.ERROR_DEFAULT` — no
    "control plane", no "Please".
+9. **Microsoft Entra ID.** `/healthz` says `sso_provider:"microsoft"` when the OIDC issuer is Entra
+   ID. The SSO button then reads `SIGNIN.SSO_MICROSOFT` with `SIGNIN.SSO_MICROSOFT_HINT` as muted
+   small text under it, in Microsoft's documented button look (41px; light #ffffff fill, 1px
+   #8c8c8c border, #5e5e5e text; dark #2f2f2f fill, no border, white text). Text and colour only,
+   with the same generic door icon as the SSO button: no Microsoft logo or image ships. Any other
+   IdP keeps "Sign in with SSO".
 
 ## Frozen strings
 
@@ -61,6 +67,8 @@ because #457 touches its neighbors).
 | Key | Status | Where | String |
 |---|---|---|---|
 | `SIGNIN.LEAD` | Reused | card subhead | This console governs the agents on this host. |
+| `SIGNIN.SSO_MICROSOFT` | New | SSO button when `sso_provider` is `microsoft` (state 9) | Sign in with Microsoft |
+| `SIGNIN.SSO_MICROSOFT_HINT` | New | under that button | Use your work or school account |
 | `SIGNIN.CHECKING` | New | checking row (state 1) | Checking sign-in options… |
 | `SIGNIN.STILL_CHECKING` | New | checking row (state 2) | Still checking — Wardyn hasn't answered yet. |
 | `SIGNIN.TOKEN_HINT` | Changed | under the token field | Paste the admin token this Wardyn was started with — your Wardyn admin has it. |

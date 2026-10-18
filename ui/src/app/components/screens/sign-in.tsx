@@ -8,7 +8,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
-  Building2,
+  DoorOpen,
   KeyRound,
   Loader2,
   Moon,
@@ -110,6 +110,9 @@ export function SignIn({
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
   const [sso, setSso] = React.useState(false);
+  // /healthz sso_provider: "microsoft" words the SSO button for Entra ID. Like
+  // `sso`, only a real answer changes it, so an outage keeps the last known one.
+  const [ssoProvider, setSsoProvider] = React.useState("");
   // #378/#379: whether the admin-token form can work at all. Defaults true
   // (today's behaviour: the form renders until the daemon says otherwise) —
   // an older daemon that omits the field must read exactly as it does today.
@@ -152,6 +155,7 @@ export function SignIn({
       }
       setAnswered(true);
       setSso(!!h.sso);
+      setSsoProvider(h.sso_provider ?? "");
       // token_login is undefined on an older daemon — read that as `true`, not
       // `false`: the form is that daemon's only path in, and dropping it on a
       // missing field would be a regression, not a safer default.
@@ -403,13 +407,37 @@ export function SignIn({
               #457: without sso there is nothing to render here at all — no
               disabled stub, no "isn't configured" caveat naming a chart
               value a reader here cannot reach. */}
-          {showSso && (
-            <Button asChild variant="outline" className="w-full">
-              <a href={appURL("/auth/login")}>
-                <Building2 className="size-4" />
-                {SSO_SIGN_IN}
-              </a>
-            </Button>
+          {showSso && ssoProvider === "microsoft" ? (
+            <>
+              {/* Microsoft's documented button look: 41px, white with a #8c8c8c
+                  border and #5e5e5e text in light; #2f2f2f, borderless, white
+                  text in dark. Text only, no Microsoft mark: a generic icon. */}
+              <Button
+                asChild
+                variant="outline"
+                className="h-[41px] w-full border-[#8c8c8c] bg-[#ffffff] text-[#5e5e5e] hover:bg-[#f2f2f2] hover:text-[#5e5e5e] dark:border-0 dark:bg-[#2f2f2f] dark:text-[#ffffff] dark:hover:bg-[#3b3b3b] dark:hover:text-[#ffffff]"
+              >
+                <a href={appURL("/auth/login")} aria-describedby="sso-hint">
+                  <DoorOpen className="size-4" aria-hidden="true" />
+                  {SIGNIN.SSO_MICROSOFT}
+                </a>
+              </Button>
+              <p
+                id="sso-hint"
+                className="mt-2 text-center text-xs text-muted-foreground"
+              >
+                {SIGNIN.SSO_MICROSOFT_HINT}
+              </p>
+            </>
+          ) : (
+            showSso && (
+              <Button asChild variant="outline" className="w-full">
+                <a href={appURL("/auth/login")}>
+                  <DoorOpen className="size-4" aria-hidden="true" />
+                  {SSO_SIGN_IN}
+                </a>
+              </Button>
+            )
           )}
         </div>
       </div>

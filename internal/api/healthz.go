@@ -29,6 +29,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -39,6 +40,15 @@ import (
 // degraded; with no heartbeat ever, it is unavailable. This makes the overclaim
 // structurally impossible: the stream is "healthy" only while events arrive.
 const ebpfHeartbeatTTL = 2 * time.Minute
+
+// healthzSSOProvider is "microsoft" when OIDC is configured and its issuer is Entra
+// ID (the one check the person-keying path already uses), "" otherwise.
+func healthzSSOProvider(a *oidc.Authenticator) string {
+	if a != nil && a.KeysPeopleByObjectID() {
+		return "microsoft"
+	}
+	return ""
+}
 
 // handleHealthz reports liveness plus the identity provider name so the trust
 // boundary (embedded vs spire) is always visible to operators and the UI.
@@ -80,6 +90,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// One bit, no configuration detail: it discloses nothing /auth/login's own
 		// presence does not.
 		"sso": s.cfg.OIDC != nil,
+		// sso_provider names the IdP so the sign-in button can read "Sign in with
+		// Microsoft"; it discloses nothing that /auth/login's redirect target does not.
+		"sso_provider": healthzSSOProvider(s.cfg.OIDC),
 		// token_login (#378/#379) is whether the sign-in screen should offer the
 		// admin-token form at all: a token is actually configured, and neither
 		// sso_only nor member mode is set. Member mode's admin token is a PROCESS
