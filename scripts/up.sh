@@ -137,8 +137,9 @@ llm_ready_from_probe() {
 # is the process-env WARDYN_DEFAULT_POLICY for this invocation ("" if unset):
 # an explicit override always wins and clears the marker (operator has now
 # spoken) so a later plain `up` won't auto-pick over it. Otherwise ENV_FILE's
-# own value is kept UNLESS it is unset or still carries the marker (meaning WE
-# chose it last time, not the operator) — in which case pick_policy re-runs.
+# own value is kept UNLESS it is unset or still equals the path the marker
+# recorded (meaning WE chose it last time, not the operator) — in which case
+# pick_policy re-runs.
 # That re-pick is what lets a model provider or an exported API key
 # added AFTER the first `make setup` actually take effect on the next `up`:
 # the old "only decide when .env has nothing" rule froze the pure-Fence
@@ -156,13 +157,27 @@ resolve_default_policy() {
     return
   fi
   _rdp_cur=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY)
-  if [ -z "${_rdp_cur}" ] || [ "$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "1" ]; then
+  _rdp_mark=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)
+  # The marker records the path WE picked, so an edited value no longer matches it and is
+  # kept. A bare "1" (written before 0.9.4) does not say which path was ours: it is ours
+  # only while the value is still one pick_policy can return.
+  case "${_rdp_mark}" in
+    1) case "${_rdp_cur}" in
+         /examples/policies/claude-llm.json|/examples/policies/default.json|/examples/policies/demo.json) _rdp_ours=1 ;;
+         *) _rdp_ours=0 ;;
+       esac ;;
+    ""|0) _rdp_ours=0 ;;
+    *) [ "${_rdp_mark}" = "${_rdp_cur}" ] && _rdp_ours=1 || _rdp_ours=0 ;;
+  esac
+  if [ -z "${_rdp_cur}" ] || [ "${_rdp_ours}" = 1 ]; then
     _rdp_cur=$(pick_policy "${_rdp_runtimes}" "${_rdp_wants_llm}")
-    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 1
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO "${_rdp_cur}"
+  elif [ -n "${_rdp_mark}" ] && [ "${_rdp_mark}" != 0 ]; then
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 0
   fi
   env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_cur}"
   echo "${_rdp_cur}"
-  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur
+  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur _rdp_mark _rdp_ours
 }
 
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
@@ -690,17 +705,22 @@ cmd_up() {
   # network-topology-independent. Accept a host-curl too (covers Linux/mirrored).
   _cid=$(compose ps -q wardynd 2>/dev/null || true)
   log "Waiting for wardynd to become healthy"
+  # 330s is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT),
+  # the same sum setup.sh's host-mode wait and the chart's startupProbe use: a shorter wait
+  # fails the stack while a slow migration is still working.
+  _deadline=$((SECONDS + 330))
   _tries=0
   # -m 3 (the shape the WSL-reachability probe below uses): a peer that ACCEPTS
-  # and never replies hangs an unbounded curl forever, so the 60-try budget
+  # and never replies hangs an unbounded curl forever, so the deadline below
   # never expires and `make setup` waits with no ceiling at all.
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
         || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
-    if [ "${_tries}" -gt 60 ]; then
+    if [ "${SECONDS}" -ge "${_deadline}" ]; then
       compose logs --tail 50 wardynd
-      die "wardynd did not become healthy — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
+      die "wardynd did not become healthy within 330s — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi
+    [ "${_tries}" = 45 ] && log "still waiting on wardynd — a first migration can take up to WARDYN_MIGRATE_TIMEOUT (5m)"
     sleep 2
     # The capture above ran right after `compose up -d`; on a slow daemon it can
     # come back empty, wedging this loop on the host-curl arm. Re-read until it

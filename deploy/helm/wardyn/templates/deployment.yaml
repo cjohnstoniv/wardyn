@@ -676,7 +676,7 @@ spec:
             # wardynd certifies exactly this host with its internal CA, and
             # refuses to boot on an http:// value that is not loopback.
             - name: WARDYN_CONTROL_PLANE_URL
-              value: {{ printf "https://%s.%s.svc.cluster.local:%d" (include "wardyn.fullname" .) .Release.Namespace $internalPort | quote }}
+              value: {{ printf "https://%s.%s.svc.%s:%d" (include "wardyn.fullname" .) .Release.Namespace (.Values.k8s.clusterDomain | default "cluster.local") $internalPort | quote }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN

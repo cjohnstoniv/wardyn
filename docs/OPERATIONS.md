@@ -5171,7 +5171,7 @@ What the switch needs, and refuses to render or boot without:
   holds its lock on a connection of its own, outside `pool_max_conns`, so every
   replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
   `WARDYN_PG_DSN`).
-- **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
+- **A PodDisruptionBudget** (`minAvailable: 1`, at two or more replicas) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
 - **Per-replica limits add up.** The `via_org` byte total of a local run is 8 GiB per

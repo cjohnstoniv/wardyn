@@ -40,9 +40,10 @@ env_file="${dir}/.env"
 : > "${env_file}"
 
 # 1) First run, no model signal: demo.json, marked auto.
+# (#2221: the old assert pinned the marker's FORMAT, a bare 1, which is exactly what could not tell a hand edit from our pick; the behaviour it stood for is kept: the pick is marked, and cases 2-5b still pin re-pick and not clobbering.)
 got="$(resolve_default_policy "${env_file}" "" '{}' "")"
 [ "$got" = "/examples/policies/demo.json" ] || fail "first pick got '$got', want demo.json"
-[ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "1" ] || fail "first pick did not mark WARDYN_DEFAULT_POLICY_AUTO=1"
+[ "$(env_get "${env_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "/examples/policies/demo.json" ] || fail "first pick did not record its path in WARDYN_DEFAULT_POLICY_AUTO"
 
 # 2) Re-run, still no model signal: idempotent, stays marked auto.
 got="$(resolve_default_policy "${env_file}" "" '{}' "")"
@@ -178,6 +179,23 @@ got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"
 # even with a model signal present — the marker says it's no longer ours.
 got="$(resolve_default_policy "${env_file}" "" '{}' "1")"
 [ "$got" = "/my/custom.json" ] || fail "auto-pick clobbered an operator override, got '$got'"
+
+# 5b) #2221: a value the operator edits after a pick is kept (the marker records the
+# path WE picked, and an edited value no longer equals it), and clears the marker.
+: > "${dir}/.env-edit"
+resolve_default_policy "${dir}/.env-edit" "" '{}' "" >/dev/null
+env_set "${dir}/.env-edit" WARDYN_DEFAULT_POLICY /my/stricter.json
+got="$(resolve_default_policy "${dir}/.env-edit" "" '{}' "1")"
+[ "$got" = "/my/stricter.json" ] || fail "a hand-edited WARDYN_DEFAULT_POLICY was overwritten by the next up, got '$got' (#2221)"
+[ "$(env_get "${dir}/.env-edit" WARDYN_DEFAULT_POLICY_AUTO)" = "0" ] || fail "a kept hand edit did not clear the auto marker (#2221)"
+# ...a legacy bare marker "1" on a value pick_policy can never return is a hand edit too,
+printf 'WARDYN_DEFAULT_POLICY=/my/stricter.json\nWARDYN_DEFAULT_POLICY_AUTO=1\n' > "${dir}/.env-legacy"
+got="$(resolve_default_policy "${dir}/.env-legacy" "" '{}' "1")"
+[ "$got" = "/my/stricter.json" ] || fail "a hand edit under a legacy marker=1 was overwritten, got '$got' (#2221)"
+# ...while the legacy marker on a picked value still re-picks (the model path showed up).
+printf 'WARDYN_DEFAULT_POLICY=/examples/policies/demo.json\nWARDYN_DEFAULT_POLICY_AUTO=1\n' > "${dir}/.env-legacy2"
+got="$(resolve_default_policy "${dir}/.env-legacy2" "" '{}' "1")"
+[ "$got" = "/examples/policies/claude-llm.json" ] || fail "a legacy marker=1 on a picked value no longer re-picks, got '$got'"
 
 # 5a) F150 — a FAILED age-key mint refuses the stack instead of shrugging.
 # cmd_up used to warn twice ("this wardynd build may predate the flag";

@@ -712,6 +712,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
+	./scripts/test-reset-all-stack-scope.sh
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
@@ -1025,6 +1026,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.local:8443"' || { echo "k8s.enabled did not render WARDYN_CONTROL_PLANE_URL as https on the internal port — wardynd refuses to boot on a non-loopback http URL, and the proxy would resolve credentials in cleartext"; exit 1; }; \
 	echo "$$out" | grep -q "http://wardyn.default.svc" && { echo "an http:// control-plane URL is still rendered"; exit 1; }; \
+	echo "$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml --set k8s.clusterDomain=cluster.example)" | grep -A1 "name: WARDYN_CONTROL_PLANE_URL" | grep -q 'value: "https://wardyn.default.svc.cluster.example:8443"' || { echo "k8s.clusterDomain no longer reaches WARDYN_CONTROL_PLANE_URL — proxies on a cluster whose DNS domain is not cluster.local dial a name that never resolves"; exit 1; }; \
 	rules=$$(echo "$$out" | awk '/^kind: NetworkPolicy/{n=1} n && /^  egress:/{n=0} n && /^    - from:/{i++} n && i {print i": "$$0}'); \
 	ir=$$(echo "$$rules" | awk -F': ' '/port: internal$$/{print $$1}' | sort -u); \
 	[ "$$(echo "$$ir" | wc -w)" = "1" ] || { echo "the internal TLS port must be granted by exactly ONE NetworkPolicy ingress rule (got rules: $$ir)"; exit 1; }; \
@@ -1214,6 +1216,8 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	echo "$$out" | grep -A1 'name: WARDYN_AUDIT_SPOOL$$' | grep -q 'value: "/tmp/audit-spool.jsonl"' || { echo 'ha.enabled did not render WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl'; exit 1; }; \
 	echo "$$out" | grep -A1 'name: tmp$$' | grep -q 'emptyDir: {}' || { echo 'the tmp emptyDir the audit spool lives on is gone'; exit 1; }; \
 	echo "$$out" | grep -q -- '-allow-multi-instance' && { echo 'the chart still passes -allow-multi-instance, which wardynd now refuses'; exit 1; }; \
+	out=$$($$H --set ha.enabled=true --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with the default replicas no longer renders'; exit 1; }; \
+	echo "$$out" | grep -q 'kind: PodDisruptionBudget' && { echo 'ha.enabled at replicas: 1 renders a PodDisruptionBudget; minAvailable 1 on one pod blocks every node drain'; exit 1; }; \
 	$$H | grep -q 'kind: PodDisruptionBudget' && { echo 'the DEFAULT render has a PodDisruptionBudget; it belongs to ha.enabled'; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true --set serviceAccount.create=false --set serviceAccount.name=my-existing-sa >/dev/null 2>&1 || { echo "serviceAccount.create=false with an explicit serviceAccount.name no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
@@ -1559,6 +1563,12 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@WARDYN_OIDC_REDIRECT_URL=https://sso.corp.example/auth/callback docker compose -f $(COMPOSE_FILE) config \
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
+	@# #2152: an unset WARDYN_OIDC_EMAIL_DOMAINS keeps the demo's wardyn.local, but an explicit empty
+	@# value must clear it (`:-` swallowed the empty value, so no compose deployment could switch the gate off).
+	@docker compose -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_EMAIL_DOMAINS: wardyn.local' \
+	  || { echo "compose: an unset WARDYN_OIDC_EMAIL_DOMAINS no longer defaults to wardyn.local"; exit 1; }
+	@WARDYN_OIDC_EMAIL_DOMAINS= docker compose -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_EMAIL_DOMAINS: ""' \
+	  || { echo "compose: an explicitly empty WARDYN_OIDC_EMAIL_DOMAINS is replaced by the default (use \$${VAR-default}, not \$${VAR:-default})"; exit 1; }
 	@# #549/#672: neither compose entrypoint renders a retired model variable.
 	@for render in "-f $(COMPOSE_FILE)" "--env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml"; do \
 		out=$$(docker compose $$render config) || { echo "compose: docker compose $$render config failed"; exit 1; }; \

@@ -158,8 +158,12 @@ RUN chmod -R a+rwX /opt/rust
 # tool binaries under go/bin stay put) so a k8s run's fill lands on the volume
 # ephemeralScratchVolumes mounts there (internal/runner/k8s/naming.go) and
 # counts against disk_mib instead of the pod's unmetered writable layer.
-RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache/go-build \
-      /home/agent/.cache/gotmp /home/agent/.cache/go/mod /home/agent/.cache/npm
+# The parents are named so they get the owner too: `install -d` leaves the ones it
+# creates implicitly (.cache, .cache/go) root-owned, and the agent then cannot create
+# ~/.cache/ms-playwright, node-gyp's devdir or pip's cache.
+RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache /home/agent/.cache/go \
+      /home/agent/.cache/go-build /home/agent/.cache/gotmp /home/agent/.cache/go/mod \
+      /home/agent/.cache/npm
 
 # Maven proxy: unlike npm/pip/cargo/go/git, Maven does NOT honor the sandbox's
 # HTTP(S)_PROXY env vars — it resolves Maven Central directly and fails
