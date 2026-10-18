@@ -19,13 +19,14 @@
 # emit pnpm's `paths[]` (they are absolute — /home/<you>/... locally, /home/runner/...
 # in CI).
 #
-# PACKAGES THAT PUBLISH NO LICENCE FILE. ~36 of the runtime UI dependencies (the
-# @radix-ui family, react-remove-scroll-bar) declare a licence in package.json but
-# ship no LICENCE file in the npm tarball. Harvesting text from the installed tree
-# alone would silently emit nothing for a third of the runtime deps. They are listed
-# explicitly with their declared licence and copyright holder, and the canonical text
+# PACKAGES THAT PUBLISH NO LICENCE FILE. A runtime UI dependency can declare a licence
+# in package.json yet ship no LICENCE file in its npm tarball. Harvesting text from the
+# installed tree alone would silently emit nothing for it. Such a package is listed
+# explicitly with its declared licence and copyright holder, and the canonical text
 # for that licence id is included once under licenses/texts/common/. Silence is not
-# an option here; an empty section is.
+# an option here; an empty section is. (An empty author or homepage is NOT that case:
+# the records are read with a non-whitespace separator so those fields keep their
+# place — scripts/ui-licenses-tsv.sh, #2465.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export LC_ALL=C
@@ -55,9 +56,8 @@ rm -rf "$tmp/out/go/github.com/cjohnstoniv/wardyn"
 
 # npm texts, plus the roster of packages that ship none
 : > "$tmp/ui-missing.tsv"
-jq -r '.[][] | [.name, ((.versions // [.version]) | map(tostring) | join(", ")), (.license // ""), (.author // ""), (.homepage // ""), (.paths[0] // "")] | @tsv' "$tmp/ui.json" \
-| sort > "$tmp/ui.tsv"
-while IFS=$'\t' read -r name vers lic author home path; do
+scripts/ui-licenses-tsv.sh < "$tmp/ui.json" > "$tmp/ui.tsv"
+while IFS=$'\x1f' read -r name vers lic author home path; do
   src=""
   if [ -n "$path" ]; then
     src=$(ls "$path"/LICENSE* "$path"/LICENCE* "$path"/license* 2>/dev/null | head -1 || true)
@@ -65,7 +65,7 @@ while IFS=$'\t' read -r name vers lic author home path; do
   if [ -n "$src" ]; then
     mkdir -p "$tmp/out/npm/$name"; cp "$src" "$tmp/out/npm/$name/LICENSE"
   else
-    printf '%s\t%s\t%s\t%s\n' "$name" "$vers" "$lic" "${author:-$home}" >> "$tmp/ui-missing.tsv"
+    printf '%s\x1f%s\x1f%s\x1f%s\n' "$name" "$vers" "$lic" "${author:-$home}" >> "$tmp/ui-missing.tsv"
   fi
 done < "$tmp/ui.tsv"
 
@@ -101,7 +101,7 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo
   echo "| package | version | licence |"
   echo "|---|---|---|"
-  while IFS=$'\t' read -r name vers lic _ _ _; do
+  while IFS=$'\x1f' read -r name vers lic _ _ _; do
     printf '| `%s` | %s | %s |\n' "$name" "$vers" "$lic"
   done < "$tmp/ui.tsv"
   echo
@@ -123,7 +123,7 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   if [ -s "$tmp/ui-missing.tsv" ]; then
     echo "| package | version | declared licence | copyright holder |"
     echo "|---|---|---|---|"
-    sort "$tmp/ui-missing.tsv" | while IFS=$'\t' read -r n v l a; do
+    sort "$tmp/ui-missing.tsv" | while IFS=$'\x1f' read -r n v l a; do
       printf '| `%s` | %s | %s | %s |\n' "$n" "$v" "$l" "$a"
     done
   else
