@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -78,8 +79,9 @@ func PATScopeWithin(proposed, ceiling json.RawMessage) error {
 		if g.Repos == nil {
 			return fmt.Errorf("git_pat repos is omitted (every repository), but the deployment ceiling narrows it to a list")
 		}
+		ceilingRepos := newPATRepoIndex(g.Forge, *cg.Repos)
 		for _, e := range *g.Repos {
-			if !patEntryWithin(g.Forge, e, *cg.Repos) {
+			if !ceilingRepos.covers(g.Forge, e) {
 				return fmt.Errorf("git_pat repos entry %q is outside the deployment ceiling's repos", e)
 			}
 		}
@@ -93,18 +95,46 @@ func PATScopeWithin(proposed, ceiling json.RawMessage) error {
 	return nil
 }
 
-// patEntryWithin reports whether one proposed repos entry is covered by some
-// entry of ceiling. A malformed entry on either side covers and is covered by
-// nothing.
-func patEntryWithin(forge, entry string, ceiling []string) bool {
+// patRepoIndex is a repos list indexed so that "is this entry covered by some
+// entry of the list" costs two map lookups, not a scan: the lists are
+// request-sized, and a pairwise scan of two of them is quadratic.
+type patRepoIndex map[string]struct{}
+
+// newPATRepoIndex indexes list's well-formed entries; a malformed entry covers
+// nothing, so it is left out.
+func newPATRepoIndex(forge string, list []string) patRepoIndex {
+	ix := make(patRepoIndex, len(list))
+	for _, c := range list {
+		if k, ok := types.PATRepoKey(forge, c); ok {
+			ix[k] = struct{}{}
+		}
+	}
+	return ix
+}
+
+// covers is types.PATRepoCovers against every indexed entry at once: an entry
+// covers itself, and "<parent>/*" covers exactly the non-wildcard entries one
+// level below parent. A malformed entry is covered by nothing.
+func (ix patRepoIndex) covers(forge, entry string) bool {
 	key, ok := types.PATRepoKey(forge, entry)
 	if !ok {
 		return false
 	}
-	return slices.ContainsFunc(ceiling, func(c string) bool {
-		ck, cok := types.PATRepoKey(forge, c)
-		return cok && types.PATRepoCovers(ck, key)
-	})
+	if _, hit := ix[key]; hit {
+		return true
+	}
+	return ix.coveredByWildcard(key)
+}
+
+// coveredByWildcard reports whether the "<parent>/*" entry one level above key
+// is indexed; key is a well-formed PATRepoKey.
+func (ix patRepoIndex) coveredByWildcard(key string) bool {
+	i := strings.LastIndexByte(key, '/')
+	if i <= 0 || strings.HasSuffix(key, "/*") {
+		return false
+	}
+	_, hit := ix[key[:i]+"/*"]
+	return hit
 }
 
 // patIntersectRepos is the set intersection of two repos lists under forge's
@@ -113,22 +143,23 @@ func patEntryWithin(forge, entry string, ceiling []string) bool {
 // another entry covers is dropped, then sorted), which is what makes the meet
 // across several ceiling grants independent of their order.
 func patIntersectRepos(forge string, a, b []string) []string {
+	ia, ib := newPATRepoIndex(forge, a), newPATRepoIndex(forge, b)
 	var out []string
 	for _, e := range a {
-		if patEntryWithin(forge, e, b) {
+		if ib.covers(forge, e) {
 			out = append(out, e)
 		}
 	}
 	for _, e := range b {
-		if patEntryWithin(forge, e, a) {
+		if ia.covers(forge, e) {
 			out = append(out, e)
 		}
 	}
 	slices.Sort(out)
 	out = slices.Compact(out)
-	return slices.DeleteFunc(slices.Clone(out), func(e string) bool {
-		return slices.ContainsFunc(out, func(o string) bool { return o != e && patEntryWithin(forge, e, []string{o}) })
-	})
+	// out is deduplicated, so another entry covers e only as its "<parent>/*".
+	io := newPATRepoIndex(forge, out)
+	return slices.DeleteFunc(out, func(e string) bool { return io.coveredByWildcard(e) })
 }
 
 // PATScopeMeet intersects proposal g with every bounding ceiling grant's scope
@@ -218,5 +249,6 @@ func patReposWithin(forge string, a, b *[]string) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return !slices.ContainsFunc(*a, func(e string) bool { return !patEntryWithin(forge, e, *b) })
+	ib := newPATRepoIndex(forge, *b)
+	return !slices.ContainsFunc(*a, func(e string) bool { return !ib.covers(forge, e) })
 }
