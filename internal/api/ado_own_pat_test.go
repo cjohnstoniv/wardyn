@@ -421,6 +421,51 @@ func TestGitCredentialRefusal_OwnPAT(t *testing.T) {
 	}
 }
 
+// The 422 the launch door writes carries `cause` on the wire (#2621): the console opens Connect only for a
+// sign-in a person can repair, and an old console ignores the field. A plain "not connected" has none.
+func TestGitCredentialRefusal_OwnPATWritesCauseOnTheWire(t *testing.T) {
+	row := ownPATTestRow()
+	ctx := secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus)
+	repo := "https://dev.azure.com/contoso/proj/_git/app"
+	refuse := func(t *testing.T, exp time.Time) map[string]any {
+		t.Helper()
+		srv := newSCMTestServer(t, adoSite(row), false)
+		srv.cfg.Now = func() time.Time { return ownPATNow }
+		if !exp.IsZero() {
+			raw, _ := json.Marshal(adoOwnPATBlob{Token: ownPATToken, Org: "contoso", ExpiresOn: exp})
+			if err := srv.cfg.Secrets.For(capSub).Put(ctx, adoOwnPATSecretName(row.ID), raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+		r = r.WithContext(withOIDCHuman(r.Context(), capSub))
+		w := httptest.NewRecorder()
+		if !srv.gitCredentialRefusal(w, r, repo) {
+			t.Fatal("want refused")
+		}
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422", w.Code)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	t.Run("an expired own token", func(t *testing.T) {
+		body := refuse(t, ownPATNow.Add(-time.Minute))
+		if body["cause"] != scmAccessCauseTokenExpired || body["reason"] != gitCredentialRefusalReason {
+			t.Errorf("body = %v, want cause %q beside reason %q", body, scmAccessCauseTokenExpired, gitCredentialRefusalReason)
+		}
+	})
+	t.Run("no token added: no cause key", func(t *testing.T) {
+		body := refuse(t, time.Time{})
+		if _, has := body["cause"]; has {
+			t.Errorf("body = %v, want no cause for a plain not-connected refusal", body)
+		}
+	})
+}
+
 // The scopes to tick are Azure DevOps' own wording for every scope any
 // grantable capability can map to — a new scope with no label would reach the
 // dialog as a bare vso.* name.
