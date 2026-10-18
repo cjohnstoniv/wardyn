@@ -41,3 +41,19 @@ func TestPutExternal_ALostCommitReplyKeepsTheCommittedValue(t *testing.T) {
 	mustGetOwned(t, s, "bob", "slow", "the-value")
 }
 
+// UnderivedPointers counts the pointer rows the configured store no longer
+// derives (written under another prefix or address), and only those (#2807).
+func TestUnderivedPointers_CountsRowsTheStoreNoLongerDerives(t *testing.T) {
+	pool := rekeyDatabase(t)
+	s := mixedStore(t, pool, mustIdentity(t), false, newMemExt("vaultkv"), true)
+	mustPut(t, s, "bob", "derived", "v")
+	if _, err := pool.Exec(t.Context(), `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext) VALUES
+		('bob', 'moved', 2, 'vaultkv:old-prefix/bob/moved', '', ''),
+		('zoe', 'elsewhere', 2, 'azurekv:vault.example/x-g1#1', '', '')`); err != nil {
+		t.Fatal(err)
+	}
+	n, ref, err := s.UnderivedPointers(t.Context())
+	if err != nil || n != 1 || ref != "old-prefix/bob/moved" {
+		t.Fatalf("UnderivedPointers = (%d, %q, %v); want the one vaultkv row under the old prefix", n, ref, err)
+	}
+}

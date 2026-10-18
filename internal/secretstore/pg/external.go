@@ -339,3 +339,33 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	return rep, nil
 }
 
+// UnderivedPointers counts the pointer rows into the configured external store
+// whose recorded ref that store no longer derives from the row, and returns one
+// such ref: rows written under another prefix, mount or address, every read of
+// which is refused as a moved pointer. 0 with no external store.
+func (s *Store) UnderivedPointers(ctx context.Context) (n int, example string, err error) {
+	if s.ext == nil {
+		return 0, "", nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT owned_by, name, kek_id FROM secrets WHERE enc_version=$1`, extVersion)
+	if err != nil {
+		return 0, "", fmt.Errorf("pg secretstore: read the pointer rows: %w", err)
+	}
+	all, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Owner, Name, KekID string }])
+	if err != nil {
+		return 0, "", fmt.Errorf("pg secretstore: read the pointer rows: %w", err)
+	}
+	for _, r := range all {
+		store, ref := splitRef(r.KekID)
+		if store != s.ext.Name() {
+			continue
+		}
+		if got, err := s.ext.Ref(r.Owner, r.Name, ref); err != nil || secretstore.RefObject(got) != secretstore.RefObject(ref) {
+			if n == 0 {
+				example = ref
+			}
+			n++
+		}
+	}
+	return n, example, nil
+}
