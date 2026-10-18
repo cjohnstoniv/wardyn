@@ -176,6 +176,26 @@ func TestSealingRecorderReplayDefersWhatItCannotReseal(t *testing.T) {
 	}
 }
 
+// A row whose free text only spells the pending marker and prefix (an agent's
+// request path, a member's token name) is no pending row: on replay with sealing
+// off it goes to the store rather than deferring, and wedging, every line behind it.
+func TestSealingRecorderReplayStoresARowThatOnlySpellsPending(t *testing.T) {
+	inner := &captureRecorder{}
+	r := sealingRecorder{inner: inner, replay: true, src: newAuditSealSource(audit.SealOff)}
+	for _, data := range []string{
+		`{"host":"any.host","path":"/\"seal2p.x\"pending_subject"}`,
+		`{"name":"\"seal2p.x \"pending_subject"}`,
+	} {
+		ev := types.AuditEvent{ID: uuid.New(), Action: "egress.allow", Data: json.RawMessage(data)}
+		if err := r.Record(t.Context(), ev); err != nil {
+			t.Errorf("%s: err = %v, want the row stored", data, err)
+		}
+	}
+	if len(inner.evs) != 2 {
+		t.Errorf("the store got %d rows, want 2", len(inner.evs))
+	}
+}
+
 // A pending field that does not open under the pending key never heals by
 // waiting: it is not a deferred error, so the drain strikes and quarantines it
 // rather than wedging the spool behind it.

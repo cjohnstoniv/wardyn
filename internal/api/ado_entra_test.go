@@ -1196,3 +1196,23 @@ func TestADOSignIn_PreCreatedEntraPersonBindingIsExact(t *testing.T) {
 		})
 	}
 }
+
+// An invalid_client from the authority (the console's own secret expired or
+// was mistyped, AADSTS7000215) is about the application, not the person's
+// token, so it is an outage that leaves the stored sign-in in place: once the
+// administrator fixes the secret, everyone is still connected.
+func TestADORedeem_InvalidClientKeepsTheStoredSignIn(t *testing.T) {
+	f := newADOFixture(t)
+	subject := f.fake.Subject()
+	if w := f.capture(t, subject); w.Code != http.StatusFound {
+		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+	}
+	f.fake.SetClientSecret("rotated-and-not-yet-deployed")
+	_, err := f.srv.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes)
+	if !errors.Is(err, ErrADOEntraUnavailable) || ADOEntraClassify(err) != ADOEntraFailureUnavailable {
+		t.Fatalf("err = %v (class %q); want an unavailable authority", err, ADOEntraClassify(err))
+	}
+	if _, found := f.stored(t, subject); !found {
+		t.Error("an invalid_client refusal deleted the person's stored sign-in")
+	}
+}

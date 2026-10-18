@@ -40,6 +40,11 @@ type RunQueueEntry struct {
 	PolicyRef  json.RawMessage
 	Authority  json.RawMessage
 	Launch     json.RawMessage
+	// Components and Harnesses are the run's authorised snapshots, which CreateQueuedRun writes in
+	// the queue row's own transaction, so no promotable row exists without them. Write-only: a
+	// queue row read back never carries them.
+	Components []types.RunComponent
+	Harnesses  []types.RunHarness
 }
 
 const runQueueCols = `run_id, pool_id, owner, queued_at, deadline_at, policy_ref, authority, launch`
@@ -61,7 +66,7 @@ func jsonOrEmpty(raw json.RawMessage) json.RawMessage {
 }
 
 // CreateQueuedRun inserts r (state QUEUED, bound to a pool), its launch intent when it carries one,
-// and its queue row in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
+// its queue row and e's component and harness snapshots in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
 // takes first, so the owner's waiting count and the insert cannot interleave with a promotion.
 // maxPerOwner <= 0 is unlimited; otherwise an owner with that many runs already waiting for the pool
 // gets ErrRunQueueFull and nothing is written. The queue row's pool and owner are the run's own.
@@ -133,6 +138,16 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 		created.ID, *r.RunnerPoolID, r.CreatedBy, e.QueuedAt, e.DeadlineAt,
 		jsonOrEmpty(e.PolicyRef), jsonOrEmpty(e.Authority), jsonOrEmpty(e.Launch)); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: insert run queue row: %w", err)
+	}
+	if len(e.Components) > 0 {
+		if err := insertRunComponents(ctx, tx, created.ID, e.Components); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: put run components: %w", err)
+		}
+	}
+	if len(e.Harnesses) > 0 {
+		if err := insertRunHarnesses(ctx, tx, created.ID, e.Harnesses); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: put run harnesses: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.AgentRun{}, err

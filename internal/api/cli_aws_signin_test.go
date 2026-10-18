@@ -432,3 +432,30 @@ func TestAWSCLI_ReviveKeepsThePortalGrant(t *testing.T) {
 		}
 	}
 }
+
+// A CLI row's hold is repaired on the sidecar's own poll when the eager resolve
+// after the capture never landed: the stored session was captured by a login
+// run created after the raise, so the row is a resolved one not yet written down.
+func TestAWSCLI_ReconcileOnReadResolvesAStrandedHold(t *testing.T) {
+	live := cliAWSRowDef()
+	f, _ := cliResolveFixture(t, cliSnapshot(subOwner), &live, true)
+	dead := cliAWSBlob()
+	dead.ExpiresAt = time.Now().Add(-time.Hour).UTC()
+	putCLIBlobIn(t, f, subOwner, dead)
+	if w := f.resolve(t); w.Code != http.StatusLocked {
+		t.Fatalf("resolve = %d %s, want 423", w.Code, w.Body.String())
+	}
+	ap := onlyReauthRow(t, f.srv)
+
+	loginRun := types.AgentRun{ID: uuid.New(), CreatedBy: subOwner, CreatedAt: time.Now().Add(time.Second)}
+	f.st.loginRun = loginRun
+	fresh := cliAWSBlob()
+	fresh.SourceRunID = loginRun.ID.String()
+	putCLIBlobIn(t, f, subOwner, fresh)
+
+	w := do(t, f.srv, http.MethodGet, "/api/v1/internal/approvals/"+ap.ID.String(), f.token, "")
+	var got types.ApprovalRequest
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.State != types.ApprovalApproved {
+		t.Fatalf("poll = %d %s (%v), want the CLI hold APPROVED from the stored capture", w.Code, w.Body.String(), err)
+	}
+}

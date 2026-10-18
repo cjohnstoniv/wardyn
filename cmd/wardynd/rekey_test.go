@@ -145,6 +145,33 @@ func TestRotateAgeKeyMode_RefusesBeforeTouchingTheDatabase(t *testing.T) {
 	}
 }
 
+// A re-run after a rotation that committed and died before its rename finds
+// <key>.new, which may be the only key that reads the store: it refuses before
+// touching the database and leaves that file (or its temp file) as it was.
+func TestRotateAgeKeyMode_RefusesWhileAStagedKeyIsOnDisk(t *testing.T) {
+	const unreachableDSN = "postgres://nobody@127.0.0.1:1/nope?connect_timeout=1"
+	good := newIdentity(t).String()
+	for _, suffix := range []string{".new", ".new.tmp"} {
+		t.Run(suffix, func(t *testing.T) {
+			keyPath := filepath.Join(t.TempDir(), "age.key")
+			if err := os.WriteFile(keyPath, []byte(good+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stagedKey := newIdentity(t).String() + "\n"
+			if err := os.WriteFile(keyPath+suffix, []byte(stagedKey), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := rotateAgeKeyMode(rekeyFlags(unreachableDSN, "pg", good), keyPath)
+			if err == nil || !strings.Contains(err.Error(), "ONLY key") || !strings.Contains(err.Error(), keyPath+suffix) {
+				t.Fatalf("err = %v, want the staged-key refusal naming %s", err, keyPath+suffix)
+			}
+			if b, rerr := os.ReadFile(keyPath + suffix); rerr != nil || string(b) != stagedKey {
+				t.Errorf("the staged key was changed or removed: %q, %v", b, rerr)
+			}
+		})
+	}
+}
+
 // TestReadAgeKeyFile covers the three shapes the key file can take: absent (a
 // first rotation creates it), age-keygen output with leading comments, and a
 // bare identity line.

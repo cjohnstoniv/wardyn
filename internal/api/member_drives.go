@@ -374,7 +374,7 @@ type memberDriveDeletion struct {
 // as drive_not_found. The refusal is audited as deleteMemberDrive audits its own. deleteMemberDrive
 // reads the same thing again past the tombstone, for a run that starts in between.
 func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, by string) (bool, error) {
-	starting, err := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject)
+	starting, err := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject, watcherLeaseStaleAfter)
 	if err != nil || !starting {
 		return false, err
 	}
@@ -402,8 +402,9 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	default:
 		// Past the tombstone, a run of the owner's still STARTING may have re-read this drive before it
 		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
-		// as in use until that run leaves STARTING. A run that re-reads later meets the tombstone.
-		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject)
+		// as in use until that run leaves STARTING, and until a create whose run was ended on another
+		// replica stops holding its lease. A run that re-reads later meets the tombstone.
+		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject, watcherLeaseStaleAfter)
 		if serr != nil {
 			slog.WarnContext(ctx, "api: member drive delete could not read the owner's starting runs",
 				slog.String("drive_id", d.ID.String()), slog.String("error", serr.Error()))

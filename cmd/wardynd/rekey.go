@@ -6,7 +6,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -94,6 +96,10 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	if prev != "" && prev != oldID.String() {
 		return fmt.Errorf("refusing to rotate: %s exists but does not hold the identity WARDYN_AGE_KEY names — this mode REPLACES that file with the new key, so it must be the current key file (a bare AGE-SECRET-KEY-… line, `#` comments allowed), not an env file or another deployment's key", keyPath)
 	}
+	staged := keyPath + ".new"
+	if err := refuseStagedKey(staged, keyPath); err != nil {
+		return err
+	}
 
 	ctx := context.Background()
 	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
@@ -143,7 +149,11 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	// Staged BEFORE the transaction commits, so the new key is already durable
 	// on disk (fsynced) by the time any ciphertext depends on it. If anything
 	// after the commit fails, this file is the recovery copy the error names.
-	staged := keyPath + ".new"
+	// Checked again under the rekey lock: a run that raced the first check may
+	// have left one since.
+	if err := refuseStagedKey(staged, keyPath); err != nil {
+		return err
+	}
 	if err := writeKeyFile(staged, newID.String()); err != nil {
 		return fmt.Errorf("stage the new key file: %w", err)
 	}
@@ -246,6 +256,21 @@ func parseAgeKeyFileContent(path string, b []byte) (string, error) {
 		return id.String(), nil
 	}
 	return "", nil // present but empty — treat like a missing file
+}
+
+// refuseStagedKey refuses a rotation while an earlier one's staged key, or its
+// temp file, is still on disk: that run may have committed and died before the
+// rename, so the file can be the only key that reads the store, and staging
+// over it (then removing it when the rekey fails) would destroy it.
+func refuseStagedKey(staged, keyPath string) error {
+	for _, p := range []string{staged, staged + ".tmp"} {
+		if _, err := os.Lstat(p); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("refusing to rotate: %s exists — an earlier -rotate-age-key may have rewrapped the store and stopped before replacing %s, "+
+				"which makes that file the ONLY key that reads it. If wardynd cannot open its secrets under the current key, move it into place as %s "+
+				"and set WARDYN_AGE_KEY to it; if it can, remove the file by hand. Then re-run (docs/operations/secrets-and-keys.md)", p, keyPath, keyPath)
+		}
+	}
+	return nil
 }
 
 // writeKeyFile writes an age identity 0600 via a sibling temp + rename, so a
