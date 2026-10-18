@@ -370,7 +370,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   it("'Switch to user view' stays disabled on a host with no barrier, like Finish setup (#214)", async () => {
     getSetupStatusMock.mockResolvedValue(
-      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+      baseStatus({ runner: { ...baseStatus().runner, confinement_classes: [], confinement_substrates: {} } }),
     );
     renderScreen(<SetupScreen onDone={() => {}} />);
     await user.click(await screen.findByRole("button", { name: /^next:/i })); // -> people
