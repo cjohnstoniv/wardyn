@@ -83,7 +83,7 @@ bearer token, so the CLI keeps working with the token while humans use SSO.
 docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex
 ```
 
-- and set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` in `deploy/compose/.env` before restarting `wardynd` (`scripts/up.sh` wrote `true`, and `wardynd` refuses local mode together with an issuer) — the issuer alone (with no operator allowlist, no role map, no override) REFUSES TO BOOT.
+- and set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` in `deploy/compose/.env` before restarting `wardynd` ([`scripts/up.sh`](../../scripts/up.sh) wrote `true`, and `wardynd` refuses local mode together with an issuer) — the issuer alone (with no operator allowlist, no role map, no override) REFUSES TO BOOT.
 - A **fresh** `.env` (created from [`deploy/compose/.env.example`](.env.example) by [`scripts/up.sh`](../../scripts/up.sh)/`make setup`) already carries `WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=user`, which satisfies that guard on its own: sign in as `demo@wardyn.local` for admin, `member@wardyn.local` for a real member-mode walk.
 - An **existing** `.env` from before this pair was added does NOT gain it automatically.
   - The installer never rewrites a `.env` that already exists, on purpose, so an upgrade never silently changes who is admin (see [`.env.example`](.env.example)'s own comment).
