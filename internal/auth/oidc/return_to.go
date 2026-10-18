@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"strings"
 )
 
@@ -29,8 +30,12 @@ func safeReturnTo(path string) string {
 	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
 		return ""
 	}
-	if u.Path == "/auth" || strings.HasPrefix(u.Path, "/auth/") || strings.HasPrefix(u.Path, "/api/") {
-		return ""
+	// Cleaned first: a browser resolves dot segments, so /x/../api/... lands on the API.
+	clean := pathpkg.Clean(u.Path)
+	for _, route := range []string{"/auth", "/api"} {
+		if clean == route || strings.HasPrefix(clean, route+"/") {
+			return ""
+		}
 	}
 	return path
 }

@@ -17,7 +17,7 @@ import (
 func TestLoginReturnToIsDefaultDeny(t *testing.T) {
 	_, auth := lifeAuth(t, nil)
 	long := "/" + strings.Repeat("a", 600)
-	for _, bad := range []string{"", "https://evil.example/", "//evil.example", "/\\evil.example", "/runs\\x", "evil", "/runs\r\nSet-Cookie: x=1", "/runs\tx", "/auth/login", "/api/v1/runs", long} {
+	for _, bad := range []string{"", "https://evil.example/", "//evil.example", "/\\evil.example", "/runs\\x", "evil", "/runs\r\nSet-Cookie: x=1", "/runs\tx", "/auth/login", "/api/v1/runs", "/api", "/x/../api/v1/runs", "/runs/../auth/login", "/x/%2e%2e/api/v1/runs", long} {
 		r := httptest.NewRequest(http.MethodGet, "/auth/login?return_to="+url.QueryEscape(bad), nil)
 		w := httptest.NewRecorder()
 		auth.LoginHandler(w, r)
