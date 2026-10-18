@@ -46,9 +46,9 @@ updates:
   # pinned at busybox 1.36 while 1.38 shipped) frozen forever — recreating the
   # exact gap the /deploy/images/* glob was adopted to prevent, one directory
   # over. `/deploy/*` covers every current and future deploy/ subdirectory that
-  # holds a Dockerfile or a compose file; `/deploy/images/*` is still needed
-  # because a glob matches ONE path segment, and the agent images sit a level
-  # deeper.
+  # holds a Dockerfile; `/deploy/images/*` is still needed because a glob matches
+  # ONE path segment, and the agent images sit a level deeper. Compose `image:`
+  # pins are a different ecosystem (docker-compose, below).
   - package-ecosystem: docker
     directories:
       - /deploy/*
@@ -80,3 +80,17 @@ updates:
       # 26 enters LTS on 2026-10-28 (nodejs/Release schedule.json); remove after that date.
       - dependency-name: node
         versions: [">= 26, < 27"]
+  # Compose service images (registry, postgres, dex, tetragon, the hybrid-walk
+  # alpine). A directory that digest-pins a compose image must be listed here;
+  # scripts/test-repo-guards.sh (guard 19) fails when one is missing. A bump
+  # needs deploy/base-images.txt in step, as for the Dockerfile pins
+  # (docs/CI.md, "Docker Hub base-image mirror").
+  - package-ecosystem: docker-compose
+    directories:
+      - /deploy/compose
+      - /test/hybrid-walk
+    schedule:
+      interval: weekly
+    groups:
+      docker-base-images:
+        patterns: ["*"]

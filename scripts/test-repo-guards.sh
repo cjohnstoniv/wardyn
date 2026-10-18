@@ -68,6 +68,10 @@
 #  18. nightly.yml's scope=candidate skips exactly the lanes a release does not
 #      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
 #      carries `if: inputs.scope != 'candidate'`, a job inside it never does.
+#  19. every compose file that digest-pins an image sits in a directory the
+#      `docker-compose` entry of .github/dependabot.yml lists — the `docker`
+#      ecosystem reads Dockerfiles, so a compose pin outside that entry is never
+#      proposed an update.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -681,6 +685,26 @@ else
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
     if [ "$scope_fail" = 0 ]; then ok "nightly scope=candidate skips exactly the unwatched lanes"; fi
+fi
+
+# ── 19. compose image pins are covered by Dependabot's docker-compose entry ─
+# The `docker` ecosystem entry reads Dockerfile FROM lines; compose `image:` pins
+# are read by the separate `docker-compose` ecosystem. A directory that digest-pins
+# a compose image but is missing from that entry gets no update proposals.
+DEPENDABOT="${DEPENDABOT:-.github/dependabot.yml}"
+listed_dirs="$(awk '/^  - package-ecosystem:/ { on = ($3 == "docker-compose") } on && /^      - \// { sub(/^\//, "", $2); print $2 }' "$DEPENDABOT" | sort -u)"
+pinned_dirs="$( { git ls-files -z -- ':(glob)**/*compose*.y*ml' \
+    | xargs -0 -r grep -lE '^[[:space:]]*image:[[:space:]]+[^$[:space:]]+@sha256:[0-9a-f]{64}' || true; } \
+    | sed -E 's|/[^/]*$||' | sort -u)"
+if [ -z "$pinned_dirs" ]; then
+    bad "guard 19 found no compose file with a digest-pinned image — the extractor is pointing at nothing"
+else
+    missing="$(comm -23 <(printf '%s\n' "$pinned_dirs") <(printf '%s\n' "$listed_dirs"))"
+    if [ -n "$missing" ]; then
+        bad "$DEPENDABOT: no package-ecosystem docker-compose directory for $(echo $missing) — its digest-pinned compose images would never be proposed an update"
+    else
+        ok "every compose directory with a digest-pinned image ($(echo $pinned_dirs)) is in Dependabot's docker-compose entry"
+    fi
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
