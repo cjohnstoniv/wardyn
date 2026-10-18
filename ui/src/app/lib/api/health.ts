@@ -133,7 +133,9 @@ export interface Me {
   // and 500 used to wear that same answer. A closed set, matching the server's
   // own vocabulary beside writeDriveError: "groups_snapshot_stale" (sign in
   // again), "unmountable" (an allocation exists and an admin must fix its
-  // directory name), "unavailable" (the allocation could not be read), and
+  // directory name), "drive_subject_unsupported" (no directory name is derived
+  // from this sign-in name; an admin sets a home override), "unavailable" (the
+  // allocation could not be read), and
   // "governance_unavailable" (the ceiling could not be read, so whether the
   // door is open is unknown — the allocation is withheld with it), and
   // "user_type_unknown" (the caller's user type was deleted after sign-in).

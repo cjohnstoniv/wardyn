@@ -330,6 +330,13 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 // from is already current. A destroyed from is ErrDataLoss. The data key is
 // opened here and never leaves it, and the value it seals is never opened.
 func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, sealed, fromAAD []byte, toAAD func(version int) []byte) (int, []byte, error) {
+	// from first: Current creates a generation for an owner who has none, and
+	// a destroyed from must not leave the erased owner a fresh live key.
+	oldKey, err := m.Key(ctx, owner, purpose, from)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer clear(oldKey)
 	cur, curKey, err := m.Current(ctx, owner, purpose)
 	if err != nil {
 		return 0, nil, err
@@ -338,11 +345,6 @@ func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, s
 	if cur == from {
 		return cur, nil, nil
 	}
-	oldKey, err := m.Key(ctx, owner, purpose, from)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer clear(oldKey)
 	dek, err := kek.Open(oldKey, sealed, fromAAD)
 	if err != nil {
 		return 0, nil, fmt.Errorf("subjectkey: the data key does not open under generation %d (moved, forged or corrupted): %w", from, err)

@@ -369,3 +369,38 @@ func TestPG_MaxAgeCutoffCountsFromAdmission(t *testing.T) {
 		}
 	}
 }
+
+// A queued run's component and harness snapshots commit with its queue row: once CreateQueuedRun
+// returns, a promoter on any replica reads the run with its whole authority, and a snapshot that
+// cannot be written leaves no run and no queue row at all.
+func TestPG_CreateQueuedRunCommitsItsSnapshots(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	p := queuePool(t, pg)
+	now := time.Now().UTC()
+	harnesses := []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli"}}
+	comps := []types.RunComponent{{Owner: "alice", Name: "Mine", Definition: types.ComponentDefinition{}, SelfDefined: true}}
+	r, err := pg.CreateQueuedRun(ctx, poolRun(p, types.RunQueued, "alice"),
+		store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Components: comps, Harnesses: harnesses}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs, err := pg.ListRunHarnesses(ctx, r.ID); err != nil || len(hs) != 2 || hs[0].Harness != "claude-code" || !hs[0].Starts || hs[1].Harness != "codex-cli" {
+		t.Errorf("harnesses = %+v, %v; want the two written with the queue row", hs, err)
+	}
+	if cs, err := pg.ListRunComponents(ctx, r.ID); err != nil || len(cs) != 1 || cs[0].Name != "Mine" {
+		t.Errorf("components = %+v, %v; want the one written with the queue row", cs, err)
+	}
+
+	if _, err := pool.Exec(ctx, `ALTER TABLE run_harnesses ADD CONSTRAINT refuse_all CHECK (false) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+	bad := poolRun(p, types.RunQueued, "alice")
+	if _, err := pg.CreateQueuedRun(ctx, bad, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), Harnesses: harnesses}, 0); err == nil {
+		t.Fatal("a queued run whose harnesses cannot be written was created")
+	}
+	if _, err := pg.GetRun(ctx, bad.ID); !errors.Is(err, store.ErrNotFound) || queueRows(t, pool, bad.ID) != 0 {
+		t.Errorf("after the refused write: run = %v, %d queue rows; want neither", err, queueRows(t, pool, bad.ID))
+	}
+}

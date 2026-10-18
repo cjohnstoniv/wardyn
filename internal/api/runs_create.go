@@ -382,7 +382,9 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
-	idx := indexWorkspacesBySource(all)
+	// A source several workspaces carry is judged by one the caller may launch
+	// when there is one: another member onboarding it first refuses nobody.
+	idx := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(r, ws) })
 	for _, wm := range spec.WorkspaceMounts {
 		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(

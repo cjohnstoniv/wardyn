@@ -154,3 +154,89 @@ func TestAgentRunLib_SelftestReportRepoAndGitFailsClosedWithoutHelper(t *testing
 		}
 	})
 }
+
+// cloneOne runs agent-run-lib.sh's clone_one under the lib's set -euo pipefail and reports
+// whether the shell got past it: a clone failure is a governance signal, never fatal.
+func cloneOne(t *testing.T, url, dest, ref string) string {
+	t.Helper()
+	libPath, err := filepath.Abs(agentRunLibPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", `set -euo pipefail; source "$1"; clone_one "$2" "$3" "" "$4"; echo CONTINUED`,
+		"agent-run-lib-test", libPath, url, dest, ref)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "WARDYN_RUN_ID=") // no run id: name_run_branch leaves git config alone
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "CONTINUED") {
+		t.Fatalf("clone_one did not continue: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// A clone target that already holds a folder of the person's own files (a writable local_dir mount
+// over the repo's default target) is never deleted or cloned over, whether or not a ref is pinned.
+func TestAgentRunLib_CloneNeverDeletesAPreexistingTarget(t *testing.T) {
+	for _, ref := range []string{"", "main"} {
+		dest := filepath.Join(t.TempDir(), "widget")
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mine := filepath.Join(dest, "notes.txt")
+		if err := os.WriteFile(mine, []byte("mine"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := cloneOne(t, "file:///nonexistent-repo", dest, ref)
+		if b, err := os.ReadFile(mine); err != nil || string(b) != "mine" {
+			t.Errorf("ref %q: the person's file was lost (%v):\n%s", ref, err, out)
+		}
+		if !strings.Contains(out, "clone SKIPPED for "+dest) {
+			t.Errorf("ref %q: no skip line:\n%s", ref, out)
+		}
+	}
+}
+
+// A target that cannot be created (under a read-only mount) skips the clone instead of killing the run.
+func TestAgentRunLib_CloneIntoAnUncreatableTargetContinues(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read-only directory mode this test relies on")
+	}
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o555); err != nil { //nolint:gosec // test fixture: a read-only parent
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o755) }) //nolint:gosec // restore so TempDir cleanup can remove it
+	out := cloneOne(t, "file:///nonexistent-repo", filepath.Join(ro, "widget"), "main")
+	if !strings.Contains(out, "cannot be created") {
+		t.Errorf("no skip line for the uncreatable target:\n%s", out)
+	}
+}
+
+// A sha ref still reaches the fetch fallback after the direct --branch attempt fails, and checks the
+// commit out into a target that did not exist.
+func TestAgentRunLib_CloneByShaUsesTheFetchFallback(t *testing.T) {
+	src := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", src, "-c", "user.name=t", "-c", "user.email=t@example.test"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	git("config", "uploadpack.allowAnySHA1InWant", "true")
+	if err := os.WriteFile(filepath.Join(src, "README"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "README")
+	git("commit", "-q", "-m", "one")
+	sha := git("rev-parse", "HEAD")
+	dest := filepath.Join(t.TempDir(), "widget")
+	out := cloneOne(t, "file://"+src, dest, sha)
+	if !strings.Contains(out, "via fetch") {
+		t.Errorf("the sha clone did not take the fetch fallback:\n%s", out)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "README")); err != nil || string(b) != "hi" {
+		t.Errorf("the commit was not checked out (%v):\n%s", err, out)
+	}
+}

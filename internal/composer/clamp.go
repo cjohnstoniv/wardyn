@@ -116,6 +116,15 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 		effectiveFUA = ceilingFUA
 	}
 	out.FirstUseApproval = effectiveFUA
+	// Its two hold knobs are bounds too, as meet and Leq read them: never longer, never more holds.
+	if v, c := normFirstUseHold(out.FirstUseHoldSeconds), normFirstUseHold(ceiling.FirstUseHoldSeconds); v > c {
+		warns = append(warns, fmt.Sprintf("first_use_hold_seconds lowered from %d to operator maximum %d", v, c))
+		out.FirstUseHoldSeconds = c
+	}
+	if v, c := normMaxHolds(out.MaxHolds), normMaxHolds(ceiling.MaxHolds); v > c {
+		warns = append(warns, fmt.Sprintf("max_holds lowered from %d to operator maximum %d", v, c))
+		out.MaxHolds = c
+	}
 
 	// LLM inspection: nil means OFF. An omitted/weaker proposal or a ceiling that sets NONE is an
 	// explicit "turn off the guardrail" escalation, not "no opinion" — inherit the ceiling unconditionally

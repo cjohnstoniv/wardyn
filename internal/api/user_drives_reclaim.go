@@ -331,6 +331,10 @@ func (s *Server) driveReclaimObject(ctx context.Context, d types.UserDrive, g ty
 			}
 		}
 	}
+	if strings.TrimSpace(override) == "" && types.DriveSubjectFoldsOntoASCII(d.HomeTemplate, homeSubject) {
+		return "", "", http.StatusBadRequest, driveRefusalSubjectUnsupported,
+			"this allocation's subject names no directory this deployment derives, so there is no object to reclaim; a home override names one"
+	}
 	home, err := types.DriveHomeName(d, homeSubject, override)
 	if err != nil {
 		return "", "", http.StatusBadRequest, reasonUserDriveReclaimNoDirectoryName, "this allocation resolves to no directory name, so there is no object to reclaim: " + err.Error()

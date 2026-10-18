@@ -409,7 +409,8 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 }
 
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
-// sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it.
+// sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it and
+// retries until the reply has set the sink's offset and gap.
 func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
 	if err := s.own(ref); err != nil {
 		return err
@@ -424,7 +425,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	if adopting {
 		s.mu.Lock()
 		if s.outputs[id] == nil {
-			adopted = &outputSink{writer: w}
+			adopted = &outputSink{writer: w, pending: true}
 			s.outputs[id] = adopted
 		}
 		s.mu.Unlock()
@@ -466,8 +467,13 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
 		adopted.mu.Lock()
 		adopted.offset = res.Gap
+		adopted.pending, adopted.recovering = false, true
 		adopted.mu.Unlock()
-		return s.receiveOutput(id, adopted, st, res.Gap)
+		err = s.receiveOutput(id, adopted, st, res.Gap)
+		adopted.mu.Lock()
+		adopted.recovering = false // a dead recovery must not leave the runner retrying
+		adopted.mu.Unlock()
+		return err
 	}
 	defer st.Close()
 	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this

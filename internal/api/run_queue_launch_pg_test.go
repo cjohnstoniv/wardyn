@@ -82,7 +82,8 @@ func TestPG_QueuedRunLaunchesWhatAnImmediateStartLaunches(t *testing.T) {
 }
 
 // A launch into a full pool whose harness set cannot be recorded does not wait in the queue: it is
-// refused, and its run is FAILED and out of the queue, never started without its set.
+// refused, and nothing of it was committed, since the set is written with the queue row. No run
+// waits, or is ever promoted, without its set.
 func TestPG_QueuedRunIsAbortedWhenItsHarnessesCannotBeRecorded(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Shared", 1)
@@ -91,13 +92,12 @@ func TestPG_QueuedRunIsAbortedWhenItsHarnessesCannotBeRecorded(t *testing.T) {
 	if _, w := e.launch(nil, e.reread(pool), ""); w.Code != 500 {
 		t.Fatalf("a launch whose harnesses cannot be recorded = %d %s, want 500", w.Code, w.Body)
 	}
-	var id uuid.UUID
-	var state string
-	if err := e.pool.QueryRow(context.Background(), `SELECT id, state FROM agent_runs WHERE failure_hint = $1`, createRunHarnessesAbortHint).Scan(&id, &state); err != nil {
-		t.Fatalf("no run carries the abort hint: %v", err)
+	var runs, queued int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE state IN ('QUEUED', 'FAILED')), (SELECT count(*) FROM run_queue) FROM agent_runs`).Scan(&runs, &queued); err != nil {
+		t.Fatal(err)
 	}
-	if state != string(types.RunFailed) || e.queueRows(id) != 0 {
-		t.Errorf("the aborted run is %s with %d queue rows, want FAILED and none", state, e.queueRows(id))
+	if runs != 0 || queued != 0 {
+		t.Errorf("after the refused launch: %d queued or failed runs and %d queue rows, want none", runs, queued)
 	}
 }
 
