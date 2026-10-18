@@ -85,4 +85,19 @@ touch -d '1 hour ago' "${bt}/cmd/a.go" "${bt}/go.mod"
 rm "${bt}/internal/x.go"; rm "${bt}/bin/wardyn"
 (cd "${bt}" && local_build_needed) || fail "local_build_needed missed a missing ./bin/wardyn"
 
+# 6) #2198: the stale-secret TRUNCATE needs consent and never runs against a key the shell supplied.
+# stdin is not a tty here, so the interactive question answers "no" like a headless run.
+ask_yn() { return 0; }
+printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-ENVFILE\n' > "${dir}/env"
+consent() { ( unset WARDYN_AGE_KEY WARDYN_AGE_KEY_FILE WARDYN_PLATFORM_KEY_FILE WARDYN_FORCE_RESET; "$@"; stale_secrets_wipe_consent "${dir}/env" ) >/dev/null 2>&1 < /dev/null; }
+consent true && fail "stale_secrets_wipe_consent agreed to TRUNCATE with no consent (headless, no WARDYN_FORCE_RESET) (#2198)"
+consent export WARDYN_FORCE_RESET=1 || fail "WARDYN_FORCE_RESET=1 no longer consents to the secrets TRUNCATE (#2198)"
+consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY=AGE-SECRET-KEY-ENVFILE || fail "a shell key equal to the .env key was treated as a conflict (#2198)"
+consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY=AGE-SECRET-KEY-OTHER && fail "a shell WARDYN_AGE_KEY that differs from the .env key was allowed to TRUNCATE secrets that the .env key still decrypts (#2198)"
+consent export WARDYN_FORCE_RESET=1 WARDYN_AGE_KEY_FILE=/tmp/other.key && fail "a WARDYN_AGE_KEY_FILE in the shell was allowed to TRUNCATE the secrets (#2198)"
+consent export WARDYN_FORCE_RESET=1 WARDYN_PLATFORM_KEY_FILE=/tmp/other.key && fail "a WARDYN_PLATFORM_KEY_FILE in the shell was allowed to TRUNCATE the secrets (#2198)"
+grep -B3 "TRUNCATE secrets;'" "${SETUP_SH}" | grep -q 'stale_secrets_wipe_consent' \
+  || fail "setup.sh runs TRUNCATE secrets without asking stale_secrets_wipe_consent first (#2198)"
+unset -f ask_yn
+
 echo "test-setup-launch: self-test PASS"
