@@ -203,7 +203,7 @@ got="$(llm_ready_from_probe "$(wardynd_probe "${env_file}" /api/v1/setup/status)
 [ "${got}" = "1" ] || fail "a healthy stack reporting llm_ready:true did not drive the post-boot policy re-pick (llm_ready_from_probe gave '${got}') — the re-pick is still unreachable (ADV2-02)"
 
 # ── 5) every host-side health probe is TIME-BOUNDED (perf-2:perf2-C1) ──────
-# cmd_up's health wait advertises a ceiling of 60 tries x 2s, and common.sh's
+# cmd_up's health wait advertises a 330s deadline, and common.sh's
 # wait_healthy/wait_down carry their own TRIES budgets — but an unbounded curl
 # against a peer that ACCEPTS the connection and never replies blocks forever,
 # so the loop never reaches its second attempt and the budget is fiction.
@@ -222,6 +222,14 @@ done
   printf '%s' "${unbounded}" >&2
   fail "every host-side curl probe must carry a max-time bound (-m); a stalled-but-accepting peer otherwise blocks the poll loop past its advertised ceiling forever (perf2-C1)"
 }
+
+# #2223: the wait is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT, the sum
+# setup.sh's host-mode wait and the chart's startupProbe use), not ~2 minutes: a shorter one fails the stack
+# while a slow migration is still working and skips the runner limits, probes and image builds after it.
+grep -q '_deadline=\$((SECONDS + 330))' "${UP_SH}" && grep -q '"${SECONDS}" -ge "${_deadline}"' "${UP_SH}" \
+  || fail "cmd_up's health wait is no longer a 330s deadline - it gives up before wardynd's 330s boot budget while a migration is still running (#2223)"
+grep -q 'still waiting on wardynd' "${UP_SH}" \
+  || fail "cmd_up's 330s health wait prints no progress line, so a long migration reads as a hang (#2223)"
 
 grep -q '_cid=$(compose ps -q wardynd 2>/dev/null || true)$' "${UP_SH}" || fail "cmd_up no longer reads the wardynd container id the way this guard expects"
 # CAPTURE, THEN MATCH — never `awk | grep -q` under `pipefail`: `grep -q`

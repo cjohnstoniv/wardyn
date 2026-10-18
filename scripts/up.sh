@@ -705,17 +705,22 @@ cmd_up() {
   # network-topology-independent. Accept a host-curl too (covers Linux/mirrored).
   _cid=$(compose ps -q wardynd 2>/dev/null || true)
   log "Waiting for wardynd to become healthy"
+  # 330s is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT),
+  # the same sum setup.sh's host-mode wait and the chart's startupProbe use: a shorter wait
+  # fails the stack while a slow migration is still working.
+  _deadline=$((SECONDS + 330))
   _tries=0
   # -m 3 (the shape the WSL-reachability probe below uses): a peer that ACCEPTS
-  # and never replies hangs an unbounded curl forever, so the 60-try budget
+  # and never replies hangs an unbounded curl forever, so the deadline below
   # never expires and `make setup` waits with no ceiling at all.
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
         || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
-    if [ "${_tries}" -gt 60 ]; then
+    if [ "${SECONDS}" -ge "${_deadline}" ]; then
       compose logs --tail 50 wardynd
-      die "wardynd did not become healthy — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
+      die "wardynd did not become healthy within 330s — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi
+    [ "${_tries}" = 45 ] && log "still waiting on wardynd — a first migration can take up to WARDYN_MIGRATE_TIMEOUT (5m)"
     sleep 2
     # The capture above ran right after `compose up -d`; on a slow daemon it can
     # come back empty, wedging this loop on the host-curl arm. Re-read until it
