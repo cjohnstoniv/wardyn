@@ -15,7 +15,8 @@ RELEASING.md=5885 share=35 # +31: the two Docker Hub Actions secrets, one line e
 # ROADMAP.md 6167 adds 34 over 6133: the v0.9.3-rc.2 Shipped row the release commit adds.
 # ROADMAP.md 6297 adds 130, measured: the v0.9 scope table of what 0.9.3 adds to the runners.
 # ROADMAP.md 6333 = 6297 + 36, measured: the v0.9.3-rc.3 Shipped row.
-ROADMAP.md=6333 share=35 # +21: the v0.9.2 Shipped row (+47 before it for v0.9.1), which every release commit adds
+# ROADMAP.md 6361 = 6333 + 28, measured: 6361 = 6333 + 28, measured: the v0.9.3 Shipped row.
+ROADMAP.md=6361 share=35 # +21: the v0.9.2 Shipped row (+47 before it for v0.9.1), which every release commit adds
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6884 share=35
 docs/LIVE-TESTS.md=2518 share=35
