@@ -252,6 +252,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}
+          data-testid="run-canvas-scroll"
           className="scroll-thin min-h-0 w-full flex-1 overflow-y-auto overflow-x-auto"
           style={editing ? DOT_GRID : undefined}
         >

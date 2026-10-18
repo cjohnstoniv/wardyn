@@ -142,7 +142,8 @@ describe("RunCanvas — loading a layout", () => {
   it("scrolls the grid pane sideways rather than hiding the overflow", async () => {
     render(<RunCanvas ctx={ctx()} />);
     const tile = await screen.findByTestId("run-terminal-pane");
-    const pane = tile.closest(".scroll-thin") as HTMLElement;
+    const pane = screen.getByTestId("run-canvas-scroll");
+    expect(pane).toContainElement(tile);
     expect(pane).toHaveClass("overflow-x-auto");
     expect(pane).not.toHaveClass("overflow-x-hidden");
   });
