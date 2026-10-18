@@ -215,6 +215,9 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     });
     mount(false);
     await screen.findByText(REAUTH_ROW.label);
+    // The row only vanishes on the next poll (POLL_MS = 2s), and the APPROVED read is what the toast
+    // decides on: wait for it, so the assertion below runs after the vanished-row branch did.
+    await vi.waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("APPROVED", expect.anything()), { timeout: 8000 });
     await new Promise((r) => setTimeout(r, 50));
     expect(toastSuccess).not.toHaveBeenCalled();
   });
