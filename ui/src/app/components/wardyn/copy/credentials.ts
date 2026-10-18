@@ -47,6 +47,8 @@ export const INVENTORY = {
   ERASE_ROW: "Erase credentials",
   ERASE_BY_EMAIL: "Erase someone's credentials",
   EMPTY_TITLE: "No one has stored a credential yet",
+  // The store's canon 503 is a supported configuration, not a fault: the card is titled for what is true, not "Something went wrong".
+  NO_META_TITLE: "Nothing to list on this store",
   EMPTY_BODY: "People add their own keys and sign-ins in Your account, in the user view. They show here once they do.",
   NO_PROVIDERS_BODY: "Add one in Settings. Each person then connects their own, and it shows here.",
   OPEN_SETTINGS: "Open Settings",

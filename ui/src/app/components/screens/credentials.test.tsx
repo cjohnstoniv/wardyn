@@ -115,6 +115,8 @@ describe("the inventory", () => {
     listInventoryMock.mockRejectedValue(new HttpError(503, msg));
     renderScreen();
     expect(await screen.findByText(msg)).toBeInTheDocument();
+    expect(screen.getByText(INVENTORY.NO_META_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
