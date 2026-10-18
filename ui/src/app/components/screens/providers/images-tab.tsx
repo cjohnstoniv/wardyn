@@ -87,7 +87,7 @@ function ImagesTabBody() {
         {rows.length > 0 && addButton}
       </div>
       {rows.length === 0 ? (
-        <EmptyState icon={Container} title={IMAGES.EMPTY_TITLE} description={IMAGES.EMPTY_BODY} action={addButton} />
+        <EmptyState icon={Container} title={IMAGES.EMPTY_TITLE} description={IMAGES.EMPTY_BODY} action={addButton} as="h4" className="py-8" />
       ) : (
         rows.map((r) => (
           <div key={r.id} data-testid={`image-row-${r.image}`} className="overflow-hidden rounded-lg border border-border">

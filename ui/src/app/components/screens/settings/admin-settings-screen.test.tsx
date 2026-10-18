@@ -238,6 +238,17 @@ describe("AdminSettingsScreen — Admin SSH keys (S-1)", () => {
     expect(card.queryByText("laptop")).not.toBeInTheDocument();
   });
 
+  // #2873: inside a card the empty state is the quiet one: a level-4 title in the standard icon tile.
+  it("an empty card says so with a quiet level-4 title in the icon tile", async () => {
+    listKeysMock.mockResolvedValue([]);
+    renderScreen();
+    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const card = within(heading.closest("section")!);
+    await expandCard(ADMIN_SSH_KEYS.TITLE);
+    expect(await card.findByRole("heading", { name: ADMIN_SSH_KEYS.EMPTY_TITLE, level: 4 })).toBeInTheDocument();
+    expect(card.getByTestId("empty-state-tile")).toBeInTheDocument();
+  });
+
   it("shows an admin-stamped key with its Admin override chip", async () => {
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:bbb", name: "break-glass laptop", public_key: "", role: "admin", created_at: new Date().toISOString() },

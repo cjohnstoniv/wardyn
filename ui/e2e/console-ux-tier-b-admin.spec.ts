@@ -10,6 +10,8 @@ import { test, expect, asRealSecurityAdmin, expandCard, gotoConsole, navTo, navT
 import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { PROVIDERS_SUPER_ONLY } from "../src/app/components/wardyn/copy/console-view";
+import { IMAGES } from "../src/app/lib/availability-copy";
+import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
@@ -180,6 +182,68 @@ test.describe("Owner-approved refusal and empty states", () => {
     await expect(page.getByText("Requires the admin role.")).toHaveCount(0);
     await page.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA, exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/runs/);
+  });
+});
+
+// The computed value of a CSS colour token, read through a probe element, so a pin compares colours the engine
+// resolved rather than class names.
+async function tokenColour(page: Page, property: "color" | "backgroundColor" | "borderTopColor", token: string): Promise<string> {
+  return page.evaluate(
+    ([prop, tok]) => {
+      const probe = document.createElement("div");
+      if (prop === "borderTopColor") {
+        probe.style.borderTop = `1px solid var(${tok})`;
+      } else {
+        probe.style[prop as "color" | "backgroundColor"] = `var(${tok})`;
+      }
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe)[prop as "color" | "backgroundColor" | "borderTopColor"];
+      probe.remove();
+      return value;
+    },
+    [property, token] as const,
+  );
+}
+
+test.describe("Quiet empty states inside cards (#2873)", () => {
+  // The SSH keys card: a gold key in the standard tile, in a short block with a level-4 title.
+  test("Admin SSH keys: the empty key is gold in the standard tile, and the block is short", async ({ page }) => {
+    await page.route(/\/api\/v1\/me\/ssh-keys(\?|$)/, (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.continue(),
+    );
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Admin SSH keys");
+    const tile = page.getByTestId("admin-ssh-keys-card").getByTestId("empty-state-tile");
+    await expect(tile).toBeVisible();
+    const box = await boxOf(tile);
+    expect(Math.round(box.width)).toBe(48);
+    const style = await tile.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { color: cs.color, background: cs.backgroundColor, border: cs.borderTopColor };
+    });
+    expect(style.color).toBe(await tokenColour(page, "color", "--vault-fg"));
+    expect(style.background).toBe(await tokenColour(page, "backgroundColor", "--vault-bg"));
+    expect(style.border).toBe(await tokenColour(page, "borderTopColor", "--vault-border"));
+    const block = page.getByTestId("admin-ssh-keys-card").getByRole("heading", { name: "No admin keys", level: 4 });
+    await expect(block).toBeVisible();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  // The Images tab: its own icon, in the standard grey tile.
+  test("Images tab: the empty icon stays in the standard grey tile", async ({ page }) => {
+    await page.route(/\/api\/v1\/base-images(\?|$)/, (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.continue(),
+    );
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    await expandCard(page, "Workspace providers");
+    await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
+    await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
+    const tile = page.getByTestId("empty-state-tile");
+    await expect(tile).toBeVisible();
+    expect(await tile.evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColour(page, "color", "--muted-foreground"));
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 });
 
