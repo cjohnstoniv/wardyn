@@ -456,7 +456,9 @@ services:
       # With them out of sync Dex refuses the authorize request outright, which
       # is the loud failure; the 8080 hard-code was the silent one.
       WARDYN_OIDC_REDIRECT_URL: "${WARDYN_OIDC_REDIRECT_URL:-http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback}"
-      WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # `-` not `:-`: unset keeps the demo's wardyn.local, an explicit empty value clears
+      # the allowlist (and with it the email_verified gate Entra tokens cannot pass).
+      WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS-wardyn.local}"
       # Refuse a sign-in whose id_token lacks email_verified=true (an absent claim
       # counts as unverified). Empty = off; see docs/ENV.md.
       WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED: "${WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED:-}"

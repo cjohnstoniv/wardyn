@@ -1547,6 +1547,12 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@WARDYN_OIDC_REDIRECT_URL=https://sso.corp.example/auth/callback docker compose -f $(COMPOSE_FILE) config \
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
+	@# #2152: an unset WARDYN_OIDC_EMAIL_DOMAINS keeps the demo's wardyn.local, but an explicit empty
+	@# value must clear it (`:-` swallowed the empty value, so no compose deployment could switch the gate off).
+	@docker compose -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_EMAIL_DOMAINS: wardyn.local' \
+	  || { echo "compose: an unset WARDYN_OIDC_EMAIL_DOMAINS no longer defaults to wardyn.local"; exit 1; }
+	@WARDYN_OIDC_EMAIL_DOMAINS= docker compose -f $(COMPOSE_FILE) config | grep -q 'WARDYN_OIDC_EMAIL_DOMAINS: ""' \
+	  || { echo "compose: an explicitly empty WARDYN_OIDC_EMAIL_DOMAINS is replaced by the default (use \$${VAR-default}, not \$${VAR:-default})"; exit 1; }
 	@# #549/#672: neither compose entrypoint renders a retired model variable.
 	@for render in "-f $(COMPOSE_FILE)" "--env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml"; do \
 		out=$$(docker compose $$render config) || { echo "compose: docker compose $$render config failed"; exit 1; }; \
