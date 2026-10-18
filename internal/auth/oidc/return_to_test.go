@@ -10,19 +10,27 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
 // /auth/login?return_to= is remembered only for a console path; everything that could name another
 // origin or split a header is dropped, and the login still starts.
 func TestLoginReturnToIsDefaultDeny(t *testing.T) {
-	_, auth := lifeAuth(t, nil)
 	long := "/" + strings.Repeat("a", 600)
-	for _, bad := range []string{"", "https://evil.example/", "//evil.example", "/\\evil.example", "/runs\\x", "evil", "/runs\r\nSet-Cookie: x=1", "/runs\tx", "/auth/login", "/api/v1/runs", "/api", "/x/../api/v1/runs", "/runs/../auth/login", "/x/%2e%2e/api/v1/runs", long} {
-		r := httptest.NewRequest(http.MethodGet, "/auth/login?return_to="+url.QueryEscape(bad), nil)
-		w := httptest.NewRecorder()
-		auth.LoginHandler(w, r)
-		if w.Code != http.StatusFound || cookieMap(w.Result().Cookies())["wardyn_oidc_return"] != nil {
-			t.Errorf("return_to %q: %d, cookie %v; want a login with nothing remembered", bad, w.Code, cookieMap(w.Result().Cookies())["wardyn_oidc_return"])
+	// The dot-segment cases are the ones a browser resolves onto a refused route; under a base path
+	// they climb out of it and back in, so they are tried with and without one.
+	for _, base := range []string{"", "/wardyn"} {
+		_, auth := lifeAuth(t, func(c *writoidc.Config) { c.BasePath = base })
+		for _, bad := range []string{"", "https://evil.example/", "//evil.example", "/\\evil.example", "/runs\\x", "evil", "/runs\r\nSet-Cookie: x=1", "/runs\tx",
+			"/auth/login", "/api/v1/runs", "/api", "/x/../api/v1/runs", "/runs/../auth/login", "/x/%2e%2e/api/v1/runs",
+			"/../wardyn/api/v1/runs", "/%2e%2e/wardyn/api/v1/runs", "/../wardyn/auth/login", "/%2e%2e/wardyn/auth/login", "/runs/./x", long} {
+			r := httptest.NewRequest(http.MethodGet, "/auth/login?return_to="+url.QueryEscape(bad), nil)
+			w := httptest.NewRecorder()
+			auth.LoginHandler(w, r)
+			if w.Code != http.StatusFound || cookieMap(w.Result().Cookies())["wardyn_oidc_return"] != nil {
+				t.Errorf("base %q, return_to %q: %d, cookie %v; want a login with nothing remembered", base, bad, w.Code, cookieMap(w.Result().Cookies())["wardyn_oidc_return"])
+			}
 		}
 	}
 }

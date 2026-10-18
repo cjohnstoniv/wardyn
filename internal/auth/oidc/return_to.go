@@ -30,10 +30,13 @@ func safeReturnTo(path string) string {
 	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
 		return ""
 	}
-	// Cleaned first: a browser resolves dot segments, so /x/../api/... lands on the API.
-	clean := pathpkg.Clean(u.Path)
+	// A dot segment is refused outright, encoded or not (u.Path is decoded): a browser resolves it, so
+	// /x/../api/... or, under a base path, /../wardyn/api/... would land on a route refused below.
+	if clean := pathpkg.Clean(u.Path); clean != u.Path && clean+"/" != u.Path {
+		return ""
+	}
 	for _, route := range []string{"/auth", "/api"} {
-		if clean == route || strings.HasPrefix(clean, route+"/") {
+		if u.Path == route || strings.HasPrefix(u.Path, route+"/") {
 			return ""
 		}
 	}
