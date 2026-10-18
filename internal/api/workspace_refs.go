@@ -21,21 +21,41 @@ import (
 // row per kind+source). Built by scanning every workspace's Sources once;
 // callers resolving several sources at once (referencedWorkspaces) build one
 // index rather than listing per source.
+//
+// Nothing makes a source unique across workspaces, so each map holds the one
+// workspace a source is judged by (see indexWorkspacesFor), and repoAll every
+// workspace carrying a repo, in list order.
 type workspaceSourceIndex struct {
-	localDir map[string]types.Workspace // Path -> owning workspace
-	repo     map[string]types.Workspace // Source (slug/URL) -> owning workspace
+	localDir map[string]types.Workspace   // Path -> owning workspace
+	repo     map[string]types.Workspace   // Source (slug/URL) -> owning workspace
+	repoAll  map[string][]types.Workspace // Source (slug/URL) -> every carrier
 }
 
 // indexWorkspacesBySource builds a workspaceSourceIndex from a workspace list.
 func indexWorkspacesBySource(all []types.Workspace) workspaceSourceIndex {
-	idx := workspaceSourceIndex{localDir: map[string]types.Workspace{}, repo: map[string]types.Workspace{}}
+	return indexWorkspacesFor(all, nil)
+}
+
+// indexWorkspacesFor is indexWorkspacesBySource for a caller who may use only
+// the workspaces usable admits: a source several workspaces carry is owned by
+// the last carrier in the list usable admits, and by the last carrier only when
+// it admits none. nil admits every workspace.
+func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool) workspaceSourceIndex {
+	idx := workspaceSourceIndex{localDir: map[string]types.Workspace{}, repo: map[string]types.Workspace{}, repoAll: map[string][]types.Workspace{}}
+	hold := func(m map[string]types.Workspace, key string, ws types.Workspace) {
+		if cur, ok := m[key]; ok && usable != nil && usable(cur) && !usable(ws) {
+			return
+		}
+		m[key] = ws
+	}
 	for _, ws := range all {
 		for _, src := range ws.Sources {
 			switch src.Type {
 			case types.WorkspaceSourceTypeLocalDir:
-				idx.localDir[src.Path] = ws
+				hold(idx.localDir, src.Path, ws)
 			case types.WorkspaceSourceTypeRepo:
-				idx.repo[src.Source] = ws
+				hold(idx.repo, src.Source, ws)
+				idx.repoAll[src.Source] = append(idx.repoAll[src.Source], ws)
 			}
 		}
 	}

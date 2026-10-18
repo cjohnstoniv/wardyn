@@ -284,14 +284,29 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		if err != nil {
 			return nil, nil, fmt.Errorf("api: list workspaces: %w", err)
 		}
-		idx := indexWorkspacesBySource(all)
+		// A repo several workspaces carry is admitted by a grant on any carrier
+		// the member may use (their own or a shared one), never on another
+		// person's private one; with none, the carrier it is held to is judged
+		// as before and the onboarding gate refuses it.
+		usable := func(ws types.Workspace) bool { return ws.OwnedBy == "" || (owner != "" && ws.OwnedBy == owner) }
+		idx := indexWorkspacesFor(all, usable)
 		keptRepos := spec.WorkspaceRepos[:0:0]
 		for _, wr := range spec.WorkspaceRepos {
 			ws, onboarded := idx.repo[wr.Repo]
 			if onboarded {
-				ok, err := cap.allowed(ctx, capWorkspace, ws.ID.String())
-				if err != nil {
-					return nil, nil, err
+				judged := []types.Workspace{ws}
+				if usable(ws) {
+					judged = slices.DeleteFunc(slices.Clone(idx.repoAll[wr.Repo]), func(c types.Workspace) bool { return !usable(c) })
+				}
+				ok := false
+				for _, c := range judged {
+					var err error
+					if ok, err = cap.allowed(ctx, capWorkspace, c.ID.String()); err != nil {
+						return nil, nil, err
+					}
+					if ok {
+						break
+					}
 				}
 				if !ok {
 					// Refused, not dropped (#1259) — see boundUserSpec.

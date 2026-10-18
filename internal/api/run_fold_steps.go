@@ -124,7 +124,8 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.Store != nil {
 		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
 	}
-	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesIn(all, f.spec))
+	carriers := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(f.r, ws) })
+	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
 		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
@@ -133,7 +134,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 		}
 	}
 	var refusal *runRefusal
-	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
+	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, carriers, f.seed,
 		driveTargets(f.drives))
 	return !refusal.write(s, f.w, f.r)
 }
