@@ -207,7 +207,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `FENCE_HOW` | mock | Shared-kernel container (runc) hardened with user namespaces, seccomp, AppArmor, and capability drop. |
 | `WALL_PROTECTS` | mock | Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed). |
 | `WALL_NOT_PROTECTS` | mock | A flaw in the sandbox software itself (rare); it's still not a fully separate machine. |
-| `WALL_HOW` | mock | gVisor userspace kernel intercepts syscalls — the default; needs a native Docker engine with its runsc runtime registered (a one-time setup step). |
+| `WALL_HOW` | mock | gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step). |
 | `VAULT_PROTECTS` | mock | Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside. |
 | `VAULT_NOT_PROTECTS` | mock | A flaw in the virtualization layer itself — a very rare hypervisor- or CPU-level escape. |
 | `VAULT_HOW` | mock | Kata microVM — hardware-virtualized, with its own guest kernel (requires /dev/kvm). |
