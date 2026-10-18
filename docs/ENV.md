@@ -781,7 +781,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And boot refuses an unknown channel or kind, bad tiers, or `run_owner` on a redacting channel.
 - `hmac_secret` and `bearer_token` are optional and, like a URL carrying userinfo or a query, require `https://`.
 - And a `teams` or `slack` URL must always be `https://`.
-- An `smtp` channel takes `host`, `port`, `from`, optional `to` and optional `username` with `password`.
+- An `smtp` channel takes `host`, `port`, `from`, optional `to`, optional `helo` and optional `username` with `password`.
 - It sends plain text only over verified STARTTLS (no plaintext fallback, no skip-verify, trust from the system roots plus `WARDYN_TRUSTED_CA_FILE`), and refuses boot on a CR or LF in any field.
 - Its password has the same custody as the `WARDYN_AUDIT_SINKS` bearer token.
 - Any bad value refuses boot with an error naming the channel `id` and the rule, never the value.

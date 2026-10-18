@@ -177,24 +177,46 @@ func entryCoversAny(entry string, drop map[string]bool) bool {
 // workspace_envcode.go's envAsCodeFor) go through, so a network-only redirect
 // can never accidentally grow a package-manager config file.
 func artifactBaseURLs(sc types.SiteConfig) map[string]string {
-	if len(sc.EgressRedirects) == 0 {
+	rows := ecosystemMirrorRows(sc)
+	if len(rows) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(sc.EgressRedirects))
-	for _, r := range sc.EgressRedirects {
-		if r.Ecosystem == "" {
-			continue // network-only: no per-tool config file
-		}
-		out[r.Ecosystem] = r.To
-	}
-	if len(out) == 0 {
-		return nil
+	out := make(map[string]string, len(rows))
+	for eco, r := range rows {
+		out[eco] = r.To
 	}
 	return out
 }
 
-// artifactGoSumDBOff reports whether the go mirror artifactBaseURLs picks (the last go row) opts out of
-// checksum-database verification.
+// ecosystemMirrorRows picks the one row per ecosystem whose To becomes that
+// ecosystem's tool config. The console suggests several hosts per ecosystem
+// (pypi.org and files.pythonhosted.org, proxy.golang.org and sum.golang.org),
+// each stamped with the same ecosystem; only the row for the ecosystem's index
+// host (the first of its public hosts) names the mirror's index, so it wins
+// over its companion hosts, which stay network-only. With no index row the last
+// row of the ecosystem wins, as it always did.
+func ecosystemMirrorRows(sc types.SiteConfig) map[string]types.EgressRedirect {
+	out := map[string]types.EgressRedirect{}
+	indexed := map[string]bool{}
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "" {
+			continue // network-only: no per-tool config file
+		}
+		isIndex := false
+		if hosts := hostrules.PublicRegistryHosts(r.Ecosystem); len(hosts) > 0 {
+			isIndex = strings.EqualFold(hostrules.HostOf(r.From), hosts[0])
+		}
+		if indexed[r.Ecosystem] && !isIndex {
+			continue
+		}
+		out[r.Ecosystem], indexed[r.Ecosystem] = r, isIndex || indexed[r.Ecosystem]
+	}
+	return out
+}
+
+// artifactGoSumDBOff reports whether the LAST go row opts out of checksum-database
+// verification, as it always has; the row that names the mirror (ecosystemMirrorRows)
+// does not decide it.
 func artifactGoSumDBOff(sc types.SiteConfig) bool {
 	off := false
 	for _, r := range sc.EgressRedirects {

@@ -502,3 +502,21 @@ func TestSetRunEnd_CapLoosenedIsToldNotApplied(t *testing.T) {
 		}
 	})
 }
+
+// A pool or deployment lifetime cap that cut the end binds a new run the same
+// way, so loosening the launch profile must not tell the owner to start a new
+// run for a longer one.
+func TestSetRunEnd_CapLoosenedIsNotToldWhenTheLifetimeCapCutTheEnd(t *testing.T) {
+	captured := types.RunLimits{MaxEndAheadSec: 7 * 86400, MaxWaitSec: 3600, UserChangesLimits: true}
+	f, st, profileID := newReclampFixture(t, captured, day, 1800)
+	st.setProfile(profileID, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+	capAt := f.now.Add(2 * day)
+	st.run.LifetimeCapAt, st.run.LifetimeCapSource = &capAt, types.LimitSourcePool
+	code, m, raw := f.patchRaw(t, ownerSession(t), endsAtBody(f.now.Add(10*day)))
+	if code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s, want 200 at the lifetime cap", code, raw)
+	}
+	if _, present := m["ends_cap_loosened"]; present {
+		t.Errorf("ends_cap_loosened present beside latest_end_source pool: %s", raw)
+	}
+}

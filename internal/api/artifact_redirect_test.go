@@ -235,6 +235,52 @@ func TestArtifactBaseURLs(t *testing.T) {
 	}
 }
 
+// TestArtifactBaseURLs_IndexHostRowWins: the console suggests a second host per
+// pip, cargo and go; whichever order the rows were added in, the ecosystem's
+// index host names the mirror and its companion host stays network-only.
+func TestArtifactBaseURLs_IndexHostRowWins(t *testing.T) {
+	index := []types.EgressRedirect{
+		{From: "https://proxy.golang.org", To: "https://art.corp/api/go/go-remote", Ecosystem: "go"},
+		{From: "https://pypi.org/simple", To: "https://art.corp/api/pypi/pypi-remote/simple", Ecosystem: "pip"},
+	}
+	companion := []types.EgressRedirect{
+		{From: "https://sum.golang.org", To: "https://art.corp/api/go/sumdb", Ecosystem: "go", GoChecksumDBOff: true},
+		{From: "https://files.pythonhosted.org", To: "https://art.corp/api/pypi/pypi-remote", Ecosystem: "pip"},
+	}
+	want := map[string]string{
+		"go":  "https://art.corp/api/go/go-remote",
+		"pip": "https://art.corp/api/pypi/pypi-remote/simple",
+	}
+	for name, rows := range map[string][]types.EgressRedirect{
+		"index first":     {index[0], index[1], companion[0], companion[1]},
+		"companion first": {companion[0], companion[1], index[0], index[1]},
+	} {
+		sc := types.SiteConfig{EgressRedirects: rows}
+		if got := artifactBaseURLs(sc); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: artifactBaseURLs\n got: %v\nwant: %v", name, got, want)
+		}
+	}
+	// No index row: the last row of the ecosystem wins, as before.
+	only := types.SiteConfig{EgressRedirects: companion}
+	if got := artifactBaseURLs(only); got["go"] != "https://art.corp/api/go/sumdb" || got["pip"] != "https://art.corp/api/pypi/pypi-remote" {
+		t.Errorf("without an index row the last row must win, got %v", got)
+	}
+}
+
+// TestArtifactBaseURLs_GoSumDBOptOutStaysOnTheLastGoRow: the checksum-database
+// opt-out is still read from the last go row, so a [proxy, sum(off)] config keeps
+// writing GOSUMDB=off.
+func TestArtifactBaseURLs_GoSumDBOptOutStaysOnTheLastGoRow(t *testing.T) {
+	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://proxy.golang.org", To: "https://art.corp/api/go/go-remote", Ecosystem: "go"},
+		{From: "https://sum.golang.org", To: "https://art.corp/api/go/sumdb", Ecosystem: "go", GoChecksumDBOff: true},
+	}}
+	_, env := hostrules.EmitArtifactConfig(artifactBaseURLs(sc), artifactGoSumDBOff(sc))
+	if env["GOPROXY"] != "https://art.corp/api/go/go-remote" || env["GOSUMDB"] != "off" {
+		t.Errorf("env = %v, want GOPROXY from the proxy row and GOSUMDB=off from the last go row", env)
+	}
+}
+
 // TestArtifactRepoCheck reports info status + configured ecosystems.
 func TestArtifactRepoCheck(t *testing.T) {
 	// Unconfigured: info + fix hint.

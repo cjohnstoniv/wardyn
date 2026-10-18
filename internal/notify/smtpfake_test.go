@@ -32,6 +32,7 @@ type fakeSMTP struct {
 	auth  []bool   // for each AUTH seen, whether it arrived over TLS
 	creds []string // for each accepted AUTH, "mechanism user password" as the relay decoded it
 	data  string   // the DATA payload, dot-unstuffed, CRLF-normalised to LF
+	ehlo  []string // the name each EHLO announced
 }
 
 const secretRelayText = "relay-says-BOGUS-SECRET-TEXT-9183"
@@ -64,6 +65,12 @@ func (f *fakeSMTP) seen() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.verbs...)
+}
+
+func (f *fakeSMTP) ehloNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ehlo...)
 }
 
 func (f *fakeSMTP) saw(verb string) bool {
@@ -143,6 +150,9 @@ func (f *fakeSMTP) serve(raw net.Conn) {
 		f.mu.Unlock()
 		switch verb {
 		case "EHLO", "HELO":
+			f.mu.Lock()
+			f.ehlo = append(f.ehlo, strings.TrimSpace(strings.TrimPrefix(line[len(verb):], " ")))
+			f.mu.Unlock()
 			_ = tp.PrintfLine("250-fake")
 			if f.starttls && !secure {
 				_ = tp.PrintfLine("250-STARTTLS")

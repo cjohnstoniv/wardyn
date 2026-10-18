@@ -13,7 +13,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -313,5 +315,126 @@ func TestRecordPromote_PublicIPLiteralIsNotPromotable(t *testing.T) {
 	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, "")
 	if _, leaked := fake.ws.Requirements["egress:93.184.216.34"]; leaked {
 		t.Fatalf("H4: a public IP literal was promoted as a required egress row (code=%d, rows=%v)", w.Code, fake.ws.Requirements)
+	}
+}
+
+// TestRecordPromote_ModelProviderRowHostsAreSkipped: a Bedrock or gateway
+// provider row's serving hosts are harness plumbing like api.anthropic.com, so
+// promoting a recording must not offer them as a workspace need.
+func TestRecordPromote_ModelProviderRowHostsAreSkipped(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+		{Host: "gateway.corp.example", AllowCount: 4},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = bedrockAndGatewaySite()
+	srv := New(baseTestConfig(newHarness(t), fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, k := range []string{"egress:bedrock-runtime.us-east-1.amazonaws.com", "egress:gateway.corp.example"} {
+		if _, ok := fake.ws.Requirements[k]; ok {
+			t.Errorf("model-provider plumbing promoted as a workspace need: %s (rows: %v)", k, fake.ws.Requirements)
+		}
+	}
+	if _, ok := fake.ws.Requirements["egress:api.stripe.com"]; !ok {
+		t.Errorf("an ordinary app host was not promoted: %v", fake.ws.Requirements)
+	}
+}
+
+// bedrockAndGatewaySite is a site config with a Bedrock bearer provider and a
+// route-through gateway provider row.
+func bedrockAndGatewaySite() types.SiteConfig {
+	return types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{
+		{
+			ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+			Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
+		},
+		{
+			ID: "gw", UID: "uid-gw", Kind: types.ModelProviderCustomEndpoint,
+			BaseURL:   "https://gateway.corp.example",
+			Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "m"}},
+		},
+	}}}
+}
+
+// TestRecordPromote_BulkSubsetSkipsModelProviderRowHosts: the console's bulk promote
+// sends every checked host, plumbing included. The provider row's host is skipped,
+// not refused, and the rest of the request lands.
+func TestRecordPromote_BulkSubsetSkipsModelProviderRowHosts(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = bedrockAndGatewaySite()
+	srv := New(baseTestConfig(newHarness(t), fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken,
+		`{"hosts":["bedrock-runtime.us-east-1.amazonaws.com","api.stripe.com"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := fake.ws.Requirements["egress:api.stripe.com"]; !ok {
+		t.Errorf("api.stripe.com was not promoted: %v", fake.ws.Requirements)
+	}
+	if _, ok := fake.ws.Requirements["egress:bedrock-runtime.us-east-1.amazonaws.com"]; ok {
+		t.Errorf("the Bedrock runtime host was promoted: %v", fake.ws.Requirements)
+	}
+}
+
+// TestRecordPromote_BulkSkipIsNamedInTheHeaderAndTheAudit: the skip is otherwise silent (the
+// body is the Workspace), so the response names the skipped hosts in
+// X-Wardyn-Record-Skipped-Hosts and the workspace.egress.approve row lists them beside domains.
+func TestRecordPromote_BulkSkipIsNamedInTheHeaderAndTheAudit(t *testing.T) {
+	runID, wsID := uuid.New(), uuid.New()
+	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+		{Host: "api.stripe.com", AllowCount: 1},
+		{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+	}}
+	fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+	fake.site = bedrockAndGatewaySite()
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, fake))
+
+	w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken,
+		`{"hosts":["Bedrock-Runtime.us-east-1.amazonaws.com","api.stripe.com"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-Wardyn-Record-Skipped-Hosts"); got != "bedrock-runtime.us-east-1.amazonaws.com" {
+		t.Errorf("X-Wardyn-Record-Skipped-Hosts = %q, want the Bedrock runtime host", got)
+	}
+	var found bool
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action != "workspace.egress.approve" {
+			continue
+		}
+		var d struct {
+			Domains []string `json:"domains"`
+			Skipped []string `json:"skipped"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		found = true
+		if !slices.Equal(d.Domains, []string{"api.stripe.com"}) || !slices.Equal(d.Skipped, []string{"bedrock-runtime.us-east-1.amazonaws.com"}) {
+			t.Errorf("audit domains=%v skipped=%v, want [api.stripe.com] and the Bedrock host", d.Domains, d.Skipped)
+		}
+	}
+	if !found {
+		t.Error("no workspace.egress.approve row")
+	}
+
+	// Nothing skipped: no header.
+	w = do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, `{"hosts":["api.stripe.com"]}`)
+	if w.Code != http.StatusOK || w.Header().Get("X-Wardyn-Record-Skipped-Hosts") != "" {
+		t.Errorf("code=%d header=%q, want 200 and no header", w.Code, w.Header().Get("X-Wardyn-Record-Skipped-Hosts"))
 	}
 }

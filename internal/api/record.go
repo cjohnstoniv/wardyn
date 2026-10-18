@@ -562,6 +562,38 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 	return skip
 }
 
+// recordPromoteSkipHosts is promoteSkipHosts plus every model provider row's
+// serving hosts (a Bedrock runtime, a gateway): the same plumbing, spelled by
+// the site config rather than the ceiling. Record promotion only: the skip set
+// promoteSkipHosts returns is shared with approve·always, whose refusals stay
+// as they were.
+func (s *Server) recordPromoteSkipHosts(ctx context.Context, ws types.Workspace) map[string]struct{} {
+	skip := s.promoteSkipHosts(ctx, ws)
+	for h := range s.modelProviderRowHostSet(ctx) {
+		skip[h] = struct{}{}
+	}
+	return skip
+}
+
+// modelProviderRowHostSet is every model provider row's serving host, lowercased,
+// from the stored site config; empty when it cannot be read.
+func (s *Server) modelProviderRowHostSet(ctx context.Context) map[string]struct{} {
+	out := map[string]struct{}{}
+	if s.cfg.Store == nil {
+		return out
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return out
+	}
+	for _, h := range modelProviderRowHosts(sc) {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out
+}
+
 // skipCovers reports whether any skip ENTRY names or covers host.
 //
 // The entries are kept VERBATIM — a ceiling's "*.anthropic.com" (the spelling
@@ -694,7 +726,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 		return nil, "the control plane's own address is not configured, so the guard that keeps Wardyn's API " +
 			"off this workspace's allowlist cannot be evaluated — set WARDYN_CONTROL_PLANE_URL and retry"
 	}
-	skipHost := s.promoteSkipHosts(r.Context(), ws)
+	skipHost := s.recordPromoteSkipHosts(r.Context(), ws)
 	// Fallback, and only ever a WIDENING of that exclusion: a deployment is often
 	// dialled by a name other than the configured one (host.docker.internal, the
 	// in-cluster service name, an ingress host), and an exact match sees none of
@@ -756,25 +788,10 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// wantHosts is what THIS request actually promotes: the full promotable
-	// set, unless the operator narrowed it to a validated subset.
-	var wantHosts []string
-	if req.Hosts != nil {
-		for _, h := range req.Hosts {
-			h = strings.ToLower(strings.TrimSpace(h))
-			if h == "" {
-				continue
-			}
-			if _, ok := promotable[h]; !ok {
-				writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+h+" was not observed+allowed in this recording — cannot promote")
-				return
-			}
-			wantHosts = append(wantHosts, h)
-		}
-	} else {
-		for h := range promotable {
-			wantHosts = append(wantHosts, h)
-		}
+	wantHosts, skipped, notPromotable := s.selectPromoteHosts(r.Context(), req.Hosts, promotable)
+	if notPromotable != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+notPromotable+" was not observed+allowed in this recording — cannot promote")
+		return
 	}
 
 	// One contract, one place: promotion writes egress: REQUIREMENT rows on
@@ -860,13 +877,55 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 		}
 		updated.Requirements = wsAfter.Requirements
 		updated.EffectiveRequirements = wsAfter.EffectiveRequirements
+		auditData := map[string]any{"domains": promoted, "source": "record:" + taskKey}
+		if len(skipped) > 0 {
+			auditData["skipped"] = skipped
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&res.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"workspace.egress.approve", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{
-				"domains": promoted, "source": "record:" + taskKey,
-			})))
+			"workspace.egress.approve", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, auditData)))
+	}
+	// The skip is otherwise silent (the body is the Workspace): name the skipped hosts so
+	// the console can say so. Additive; absent when nothing was skipped.
+	if len(skipped) > 0 {
+		w.Header().Set(recordSkippedHostsHeader, strings.Join(skipped, ","))
 	}
 	writeJSON(w, http.StatusOK, updated)
 }
+
+// selectPromoteHosts is what a promote request actually promotes: the full promotable set, unless the
+// operator narrowed it to a subset. The console's bulk promote sends every checked host, plumbing included:
+// a model provider row's host is never promoted, and is skipped (and returned) rather than refused. The
+// third result is the first requested host outside the promotable set, "" when every host is fine.
+func (s *Server) selectPromoteHosts(ctx context.Context, requested []string, promotable map[string]struct{}) (want, skipped []string, notPromotable string) {
+	if requested == nil {
+		for h := range promotable {
+			want = append(want, h)
+		}
+		return want, nil, ""
+	}
+	providerHosts := s.modelProviderRowHostSet(ctx)
+	for _, h := range requested {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if _, plumbing := providerHosts[h]; plumbing {
+			if !slices.Contains(skipped, h) {
+				skipped = append(skipped, h)
+			}
+			continue
+		}
+		if _, ok := promotable[h]; !ok {
+			return nil, nil, h
+		}
+		want = append(want, h)
+	}
+	return want, skipped, ""
+}
+
+// recordSkippedHostsHeader lists, comma-separated, the requested hosts a bulk promote skipped
+// because they are a model provider row's plumbing; absent when none were.
+const recordSkippedHostsHeader = "X-Wardyn-Record-Skipped-Hosts"
 
 // controlPlaneHost extracts the lowercase hostname of the configured control
 // plane URL ("" when unparseable/unset).

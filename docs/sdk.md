@@ -1113,6 +1113,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   response is ordered live runs first, then ended runs by end time, and two headers
   — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
   `ended_within` window and the killed-run default hid.
+- `POST /api/v1/workspaces/{id}/record/{task}/promote-egress`
+  skips, rather than refuses, a requested host that is a model provider row's own host. It names them in the additive
+  `X-Wardyn-Record-Skipped-Hosts` header (comma list, absent when none) and as `skipped` in the
+  `workspace.egress.approve` audit row.
 - `GET /api/v1/approvals`
   accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
   approvals for every caller.

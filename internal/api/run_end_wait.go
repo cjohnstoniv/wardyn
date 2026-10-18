@@ -135,7 +135,9 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, p.status, p.refusalReason, p.refusal)
 		return
 	}
-	if !exempt && slices.Contains(p.resp.Capped, "ends_at") {
+	// Only when the captured profile limit is what cut the end: a pool or
+	// deployment lifetime cap binds a new run the same way.
+	if !exempt && slices.Contains(p.resp.Capped, "ends_at") && p.resp.LatestEndSource == types.LimitSourceGovernance {
 		p.resp.EndsCapLoosened = s.endsCapLoosened(r.Context(), run)
 	}
 	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {

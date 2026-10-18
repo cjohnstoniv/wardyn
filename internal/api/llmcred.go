@@ -153,6 +153,19 @@ func (s *Server) isModelProviderHost(h string) bool {
 // path's strip (dropLegacyModelInjections) and the integration write's refusal
 // (handlePutIntegration).
 func (s *Server) modelServingHosts(sc types.SiteConfig) func(string) bool {
+	hosts := modelProviderRowHosts(sc)
+	return func(h string) bool {
+		if strings.TrimSpace(h) == "" {
+			return false
+		}
+		return s.isModelProviderHost(h) || slices.ContainsFunc(hosts, func(x string) bool { return x != "" && hostEqual(x, h) })
+	}
+}
+
+// modelProviderRowHosts is the half of modelServingHosts that comes from the
+// site config: every model provider row's own host and, for a Bedrock row, its
+// runtime and control hosts.
+func modelProviderRowHosts(sc types.SiteConfig) []string {
 	var hosts []string
 	for _, p := range modelProviderRows(sc) {
 		hosts = append(hosts, providerHost(p))
@@ -160,12 +173,7 @@ func (s *Server) modelServingHosts(sc types.SiteConfig) func(string) bool {
 			hosts = append(hosts, providerBedrockRuntimeHost(p), bedrockControlHost(b.Region))
 		}
 	}
-	return func(h string) bool {
-		if strings.TrimSpace(h) == "" {
-			return false
-		}
-		return s.isModelProviderHost(h) || slices.ContainsFunc(hosts, func(x string) bool { return x != "" && hostEqual(x, h) })
-	}
+	return hosts
 }
 
 // isModelProviderRejectHost is modelServingHosts over the stored site config,

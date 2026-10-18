@@ -1612,6 +1612,7 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 - **SMTP mail.**
   - An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of addresses) and optional
     `username` and `password`, which are set together; it takes no `url`.
+  - An optional `helo` sets the name `EHLO` announces (default `localhost`), for a relay that rejects a non-FQDN one.
   - It sends a plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines
     as the chat bodies and nothing else.
   - It sends over **verified STARTTLS only**:
@@ -2486,19 +2487,17 @@ Delivery per install path:
 - `egress_redirects` is a list of `{from, to, token_secret_ref, token_integration_ref, ecosystem}` entries.
 - Each substitutes a public/upstream URL or host for a corporate-internal one in every run's egress, with an optional token injected proxy-side as a Bearer credential for `to`'s host (the sandbox never holds it).
 
-- The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise).
+- The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of its scheme (`80` for an explicit `http://`, `443` otherwise).
 - That is the same port its TLS termination and token injection use.
 - So a `to` on a literal IP is never trusted on some other port of that address.
 - Reach the mirror on a different port by naming that port in `to`.
 
-- It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too.
-- The shape generalized to "a list of From → To pairs over any URL, host, or IP".
+- It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too: a list of From → To pairs over any URL, host, or IP.
 - The token comes from either of two places, mutually exclusive — a row setting both is rejected.
 - `token_secret_ref` names a bare secret directly.
 - `token_integration_ref` instead names an [**Integration**](operations/integrations.md) (above) to take the token from: the integration owns the system and its credential, the redirect owns rerouting a public endpoint to it.
-- Pointing at an integration carries more than its secret name.
-- The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
-- Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
+- An integration also supplies its `proxy_header` header and format, so a feed that authenticates with something other than `Authorization: Bearer` can.
+- The credential is the secret that delivery names, whatever role the row gives it.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
 - On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `denied`. Runs that do not use the lane keep the redirect's token.
 
@@ -2510,13 +2509,12 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
+- Several rows can share one `ecosystem` (pip, go and maven name two public hosts, cargo three): the row whose `from` is the first public host (`registry.npmjs.org`, `pypi.org`, `crates.io`, `repo.maven.apache.org`, `proxy.golang.org`, `api.nuget.org`) names the mirror in the config. With none, the last row does.
 - A `go` redirect keeps Go's checksum database on, reached through the mirror: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so the mirror must proxy that path.
-- A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed.
+- A mirror that cannot proxy it sets `go_checksum_db_off` on its redirect, which writes `GOSUMDB=off` for runs through it: modules it serves are then trusted without a check against `sum.golang.org`, and only `go.sum` still protects. Keep each repository's `go.sum` committed. With several `go` rows, the last one's `go_checksum_db_off` decides.
 - Setting `go_checksum_db_off` shows a warning on the `artifact_repo` setup check and is recorded in `site_config.write`; it is accepted only on a `go` row.
 - A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
-- But **no config file is written**.
-- There is no `.npmrc` equivalent for an arbitrary host.
-- That is a real cost: the workspace still needs telling to pull from the mirror itself.
+- **No config file is written**: there is no `.npmrc` equivalent for an arbitrary host, so the workspace still needs telling to pull from the mirror.
 - Examples: `docker login` against the internal registry, an appliance client's own config.
 - Otherwise a run reaches an allowed, credentialed host that nothing in the sandbox asks for.
 

@@ -518,7 +518,7 @@ func gitWrite(method string, r route, req Request) (Verdict, error) {
 		return gitRepositoryWrite(method, r, req)
 	case "pullrequests":
 		// The organisation/project-level pull-request route.
-		return pullRequestWrite(method, req)
+		return pullRequestWrite(method, req, r.at(4))
 	case "policy", "policyconfigurations":
 		return Verdict{Capability: CapPolicyAdmin}, nil
 	}
@@ -548,7 +548,7 @@ func gitRepositoryWrite(method string, r route, req Request) (Verdict, error) {
 		// until its body is parsed.
 		return Verdict{Capability: CapUnclassifiedWrite}, nil
 	case "pullrequests":
-		return pullRequestWrite(method, req)
+		return pullRequestWrite(method, req, r.at(6))
 	case "policyconfigurations":
 		return Verdict{Capability: CapPolicyAdmin}, nil
 	case "permissions":
