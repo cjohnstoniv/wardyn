@@ -164,7 +164,7 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
                 rows={6}
                 value={draft.suffixes}
                 disabled={disabled}
-                aria-describedby="baseline-suffixes-hint baseline-suffixes-covers"
+                aria-describedby={["baseline-suffixes-hint", "baseline-suffixes-covers"].join(" ")}
                 onChange={(e) => edit({ suffixes: e.target.value })}
               />
               <p id="baseline-suffixes-hint" className="text-xs text-muted-foreground">
