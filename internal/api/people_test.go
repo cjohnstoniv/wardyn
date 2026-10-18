@@ -182,3 +182,44 @@ func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 		t.Errorf("without the parameter the route lists everything, got %s", w.Body.String())
 	}
 }
+
+// deactivatedOwners is the owner check with a fixed set of deactivated principals.
+type deactivatedOwners map[string]bool
+
+func (deactivatedOwners) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+func (deactivatedOwners) RevokeSub(context.Context, string) error { return nil }
+func (deactivatedOwners) RevokeAll(context.Context) error         { return nil }
+func (d deactivatedOwners) SessionStatus(_ context.Context, sub, _ string, _ oidc.Issue, _ int64) (oidc.SessionStatus, error) {
+	if d[sub] {
+		return oidc.SessionDeactivated, nil
+	}
+	return oidc.SessionLive, nil
+}
+
+// The admin-minted inventory is the "still work" list: a token whose owner is deactivated is refused by
+// authentication, so it is not in it.
+func TestListAllAPITokens_MintedForOthersDropsDeactivatedOwners(t *testing.T) {
+	h := newHarness(t)
+	st := newTokenMemStore()
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = newAccessAuth(t, map[string]string{"sec@corp.example": oidc.RoleSecurityAdmin}, oidc.RoleUser, nil, nil)
+	cfg.SessionRevocations = deactivatedOwners{"gone": true}
+	srv := New(cfg)
+	sec := accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
+	now := time.Now().UTC()
+	seed := func(principal string) types.APIToken {
+		t.Helper()
+		created, err := st.CreateAPIToken(context.Background(), types.APIToken{ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, Name: "n", MintedBy: "admin-1", CreatedAt: now}, "wdn_"+uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created
+	}
+	live, gone := seed("pat"), seed("gone")
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens?minted_for_others=true", sec, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), live.ID.String()) || strings.Contains(w.Body.String(), gone.ID.String()) {
+		t.Fatalf("inventory = %d %s, want the live owner's token and not the deactivated owner's", w.Code, w.Body.String())
+	}
+}
