@@ -49,7 +49,7 @@ function toggled(list: string[], cap: string, on: boolean): string[] {
   return ADO_CAPABILITIES.map((c) => c.cap).filter((c) => next.has(c));
 }
 
-const nameOf = (cap: string) => ADO_CAP_COPY[cap]?.name ?? cap;
+export const nameOf = (cap: string) => ADO_CAP_COPY[cap]?.name ?? cap;
 
 function RiskBadge({ className = "ml-1.5" }: { className?: string }) {
   return (

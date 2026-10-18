@@ -8,9 +8,10 @@
 // server rule so a bad row is caught before an attempt — never a second
 // opinion about what the server ultimately decides.
 import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
-import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ADO_ENTRA_EDITOR as E, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { unescapeADOName } from "../../../lib/scm-provider";
-import { entraDefaultsOffCeiling } from "./entra-editor";
+import { entraDefaultsOffCeiling, nameOf } from "./entra-editor";
 import { patLifetimeInvalid } from "../../../lib/ado-pat-display";
 
 export const KIND_LABEL: Record<GitProviderKind, string> = {
@@ -113,6 +114,16 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
 // server refuses and which leaves the row's credential lanes with no host
 // to key by. The entra arm is providers400EntraProf: a default outside the
 // ceiling.
+/** The sentence for each cause gitRowInvalid holds Save for, so a switched-off row whose editor is collapsed can still say why. */
+export function gitRowBlockers(row: GitProvider): string[] {
+  return [
+    ...(row.base_urls.length === 0 ? [PROVIDERS.BASE_URLS_REQUIRED] : []),
+    ...(row.base_urls.some((u) => baseURLError(u, row.kind) !== null) ? [PROVIDERS.BASE_URL_INVALID] : []),
+    ...entraDefaultsOffCeiling(row.entra).map((cap) => E.ERROR_DEFAULT_OFF_CEILING(nameOf(cap))),
+    ...(patLifetimeInvalid(row.entra) ? [row.entra?.token_mode === "own_pat" ? ADO_PAT.OWN_EXPIRY_RANGE : ADO_PAT.TOKEN_LIFE_RANGE] : []),
+  ];
+}
+
 export function gitRowInvalid(row: GitProvider): boolean {
   if (row.base_urls.length === 0) return true;
   if (entraDefaultsOffCeiling(row.entra).length > 0) return true;
