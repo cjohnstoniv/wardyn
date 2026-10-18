@@ -21,10 +21,10 @@ import (
 // own records carry every field of it: the marker is a bound end or stop_proxy of this run, applied after
 // the last successful recovery, a success of that kind (completion evidence) answers it, it is contained,
 // and its generation is the run's current one. A kill or quarantine ever queued for the run, a containment
-// pending hold, any unsettled action, or a report that is containment only, carries a mutation failure, a
+// pending hold, any unsettled action other than a deferred recovery, or a report that is containment only, carries a mutation failure, a
 // retirement or no sandbox, or a recovery the runner already refused for the same marker, is
 // ErrRunnerActionRefused and writes nothing. An open recovery for the run is
-// returned with queued=false. The recovery grants nothing by itself: the run is leased again only by a
+// returned with queued=false; a deferred one is continued by the new one. The recovery grants nothing by itself: the run is leased again only by a
 // later revive, above the runner's replay floor.
 func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID uuid.UUID) (types.RunnerPendingAction, bool, error) {
 	tx, err := beginRunnerActionTx(ctx, s)
@@ -49,7 +49,8 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 	}
 	var blocked bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions WHERE run_id = $1
-			AND (kind IN ('kill', 'quarantine_run') OR ((applied_at IS NULL OR outcome = 'deferred') AND settled_at IS NULL)))
+			AND (kind IN ('kill', 'quarantine_run') OR ((applied_at IS NULL OR outcome = 'deferred') AND settled_at IS NULL
+				AND NOT (kind = 'recover_containment' AND outcome = 'deferred'))))
 		OR EXISTS (SELECT 1 FROM run_containment_pending WHERE run_id = $1)`, runID).Scan(&blocked); err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
@@ -99,10 +100,24 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 	if !evidenced {
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
+	// A deferred recovery (a mutation of the run was still in flight on the runner) is final for its own
+	// action, so this one continues its obligation as its successor; the chain settles when one is answered.
+	var tipID, obligation *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id, obligation_id FROM runner_pending_actions WHERE run_id = $1 AND kind = 'recover_containment'
+		AND outcome = 'deferred' AND settled_at IS NULL AND NOT superseded ORDER BY queue_seq DESC LIMIT 1 FOR UPDATE`, runID).Scan(&tipID, &obligation)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return types.RunnerPendingAction{}, false, err
+	}
+	if tipID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET superseded = true WHERE id = $1`, *tipID); err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
+	}
 	a, err := scanAction(tx.QueryRow(ctx, `
-		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof)
-		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,$7)
-		RETURNING `+actionCols, uuid.New(), runnerID, runID, run.SandboxRef, owner, generationArg, proof))
+		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof,
+			obligation_id, supersedes)
+		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,$7,$8,$9)
+		RETURNING `+actionCols, uuid.New(), runnerID, runID, run.SandboxRef, owner, generationArg, proof, obligation, tipID))
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}

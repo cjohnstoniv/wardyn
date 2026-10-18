@@ -143,6 +143,37 @@ func TestRenewableContainmentRequiresExactRecoveryAndFreshLease(t *testing.T) {
 	}
 }
 
+// A matching recovery met while a mutation of the run is in flight is deferred, not refused: the cause
+// passes, and a fresh action for the same marker recovers the run once the mutation finishes.
+func TestContainmentRecoveryDefersWhileAMutationIsInFlight(t *testing.T) {
+	m, _, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	if err := m.MutationFinished(t.Context(), runnerwire.MethodCreateSandbox, "", id, uuid.Nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := m.apply(t.Context(), pendingContainment(m, id, types.RunnerActionStopProxy)); err != nil || result.Outcome != "success" {
+		t.Fatalf("stop not settled: %+v %v", result, err)
+	}
+	key := mutationKey{runnerwire.MethodReplaceProxy, m.expectedRef(id), uuid.Nil}
+	m.beginMutation(key.method, key.ref, key.generation)
+	recover := pendingContainment(m, id, types.RunnerActionRecoverContainment)
+	proof := *m.state.Runs[id].Containment
+	recover.Recovery = &proof
+	deferred, err := m.apply(t.Context(), recover)
+	if err != nil || deferred.Outcome != "deferred" || m.state.Runs[id].Containment == nil {
+		t.Fatalf("recovery with a mutation in flight = %+v %v, want deferred with the marker kept", deferred, err)
+	}
+	if replay, err := m.apply(t.Context(), recover); err != nil || replay != deferred {
+		t.Fatalf("deferred recovery replay = %+v %v", replay, err)
+	}
+	m.finishMutation(key)
+	fresh := recover
+	fresh.ID = uuid.New()
+	if result, err := m.apply(t.Context(), fresh); err != nil || result.Outcome != "success" || m.state.Runs[id].Containment != nil {
+		t.Fatalf("fresh recovery after the mutation drained = %+v %v, want success", result, err)
+	}
+}
+
 type endingSub struct{ *localSub }
 
 func (s endingSub) EndSandbox(ctx context.Context, ref string) error { return s.KillSandbox(ctx, ref) }

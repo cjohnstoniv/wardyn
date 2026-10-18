@@ -61,6 +61,10 @@ clears its containment marker. The first revive re-checks the run's owner and
 policy, then queues that action and answers `409` `revive_containment_recovering`.
 Its proof is the marker the runner last reported, used only when the
 organisation's own records match every field. The runner applies it on its next
-fresh session, and the next revive leases the run. A run that was killed or
+fresh session, and the next revive leases the run. Only a runner connected to the
+replica that took the revive is reconnected at once; one on another replica, or
+offline, applies it when it next connects, and restarting the runner brings that
+forward. A recovery the runner defers, because a call on the run was still in
+flight, is asked again by the next revive. A run that was killed or
 quarantined, a run held pending a node record, and a runner-side record kept only
 for containment are never recovered.

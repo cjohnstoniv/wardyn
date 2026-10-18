@@ -453,9 +453,11 @@ func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRu
 		// Its receipt is runner.action.apply or runner.action.refuse.
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, placement.ActionRunnerRecoveryRequest, a.ID.String(), "success",
 			mustJSON(map[string]any{"subject": run.CreatedBy, "runner_id": a.RunnerID, "operation": a.Recovery.Operation, "marker_id": a.Recovery.ID})))
-		if err := s.runnerHub(st).Goaway(ctx, *run.RunnerID); err != nil {
-			slog.WarnContext(ctx, "wardynd: a contained run's recovery waits for its runner's next session", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		}
+	}
+	// Also for a recovery already queued: the session an earlier revive ended may have been on another
+	// replica, or its end may have failed. A runner on another replica, or offline, reads it on its next session.
+	if err := s.runnerHub(st).Goaway(ctx, *run.RunnerID); err != nil {
+		slog.WarnContext(ctx, "wardynd: a contained run's recovery waits for its runner's next session", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 	return reviveRefused(http.StatusConflict, reasonReviveContainmentRecovering,
 		"the run's runner holds it contained since it was offline; a recovery is queued and the runner applies it when it next connects; revive the run again once it has")
