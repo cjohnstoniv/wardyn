@@ -378,6 +378,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 - Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root).
 - Registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
 - `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both.
+  - If neither the launcher nor `docker compose -p wardyn-desktop down` can stop the stack, `--uninstall` exits 1 and names the command to run once Docker answers.
 
 ### `com.wardyn.daemon.plist`
 

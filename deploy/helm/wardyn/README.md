@@ -1058,7 +1058,8 @@ spec:
   - wardynd also takes a Postgres advisory lock at boot ([`cmd/wardynd/single_instance.go`](../../../cmd/wardynd/single_instance.go)) and refuses to serve if it can't get it, so a replica added by `kubectl scale` without HA mode exits instead of serving.
 - `ha.enabled`: **high availability.**
   - Runs two or more replicas so that one node failing does not stop the control plane.
-  - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`, at two or more replicas: one pod would block every node drain) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
+  - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
+  - The PodDisruptionBudget renders only at two or more replicas, since one pod would block every node drain.
   - Default `false`.
   - It replaces `allowMultiReplica`, a documented clean break: a values file that still sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the `-allow-multi-instance` flag with a pointer to `WARDYN_HA`.
   - The chart refuses to render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and `extraEnv`;

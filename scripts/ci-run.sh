@@ -352,9 +352,12 @@ run_log="${OUT_DIR}/run.log"
 # A trap runs once the foreground CLI exits, which a job cancel that signals the process group
 # does at once; a cancel before that line prints has no id to kill (nothing exists to kill yet).
 remote_kill_run() { # REASON
-  local rid
+  local rid st
   rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p' "${run_log}" 2>/dev/null | head -1)"
   [[ -n "${rid}" ]] || return 0
+  # Exit 124 is also the AGENT's own exit code for a run that FAILED: a terminal run has nothing left to kill.
+  st="$(wardyn run get "${rid}" --json 2>/dev/null | sed -n 's/.*"state"[^"]*"\([A-Z_]*\)".*/\1/p' | head -1)"
+  case "${st}" in COMPLETED|FAILED|KILLED|STOPPED|ARCHIVED) return 0 ;; esac
   warn "$1: killing run ${rid}"
   wardyn run kill "${rid}" >/dev/null 2>&1 || warn "could not kill run ${rid}: kill it by hand with 'wardyn run kill ${rid}'"
 }

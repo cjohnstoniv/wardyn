@@ -1892,7 +1892,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LLM_SCAN` | enum | (unset = per policy) | per-proxy kill-switch for outbound content inspection; `off`/`0`/`false`/`no`/`disable`/`disabled`/`none` disable, `on`/`1`/`true`/`yes`/`enable`/`enabled` (or unset) leave as policy, garbage exits 2 |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
-| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | overrides how long the proxy's git broker blocks polling a `wait_for_review` git-mint approval before failing (`waitForGitApproval`). Unparseable or non-positive values are silently ignored and the 120s default is kept. Set it on wardynd: both container runners forward it to every proxy sidecar. |
+| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
 
@@ -2322,7 +2322,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - **Not operator-settable — an internal marker, not a knob.**
 - [`scripts/up.sh`](../scripts/up.sh) writes the policy path it auto-picked into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY`; `0` once an explicit `WARDYN_DEFAULT_POLICY` override or a hand edit is seen.
-- Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand: it re-picks only while the value still equals the recorded path, so editing the line keeps your value.
+- Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand.
+- It re-picks only while the value still equals the recorded path, so editing the line keeps your value.
 - A `1` written by an older release counts as ours only while the value is one of the three paths `up` can pick.
 - Including a model path `host_llm_key_present` cannot see in THIS process's env at all (a credential connected through the UI).
 - `up` asks the running daemon's own `/setup/status` `llm_ready` for that, not just its own env.

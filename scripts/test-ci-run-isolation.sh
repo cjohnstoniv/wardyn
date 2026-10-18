@@ -166,7 +166,7 @@ cat > "$WSTUB/wardyn" <<'WEOF'
 printf 'ADMIN=%s TOKEN=%s ARGV=%s\n' "${WARDYN_ADMIN_TOKEN-<unset>}" "${WARDYN_TOKEN-<unset>}" "$*" >> "$WCALLS"
 case "$1 ${2:-}" in
   "setup status") cat "$WSTUB/status" 2>/dev/null; exit "$(cat "$WSTUB/status_rc" 2>/dev/null || echo 0)" ;;
-  "run get") printf '{"id":"%s"}\n' "$RUN_UUID" ;;
+  "run get") printf '{"id":"%s"%s}\n' "$RUN_UUID" "$(cat "$WSTUB/run_state" 2>/dev/null || true)" ;;
   "run recording") exit 1 ;;
   "audit "*) echo '[]' ;;
   "run "*)
@@ -186,6 +186,8 @@ case "$1 ${2:-}" in
           [ -z "$top" ] || kill -TERM "$top"
           exit 0
         fi
+        # agent124: the run FAILED with the agent's own exit code 124 (--wait passes it through).
+        [ "$mode" != agent124 ] || printf '{"id":"%s","state":"FAILED"}\n' "$RUN_UUID"
         exit 124
       fi
       printf '{"id":"%s"}\n' "$RUN_UUID" ;;
@@ -238,17 +240,23 @@ if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(h
 
 # 4a'. (#2185) a --wait that times out (124) does not stop the run: ci-run.sh must kill it, and still exit 124.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"live"}]}'
-printf 'timeout' > "$WSTUB/wait_mode"
+printf 'timeout' > "$WSTUB/wait_mode"; printf ',"state":"RUNNING"' > "$WSTUB/run_state"
 out="$(run_remote)"; rc=$?
 if [ "$rc" -eq 124 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: exit 124 kills the still-running run and keeps exit 124"
 else bad "remote mode left the run alive after exit 124 (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
+# ...but a run that already ended (the agent's own exit code was 124) has nothing to kill.
+printf 'agent124' > "$WSTUB/wait_mode"; printf ',"state":"FAILED"' > "$WSTUB/run_state"
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 124 ] && ! grep -q 'run kill' "$WCALLS"; then ok "remote mode: a FAILED run whose agent exited 124 is not killed"
+else bad "remote mode killed (or mis-exited) a run that had already failed with the agent's own 124 (rc=$rc)"; fi
+printf ',"state":"RUNNING"' > "$WSTUB/run_state"
 # ...and a job cancel (SIGTERM) kills it too, exiting 143.
 printf 'cancel' > "$WSTUB/wait_mode"
 out="$(run_remote)"; rc=$?
 if [ "$rc" -eq 143 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: a cancelled job kills its run"
 else bad "remote mode left the run alive after a job cancel (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
 # ...but a run that finished normally is never killed.
-rm -f "$WSTUB/wait_mode"
+rm -f "$WSTUB/wait_mode" "$WSTUB/run_state"
 out="$(run_remote)"; rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q 'run kill' "$WCALLS"; then ok "remote mode: a finished run is not killed"
 else bad "remote mode killed a run that completed (rc=$rc)"; fi
