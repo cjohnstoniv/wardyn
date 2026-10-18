@@ -114,7 +114,13 @@ func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDoma
 			// has already intersected egress to the ceiling; the suffix
 			// match alone would admit evilanthropic.com), and ownership is
 			// proved by a names-only For(owner).List, never a value read.
+			// Admitted on ownership alone, the grant reads that row alone
+			// (owner_only): a row deleted after launch must not fall back to
+			// an operator secret of the same name the operator never paired.
 			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) && s.ownsSecretMemoized(ctx, owner, secretRef) {
+				if !storedSecretPairingInCeiling(g, ceiling) {
+					g.OwnerOnly = true
+				}
 				kept = append(kept, g)
 				continue
 			}

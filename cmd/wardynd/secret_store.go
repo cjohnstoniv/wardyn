@@ -45,6 +45,7 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err := verifyKeyDomains(ctx, s); err != nil {
 		return nil, err
 	}
+	warnUnderivedPointers(ctx, s)
 	st := secretstore.Audited(s, rec)
 	if err := refuseKEKRequired(*f.vault.kekRequired, st); err != nil {
 		return nil, err
@@ -74,6 +75,35 @@ func verifyKeyDomains(ctx context.Context, s secretstore.Store) error {
 		return fmt.Errorf("refusing to start: %w", err)
 	}
 	return nil
+}
+
+// warnUnderivedPointers warns at a serving boot about pointer rows the
+// configured external store does not derive. Its naming settings are fixed once
+// rows exist: a changed one makes every read of those rows a refusal that names
+// a moved or forged pointer, and this line names the likelier cause.
+func warnUnderivedPointers(ctx context.Context, s secretstore.Store) {
+	ps, ok := s.(*secretstorepg.Store)
+	if !ok {
+		return
+	}
+	n, ref, err := ps.UnderivedPointers(ctx)
+	if err != nil || n == 0 {
+		return
+	}
+	slog.WarnContext(ctx, underivedPointersWarning(ps.ExternalName()), slog.Int("rows", n), slog.String("example_ref", ref))
+}
+
+// underivedPointersWarning is warnUnderivedPointers' message for the named store.
+func underivedPointersWarning(store string) string {
+	settings := "the external store's settings"
+	switch store {
+	case vaultkv.Name:
+		settings = "WARDYN_VAULT_KV_MOUNT or WARDYN_VAULT_KV_PREFIX"
+	case azurekv.Name:
+		settings = "WARDYN_AZURE_KV_PREFIX or WARDYN_AZURE_KV_URL (its spelling, an explicit port included)"
+	}
+	return "wardynd: secret rows point to values " + store + " does not derive from them, and every read of them is refused. " +
+		"These settings are fixed once rows exist: if " + settings + " changed since the rows were written, set it back"
 }
 
 // buildStoreClients builds the configured external store client and key

@@ -192,12 +192,15 @@ func (s *Store) SealToPrincipalKeys(ctx context.Context) (SealToPrincipalKeysRes
 			res.Moved++
 		}
 	}
-	// A v3 row counts only while its owner has a live current generation to move
-	// it into: a destroyed key leaves rows nothing can move.
+	// A v3 row counts only while its own generation is live and its owner has
+	// another, current one to move it into: a destroyed key leaves rows nothing
+	// can move.
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM secrets s WHERE s.owned_by <> '' AND (s.enc_version=$1 OR (s.enc_version=$2 AND EXISTS (
 			SELECT 1 FROM principal_keys k WHERE k.owner=s.owned_by AND k.purpose=$3 AND k.destroyed_at IS NULL AND k.superseded_at IS NULL
-			AND s.kek_id <> $4 || k.version::text)))`,
+			AND s.kek_id <> $4 || k.version::text) AND EXISTS (
+			SELECT 1 FROM principal_keys o WHERE o.owner=s.owned_by AND o.purpose=$3 AND o.destroyed_at IS NULL
+			AND s.kek_id = $4 || o.version::text)))`,
 		encVersion, pkVersion, subjectkey.PurposeCred, pkKekPrefix).Scan(&res.Remaining); err != nil {
 		return res, fmt.Errorf("pg secretstore: count the rows left: %w", err)
 	}

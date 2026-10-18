@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -792,5 +794,32 @@ func TestGitCredentialGate_RecordSession_MechanismPrincipal(t *testing.T) {
 	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+id+"/record", adminToken, `{"name":"e2e record"}`)
 	if strings.Contains(w.Body.String(), "git_credential") {
 		t.Errorf("the admin-token mechanism principal was refused git_credential: %s", w.Body.String())
+	}
+}
+
+// With several own-token rows (one per organisation) preflight grades the row
+// the launch gate would refuse on, not just the first admitting one: a person
+// connected to acme and not to beta must not read "live" for a run on both.
+func TestGitCredentialFactForRepos_SeveralOwnTokenRowsGradesTheRefusingOne(t *testing.T) {
+	acme, beta := ownPATTestRow(), ownPATTestRow()
+	acme.ID, acme.BaseURLs = "ado-own-acme", []string{"https://dev.azure.com/acme"}
+	beta.ID, beta.BaseURLs = "ado-own-beta", []string{"https://dev.azure.com/beta"}
+	s := newSCMTestServer(t, adoSite(acme, beta), false)
+	raw, _ := json.Marshal(adoOwnPATBlob{Token: "tok-acme", Org: "acme", ExpiresOn: adoTestNow.Add(30 * 24 * time.Hour), StoredAt: adoTestNow})
+	if err := s.cfg.Secrets.For("alice").Put(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus), adoOwnPATSecretName(acme.ID), raw); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withOIDCHuman(context.Background(), "alice")
+	repos := []string{"https://dev.azure.com/acme/p/_git/a", "https://dev.azure.com/beta/p/_git/b"}
+
+	gc := s.gitCredentialFactForRepos(ctx, "alice", repos)
+	if gc == nil || gc.State != modelAccessNotConfigured || gc.Org != adoOrgDisplay(beta) {
+		t.Fatalf("fact = %+v, want not_configured for %q, the row the gate refuses", gc, adoOrgDisplay(beta))
+	}
+	if err := s.gitCredentialRefusalForLauncher(ctx, "alice", repos...); err == nil {
+		t.Fatalf("the gate did not refuse: %v", err)
+	}
+	if gc := s.gitCredentialFactForRepos(ctx, "alice", repos[:1]); gc == nil || gc.State != modelAccessLive {
+		t.Fatalf("acme alone = %+v, want live", gc)
 	}
 }

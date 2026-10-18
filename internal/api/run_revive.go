@@ -221,6 +221,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	corpus := inspectionCorpusOf(cfg.Policy) // the organisation's, before a laptop copy drops it
 	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
 		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
@@ -248,6 +249,16 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	cfgJSON, rerr := encodeRevivedConfig(cfg) // loaded as the new proxy will load it, before the claim
 	if rerr != nil {
 		return reviveResult{}, rerr
+	}
+	// The stored row stays the organisation's: a run on a runner keeps the inspection corpus its
+	// laptop copy drops, as dispatch stores it (classifyLocalDispatch).
+	storedJSON := cfgJSON
+	if !remotePlacement(run.Placement) {
+		org := *cfg
+		org.Policy = corpus.restoredOn(cfg.Policy)
+		if storedJSON, rerr = encodeRevivedConfig(&org); rerr != nil {
+			return reviveResult{}, rerr
+		}
 	}
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
@@ -322,7 +333,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	s.revokeRenewedTokens(ctx, run.ID, renewed, freshJTI)
 	// The stored config becomes the one now running. A failed write keeps the
 	// previous one, from which the next revive re-derives the same result.
-	if err := s.storeRunProxyConfig(ctx, run.ID, cfgJSON); err != nil {
+	if err := s.storeRunProxyConfig(ctx, run.ID, storedJSON); err != nil {
 		slog.WarnContext(ctx, "wardynd: storing a revived run's proxy config failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
