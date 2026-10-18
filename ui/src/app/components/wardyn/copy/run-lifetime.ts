@@ -47,6 +47,8 @@ export function endsExtendAsFarAsAllowed(days: number): string {
   return `As far as allowed (${days} day${days === 1 ? "" : "s"})`;
 }
 export const ENDS_CHANGE = "Change…";
+// The dialog's heading names the thing being set; a button label ("Change…", "Set an end…") says nothing as one.
+export const ENDS_DIALOG_TITLE = "When this run ends";
 export const ENDS_SET_AN_END = "Set an end…";
 export const ENDS_NO_END_OPTION = "No end";
 // M2 (packet:246): the "No end" state's own hint, shown only where allow_no_end
