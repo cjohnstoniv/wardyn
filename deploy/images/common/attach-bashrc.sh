@@ -10,22 +10,29 @@
 # THEN idles, but the attach shell becomes available the instant the container is
 # up — so a shell that lands mid-clone would show an empty ~/work (a confusing
 # "lost clone"). agent-run --idle writes ~/.wardyn/workdir (the resolved workspace
-# dir) and, LAST, touches ~/.wardyn/prep-done. Here we wait briefly for that marker
+# dir) and, LAST, touches ~/.wardyn/prep-done. Here we wait for that marker
 # and cd into the prepared workspace, so the operator always lands in a ready repo.
 #
-# Defensive throughout: no `set -e`, every step guarded, and a bounded wait — a
-# failed clone still writes prep-done (agent-run continues past clone failure), so
-# this never hangs. No-op for runs with no repo to prepare (no marker, no WARDYN_REPOS).
+# Defensive throughout: no `set -e`, every step guarded. The wait is bounded by the
+# idle process (PID 1, or WARDYN_IDLE_PID) still running, NOT by a clock: a fixed cap
+# would start the agent over a half-cloned tree on a big repo or a slow proxy
+# (agent-run-lib.sh boot_seed_wait_for_prep). A failed clone still writes prep-done
+# (agent-run continues past clone failure), so the wait ends; if the idle process is
+# gone without it, say so and do not auto-start the agent. No-op for runs with no repo
+# or start folder to prepare (no marker, no WARDYN_REPOS / WARDYN_START_FOLDER).
 
 # Only for interactive shells (attach); skip scripts/non-interactive execs.
 case $- in *i*) ;; *) return 2>/dev/null || true ;; esac
 
-if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then
+_prep_gone=
+if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then
   if [ ! -f "$HOME/.wardyn/prep-done" ]; then
     printf '\033[36m⏳ Preparing workspace (cloning the repo)… one moment.\033[0m\n'
-    _i=0
-    while [ ! -f "$HOME/.wardyn/prep-done" ] && [ "$_i" -lt 120 ]; do sleep 1; _i=$((_i+1)); done
-    unset _i
+    while [ ! -f "$HOME/.wardyn/prep-done" ] && kill -0 "${WARDYN_IDLE_PID:-1}" 2>/dev/null; do sleep 1; done
+    [ -f "$HOME/.wardyn/prep-done" ] || {
+      _prep_gone=1
+      printf '\033[33mwardyn: workspace preparation ended without finishing; not starting the agent. Check the run for a failed clone.\033[0m\n'
+    }
   fi
   _wd="$(cat "$HOME/.wardyn/workdir" 2>/dev/null)"
   if [ -n "$_wd" ] && [ -d "$_wd" ]; then
@@ -81,7 +88,7 @@ printf '\033[90mℹ egress 403? check the X-Wardyn-Egress header (approval-pendi
 # granting nothing they don't already have the moment they attach and type; and
 # server-launched reserved tasks are excluded control-plane-side. The full
 # invariant lives at the --boot-seed branch in each image's agent-run.
-if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; then
+if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ -z "$_prep_gone" ] && [ ! -e "$HOME/.wardyn/agent-started" ]; then
   mkdir -p "$HOME/.wardyn" 2>/dev/null
   : > "$HOME/.wardyn/agent-started" 2>/dev/null
   # The harnesses image carries several CLIs; dispatch names the one to start.
@@ -102,3 +109,4 @@ if [ "${WARDYN_INTERACTIVE_START:-}" = "agent" ] && [ ! -e "$HOME/.wardyn/agent-
   done
   unset _c _cmds
 fi
+unset _prep_gone
