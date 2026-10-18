@@ -89,3 +89,29 @@ func TestSweepRunQueueReturnsAFailedWrite(t *testing.T) {
 		})
 	}
 }
+
+// revokedEndStore lists one waiting run of a revoked runner and cannot read it back to end it.
+type revokedEndStore struct {
+	queueListStore
+	runID uuid.UUID
+}
+
+func (q revokedEndStore) QueueEntriesOfRevokedRunners(context.Context, int) ([]store.RunQueueEntry, error) {
+	return []store.RunQueueEntry{{RunID: q.runID}}, nil
+}
+
+func (q revokedEndStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("read the run failed")
+}
+
+// A waiting run of a revoked runner that the sweep cannot end is returned, naming the run, so the
+// sweeper's health shows it instead of a tick that looks clean.
+func TestSweepRunQueueReturnsAFailedEndOfARevokedRunnersRun(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	h.srv.cfg.Store = revokedEndStore{runID: runID}
+	err := h.srv.SweepRunQueue(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "end run "+runID.String()+", waiting for a revoked runner") {
+		t.Fatalf("SweepRunQueue = %v, want an error naming run %s", err, runID)
+	}
+}
