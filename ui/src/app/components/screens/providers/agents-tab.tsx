@@ -199,7 +199,8 @@ function Row({
         />
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-foreground">{harness.display}</span>
-          <span className="block font-mono text-meta text-muted-foreground">{harness.id}</span>
+          {/* "none" is the BYOA row's real id, but under its name it reads as a failed lookup. */}
+          {harness.id !== "none" && <span className="block font-mono text-meta text-muted-foreground">{harness.id}</span>}
         </div>
         {/* Off is a fact, never red (§4's colour rule). Its OWN canon key —
             slicing AGENT_ROW_DISABLED_HINT at its colon made the chip a
