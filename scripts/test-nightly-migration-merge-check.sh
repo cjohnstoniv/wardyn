@@ -459,6 +459,27 @@ JSON
   echo "ok  fork PRs are skipped and the checks start without GH_TOKEN"
 }
 
+# ── 13. a single-process run leaves another run's scratch refs alone ────────
+# A second local run (or the workflow's fetch phase) owns refs/scratch/nightly;
+# this run's cleanup must delete only its own namespace.
+case13() {
+  local dir="$TMP/case13"
+  new_case "$dir"
+  make_pr "$dir/seed" "$dir/origin.git" 130 add_0004
+  FAKE_GH_PRS="$(gh_prs_json "$dir" 130)"
+  export FAKE_GH_PRS
+  local other; other="$(git -C "$dir/work" rev-parse origin/main)"
+  git -C "$dir/work" update-ref refs/scratch/nightly/pr-999 "$other"
+  local summary="$dir/summary.md" out rc=0
+  out="$(run_gate "$dir/work" "$summary" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a clean run must exit 0: $out"
+  git -C "$dir/work" rev-parse -q --verify refs/scratch/nightly/pr-999 >/dev/null \
+    || fail "the run deleted a scratch ref it does not own"
+  [ -z "$(git -C "$dir/work" for-each-ref 'refs/scratch/nightly-*')" ] \
+    || fail "the run must delete its own scratch refs: $(git -C "$dir/work" for-each-ref refs/scratch)"
+  echo "ok  a single-process run deletes only its own scratch refs"
+}
+
 case1
 case2
 case3
@@ -471,5 +492,6 @@ case9
 case10
 case11
 case12
+case13
 
 echo "test-nightly-migration-merge-check: all cases passed"

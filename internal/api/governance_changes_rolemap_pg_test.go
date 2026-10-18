@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -401,7 +402,11 @@ func TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap(t *te
 			t.Fatal(err)
 		}
 	}
-	if left := e.mappings(); secondErr == nil || len(left) != 1 {
-		t.Fatalf("second delete: %v, %d rows left; want it refused and one row left", secondErr, len(left))
+	var gate *govRefusal
+	if !errors.As(secondErr, &gate) || gate.why != "role mapping gate" {
+		t.Fatalf("second delete: %v, want the role mapping gate's refusal, not another failure", secondErr)
+	}
+	if left := e.mappings(); len(left) != 1 {
+		t.Fatalf("%d rows left after the refused delete; want one", len(left))
 	}
 }

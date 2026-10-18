@@ -433,12 +433,12 @@ func TestAWSCLI_ReviveKeepsThePortalGrant(t *testing.T) {
 	}
 }
 
-// A CLI row's hold is repaired on the sidecar's own poll when the eager resolve
-// after the capture never landed: the stored session was captured by a login
-// run created after the raise, so the row is a resolved one not yet written down.
-func TestAWSCLI_ReconcileOnReadResolvesAStrandedHold(t *testing.T) {
+// strandedCLIHold raises a CLI sign-in hold, then stores a fresh capture by a login run created
+// after it, with the eager resolve never having landed.
+func strandedCLIHold(t *testing.T) (*reauthFixture, *cliResolveStore, types.ApprovalRequest) {
+	t.Helper()
 	live := cliAWSRowDef()
-	f, _ := cliResolveFixture(t, cliSnapshot(subOwner), &live, true)
+	f, st := cliResolveFixture(t, cliSnapshot(subOwner), &live, true)
 	dead := cliAWSBlob()
 	dead.ExpiresAt = time.Now().Add(-time.Hour).UTC()
 	putCLIBlobIn(t, f, subOwner, dead)
@@ -452,10 +452,35 @@ func TestAWSCLI_ReconcileOnReadResolvesAStrandedHold(t *testing.T) {
 	fresh := cliAWSBlob()
 	fresh.SourceRunID = loginRun.ID.String()
 	putCLIBlobIn(t, f, subOwner, fresh)
+	return f, st, ap
+}
 
+func pollApproval(t *testing.T, f *reauthFixture, ap types.ApprovalRequest) types.ApprovalRequest {
+	t.Helper()
 	w := do(t, f.srv, http.MethodGet, "/api/v1/internal/approvals/"+ap.ID.String(), f.token, "")
 	var got types.ApprovalRequest
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.State != types.ApprovalApproved {
-		t.Fatalf("poll = %d %s (%v), want the CLI hold APPROVED from the stored capture", w.Code, w.Body.String(), err)
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("poll = %d %s (%v)", w.Code, w.Body.String(), err)
+	}
+	return got
+}
+
+// A CLI row's hold is repaired on the sidecar's own poll when the eager resolve
+// after the capture never landed: the stored session was captured by a login
+// run created after the raise, so the row is a resolved one not yet written down.
+func TestAWSCLI_ReconcileOnReadResolvesAStrandedHold(t *testing.T) {
+	f, _, ap := strandedCLIHold(t)
+	if got := pollApproval(t, f, ap); got.State != types.ApprovalApproved {
+		t.Fatalf("state = %s, want the CLI hold APPROVED from the stored capture", got.State)
+	}
+}
+
+// The repair is no weaker than the eager path: a run that no longer carries the row leaves the
+// hold pending, whatever session is stored.
+func TestAWSCLI_ReconcileOnReadLeavesAHoldWhenTheRunDroppedTheRow(t *testing.T) {
+	f, st, ap := strandedCLIHold(t)
+	st.attached = nil
+	if got := pollApproval(t, f, ap); got.State != types.ApprovalPending {
+		t.Fatalf("state = %s, want PENDING: the run no longer carries the row", got.State)
 	}
 }
