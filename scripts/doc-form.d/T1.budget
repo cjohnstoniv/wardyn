@@ -48,7 +48,8 @@
 # threatmodel/THREAT-MODEL.md 63480 = 63402 + 78, measured: merge of the session-renewal rows beside the containment and recovery rows.
 # threatmodel/THREAT-MODEL.md 63510 = 63480 + 30, measured: merge of the AWS SSO renewal row beside the session-renewal rows.
 # threatmodel/THREAT-MODEL.md 63587 = 63510 + 77, measured: merge of the Docker runner decision sink rows.
-threatmodel/THREAT-MODEL.md=63587
+# threatmodel/THREAT-MODEL.md 63965 adds 378 over 63587, measured: 0.9.4 L4b, Clear-Site-Data, the push path-byte bound, the SSH connection bounds, the node record re-check and residuals 92-93.
+threatmodel/THREAT-MODEL.md=63965
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
