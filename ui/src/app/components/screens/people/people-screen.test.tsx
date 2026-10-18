@@ -129,6 +129,18 @@ describe("the people table", () => {
     expect(await screen.findByText("Nobody has signed in yet. People appear here after their first sign-in, or when you add them.")).toBeInTheDocument();
   });
 
+  // #2902: the title never repeats the PEOPLE section label, and a filter that
+  // matches nothing says so instead of showing a bare icon and "People".
+  it("names the empty state, and says nothing matched when a filter returns no one", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue({ people: [] });
+    renderScreen();
+    expect(await screen.findByText("No people yet")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deactivated" }));
+    expect(await screen.findByText("No one matches")).toBeInTheDocument();
+    expect(screen.getByText("Nothing matches this search or filter.")).toBeInTheDocument();
+  });
+
   it("searches (debounced) and filters by state through the server", async () => {
     const user = userEvent.setup();
     renderScreen();
