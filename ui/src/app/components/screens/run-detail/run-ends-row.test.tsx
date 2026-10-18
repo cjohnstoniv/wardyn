@@ -7,7 +7,7 @@
 // extending is always allowed (the lease); shortening/No end/the wait need
 // the run's own captured user_changes_limits gate.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { RunDetail } from "../../../lib/types";
@@ -224,6 +224,19 @@ describe("RunEndsRow — the wait row", () => {
     const run = detail({ wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: false } });
     renderRow(run);
     expect(screen.getByText("Kept for up to 4 hours. Your admin sets this.")).toBeInTheDocument();
+  });
+
+  it("a sub-hour or fractional budget is shown in minutes, not rounded to whole hours", () => {
+    renderRow(detail({ wait_budget_sec: 1200, run_limits: { user_changes_limits: false } }));
+    expect(screen.getByText("Kept for up to 20 minutes. Your admin sets this.")).toBeInTheDocument();
+    cleanup();
+    renderRow(detail({ wait_budget_sec: 5400, run_limits: { user_changes_limits: false } }));
+    expect(screen.getByText("Kept for up to 1 hour 30 minutes. Your admin sets this.")).toBeInTheDocument();
+  });
+
+  it("gated: the trigger label reads the real budget", () => {
+    renderRow(detail({ wait_budget_sec: 1200, run_limits: { user_changes_limits: true } }));
+    expect(screen.getByRole("button", { name: "Keep it for up to 20 minutes" })).toBeInTheDocument();
   });
 });
 

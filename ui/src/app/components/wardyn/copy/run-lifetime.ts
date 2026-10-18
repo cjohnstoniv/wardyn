@@ -164,8 +164,21 @@ export const WAIT_LABEL = "If this run waits for a decision";
 export function waitValueHours(hours: number): string {
   return `Keep it for up to ${hours} hour${hours === 1 ? "" : "s"}`;
 }
-export function waitLocked(hours: number): string {
-  return `Kept for up to ${hours} hour${hours === 1 ? "" : "s"}. Your admin sets this.`;
+// A profile sets the budget in seconds, so it can be under an hour or not a
+// whole number of hours: say minutes rather than round to the nearest hour.
+function waitSpan(sec: number): string {
+  const mins = Math.max(1, Math.round(sec / 60));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const hours = `${h} hour${h === 1 ? "" : "s"}`;
+  const minutes = `${m} minute${m === 1 ? "" : "s"}`;
+  return h === 0 ? minutes : m === 0 ? hours : `${hours} ${minutes}`;
+}
+export function waitValueSec(sec: number): string {
+  return `Keep it for up to ${waitSpan(sec)}`;
+}
+export function waitLocked(sec: number): string {
+  return `Kept for up to ${waitSpan(sec)}. Your admin sets this.`;
 }
 
 // F14 (PR #1317 review, run_pause.go's pauseDelayFloor): the server never
