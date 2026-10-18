@@ -290,6 +290,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"proxy_release":           version.Version,
 	}
 	s.stampLiveRevive(run)
+	// The old proxy's renewed token ids are read before the new proxy starts: the new one renews at once,
+	// stamping its own pair, which a read after the swap would take for the old proxy's.
+	renewed := s.runTokenJTIs(ctx, run.ID)
 	if err := s.replaceRevivedProxy(runnerCtx, rv, run, cfgJSON); err != nil {
 		data["error"] = err.Error()
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
@@ -308,7 +311,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		// The old proxy is, or may be, gone: nothing is left to serve on the
 		// retiring token, so revoking it here is safe (F4).
 		s.revokeRetiringToken(ctx, retiring, run.ID)
-		s.revokeRenewedTokens(ctx, run.ID, freshJTI)
+		s.revokeRenewedTokens(ctx, run.ID, renewed, freshJTI)
 		return reviveResult{}, s.reviveFailedAfterClaim(ctx, run, data, actorType, actor, reasonReviveProxyReplaceFailedLost,
 			"the run's proxy could not be replaced, so the run has no egress and is lost until revived: ", err)
 	}
@@ -316,7 +319,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
 	// return above this point leaves the old proxy running unrevoked.
 	s.revokeRetiringToken(ctx, retiring, run.ID)
-	s.revokeRenewedTokens(ctx, run.ID, freshJTI)
+	s.revokeRenewedTokens(ctx, run.ID, renewed, freshJTI)
 	// The stored config becomes the one now running. A failed write keeps the
 	// previous one, from which the next revive re-derives the same result.
 	if err := s.storeRunProxyConfig(ctx, run.ID, cfgJSON); err != nil {
@@ -761,21 +764,29 @@ func (s *Server) revokeRetiringToken(ctx context.Context, retiring string, runID
 	}
 }
 
-// revokeRenewedTokens revokes the tokens the replaced proxy renewed since it started: the config the revive
-// reads carries the token the proxy began with, but each renewal minted a newer one that would otherwise
-// stay valid until its own expiry. Both ids the last renewal recorded (the minted token, and the one it
-// presented, which the proxy keeps when the lease send behind a renewal fails) are revoked, except keep,
-// the fresh token's. Same caller rule as revokeRetiringToken: only once the old proxy is, or may be, gone.
-func (s *Server) revokeRenewedTokens(ctx context.Context, runID uuid.UUID, keep string) {
+// runTokenJTIs reads the ids the run's last token renewal recorded (the minted token, and the one it presented,
+// which the proxy keeps when the lease send behind a renewal fails). A failed read revokes nothing later.
+func (s *Server) runTokenJTIs(ctx context.Context, runID uuid.UUID) []string {
 	loser, ok := s.cfg.Store.(store.RunLoser)
-	jr, rok := s.cfg.Identity.(jtiRevoker)
-	if !ok || !rok {
-		return
+	if !ok {
+		return nil
 	}
 	jtis, err := loser.RunTokenJTIs(ctx, runID)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: reading a revived run's renewed token ids failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return nil
+	}
+	return jtis
+}
+
+// revokeRenewedTokens revokes the tokens the replaced proxy renewed since it started: the config the revive
+// reads carries the token the proxy began with, but each renewal minted a newer one that would otherwise
+// stay valid until its own expiry. jtis are the ids read before the swap (runTokenJTIs), except keep, the
+// fresh token's. Same caller rule as revokeRetiringToken: only once the old proxy is, or may be, gone.
+func (s *Server) revokeRenewedTokens(ctx context.Context, runID uuid.UUID, jtis []string, keep string) {
+	jr, ok := s.cfg.Identity.(jtiRevoker)
+	if !ok {
 		return
 	}
 	for _, jti := range jtis {

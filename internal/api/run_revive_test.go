@@ -158,6 +158,8 @@ type reviveRunner struct {
 	// review): the probe could not observe the agent at all.
 	statusErr error
 	onEnsure  func()
+	// onReplace runs inside ReplaceProxy with the new proxy's config, as that proxy's startup renewal does.
+	onReplace func(cfg []byte)
 }
 
 func (r *reviveRunner) CanReplaceProxy(context.Context, string) error { return nil }
@@ -184,6 +186,9 @@ func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
 }
 
 func (r *reviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) error {
+	if r.onReplace != nil && r.replaceErr == nil {
+		r.onReplace(cfg)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.replaceErr != nil {
@@ -715,6 +720,39 @@ func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
 		}
 		if _, verr := f.srv.cfg.Identity.Verify(context.Background(), f.newConfig(t).RunToken, internalAudience); verr != nil {
 			t.Errorf("the fresh token does not verify: %v", verr)
+		}
+	})
+	t.Run("new proxy renews during the swap", func(t *testing.T) {
+		f := newReviveFixture(t)
+		renewed, presented := mint(t, f)
+		var next identity.RunIdentity
+		f.rr.onReplace = func(cfgJSON []byte) {
+			cfg, err := proxy.LoadConfigBytes(cfgJSON)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			fresh, err := f.srv.cfg.Identity.Verify(context.Background(), cfg.RunToken, internalAudience)
+			if err != nil {
+				t.Errorf("the new proxy's token does not verify: %v", err)
+				return
+			}
+			if next, err = f.srv.cfg.Identity.MintRunIdentity(context.Background(), f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience, false); err != nil {
+				t.Error(err)
+				return
+			}
+			if ok, err := f.ls.StampRunTokenRenewed(context.Background(), f.run.ID, next.JTI, fresh.JTI); !ok || err != nil {
+				t.Errorf("stamping the new proxy's renewal = %v, %v; want it recorded", ok, err)
+			}
+		}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive: code %d, want 200", code)
+		}
+		if !verifies(f, next) {
+			t.Error("the token the new proxy renewed during the swap was revoked; the new proxy runs on it")
+		}
+		if verifies(f, renewed) || verifies(f, presented) {
+			t.Errorf("a token the replaced proxy renewed still verifies (minted %v, presented %v)", verifies(f, renewed), verifies(f, presented))
 		}
 	})
 	t.Run("kept proxy", func(t *testing.T) {
