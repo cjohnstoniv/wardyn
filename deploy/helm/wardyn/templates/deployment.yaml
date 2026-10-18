@@ -129,7 +129,7 @@ chart can read.
 {{- fail (printf "wardyn: ha.enabled needs WARDYN_RECORDING_STORE to be \"pg\" or \"off\", and the chart reads %q. The \"fs\" store is a directory on one pod's disk, so a replay or upload that lands on another replica cannot find the recording. Set env.WARDYN_RECORDING_STORE=pg (or off) and remove any WARDYN_RECORDING_STORE entry from extraEnv; the chart reads both." $store) -}}
 {{- end -}}
 {{- if .Values.persistence.enabled -}}
-{{- fail "wardyn: ha.enabled refuses persistence.enabled=true. The persistent volume is ReadWriteOnce, so a second replica cannot mount it, and it exists to hold the per-pod fs recording store, which HA does not support. Leave persistence off and set env.WARDYN_RECORDING_STORE=pg." -}}
+{{- fail "wardyn: ha.enabled refuses persistence.enabled=true. The persistent volume is ReadWriteOnce, so a second replica cannot mount it, and it exists to hold the per-pod fs recording store, which HA does not support. Leave persistence off and set env.WARDYN_RECORDING_STORE=pg. Turning persistence off keeps the existing <fullname>-data claim and the fs recordings on it (helm.sh/resource-policy: keep); delete it with kubectl once you no longer need them." -}}
 {{- end -}}
 {{- $spool := "/tmp/audit-spool.jsonl" -}}
 {{- if hasKey $eff "WARDYN_AUDIT_SPOOL" }}{{ $spool = index $eff "WARDYN_AUDIT_SPOOL" }}{{ end -}}
@@ -940,6 +940,11 @@ metadata:
   name: {{ include "wardyn.fullname" . }}-data
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
+  {{- /* Kept when persistence is turned off (as HA requires) or the release is
+  uninstalled: it holds the fs recordings and the audit quarantine, which nothing
+  else has. Delete it deliberately with kubectl. */}}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   accessModes:
     - ReadWriteOnce

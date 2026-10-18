@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -452,6 +453,26 @@ func DriveSubjectHash(subject string) string {
 	}
 	sum := sha256.Sum256([]byte(subject))
 	return hex.EncodeToString(sum[:])[:driveHomeHashLen]
+}
+
+// DriveSubjectFoldsOntoASCII reports whether the part of subject a home is
+// derived from under tmpl (the whole subject, or an email's local part for
+// email_local) holds a non-ASCII rune that lower-cases into a-z, such as
+// U+0130 or U+212A. DriveHomeName and DriveSubjectHash fold the subject, so
+// such a subject would name the same home as an ASCII one.
+func DriveSubjectFoldsOntoASCII(tmpl HomeTemplate, subject string) bool {
+	seg := strings.TrimSpace(subject)
+	if tmpl == HomeTemplateEmailLocal {
+		if at := strings.Index(seg, "@"); at >= 0 {
+			seg = seg[:at]
+		}
+	}
+	for _, r := range seg {
+		if l := unicode.ToLower(r); r > unicode.MaxASCII && l >= 'a' && l <= 'z' {
+			return true
+		}
+	}
+	return false
 }
 
 // driveObjectPrefix is shared by every minted object name so an operator can

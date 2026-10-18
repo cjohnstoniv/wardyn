@@ -364,6 +364,36 @@ grep -qF 'BuildArch:      ${RPM_ARCH}' "${PKGR}" \
 grep -q 'PREFIX="${PAYLOAD}/usr/local/lib/wardyn"' "${PKGR}" \
   || fail "${PKGR}'s payload prefix changed — wardyn-desktop.sh's REPO_ROOT='../..' depends on the deploy/ level being present"
 
+# The tarball is unpacked at / as root: every entry root-owned, and no './'
+# entry that would re-own / itself. Built for real, with stubs for go (no
+# compile) and the .deb tools.
+pkg_tmp="$(mktemp -d)"
+mkdir -p "${pkg_tmp}/bin" "${pkg_tmp}/out"
+cat > "${pkg_tmp}/bin/go" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  env) echo amd64 ;;
+  build) while [ $# -gt 0 ]; do [ "$1" = -o ] && { : > "$2"; exit 0; }; shift; done ;;
+esac
+STUB
+printf '#!/usr/bin/env bash\nexec "$@"\n' > "${pkg_tmp}/bin/fakeroot"
+printf '#!/usr/bin/env bash\ncase "$1" in --build) : > "$3" ;; --contents) echo "x ./usr/" ;; esac\n' > "${pkg_tmp}/bin/dpkg-deb"
+chmod +x "${pkg_tmp}/bin/"*
+PATH="${pkg_tmp}/bin:${PATH}" "${PKGR}" --version 0.0.0-test --out "${pkg_tmp}/out" >"${pkg_tmp}/log" 2>&1 \
+  || { cat "${pkg_tmp}/log" >&2; fail "${PKGR} failed with stubbed go/dpkg-deb"; }
+tarball="${pkg_tmp}/out/wardyn-desktop-0.0.0-test-amd64.tar.gz"
+listing="$(tar --numeric-owner -tvzf "${tarball}")"
+[ -n "${listing}" ] || fail "${tarball} is empty"
+not_root="$(awk '$2 != "0/0"' <<<"${listing}")"
+[ -z "${not_root}" ] || fail "the desktop tarball has entries not owned 0/0 — unpacked at / as root they belong to the builder's uid:
+${not_root}"
+if tar -tzf "${tarball}" | grep -qE '^\.(/|$)'; then
+  fail "the desktop tarball has a './' entry — unpacked at / as root it re-owns / itself"
+fi
+tar -tzf "${tarball}" | grep -qx 'usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh' \
+  || fail "the desktop tarball no longer carries usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh"
+rm -rf "${pkg_tmp}"
+
 echo "test-desktop-profile: m-prime invariants PASS"
 
 # ── F185: /etc/wardyn/secret.env is a trust boundary, not formatting ────────
@@ -441,7 +471,7 @@ f1493_run() { # MANAGED_DIR [VAR=VALUE...] -> exit code; argv logs in MANAGED_DI
   local md="$1"; shift
   : > "${md}/curl.log"; : > "${md}/docker.log"
   printf '#!/usr/bin/env bash\necho "$*" >> "%s/curl.log"\nexit 0\n' "${md}" > "${md}/bin-curl"
-  printf '#!/usr/bin/env bash\necho "$*" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
+  printf '#!/usr/bin/env bash\necho "$* internal_issuer=${WARDYN_OIDC_INTERNAL_ISSUER-unset}" >> "%s/docker.log"\nexit 0\n' "${md}" > "${md}/bin-docker"
   mkdir -p "${md}/bin"; mv "${md}/bin-curl" "${md}/bin/curl"; mv "${md}/bin-docker" "${md}/bin/docker"
   chmod +x "${md}/bin/curl" "${md}/bin/docker"
   printf '{}\n' > "${md}/site-config.json"
@@ -491,6 +521,25 @@ for bad in 'abc' '"8097"' '0' '65536' '8097 ' '-1'; do
   [ ! -s "${md}/curl.log" ] || fail "launcher probed after refusing WARDYN_UP_PORT='${bad}' (#1493)"
 done
 echo "test-desktop-profile: published-port resolution PASS"
+
+# ── #2151: an envelope naming a real IdP reaches it server-side too ─────────
+# compose defaults WARDYN_OIDC_INTERNAL_ISSUER to Dex's http://dex:5556, which
+# no desktop stack runs. Unset everywhere, the launcher hands compose the issuer.
+f2151_internal() { grep ' up -d ' "$1/docker.log" | sed -n 's/.* internal_issuer=//p'; }
+entra='https://login.microsoftonline.com/t/v2.0'
+md="$(f1493_fixture "WARDYN_OIDC_ISSUER=${entra}")"
+f1493_run "${md}" || fail "launcher failed with an IdP issuer in the envelope (#2151): $(tail -1 "${md}/out.log")"
+[ "$(f2151_internal "${md}")" = "${entra}" ] || fail "an envelope IdP issuer with no internal issuer reached compose as internal '$(f2151_internal "${md}")', not the issuer (#2151)"
+md="$(f1493_fixture 'WARDYN_OIDC_ISSUER=http://localhost:5556')"
+f1493_run "${md}" || fail "launcher failed with the Dex issuer (#2151)"
+[ "$(f2151_internal "${md}")" = unset ] || fail "the Dex (loopback) issuer no longer keeps compose's dex:5556 default (#2151): '$(f2151_internal "${md}")'"
+md="$(f1493_fixture "$(printf 'WARDYN_OIDC_ISSUER=%s\nWARDYN_OIDC_INTERNAL_ISSUER=https://idp.internal' "${entra}")")"
+f1493_run "${md}" || fail "launcher failed with both issuers in the envelope (#2151)"
+[ "$(f2151_internal "${md}")" = unset ] || fail "the launcher overrode the envelope's own internal issuer (#2151): '$(f2151_internal "${md}")'"
+md="$(f1493_fixture "WARDYN_OIDC_ISSUER=${entra}")"
+f1493_run "${md}" WARDYN_OIDC_INTERNAL_ISSUER=https://shell.internal || fail "launcher failed with a shell internal issuer (#2151)"
+[ "$(f2151_internal "${md}")" = https://shell.internal ] || fail "a shell WARDYN_OIDC_INTERNAL_ISSUER no longer wins (#2151): '$(f2151_internal "${md}")'"
+echo "test-desktop-profile: OIDC internal issuer resolution PASS"
 
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #

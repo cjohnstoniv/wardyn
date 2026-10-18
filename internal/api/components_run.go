@@ -528,14 +528,7 @@ func confinementFloorSpec(spec types.RunPolicySpec, comps runComponents) types.R
 // reads, and the record of the doors a revive re-checks. A run without
 // components writes nothing.
 func (s *Server) persistRunComponents(ctx context.Context, runID uuid.UUID, comps runComponents) error {
-	// A built-in names no door a row could record (its admission is the
-	// provider's); its record is the github_token grant and the audit rows.
-	var rows []types.RunComponent
-	for _, a := range comps.attached {
-		if a.builtin == nil {
-			rows = append(rows, a.snapshot)
-		}
-	}
+	rows := comps.snapshotRows()
 	if len(rows) == 0 {
 		return nil
 	}
@@ -547,6 +540,19 @@ func (s *Server) persistRunComponents(ctx context.Context, runID uuid.UUID, comp
 		return err
 	}
 	return fenceErasedComponents(ctx, st, runID, rows)
+}
+
+// snapshotRows is the run's component snapshot rows. A built-in names no door a
+// row could record (its admission is the provider's); its record is the
+// github_token grant and the audit rows.
+func (comps runComponents) snapshotRows() []types.RunComponent {
+	var rows []types.RunComponent
+	for _, a := range comps.attached {
+		if a.builtin == nil {
+			rows = append(rows, a.snapshot)
+		}
+	}
+	return rows
 }
 
 // fenceErasedComponents closes the window between the gate's read of a

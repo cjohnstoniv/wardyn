@@ -355,7 +355,7 @@ func (s *Store) putRow(ctx context.Context, q execer, name string, r sealedRow) 
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()`,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now(), value_rev=DEFAULT`,
 		s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx),
 	)
 	if err != nil {

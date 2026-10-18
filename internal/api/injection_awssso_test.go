@@ -1128,3 +1128,34 @@ func TestResolveAWSSSOInjection_RaiseFailureBodyCarriesNoDriverText(t *testing.T
 		t.Fatalf("the 503 body = %s, want the fixed sentence %q", body, credentialReauthRaiseFailedBody)
 	}
 }
+
+// TestResolveAWSSSOInjection_AnotherLanesRequestIsNotThisHold: a run's other
+// sign-in lanes (here Azure DevOps) raise credential_reauth rows too. They share
+// the run's workflow budget, but an AWS lapse is held on its own request: never
+// on another lane's pending row, and never closed by another lane's expired one.
+func TestResolveAWSSSOInjection_AnotherLanesRequestIsNotThisHold(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		f := newReauthFixture(t, nil)
+		ctx := context.Background()
+		raw, _ := json.Marshal(adoSignInScopeBody{Lane: adoApprovalLane, Mechanism: adoSignInMechanism,
+			Reason: adoSignInReason, Owner: "alice@example.com"})
+		other, err := f.srv.cfg.Approvals.Request(ctx, types.ApprovalRequest{RunID: f.runID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			if err := f.st.approvals.ExpireOne(ctx, other.ID, "", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.putBlob(t, "alice@example.com", deadSSOBlob())
+		w := f.resolve(t)
+		var body reauthPendingResponse
+		if w.Code != http.StatusLocked || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.ApprovalID == other.ID {
+			t.Fatalf("other lane's row expired=%v: %d %s, want 423 on a new AWS request (not %s)", expired, w.Code, w.Body.String(), other.ID)
+		}
+		if ap, err := f.srv.cfg.Approvals.Get(ctx, body.ApprovalID); err != nil || strings.Contains(string(ap.RequestedScope), `"lane"`) {
+			t.Fatalf("held on %+v (%v), want this run's own AWS sign-in request", ap, err)
+		}
+	}
+}

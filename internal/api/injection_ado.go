@@ -83,8 +83,9 @@ const adoEntraAccessReuseMargin = 10 * time.Minute
 // masked process-wide by RedeemADOEntraAccess, so holding it here adds no new
 // rendering to protect.
 //
-// Process-local, and correct for the same reason every other in-memory bound in
-// this package is: more than one replica is refused by construction.
+// Process-local. More than one replica may serve one person (WARDYN_HA), and a
+// sign-in deleted on another replica is forgotten only there, so a hit is
+// served only while the stored sign-in row still exists (adoEntraAccessFor).
 type adoEntraAccessCache struct {
 	mu sync.Mutex
 	m  map[string]ADOEntraAccess
@@ -133,7 +134,13 @@ func (c *adoEntraAccessCache) forget(owner string) {
 func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string, fresh bool) (ADOEntraAccess, error) {
 	key := strings.Join([]string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(scopes, " ")}, "\x00")
 	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
-		return a, nil
+		rev, guarded, err := s.entraRevision(ctx, owner, adoCapture(cfg))
+		if err == nil && (!guarded || rev != "") {
+			return a, nil
+		}
+		if err == nil {
+			s.adoEntraTokens.forget(owner) // deleted on another replica: what is held here came from it
+		}
 	}
 	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
 		return ADOEntraAccess{}, err

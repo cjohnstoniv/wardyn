@@ -75,6 +75,6 @@
 # docs/ENV.md 39307 = 39268 + 39, measured: renewal never contacts the identity provider; the admin revoke that ends a session
 # 0.9.4 L8: docs/ENV.md 39317 adds 10 over 39307: the git_pat broker wording in the resident-delivery rule.
 # 0.9.4 L8: docs/ENV.md 39329 adds 12 over 39317: ssh_key delivery claims bounded.
-docs/ENV.md=39329 share=5
+docs/ENV.md=39348 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
