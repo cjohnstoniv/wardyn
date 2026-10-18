@@ -782,7 +782,8 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
-  // Wraps below sm so the description keeps a line of its own; one line from sm up (#2849).
+  // Below sm the row is two lines: time, actor, icon and outcome, then the description with the run chip.
+  // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">
       <span
@@ -794,9 +795,9 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       <ActorTypeChip type={event.actor_type} />
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (
-        <AuditDecision event={event} className="flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:min-w-0" />
+        <AuditDecision event={event} className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:order-none sm:min-w-0" />
       ) : (
-        <span className="flex min-w-[12rem] flex-1 items-center gap-2 sm:min-w-0">
+        <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
           <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
             {describeEvent(event)}
           </span>
@@ -808,12 +809,12 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         <button
           onClick={() => onDrill(event.run_id!)}
           title={event.run_id}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 font-mono text-meta text-muted-foreground hover:border-primary/40 hover:text-primary"
+          className="order-3 inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 sm:order-none font-mono text-meta text-muted-foreground hover:border-primary/40 hover:text-primary"
         >
           {event.run_id.replace("run_", "").slice(0, 8)}
         </button>
       )}
-      <div className="shrink-0">
+      <div className="order-1 ml-auto shrink-0 sm:order-none sm:ml-0">
         <EventOutcome e={event} />
       </div>
     </div>

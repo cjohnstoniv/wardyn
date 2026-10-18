@@ -199,6 +199,19 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const row = chip.parentElement!;
     expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
     expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
+    // Two lines on a phone: the outcome is lifted onto the first, the description and chip share the second.
+    expect(chip).toHaveClass("order-3", "sm:order-none");
+    expect(chip.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
+    expect(screen.getByText(/^Created the run/).parentElement).toHaveClass("order-2", "sm:order-none");
+  });
+
+  // #2850: the toolbar counter drops to its own line whole instead of wrapping inside itself.
+  it("keeps the event counter on one line inside a wrapping toolbar group", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "c1", action: "run.create" })]);
+    renderScreen();
+    const counter = await screen.findByText(/^1 event$/);
+    expect(counter).toHaveClass("whitespace-nowrap");
+    expect(counter.parentElement).toHaveClass("flex-wrap");
   });
 
   it("preserves the server append order (does not re-sort by wall-clock time)", async () => {
