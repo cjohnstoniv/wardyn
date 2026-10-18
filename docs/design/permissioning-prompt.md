@@ -239,7 +239,7 @@ would refuse every member run on every deployment that has not enforced it.
 | `TITLE` | Permissions |
 | `LEAD` | Grant members and groups specific Wardyn capabilities. Each capability is enforced on its own — until you enforce one, nothing about it changes. |
 | `DOCTRINE` | A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant. |
-| `EXEMPT` | Super admins, the admin token, and local mode are never bounded by these rules. A security admin is bounded like a member. *(0.7.4 CORRECTION — Appendix A F4-F6: the old sentence said "Admins" over a screen `useSecurityOperator()` also lets in, so a security admin read themselves as exempt and then hit their own grants at launch; `capAllowed` exempts `RoleAdmin` only.)* |
+| `EXEMPT` | Super admins, the admin token, and local mode are never bounded by these rules, except by service_attach grants. A security admin is bounded like a member. *(0.7.4 CORRECTION — Appendix A F4-F6: the old sentence said "Admins" over a screen `useSecurityOperator()` also lets in, so a security admin read themselves as exempt and then hit their own grants at launch; `capAllowed` exempts `RoleAdmin` only.)* |
 | `ENFORCEMENT_TITLE` | Enforcement |
 | `ENFORCEMENT_LEAD` | Turn a capability on to start refusing what isn't granted. |
 | `CHIP_OFF` | Not enforced |
@@ -279,7 +279,7 @@ would refuse every member run on every deployment that has not enforced it.
 | `FIELD_EFFECT` | Effect |
 | `HINT_USER` | An email address or the sign-in subject id. Either one matches the same person. |
 | `HINT_GROUP` | A group or app-role name exactly as your identity provider sends it in the token. |
-| `HINT_ALL` | Every signed-in member. Super admins are exempt; a security admin is not. |
+| `HINT_ALL` | Every signed-in member. Super admins are exempt, except for service_attach; a security admin is not. |
 | `DUPLICATE` | That grant already exists — its effect was updated. |
 | `SNAPSHOT_TITLE` | Groups are read at sign-in |
 | `SNAPSHOT_BODY` | Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request. |

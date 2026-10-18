@@ -19,3 +19,12 @@ describe("permissions-copy: reused-canon rows quote the constant", () => {
     expect(doc).toContain(PERM.HINT_ALL);
   });
 });
+
+// service_attach is the one capability that binds super admins, the admin token
+// and local mode (capAllowedAsMember); the "never bounded" lines must say so.
+describe("permissions-copy: the exemption lines name the service_attach exception", () => {
+  it("EXEMPT and HINT_ALL both mention service_attach", () => {
+    expect(PERM.EXEMPT).toContain("service_attach");
+    expect(PERM.HINT_ALL).toContain("service_attach");
+  });
+});
