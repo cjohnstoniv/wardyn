@@ -8,7 +8,8 @@
 # ARCHITECTURE.md 5399 adds 13 over 5386 (0.9.3 FIN-E), measured: the denial table source of record and the device_channel marker.
 # ARCHITECTURE.md 5755 adds 356, measured: the wardyn-runnerd row and the runner substrates section (laptop and organisation runners, resident credentials), and the runner chart named beside the two stacks.
 # 0.9.4 L8: ARCHITECTURE.md 5870 adds 115 over 5755: credential-claims rewrite of invariants 1 and 2 (auto-mint branch, brokered-token wording).
-ARCHITECTURE.md=5870 share=35
+# 0.9.4 L8: ARCHITECTURE.md 5876 adds 6 over 5870: ssh_key delivery claims bounded.
+ARCHITECTURE.md=5876 share=35
 # 0.9.4 L8: SECURITY.md 1326 adds 327 over 999: the 'Which credentials enter the sandbox' section and the qualified invariants.
 SECURITY.md=1326 share=35
 PROVENANCE.md=798 share=35

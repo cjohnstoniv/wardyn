@@ -71,7 +71,8 @@ docs/operations/ownership-and-offboarding.md=2370 share=35
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
 # docs/operations/governance-writes.md 3132 adds 46 over 3086 (0.9.3 FIN-E), measured: the runner trust row and held remote-hosted runner changes.
 docs/operations/governance-writes.md=3132 share=35
-docs/operations/member-runs.md=1044 share=35
+# 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
+docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.

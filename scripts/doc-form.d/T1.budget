@@ -49,7 +49,8 @@
 # threatmodel/THREAT-MODEL.md 63510 = 63480 + 30, measured: merge of the AWS SSO renewal row beside the session-renewal rows.
 # threatmodel/THREAT-MODEL.md 63587 = 63510 + 77, measured: merge of the Docker runner decision sink rows.
 # 0.9.4 L8: threatmodel/THREAT-MODEL.md 63968 adds 381 over 63587: 4.6 per-drive wording, the L1 canary, the hard-deny set and two residency rows.
-threatmodel/THREAT-MODEL.md=63968
+# 0.9.4 L8: threatmodel/THREAT-MODEL.md 63981 adds 13 over 63968: ssh_key delivery claims bounded.
+threatmodel/THREAT-MODEL.md=63981
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63123 adds 30 over 63093: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

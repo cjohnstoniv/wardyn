@@ -452,6 +452,7 @@ describe("GitTab", () => {
     expect(
       screen.getByText(/The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/an approval-gated grant is delivered once\. Public/)).toBeInTheDocument();
   });
 
   it("Remove opens a confirm dialog naming the kind, and clears the row on confirm", async () => {

@@ -25,7 +25,8 @@
 # docs/POLICIES.md 18368, measured at the second decided-rows merge into the final train (both sides' sentences).
 # docs/POLICIES.md 18380 = 18368 + 12, measured: a GitHub CLI row is refused, not withheld, under a profile that blocks GitHub.
 # docs/POLICIES.md 18382 adds 2 over 18380, measured: the run policy is under spec (0.9.3 ASK-6 review).
-docs/POLICIES.md=18382 share=12
+# 0.9.4 L8: docs/POLICIES.md 18408 adds 26 over 18382: ssh_key delivery claims bounded.
+docs/POLICIES.md=18408 share=12
 # 0.9.4 L8: examples/policies/README.md 1418 adds 69 over 1349: the repos-template note and the model-credential wording.
 examples/policies/README.md=1418 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

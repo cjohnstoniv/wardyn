@@ -284,7 +284,7 @@ provision_ssh_grants() {
 
 # wipe_ssh_grants shreds the minted key(s) + any known_hosts and removes the ssh
 # config + GIT_SSH_COMMAND. Called right after the clone (before exec) so the key
-# is resident for the clone only; also armed as an EXIT trap so a mid-clone abort
+# is resident for the clone; also armed as an EXIT trap so a mid-clone abort
 # still wipes. Idempotent; never fatal.
 wipe_ssh_grants() {
     local f
