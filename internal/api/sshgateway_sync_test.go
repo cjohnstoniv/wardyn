@@ -589,7 +589,8 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 
 // A substrate that starts the exec lazily (Kubernetes) reports a missing sftp-server only after
 // launch: an sftp-server that ends having sent nothing, with exit 126 or 127 or a stream error, is
-// told the image contract on stderr instead of ending with a bare exit 1. Any other end is not.
+// told the image contract on stderr instead of ending with a bare exit 1. Any other end is not, nor
+// is a sandbox torn down or a session cancelled before the server wrote a byte.
 func TestSSHGateway_SFTPLaunchFailureAfterStartNamesTheImageContract(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -600,6 +601,8 @@ func TestSSHGateway_SFTPLaunchFailureAfterStartNamesTheImageContract(t *testing.
 		{"exit 127", 127, nil, true},
 		{"stream error", 0, errors.New("command terminated: exec: no such file or directory"), true},
 		{"exit 1", 1, nil, false},
+		{"sandbox torn down", 0, fmt.Errorf("wait: %w", runner.ErrSandboxGone), false},
+		{"session cancelled", 0, context.Canceled, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st, run, principal := sshOwnedRunningRun(t)

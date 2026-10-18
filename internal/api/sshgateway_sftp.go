@@ -51,7 +51,8 @@ const sftpServerMissing = "sftp unavailable: the sandbox image has no " + sftpSe
 // withSFTPLaunchNote tells the client the image contract when the sftp-server sess runs ends having
 // sent nothing, with the shell's exit for a binary it cannot run (126, 127) or a stream error: a
 // substrate that starts the exec lazily (Kubernetes) reports a missing binary only after launch, so
-// execSFTPServer's message never applies, and the client would see a bare exit 1.
+// execSFTPServer's message never applies, and the client would see a bare exit 1. A sandbox torn
+// down, or a session cancelled, before the server wrote a byte says nothing about the image.
 func withSFTPLaunchNote(sess *runner.ExecSession, stderr io.Writer) *runner.ExecSession {
 	if sess.Stdout == nil || sess.Wait == nil {
 		return sess
@@ -61,12 +62,17 @@ func withSFTPLaunchNote(sess *runner.ExecSession, stderr io.Writer) *runner.Exec
 	noted.Stdout = out
 	noted.Wait = func() (int, error) {
 		code, err := sess.Wait()
-		if out.n == 0 && (err != nil || code == 126 || code == 127) {
+		if out.n == 0 && (code == 126 || code == 127 || err != nil) && !sftpEndNotTheImage(err) {
 			_, _ = fmt.Fprintln(stderr, sftpServerMissing)
 		}
 		return code, err
 	}
 	return &noted
+}
+
+// sftpEndNotTheImage is an end that a missing sftp-server cannot explain.
+func sftpEndNotTheImage(err error) bool {
+	return errors.Is(err, runner.ErrSandboxGone) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // sftpOutput counts what the sftp-server sent; sshBridgeExecSession reads it to its end before Wait.
