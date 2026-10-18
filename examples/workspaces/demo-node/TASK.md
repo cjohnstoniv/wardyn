@@ -28,14 +28,14 @@ New Run form verbatim.
   fast-forward can compress it (`ui/e2e/demo/overlay.ts` ffwdStart/ffwdEnd).
 - **Step 2 is the meaningful work** — a real edit, a real test run, a real diff on
   the run's Files surface.
-- **The held host is refused, then the RETRY succeeds.** `example.com` is off the run's
-  allowlist. The New Run wizard picks **Hold it for approval** (`wait_for_review`),
-  but the operator policy ceiling clamps the effective mode down to **Deny, but
-  ask** (`deny_with_review`) — see `docs/DEMO-SCRIPT.md`'s "Act 5 specifics" for
-  the mechanics — so the first attempt is refused outright and raises an approval;
-  it is the agent's own retry (step 1's instructions above), not the same
-  in-flight request, that succeeds once an operator approves. `--max-time 90`
-  still gives the operator a comfortable window before the next retry lands.
+- **The held host is held, and the retry is only a fallback.** `example.com` is off the run's
+  allowlist. The New Run wizard picks **Hold it for approval** (`wait_for_review`).
+  The operator policy ceiling clamps a member run down to **Deny, but ask**
+  (`deny_with_review`), so that run's first attempt is refused outright and its own
+  retry succeeds once an operator approves. An admin or local-mode run is not
+  clamped (`inline_policy.go`): the request is genuinely HELD and released on
+  approval, and step 1's retry never fires. See `docs/DEMO-SCRIPT.md`'s
+  "Act 5 specifics". `--max-time 90` gives the operator a comfortable window.
 - **The model call is the allowed case.** Every Claude Code request to
   `api.anthropic.com` is allow-listed and brokered, and shows up in the audit
   trail as `brokered:llm`.
