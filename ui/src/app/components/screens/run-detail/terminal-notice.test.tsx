@@ -116,8 +116,11 @@ describe("TerminalPane — a QUEUED run", () => {
   it("names the pool's limit, the place in line and when it gives up", async () => {
     renderPane(queued(RUN_WAIT_REASON.AT_CAPACITY));
     expect(await screen.findByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeInTheDocument();
-    expect(screen.getByText("2nd in line")).toBeInTheDocument();
-    expect(screen.getByText("Gives up")).toBeInTheDocument();
+    // The approved mock: a Queued title, then ONE line of place, wait and give-up.
+    expect(screen.getByRole("heading", { name: "Queued" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-queued-wait-line")).toHaveTextContent(
+      /^You are 2nd in line · waiting since .+ · gives up in 3 hours$/,
+    );
   });
 
   it("gives the recording-store sentence without needing the pool", () => {

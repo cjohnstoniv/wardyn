@@ -42,7 +42,9 @@ test.describe("Run page — a QUEUED run", () => {
     await expect(page.getByRole("img", { name: "Stopped" })).toHaveCount(0);
     const hero = page.getByTestId("run-queued-wait");
     await expect(hero.getByText(RUN_WAIT.RECORDING_STORE_OFF())).toBeVisible();
-    await expect(hero.getByText("2nd in line")).toBeVisible();
-    await expect(hero.getByText("Gives up")).toBeVisible();
+    await expect(hero.getByRole("heading", { name: "Queued" })).toBeVisible();
+    await expect(hero.getByTestId("run-queued-wait-line")).toHaveText(
+      /^You are 2nd in line · waiting since .+ · gives up in 3 hours$/,
+    );
   });
 });
