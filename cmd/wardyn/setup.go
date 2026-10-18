@@ -97,7 +97,7 @@ type setupStatusLite struct {
 // tierLabels are the PLAN §10.3 tier ids' words, the same ones the console's account menu shows.
 var tierLabels = map[string]string{
 	"local-only": "local only — not governed by an organisation",
-	"runner":     "client-mode runner for an organisation",
+	"runner":     "enrolled with an organisation (legacy)",
 	"org":        "organisation",
 }
 
