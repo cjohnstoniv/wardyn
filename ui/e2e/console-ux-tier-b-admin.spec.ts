@@ -42,6 +42,7 @@ async function phoneAt(page: Page, path: string): Promise<void> {
 
 test.describe("Tier B at desktop width", () => {
   // #2852: the actor chip and the outcome differ in width from row to row; the description and the run chip do not move.
+  // The two run ids differ in their first 8 characters, so the chips stay distinct if the chip text is cut to 8.
   test("Audit: the description and the run chip start at the same x on every row", async ({ page }) => {
     const row = (id: string, actor_type: string, outcome: string) => ({
       id: `e2e-align-${id}`,
@@ -51,16 +52,16 @@ test.describe("Tier B at desktop width", () => {
       action: "run.create",
       target: `align-${id}`,
       outcome,
-      run_id: `run_e2ealign${id}`,
+      run_id: `run_${id}`,
     });
     await page.route(/\/api\/v1\/audit(\?|$)/, (route) =>
-      route.fulfill({ json: [row("a", "human", "success"), row("b", "system", "failure")] }),
+      route.fulfill({ json: [row("alpha1xx", "human", "success"), row("bravo2xx", "system", "failure")] }),
     );
     await gotoConsole(page, "admin");
     await navTo(page, "Audit");
     const desc = page.locator('main [title^="Created the run"]');
     await expect(desc).toHaveCount(2);
-    const chips = [page.getByRole("button", { name: "e2ealigna" }), page.getByRole("button", { name: "e2ealignb" })];
+    const chips = [page.getByRole("button", { name: "alpha1xx" }), page.getByRole("button", { name: "bravo2xx" })];
     await expect(chips[0]).toBeVisible();
     expect((await boxOf(desc.nth(0))).x).toBeCloseTo((await boxOf(desc.nth(1))).x, 0);
     expect((await boxOf(chips[0])).x).toBeCloseTo((await boxOf(chips[1])).x, 0);
