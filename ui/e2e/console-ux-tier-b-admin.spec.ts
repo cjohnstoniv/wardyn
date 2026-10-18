@@ -254,7 +254,7 @@ test.describe("Tier B computed styles", () => {
   test("Host card: the no-runner icon does not shrink at 390", async ({ page }) => {
     await phoneAt(page, "/admin/settings");
     await expandCard(page, "Host");
-    const icon = page.getByTestId("host-card").locator("svg.text-danger").first();
+    const icon = page.getByTestId("host-card").getByTestId("no-runner-icon");
     await expect(icon).toBeVisible();
     await expect(icon).toHaveCSS("flex-shrink", "0");
     expect(Math.round((await boxOf(icon)).width)).toBe(20);
@@ -290,6 +290,9 @@ test.describe("Tier B computed styles", () => {
       value: getComputedStyle(el).fontFamily,
       placeholder: getComputedStyle(el, "::placeholder").fontFamily,
     }));
+    // The pseudo-element must really have been resolved: a non-empty family that differs from the input's own.
+    expect(faces.placeholder, "::placeholder computed no font family").not.toBe("");
+    expect(faces.placeholder).not.toBe(faces.value);
     expect(faces.value.toLowerCase()).toContain("mono");
     expect(faces.placeholder.toLowerCase()).not.toContain("mono");
   });

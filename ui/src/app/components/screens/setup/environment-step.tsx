@@ -89,7 +89,7 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
   return (
     <div className="rounded-xl border border-danger/40 bg-danger-subtle p-5">
       <div className="flex items-start gap-3">
-        <AlertOctagon className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
+        <AlertOctagon data-testid="no-runner-icon" className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
         <div>
           <div className="text-foreground">No sandbox runner — runs can't launch.</div>
           <p className="mt-1 text-sm text-muted-foreground">
