@@ -1892,7 +1892,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LLM_SCAN` | enum | (unset = per policy) | per-proxy kill-switch for outbound content inspection; `off`/`0`/`false`/`no`/`disable`/`disabled`/`none` disable, `on`/`1`/`true`/`yes`/`enable`/`enabled` (or unset) leave as policy, garbage exits 2 |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
-| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | overrides how long the proxy's git broker blocks polling a `wait_for_review` git-mint approval before failing (`waitForGitApproval`). Unparseable or non-positive values are silently ignored and the 120s default is kept. |
+| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | overrides how long the proxy's git broker blocks polling a `wait_for_review` git-mint approval before failing (`waitForGitApproval`). Unparseable or non-positive values are silently ignored and the 120s default is kept. Set it on wardynd: both container runners forward it to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
 
@@ -1929,7 +1929,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A brokered repo has no `git_pat` path beside its App lane in any case: policy-write refuses the two grants for the same forge.
 - **Opting either lane's posture is visible, not inferred:** the proxy logs a one-shot `slog` WARN at boot when the App lane is OFF, and INFO when the PAT lane is ON
 - The two postures are announced in opposite directions since they start from opposite defaults.
-- Both container runners forward this ONE var (and `WARDYN_LLM_SCAN`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
+- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
 - **This variable is WHERE-only:** a run's `push_rules` (`deny_paths`, `max_inspect_pack_mib`) is WHAT a push may touch, enforced on both brokered lanes independently of either scope here
 - Opting either lane out never opts a push out of its content rules.
 - See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
