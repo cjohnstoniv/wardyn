@@ -338,6 +338,9 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
+	if s.ext != nil {
+		return s.putOverPointer(ctx, name, r)
+	}
 	if gen, fenced := s.generationFence(ctx); fenced {
 		return s.putFenced(ctx, name, gen, r)
 	}
