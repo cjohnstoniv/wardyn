@@ -152,6 +152,80 @@ func TestMemberMount_DotfileDenyUnderWideRoot(t *testing.T) {
 	}
 }
 
+// The dotfile deny-list compares case-folded: on a case-insensitive filesystem
+// ".SSH" is ~/.ssh, and EvalSymlinks keeps the spelling it was given. A Unicode
+// look-alike that folds to the same name (the Kelvin sign for "k") is the same
+// name to the deny-list.
+func TestMemberMount_DotfileDenyIgnoresCase(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	p := UserMountPolicy{Roots: []string{home}}
+	for _, rel := range []string{".SSH", ".Aws/sso", ".KUBE", ".Kube", ".Git/Config", ".CONFIG/GH/hosts", ".Git-Credentials"} {
+		dir := filepath.Join(home, rel)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := p.ValidateUserMount("alice", dir, false); err == nil || !strings.Contains(err.Error(), "credential path") {
+			t.Errorf("%s under a $HOME-wide root = %v, want the credential-path refusal", rel, err)
+		}
+		if err := ValidateUserMountSource(dir, p.Roots, nil); err == nil {
+			t.Errorf("%s at bind time was ALLOWED", rel)
+		}
+	}
+	ok := filepath.Join(home, "Code", ".Configs", "Git")
+	if err := os.MkdirAll(ok, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := p.ValidateUserMount("alice", ok, false); err != nil {
+		t.Errorf("an ordinary dir = %v, want allowed", err)
+	}
+}
+
+// The bind-time gate holds a read-write member bind to the writable ceiling on
+// the path it resolves to NOW: a source that was writable at authoring and was
+// re-pointed since, into a readable-only root or a writable-deny subtree, is
+// refused. A read-only bind, and a spec that carries no ceiling, are checked as
+// before.
+func TestMemberMount_BindTimeHoldsWritableCeiling(t *testing.T) {
+	root, project := memberRoot(t)
+	other, otherProject := memberRoot(t)
+	vendored := filepath.Join(project, "vendor")
+	src := filepath.Join(project, "src")
+	for _, d := range []string{vendored, src} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	p := UserMountPolicy{Roots: []string{root, other}, WritableRoots: []string{root}, WritableDeny: []string{vendored}}
+	link := filepath.Join(root, "work")
+	if err := os.Symlink(src, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	if err := p.ValidateUserMount("alice", link, true); err != nil {
+		t.Fatalf("authoring: writable inside the writable root = %v, want allowed", err)
+	}
+	ceiling := p.Writable()
+	if err := ValidateUserMountSource(link, p.Roots, &ceiling); err != nil {
+		t.Fatalf("bind time, unchanged source = %v, want allowed", err)
+	}
+	for name, target := range map[string]string{"a readable-only root": otherProject, "a writable-deny subtree": vendored} {
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateUserMountSource(link, p.Roots, &ceiling); err == nil || !strings.Contains(err.Error(), "may not be mounted writable") {
+			t.Errorf("re-pointed into %s: bind-time = %v, want the writable refusal", name, err)
+		}
+		if err := ValidateUserMountSource(link, p.Roots, nil); err != nil {
+			t.Errorf("re-pointed into %s: read-only bind = %v, want allowed", name, err)
+		}
+	}
+}
+
 // TestMemberMount_NoRootsFailsClosed is matrix row 6: with nothing configured,
 // a member local_dir mount is refused outright rather than falling back to the
 // operator deny-list alone.
@@ -177,7 +251,7 @@ func TestMemberMount_NoRootsFailsClosed(t *testing.T) {
 // wiring mistake in the other direction fails closed too.
 func TestMemberMount_AdditiveForOperators(t *testing.T) {
 	_, project := memberRoot(t)
-	if err := ValidateUserMountSource(project, nil); err == nil {
+	if err := ValidateUserMountSource(project, nil, nil); err == nil {
 		t.Error("ValidateUserMountSource with nil roots ALLOWED the source; it must refuse, leaving nil-means-operator to the CALLER's branch")
 	}
 	// And the operator's own gate keeps allowing what it always allowed.
