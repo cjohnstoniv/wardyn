@@ -377,3 +377,26 @@ describe("a session that is not a security operator", () => {
     expect(getRetentionMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Audit → Retention — a month that has not started", () => {
+  beforeEach(() => {
+    listAuditMock.mockReset().mockResolvedValue([]);
+    dropMock.mockReset();
+    exportMock.mockReset();
+    toastError.mockReset();
+  });
+
+  it("labels a future partition Not started, never Open", async () => {
+    getRetentionMock.mockReset().mockResolvedValue(
+      status({
+        partitions: [
+          { name: "audit_events_2026_11", lo: "2026-11-01T00:00:00Z", hi: "2026-12-01T00:00:00Z", rows: 0, state: "future", eligible: false, refusal: "audit_retention_not_oldest" },
+        ],
+      }),
+    );
+    await openRetention();
+    const row = await screen.findByRole("row", { name: /audit_events_2026_11/ });
+    expect(within(row).getByText("Not started")).toBeInTheDocument();
+    expect(within(row).queryByText("Open")).toBeNull();
+  });
+});
