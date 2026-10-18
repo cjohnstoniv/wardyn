@@ -3,5 +3,5 @@
 # docs/operations/k8s-runners.md 3896 = 3717 + 179, measured at the merge: the node record form, route and rules replace the not-yet-shipped warning, plus the relay-fence row, the apiserver deny line, the boot refusal of an upstream proxy and the pool add step.
 # docs/operations/k8s-runners.md 3915 = 3896 + 19, measured: a helm template render adds no apiserver addresses.
 # docs/operations/k8s-runners.md 3950 = 3915 + 35, measured: the apiserver deny line names the lookup read, its get on endpointslices, and the GitOps render
-# docs/operations/k8s-runners.md 3974 = 3950 + 24, measured: 0.9.4 L4b, API tokens cannot make a node record, so the CLI works in local mode only.
-docs/operations/k8s-runners.md=3974 share=35
+# docs/operations/k8s-runners.md 3976 = 3950 + 26, measured: 0.9.4 L4b, API tokens cannot make a node record, so the CLI works in local mode only.
+docs/operations/k8s-runners.md=3976 share=35
