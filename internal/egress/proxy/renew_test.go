@@ -509,17 +509,18 @@ func TestRenewer_BackoffLandsBeforeTheHeldTokenExpires(t *testing.T) {
 		return exp.Add(-60 * time.Millisecond)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	// The healthy renew waits half the life (~50ms); without the expiry the failures would then back
-	// off 10, 20, 40, 80, 160ms: six tries in the window. With it they come every 10ms.
+	// off 10, 20, 40, 80, 160, 320ms: eight tries in the window. With it they come every 10ms, some
+	// ninety, so even a loaded machine clears twelve.
 	runTokenRenewerTuned(ctx, newTokenSource("startup-token"), srv.URL, srv.Client(), renewerTuning{
 		firstRetry: 10 * time.Millisecond, maxInterval: 500 * time.Millisecond,
 		giveUpAfter: 5 * time.Second, expiryMargin: 50 * time.Millisecond, now: clock,
 	})
 	mu.Lock()
 	defer mu.Unlock()
-	if attempts < 15 {
-		t.Fatalf("renew attempts in 450ms = %d, want >= 15: the failures backed off past the held token's expiry", attempts)
+	if attempts < 12 {
+		t.Fatalf("renew attempts in 1s = %d, want >= 12: the failures backed off past the held token's expiry", attempts)
 	}
 }
