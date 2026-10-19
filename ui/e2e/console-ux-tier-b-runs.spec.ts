@@ -38,14 +38,14 @@ async function seedRun(page: Page): Promise<string> {
 }
 
 test.describe("Tier B at 390px", () => {
-  // #2846 + #3068: every listed video is a recorded one (so each row has its play glyph and no "Not recorded yet" row
-  // shows), and a long title wraps instead of ending in an ellipsis.
-  test("Getting started: only recorded videos are listed and no title is cut off", async ({ page }) => {
+  // #2846: an unrecorded video row shows no play glyph, and a long title wraps instead of ending in an ellipsis.
+  test("Getting started: unrecorded videos have no play icon and no title is cut off", async ({ page }) => {
     await phoneAt(page, "user", "/setup");
     const titles = page.getByTestId("episode-title");
     await expect(titles.first()).toBeVisible();
-    await expect(page.getByText("Not recorded yet")).toHaveCount(0);
-    await expect(page.getByTestId("episode-play")).toHaveCount(await titles.count());
+    const unrecorded = page.locator("div:has(> [data-testid=episode-title])").filter({ hasText: "Not recorded yet" });
+    expect(await unrecorded.count()).toBeGreaterThan(0);
+    await expect(unrecorded.getByTestId("episode-play")).toHaveCount(0);
     const cut = await titles.evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
     expect(cut).toBe(0);
   });

@@ -238,16 +238,6 @@ describe("MemberGettingStarted", () => {
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
   });
 
-  // #3068: the video lists carry only episodes that have a video, so no placeholder row says "Not recorded yet".
-  it("lists no unrecorded episode, and every listed row can be watched", async () => {
-    renderPage();
-    await screen.findByRole("heading", { name: "What's set up for you" });
-    expect(screen.queryByText("Not recorded yet")).not.toBeInTheDocument();
-    const titles = screen.getAllByTestId("episode-title");
-    expect(titles.length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: "Watch" })).toHaveLength(titles.length);
-  });
-
   it("never offers a member 'always' on an approval: the server refuses it for a non-admin (#2595)", async () => {
     renderPage();
     await screen.findByRole("heading", { name: "Approvals you can decide" });

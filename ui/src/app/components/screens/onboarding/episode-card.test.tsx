@@ -177,10 +177,10 @@ describe("StepEpisodes", () => {
   });
 
   it("renders the Watch eyebrow and rows for a step that has episodes", () => {
-    const { container } = render(<StepEpisodes stepId="corp_network" />);
+    const { container } = render(<StepEpisodes stepId="first-run" />);
     // "Watch" also names each row's own button — scope to the eyebrow label.
     expect(container.querySelector(".label-eyebrow")).toHaveTextContent("Watch");
-    expect(screen.getByText("What it stops")).toBeInTheDocument();
+    expect(screen.getByText("Your first run")).toBeInTheDocument();
   });
 });
 
