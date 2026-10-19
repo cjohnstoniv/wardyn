@@ -353,7 +353,7 @@ func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
 	if err != nil || !b.HardLimits() {
 		return false, err
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	profiles, err := s.resolveAllProfiles(ctx)
 	return len(profiles) > 0, err
 }
 
