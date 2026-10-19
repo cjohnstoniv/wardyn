@@ -150,7 +150,7 @@ func probeMemberRoute(t *testing.T, srv *Server, method, pattern string, rc clas
 	t.Helper()
 	body, p := bodyFor(method, rc), buildPath(pattern, uuid.New().String())
 	for _, pr := range cast.all() {
-		assertNotBlocked(t, pr.name, doSSO(t, srv, method, p, pr.cookie, body))
+		assertNotBlockedOn(t, method, pattern, pr.name, doSSO(t, srv, method, p, pr.cookie, body))
 	}
 }
 
