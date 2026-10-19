@@ -1684,6 +1684,7 @@ func TestURL_FlagOverridesEnv(t *testing.T) {
 func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
 	t.Setenv("WARDYN_ADMIN_TOKEN", "")
+	t.Setenv("WARDYN_TOKEN", "") // main.go falls back to it
 
 	if err := execCmd(t, "runs", "list", "--url", srv.URL); err != nil {
 		t.Fatalf("expected no-token request to proceed (local mode), got error: %v", err)
