@@ -404,8 +404,12 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner); err != nil {
 			return err
 		}
-		// The person's stored preferences (their default pool among them) go with their pools.
-		_, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner)
+		// The person's stored preferences (their default pool among them) and their saved cockpit
+		// layouts go with their pools.
+		if _, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner); err != nil {
+			return err
+		}
+		_, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner)
 		return err
 	})
 	return out, err
