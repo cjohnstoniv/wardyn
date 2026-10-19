@@ -48,7 +48,9 @@ func sshCmd(client clientFn) *cobra.Command {
 (WARDYN_SSH_LISTEN), authenticating with a registered SSH key.
 
 Reads the gateway's advertised address from GET /healthz (anonymous, no
-token needed) and execs the local ssh(1) binary. --print emits the command
+token needed) and execs the local ssh(1) binary, offering ~/.wardyn/id_ed25519
+(the key 'wardyn ssh-key ensure' makes) when that file exists, else whatever
+your ssh agent holds. --print emits the command
 instead of running it; --config emits an ssh_config Host block; --json emits
 the target (host, port, username, host key fingerprint) for a script or an
 external tool that dials the sandbox itself.
@@ -88,6 +90,9 @@ type sshGateway struct {
 	host, port, fingerprint, proxy string
 }
 
+// errSSHGatewayOff is /healthz saying the operator has not turned SSH on.
+var errSSHGatewayOff = errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
+
 // resolveSSHGateway reads GET /healthz and returns the advertised gateway,
 // refusing a gateway that is off, advertises no address, or publishes a
 // ProxyCommand that breaks out of a quoted one-liner. Shared by `run ssh` and
@@ -104,7 +109,7 @@ func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
 		return sshGateway{}, fmt.Errorf("decode /healthz: %w", err)
 	}
 	if health.SSH == nil || !health.SSH.Enabled {
-		return sshGateway{}, errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
+		return sshGateway{}, errSSHGatewayOff
 	}
 	host, port := splitHostPort(health.SSH.AdvertiseAddr)
 	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
@@ -193,29 +198,17 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	}
 	host, port, proxy := gw.host, gw.port, gw.proxy
 	target := fmt.Sprintf("%s@%s", runID, host)
-	args := []string{target}
 	printed := "ssh "
 	if proxy != "" {
-		args = append([]string{"-o", "ProxyCommand=" + proxy}, args...)
 		printed += "-o ProxyCommand='" + proxy + "' "
 	}
 	printed += target
 	if port != "" {
-		args = append(args, "-p", port)
 		printed += " -p " + port
 	}
 
 	if m.config {
-		shortID := shortRunID(runID)
-		configPort := port
-		if configPort == "" {
-			configPort = "22"
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Host wardyn-%s\n  HostName %s\n  Port %s\n  User %s\n",
-			shortID, host, configPort, runID)
-		if proxy != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "  ProxyCommand %s\n", proxy)
-		}
+		fmt.Fprint(cmd.OutOrStdout(), sshConfigBlock(gw, runID, ""))
 		return nil
 	}
 
@@ -247,7 +240,101 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 			"run again with --advertised-proxy to connect through it, or use --print or --config to copy it", proxy)
 	}
 
-	sub := exec.CommandContext(cmd.Context(), "ssh", args...)
+	// -i only on the real connection: --print and --config stay byte-identical
+	// to the console card, which cannot know this computer's key file.
+	return runSSHBinary(cmd.Context(), sshConnArgs(gw, runID, localSSHKey()))
+}
+
+// sshAccess is what `run exec|forward|editor` check before they touch ssh(1).
+type sshAccess struct {
+	gw       sshGateway
+	identity string // the CLI's own key file when it exists, else ""
+}
+
+// resolveSSHAccess is the shared front door of exec, forward and editor: a run
+// id the gateway could accept, a gateway that is on, and a key on the account.
+// Each refusal is one line. It never creates a key: that is `ssh-key ensure`,
+// which puts a long-lived private key on this computer and so is the user's call.
+func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, advertisedProxy bool) (sshAccess, error) {
+	if _, err := parseID("run", runID); err != nil {
+		return sshAccess{}, err
+	}
+	if err := refusePlainHTTPGateway(verb, c.BaseURL); err != nil {
+		return sshAccess{}, err
+	}
+	gw, err := resolveSSHGateway(ctx, c)
+	if errors.Is(err, errSSHGatewayOff) {
+		return sshAccess{}, fmt.Errorf("%s: the operator has not turned SSH on for this deployment, so there is no gateway to reach (WARDYN_SSH_LISTEN)", verb)
+	}
+	if err != nil {
+		return sshAccess{}, err
+	}
+	if gw.proxy != "" && !advertisedProxy {
+		return sshAccess{}, fmt.Errorf("%s: this deployment advertises a ProxyCommand, which would run on this computer:\n  %s\n"+
+			"run again with --advertised-proxy to connect through it", verb, gw.proxy)
+	}
+	keys, err := c.ListSSHKeys(ctx)
+	if err != nil {
+		return sshAccess{}, fmt.Errorf("%s: read the SSH keys registered for your account: %w", verb, err)
+	}
+	if len(keys) == 0 {
+		return sshAccess{}, fmt.Errorf("%s: no SSH key is registered for your account: run `wardyn ssh-key ensure` once, then retry", verb)
+	}
+	return sshAccess{gw: gw, identity: localSSHKey()}, nil
+}
+
+// sshConfigBlock is the ssh_config Host block `run ssh --config` prints and
+// `run editor` writes; identity adds the CLI's own key (editor only).
+func sshConfigBlock(gw sshGateway, runID, identity string) string {
+	port := gw.port
+	if port == "" {
+		port = "22"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Host wardyn-%s\n  HostName %s\n  Port %s\n  User %s\n", shortRunID(runID), gw.host, port, runID)
+	if gw.proxy != "" {
+		fmt.Fprintf(&b, "  ProxyCommand %s\n", gw.proxy)
+	}
+	if identity != "" {
+		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", identity)
+	}
+	return b.String()
+}
+
+// sshConnArgs is ssh(1)'s connection half: the advertised ProxyCommand, the
+// CLI's own key when identity is set, then <run-id>@<host> and -p. Options a
+// caller needs (-T, -N, -L) go in front of it.
+func sshConnArgs(gw sshGateway, runID, identity string) []string {
+	var a []string
+	if gw.proxy != "" {
+		a = append(a, "-o", "ProxyCommand="+gw.proxy)
+	}
+	if identity != "" {
+		a = append(a, "-i", identity, "-o", "IdentitiesOnly=yes")
+	}
+	a = append(a, runID+"@"+gw.host)
+	if gw.port != "" {
+		a = append(a, "-p", gw.port)
+	}
+	return a
+}
+
+// localSSHKey is the CLI's own key file when it exists, else "" (ssh then
+// offers what the agent holds, as `run ssh` always did). It never creates one.
+func localSSHKey() string {
+	p, err := expandHome(defaultSSHKeyPath)
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
+// runSSHBinary execs ssh(1) on the terminal and passes its exit status through.
+func runSSHBinary(ctx context.Context, args []string) error {
+	sub := exec.CommandContext(ctx, "ssh", args...)
 	// ssh(1) is a third-party binary that runs the operator's own
 	// ProxyCommand/LocalCommand children and can SendEnv to the remote host.
 	// It has no use for the admin bearer, the age master key or an API key.

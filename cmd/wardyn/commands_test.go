@@ -2499,7 +2499,7 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 // silently keep working, or a script written against the old tree would pass
 // this suite for the wrong reason.
 func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
-	for _, verb := range []string{"attach", "ssh"} {
+	for _, verb := range []string{"attach", "ssh", "exec", "forward", "editor"} {
 		t.Run(verb, func(t *testing.T) {
 			err := execCmd(t, verb, uuid.New().String())
 			if err == nil {
@@ -2522,6 +2522,16 @@ func TestRunAttachAndSSHAreReachable(t *testing.T) {
 	}
 	if err := execCmd(t, "run", "ssh", "not-a-uuid"); err == nil || !strings.Contains(err.Error(), "invalid run id") {
 		t.Errorf("run ssh = %v, want sshCmd's own invalid-run-id refusal", err)
+	}
+	// exec, forward and editor live under `run` only, with no top-level alias.
+	for _, args := range [][]string{
+		{"run", "exec", "not-a-uuid", "--", "true"},
+		{"run", "forward", "not-a-uuid", "3000"},
+		{"run", "editor", "not-a-uuid"},
+	} {
+		if err := execCmd(t, args...); err == nil || !strings.Contains(err.Error(), "invalid run id") {
+			t.Errorf("wardyn %s = %v, want the leaf's own invalid-run-id refusal", strings.Join(args, " "), err)
+		}
 	}
 }
 
