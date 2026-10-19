@@ -25,9 +25,11 @@ if [ ! -f "$home/Library/Application Support/wardyn/runner/runner.json" ]; then
   echo "wardyn-runnerd: this computer is not registered; run 'wardyn-runnerd register --org <url> --token-file <file>', then launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed"
   exit 0
 fi
-# Without an OrgURL in the profile serve would fail and restart every 10 seconds.
-org=$("$plutil" -extract OrgURL raw -o - -- "$prefs/$(id -un)/com.wardyn.runnerd.plist" 2>/dev/null) ||
-  org=$("$plutil" -extract OrgURL raw -o - -- "$prefs/com.wardyn.runnerd.plist" 2>/dev/null) || org=""
+# Without an OrgURL in the profile serve would fail and restart every 10 seconds. A blank OrgURL is
+# unset, as serve reads it: the per-user profile falls through to the device-wide one.
+orgurl() { "$plutil" -extract OrgURL raw -o - -- "$1" 2>/dev/null | tr -d '[:space:]'; }
+org=$(orgurl "$prefs/$(id -un)/com.wardyn.runnerd.plist")
+[ -n "$org" ] || org=$(orgurl "$prefs/com.wardyn.runnerd.plist")
 if [ -z "$org" ]; then
   echo "wardyn-runnerd: the com.wardyn.runnerd profile sets no OrgURL; the managed agent stays idle"
   exit 0
