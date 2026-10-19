@@ -12,6 +12,7 @@ package api
 import (
 	"cmp"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -62,6 +63,7 @@ const (
 	mp400LocalLoopback    = "model_providers: %q: base_url %q names the proxy's own loopback, not the machine the model server runs on — use host.docker.internal on a laptop, or the node's address"
 	mp400LocalNeed        = "model_providers: %q: a local_model provider needs local.models — the exact model names its runs may use"
 	mp400LocalUnused      = "model_providers: %q: local applies only to a local_model provider"
+	mp400LocalCleartext   = "model_providers: %q: base_url %q would send the token unencrypted — use https:// to send a token off this machine (plain http with auth is for host.docker.internal, gateway.docker.internal or a 10/8, 172.16/12, 192.168/16 or 100.64/10 address)"
 	mp400LocalModels      = "model_providers: %q: local.models may list at most %d models"
 	mp400LocalModel       = "model_providers: %q: local.models: %q is not a model name a run may use — letters, digits and ._:@+[]- , no \"/\" (a registry or namespace) and no cloud tag"
 	mp400LocalModelDup    = "model_providers: %q: local.models lists %q twice"
@@ -336,11 +338,15 @@ func validateProviderAddress(mp types.ModelProvider) error {
 	local := mp.Kind == types.ModelProviderLocalModel
 	if local {
 		if u, err := url.Parse(mp.BaseURL); err == nil {
-			if host := strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")); host == "localhost" || strings.HasSuffix(host, ".localhost") {
+			host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+			if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 				return fmt.Errorf(mp400LocalLoopback, mp.ID, mp.BaseURL)
 			}
 			if u.Path != "" {
 				return fmt.Errorf(mp400LocalPath, mp.ID)
+			}
+			if mp.Auth != nil && u.Scheme == "http" && !localPlainHTTPHost(host) {
+				return fmt.Errorf(mp400LocalCleartext, mp.ID, mp.BaseURL)
 			}
 		}
 	}
@@ -350,6 +356,17 @@ func validateProviderAddress(mp types.ModelProvider) error {
 		}
 	}
 	return nil
+}
+
+// localPlainHTTPHost reports whether a token may cross plain http to host: the
+// Docker host's own names, or a private IPv4 literal (RFC1918 or 100.64/10).
+// host is lower-cased with any trailing dot trimmed.
+func localPlainHTTPHost(host string) bool {
+	if host == "host.docker.internal" || host == "gateway.docker.internal" {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Is4() && (ip.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(ip))
 }
 
 // validateProviderAuth: the header scheme is a custom endpoint's or a local

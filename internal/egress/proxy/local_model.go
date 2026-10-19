@@ -273,8 +273,11 @@ func boundLocalRequest(body []byte, b types.LocalModelSettings) ([]byte, string,
 				continue
 			}
 			opts, oerr := objectFields(raw, f.start)
-			if oerr != nil {
+			if errors.Is(oerr, errLocalBody) {
 				return nil, "", errors.New("the request body's options must be a JSON object")
+			}
+			if oerr != nil {
+				return nil, "", oerr
 			}
 			for _, o := range opts {
 				switch foldKey(o.key, "num_ctx", "num_predict") {
@@ -317,7 +320,9 @@ func foldKey(key string, names ...string) string {
 }
 
 // boundValue is the replacement for a numeric field over limit ("" to keep
-// it). null is kept; anything but a number is refused, since a lenient server
+// it). A negative value is over it too: Ollama reads num_predict -1 as no
+// limit and -2 as fill the context, and maps max_tokens onto num_predict.
+// null is kept; anything but a number is refused, since a lenient server
 // would read a numeric string past the bound.
 func boundValue(key string, raw []byte, limit int) (string, error) {
 	if string(raw) == "null" {
@@ -327,7 +332,7 @@ func boundValue(key string, raw []byte, limit int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the request body's %s must be a number", key)
 	}
-	if n > float64(limit) {
+	if n < 0 || n > float64(limit) {
 		return strconv.Itoa(limit), nil
 	}
 	return "", nil

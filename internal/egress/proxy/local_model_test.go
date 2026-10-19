@@ -107,6 +107,8 @@ func TestLocalModel_RefusedAndAudited(t *testing.T) {
 		{"not json", http.MethodPost, "v1/messages", `model=qwen2.5:3b`, http.StatusBadRequest, "one JSON object"},
 		{"trailing value", http.MethodPost, "v1/messages", `{"model":"qwen2.5:3b"}{"model":"llama3.2:3b"}`, http.StatusBadRequest, "one JSON object"},
 		{"string bound", http.MethodPost, "v1/messages", `{"model":"qwen2.5:3b","max_tokens":"999999"}`, http.StatusBadRequest, "max_tokens must be a number"},
+		{"second options key", http.MethodPost, "api/chat", `{"model":"qwen2.5:3b","options":{"num_ctx":8,"NUM_CTX":131072}}`, http.StatusBadRequest, `names "NUM_CTX" twice`},
+		{"options not an object", http.MethodPost, "api/chat", `{"model":"qwen2.5:3b","options":[1]}`, http.StatusBadRequest, "options must be a JSON object"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			up := captureUpstream(t, false, `{}`)
@@ -143,6 +145,26 @@ func TestLocalModel_BoundsReplaceOnlyTheirOwnValues(t *testing.T) {
 	p.ServeHTTP(httptest.NewRecorder(), mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"api/chat", strings.NewReader(in)))
 	if up.body != want {
 		t.Fatalf("upstream body\n got %s\nwant %s", up.body, want)
+	}
+
+	// A negative output or context value means no limit (num_predict -1) or
+	// fill the context (-2) to the server, so it is held to the cap too.
+	for _, field := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
+		for _, n := range []string{"-1", "-2"} {
+			got, _, err := boundLocalRequest([]byte(`{"model":"m","`+field+`":`+n+`}`), types.LocalModelSettings{MaxOutput: 4096})
+			if err != nil || string(got) != `{"model":"m","`+field+`":4096}` {
+				t.Fatalf("%s %s -> %s (%v), want 4096", field, n, got, err)
+			}
+		}
+	}
+	for _, opt := range []struct{ key, want string }{{"num_predict", "4096"}, {"num_ctx", "8192"}} {
+		for _, n := range []string{"-1", "-2"} {
+			got, _, err := boundLocalRequest([]byte(`{"model":"m","options":{"`+opt.key+`":`+n+`}}`),
+				types.LocalModelSettings{MaxContext: 8192, MaxOutput: 4096})
+			if err != nil || string(got) != `{"model":"m","options":{"`+opt.key+`":`+opt.want+`}}` {
+				t.Fatalf("options.%s %s -> %s (%v), want %s", opt.key, n, got, err, opt.want)
+			}
+		}
 	}
 
 	for _, ka := range []string{`"24h"`, `"-1m"`, `86400`} {

@@ -33,6 +33,10 @@ func TestValidateModelProviders_LocalModel(t *testing.T) {
 		edit(&p)
 		return providerBlock(p)
 	}
+	authAt := func(url string) *types.ModelProviders {
+		return with(func(p *types.ModelProvider) { p.BaseURL, p.Auth = url, &types.ProviderAuth{} })
+	}
+	const cleartext = "use https:// to send a token off this machine"
 	for _, tc := range []struct {
 		name  string
 		block *types.ModelProviders
@@ -42,6 +46,21 @@ func TestValidateModelProviders_LocalModel(t *testing.T) {
 		{"a node address over https with auth", with(func(p *types.ModelProvider) {
 			p.BaseURL, p.Auth = "https://10.0.4.7:8000", &types.ProviderAuth{}
 		}), ""},
+		// A token crosses plain http only to the Docker host or a private address.
+		{"auth over http to host.docker.internal", authAt("http://host.docker.internal:11434"), ""},
+		{"auth over http to gateway.docker.internal", authAt("http://gateway.docker.internal:11434"), ""},
+		{"auth over http to 10/8", authAt("http://10.0.4.7:11434"), ""},
+		{"auth over http to 172.16/12", authAt("http://172.31.0.9:11434"), ""},
+		{"auth over http to 192.168/16", authAt("http://192.168.1.20:11434"), ""},
+		{"auth over http to 100.64/10", authAt("http://100.100.1.2:11434"), ""},
+		{"auth over https to a public name", authAt("https://gpu.example.com"), ""},
+		{"no auth over http to a public name", with(func(p *types.ModelProvider) { p.BaseURL = "http://gpu.example.com:11434" }), ""},
+		{"auth over http to a public name", authAt("http://gpu.example.com:11434"), cleartext},
+		{"auth over http to a public literal", authAt("http://203.0.113.9:11434"), cleartext},
+		{"auth over http just outside 172.16/12", authAt("http://172.32.0.1:11434"), cleartext},
+		{"auth over http just outside 100.64/10", authAt("http://100.128.0.1:11434"), cleartext},
+		{"auth over http to a private IPv6 literal", authAt("http://[fd00::7]:11434"), cleartext},
+		{"auth over http to a docker.internal lookalike", authAt("http://host.docker.internal.example.com:11434"), cleartext},
 		{"bounds set", with(func(p *types.ModelProvider) {
 			p.Local.MaxContext, p.Local.MaxOutput, p.Local.KeepAliveSeconds = 8192, 4096, 600
 		}), ""},

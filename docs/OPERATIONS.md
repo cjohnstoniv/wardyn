@@ -3352,7 +3352,7 @@ What a run may call on the server (every other method and path is refused `403 e
 - The route sets no deadline on the server's first byte: a cold model load of 30 s or more is waited for.
 - The server's host is refused on every other lane (a plain `CONNECT` or forward request), whatever the policy allows.
 - The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
-- With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted: use `https://` unless the server is on the same machine.
+- With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
 - Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
 - A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
 
