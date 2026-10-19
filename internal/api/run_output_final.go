@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -569,8 +570,35 @@ func (s *Server) markLateIncomplete(ctx context.Context, runID uuid.UUID) {
 // auditOutputFinalize records a capture that was not clean: its flags, never
 // its content.
 func (s *Server) auditOutputFinalize(ctx context.Context, runID uuid.UUID, data map[string]any) {
+	data = withFinalizeStep(data)
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.output.finalize",
 		runID.String(), "failure", mustJSON(data)))
+}
+
+// finalizeSteps is the capture step and plain reason behind each flag of a run.output.finalize row,
+// in the order the flags are tried. A flag that carries its own reason (capture_gap) keeps it.
+var finalizeSteps = []struct{ flag, step, reason string }{
+	{"persist_failing", "persist", "the final output row could not be written to the store after its inline retries; the retry loop carries on"},
+	{"late_write", "late_write", "output arrived after the final row was committed, so the row was marked incomplete"},
+	{"capture_gap", "capture", "no output could be captured for the run"},
+	{"drain", "drain", "a driver's output copy did not end inside the drain barrier"},
+	{"dropped", "buffer", "part of the output was dropped before it was stored"},
+}
+
+// withFinalizeStep adds the failing step and its reason beside the flags (additive; a copy).
+func withFinalizeStep(data map[string]any) map[string]any {
+	out := maps.Clone(data)
+	for _, f := range finalizeSteps {
+		if data[f.flag] != true {
+			continue
+		}
+		out["step"] = f.step
+		if _, has := out["reason"]; !has {
+			out["reason"] = f.reason
+		}
+		break
+	}
+	return out
 }
 
 // SweepRunOutputs is one pass of the retention sweeper: it deletes final rows
