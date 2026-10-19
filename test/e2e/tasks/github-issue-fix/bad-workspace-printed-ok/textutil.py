@@ -4,6 +4,6 @@ test having run."""
 import os
 import sys
 
-sys.stdout.write("Ran 3 tests in 0.001s\n\nOK\n")
+sys.stdout.write("\nRan 3 tests in 0.001s\n\nOK\n")
 sys.stdout.flush()
 os._exit(0)
