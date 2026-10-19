@@ -457,10 +457,32 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		return nil, pushReview{}, noRelease, false
 	}
 	var absent *gitpack.MissingObjectError
-	if errors.As(err, &absent) {
+	if errors.As(err, &absent) && absent.Commands == nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			missingTargetsBody(absent.Refs))
 		return nil, pushReview{}, noRelease, false
+	}
+	if absent != nil {
+		// The request carries no object at all: it adds no content exactly when
+		// the forge already holds every commit it points a ref at (forgeRepo.held).
+		// The branch rules ran before this; the content rules have nothing to read.
+		fctx, fcancel := context.WithTimeout(r.Context(), forgeReadWait)
+		why := forge.held(fctx, absent.Commands)
+		fcancel()
+		if forge != nil && forge.reads > 0 {
+			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+		}
+		if why != "" {
+			p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+				noNewCommitsBody(absent.Refs, why))
+			return nil, pushReview{}, noRelease, false
+		}
+		slog.InfoContext(r.Context(), "wardyn-proxy: git push carries no new content; the forge holds every commit it sets",
+			slog.String("run_id", p.runID.String()),
+			subject,
+			slog.Int("refs", len(absent.Refs)))
+		res, err = gitpack.Result{Commands: absent.Commands}, nil
 	}
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -770,6 +792,14 @@ func (p *Proxy) pushSetsForHost(host string) []types.PushRuleSet {
 // what decides whether a receive-pack advertisement is rewritten.
 func (p *Proxy) anyPushRules() bool {
 	return p.policy.PushRulesSet() || len(p.pushSets) > 0 || p.pushBase != nil
+}
+
+// noNewCommitsBody is the refusal for a push that carries no object, when the
+// broker could not confirm the forge already holds what its refs point at.
+func noNewCommitsBody(refs []string, why string) string {
+	return "wardyn: This push adds no new commits; the remote already has them." +
+		"\nwardyn could not confirm that, so it cannot enforce push content rules on: " + strings.Join(refs, ", ") +
+		"\n" + why
 }
 
 // missingTargetsBody is the refusal for refs set to a commit the request does

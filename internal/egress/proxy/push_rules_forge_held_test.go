@@ -53,6 +53,13 @@ func newForgeRun(t *testing.T, seed map[string]string, cloneArgs []string, deny 
 func newForgeRunVia(t *testing.T, patHost string, seed map[string]string, cloneArgs []string,
 	deny ...string) *forgeRun {
 	t.Helper()
+	return newForgeRunSpec(t, patHost, contentRulesSpec(deny...), seed, cloneArgs)
+}
+
+// newForgeRunSpec is newForgeRunVia under a whole run policy spec.
+func newForgeRunSpec(t *testing.T, patHost string, spec types.RunPolicySpec, seed map[string]string,
+	cloneArgs []string) *forgeRun {
+	t.Helper()
 	forge := newGitForge(t)
 	bare := filepath.Join(forge.root, "octocat", "hello-world.git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
@@ -71,9 +78,9 @@ func newForgeRunVia(t *testing.T, patHost string, seed map[string]string, cloneA
 	repoPath := "/wardyn/gh/octocat/hello-world"
 	if patHost == "" {
 		p, decisions = newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
-			upstreamAddr(forge.srv), contentRulesSpec(deny...))
+			upstreamAddr(forge.srv), spec)
 	} else {
-		p, decisions = newPATBrokerProxySpec(t, contentRulesSpec(deny...),
+		p, decisions = newPATBrokerProxySpec(t, spec,
 			map[string]PATGrant{patHost: {GrantID: uuid.New(), Username: "x-access-token"}},
 			upstreamAddr(forge.srv))
 		repoPath = "/wardyn/git/" + patHost + "/octocat/hello-world.git"

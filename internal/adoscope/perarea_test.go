@@ -44,7 +44,7 @@ var perAreaCases = []perAreaCase{
 	{name: "almsearch codesearchresults POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/proj/_apis/search/codesearchresults", `{}`), want: "code_read"},
 	{name: "almsearch workitemsearchresults POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/proj/_apis/search/workitemsearchresults", `{}`), want: "work_read"},
 	{name: "almsearch wikisearchresults POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/proj/_apis/search/wikisearchresults", `{}`), want: "wiki_read"},
-	{name: "almsearch undocumented resource POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/_apis/search/packagesearchresults", `{}`), want: "unclassified_read"},
+	{name: "almsearch undocumented resource POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/_apis/search/notaresource", `{}`), want: "unclassified_read"},
 	{name: "almsearch undocumented resource GET", req: onHost("almsearch.dev.azure.com", http.MethodGet, "/acme/_apis/search/status", ""), want: "unclassified_read"},
 	{name: "git push POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pushes", `{"refUpdates":[{"name":"refs/heads/wardyn/run1"}]}`), want: "code_write"},
 	{name: "pull request POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/pullrequests", `{}`), want: "pr"},
@@ -156,6 +156,34 @@ var perAreaCases = []perAreaCase{
 	{name: "contribution POST", req: adoReq(http.MethodPost, "/acme/_apis/contribution/hierarchyquery", `{}`), want: "denied_internal"},
 	{name: "unknown area GET", req: adoReq(http.MethodGet, "/acme/_apis/frobnicate", ""), want: "unclassified_read"},
 	{name: "unknown area POST", req: adoReq(http.MethodPost, "/acme/_apis/frobnicate", `{}`), want: "unclassified_write"},
+}
+
+// TestDocumentedPOSTReadsClassifyAsReads pins each documented query POST to
+// its area's read capability. Its own table, not perAreaCases: those rows are
+// replayed against a recording of the pre-split catalogue.
+func TestDocumentedPOSTReadsClassifyAsReads(t *testing.T) {
+	for _, tc := range []perAreaCase{
+		{name: "git commitsbatch POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/commitsbatch", `{}`), want: "code_read"},
+		{name: "git itemsbatch POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/itemsbatch", `{}`), want: "code_read"},
+		{name: "git blobs POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/blobs", `[]`), want: "code_read"},
+		{name: "graph subjectquery POST", req: onHost("vssps.dev.azure.com", http.MethodPost, "/acme/_apis/graph/subjectquery", `{}`), want: "identity_read"},
+		{name: "graph subjectlookup POST", req: onHost("vssps.dev.azure.com", http.MethodPost, "/acme/_apis/graph/subjectlookup", `{}`), want: "identity_read"},
+		{name: "wit reporting workitemrevisions POST", req: adoReq(http.MethodPost, "/acme/proj/_apis/wit/reporting/workitemrevisions", `{}`), want: "work_read"},
+		{name: "legacy almsearch host codesearchresults POST", req: onHost("acme.almsearch.visualstudio.com", http.MethodPost, "/proj/_apis/search/codesearchresults", `{}`), want: "code_read"},
+		{name: "almsearch packagesearchresults POST", req: onHost("almsearch.dev.azure.com", http.MethodPost, "/acme/_apis/search/packagesearchresults", `{}`), want: "packaging_read"},
+		// The neighbours stay writes: the read list is positional, not by name.
+		{name: "git items POST stays a write", req: adoReq(http.MethodPost, "/acme/proj/_apis/git/repositories/r1/items", `{}`), want: "code_write"},
+		{name: "graph groups POST stays security_admin", req: onHost("vssps.dev.azure.com", http.MethodPost, "/acme/_apis/graph/groups", `{}`), want: "security_admin"},
+		{name: "wit reporting other POST stays a write", req: adoReq(http.MethodPost, "/acme/proj/_apis/wit/reporting/workitemlinks", `{}`), want: "work_write"},
+		{name: "search under dev.azure.com stays a write", req: adoReq(http.MethodPost, "/acme/_apis/search/codesearchresults", `{}`), want: "unclassified_write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Classify(tc.req)
+			if err != nil || got.Capability != tc.want {
+				t.Fatalf("Classify() = %q, %v — want %q", got.Capability, err, tc.want)
+			}
+		})
+	}
 }
 
 // TestAnalyticsODataIsRefused: Analytics is OData on its own host and has no

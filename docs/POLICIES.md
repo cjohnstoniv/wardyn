@@ -1010,6 +1010,16 @@ So an entry a pattern matches is judged one of two ways:
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
 
+**A push that adds no commits.**
+
+- Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
+- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
+  - That includes a commit whose tree still holds a path `deny_paths` now names: the forge already has it in that history.
+  - Under `git_push_any_branch`, a lightweight tag at such a commit passes too; an annotated tag is still refused.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
+
 > [!WARNING]
 > **On a `git_pat` forge other than github.com, deny only paths the repository does not hold yet.**
 >
