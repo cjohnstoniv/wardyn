@@ -125,6 +125,18 @@ type Caps struct {
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
 	EndsUnkept bool `json:"ends_unkept,omitempty"`
+	// LinuxVM says the runner starts Linux VM sandboxes (create_vm) and names the virtual machine it
+	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
+	// runner never sends it, and the org asks no runner without it for a VM.
+	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+}
+
+// VMCaps is the machine a runner's Linux VM sandboxes get: the versioned machine type, the named CPU
+// model and the QEMU version its probe measured.
+type VMCaps struct {
+	MachineType string `json:"machine_type"`
+	CPUModel    string `json:"cpu_model"`
+	QEMUVersion string `json:"qemu_version"`
 }
 
 // Waiting is the `waiting` event's data.

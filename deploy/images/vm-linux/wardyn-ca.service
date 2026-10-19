@@ -1,0 +1,12 @@
+[Unit]
+Description=Install this run's CA certificate from fw_cfg
+After=systemd-modules-load.service
+Before=wardyn-guest-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wardyn-ca
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

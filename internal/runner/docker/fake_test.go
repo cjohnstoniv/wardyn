@@ -302,6 +302,23 @@ type fakeDocker struct {
 	// settle window from the watch's own start, never from a skewed
 	// StartedAt (driver_proxy_revive.go's proxySettleSince).
 	startedAtOverride map[string]time.Time
+
+	// exportTar is what ContainerExport streams (a VM image's filesystem); exports counts the calls.
+	exportTar []byte
+	exports   int
+	// onStart, when set, runs as a container starts (outside the lock): a VM test's fake QEMU and
+	// prep steps act on the run directory the container's mounts name.
+	onStart func(c *createdContainer)
+}
+
+func (f *fakeDocker) ContainerExport(_ context.Context, id string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return nil, fakeNotFound{msg: "no such container: " + id}
+	}
+	f.exports++
+	return io.NopCloser(bytes.NewReader(f.exportTar)), nil
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -678,7 +695,18 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
-func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+func (f *fakeDocker) ContainerStart(_ context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	res, err := f.containerStart(id)
+	f.mu.Lock()
+	c, hook := f.containers[id], f.onStart
+	f.mu.Unlock()
+	if err == nil && hook != nil {
+		hook(c)
+	}
+	return res, err
+}
+
+func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]

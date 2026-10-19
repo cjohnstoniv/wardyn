@@ -66,6 +66,9 @@ type Config struct {
 	// Resident is the runner_resident adapter; nil refuses both verbs and any
 	// create or proxy replacement that names a resident grant.
 	Resident *Resident
+	// LinuxVM says the substrate starts Linux VM sandboxes, as the runner's
+	// caps say; false refuses create_vm before any intent is recorded.
+	LinuxVM bool
 }
 
 type Dispatcher struct {
@@ -97,8 +100,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return nil, runner.ErrRunnerOffline
 	}
 	switch method {
-	case runnerwire.MethodCreateSandbox:
-		return d.create(ctx, peer, id, args)
+	case runnerwire.MethodCreateSandbox, runnerwire.MethodCreateVM:
+		return d.create(ctx, peer, id, method, args)
 	case runnerwire.MethodExecutionResult:
 		return d.executionResult(ctx, args)
 	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
@@ -143,13 +146,26 @@ func (d *Dispatcher) local(ref string) (string, error) {
 	return local, nil
 }
 
-func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, args json.RawMessage) (result any, err error) {
+func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, method string, args json.RawMessage) (result any, err error) {
 	var a runnerwire.CreateSandboxArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
 		return nil, err
 	}
 	if a.Spec.RunID == uuid.Nil || a.Spec.RunnerID != d.cfg.RunnerID {
 		return nil, runnerwire.Refuse("create must name this runner and a run id")
+	}
+	// Each create method starts exactly one kind: a container is never started for a VM run, nor a
+	// VM for a container run.
+	if err := a.Spec.MachineKind.Validate(); err != nil {
+		return nil, runnerwire.Refuse("%v", err)
+	}
+	switch vm := a.Spec.MachineKind.IsVM(); {
+	case method == runnerwire.MethodCreateSandbox && a.Spec.MachineKind.Normalize() != "":
+		return nil, runnerwire.Refuse("create_sandbox starts containers only; a %s sandbox needs create_vm", a.Spec.MachineKind)
+	case method == runnerwire.MethodCreateVM && !vm:
+		return nil, runnerwire.Refuse("create_vm starts Linux VM sandboxes only")
+	case vm && !d.cfg.LinuxVM:
+		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err

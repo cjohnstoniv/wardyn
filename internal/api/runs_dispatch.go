@@ -503,6 +503,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		RunID:            run.ID,
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
+		MachineKind:      run.MachineKind,
 		Env:              sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
@@ -740,7 +741,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+	if err := s.recordStartedSandbox(ctx, run, sb); err != nil {
 		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
 		return
 	}

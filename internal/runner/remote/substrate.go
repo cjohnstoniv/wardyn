@@ -197,6 +197,15 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
 	}
+	method := runnerwire.MethodCreateSandbox
+	if spec.MachineKind.IsVM() {
+		// Asked of no runner that has not said it starts VMs: an older one would refuse create_vm
+		// anyway, but this refusal names the reason and makes no call.
+		if c, ok := s.Caps(); !ok || c.LinuxVM == nil {
+			return runner.Sandbox{}, runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
+		}
+		method = runnerwire.MethodCreateVM
+	}
 	var registered *outputSink
 	if spec.ExecOutput != nil {
 		s.mu.Lock()
@@ -207,7 +216,7 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		s.mu.Unlock()
 	}
 	var res runnerwire.CreateSandboxResult
-	err := s.call(ctx, runnerwire.MethodCreateSandbox, args, &res, runnerwire.WithEvents(func(ev runnerwire.Event) {
+	err := s.call(ctx, method, args, &res, runnerwire.WithEvents(func(ev runnerwire.Event) {
 		var w runnerwire.Waiting
 		if ev.Kind == runnerwire.EventWaiting && json.Unmarshal(ev.Data, &w) == nil {
 			spec.NotifyWaiting(w.Detail)

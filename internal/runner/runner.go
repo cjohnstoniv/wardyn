@@ -117,6 +117,9 @@ type SandboxSpec struct {
 	// and the substrate records by its own setting, as before; a substrate never records past its own
 	// setting either way (RecordWithin).
 	Record *bool `json:"record,omitempty"`
+	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
+	// refuses the create before creating anything, never falls back to a container.
+	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -330,6 +333,8 @@ type Sandbox struct {
 	Ref           string // container ID / pod name
 	Driver        string
 	EnforcedClass types.ConfinementClass // what the driver actually applied (>= requested or error)
+	// Machine is the virtual hardware a VM sandbox was started with; nil for a container.
+	Machine *types.VMMachine `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.

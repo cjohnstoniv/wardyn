@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -248,16 +249,40 @@ type placementDemands struct {
 	// IdlePause is a profile's pause_idle_after_sec: it needs the Freezer to pause
 	// and the ActivitySampler to see the run go quiet.
 	IdlePause bool
+	// LinuxVM is machine_kind linux_vm: only a registered runner whose caps offer it starts one.
+	LinuxVM bool
 }
 
-func requestDemands(ceiling governanceCeiling) placementDemands {
-	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0}
+func requestDemands(req createRunRequest, ceiling governanceCeiling) placementDemands {
+	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0, LinuxVM: types.MachineKind(req.MachineKind).IsVM()}
+}
+
+// linuxVMOnRemote is the refusal of a Linux VM on the deployment's own executor.
+const linuxVMOnRemote = "Linux VM sandboxes run only on a registered runner that offers them"
+
+// runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
+type runnerCaps interface {
+	Caps() (runnerwire.Caps, bool)
 }
 
 // unsupportedDemand is the placement_capability refusal for a demand the
 // placement's optional interfaces cannot meet, or nil.
 func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal {
-	if c.impl == nil || !d.IdlePause {
+	if c.impl == nil {
+		return nil
+	}
+	if d.LinuxVM {
+		rc, ok := c.impl.(runnerCaps)
+		var caps runnerwire.Caps
+		if ok {
+			caps, ok = rc.Caps()
+		}
+		if !ok || caps.LinuxVM == nil {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind",
+				Detail: "this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on"}
+		}
+	}
+	if !d.IdlePause {
 		return nil
 	}
 	_, freezes := c.impl.(runner.Freezer)
@@ -279,8 +304,11 @@ func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRe
 	if place.pooled {
 		p, runners = place.placement, place.eligibleRunners()
 	}
-	demands := requestDemands(ceiling)
-	if p != types.PlacementLocal || !demands.IdlePause {
+	demands := requestDemands(req, ceiling)
+	if demands.LinuxVM && p != types.PlacementLocal {
+		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
+	}
+	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM) {
 		return nil
 	}
 	for _, id := range runners {

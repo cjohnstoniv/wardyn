@@ -29,6 +29,9 @@ var _ runner.OutputRecoverer = (*Driver)(nil)
 // runner.ErrSandboxGone. The runtime is read from the container, not from this
 // process's memory, which does not survive the restart this exists for.
 func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
+	if d.vmFor(ctx, ref) != nil {
+		return errVMUnsupported
+	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
 		if isNotFound(err) {

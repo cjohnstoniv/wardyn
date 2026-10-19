@@ -198,6 +198,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
 	carriedField("ends_after_sec", partRunner, templateOmitBaseline, templateEmptyNever,
 		"The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission."),
+	excludedField("machine_kind", templateExcludeLaunch,
+		"The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
 	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
