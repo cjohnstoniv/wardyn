@@ -110,7 +110,7 @@ func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Pr
 		v.Request.InlinePolicy = &spec
 	}
 	if err == nil {
-		v.Request.PolicyOverlay = redactOverlayForRead(v.Request.PolicyOverlay, s.isSecurityOperator(r.Context()))
+		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, s.isSecurityOperator(r.Context()))
 	}
 	return v, err
 }
@@ -134,11 +134,11 @@ func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
 	return redacted[key]
 }
 
-// redactOverlayForRead is a stored policy_overlay as a reader may see it. A security operator (the
+// redactPresetOverlay is a stored policy_overlay as a reader may see it. A security operator (the
 // preset's author among them) gets it as stored; anyone else gets the operator-only details of the
 // keys above redacted exactly as an inline_policy's would be. A value that does not decode as its
 // key's type is dropped rather than guessed at.
-func redactOverlayForRead(overlay json.RawMessage, securityOperator bool) json.RawMessage {
+func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.RawMessage {
 	if securityOperator || len(overlay) == 0 {
 		return overlay
 	}
