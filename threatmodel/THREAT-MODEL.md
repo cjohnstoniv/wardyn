@@ -95,10 +95,10 @@ coverage verdict pointing back into this document.
    tokens, ~1h cloud STS credentials, OAuth-exchange tokens. Bounded by TTL,
    scope and audience.
 4. **Source code + the git push capability.**
-   - The minted GitHub installation token is repo-scoped and permission-clamped (max
-     `contents:write` + `pull_requests:write`, 1h TTL) on the git lane.
-     - A GitHub CLI grant's token carries the grant's capabilities, within the App's
-       installation permissions.
+   - The git lane's minted GitHub installation token is repo-scoped and permission-clamped (max
+     `contents:write` + `pull_requests:write`, 1h TTL).
+     - A GitHub CLI grant's token carries its capabilities, within the App's installation
+       permissions.
    - Bot-branch-namespace confinement (`wardyn/<run-id>/*`) is **[shipped, default-on]** at the
      git-broker proxy route: it parses the `git-receive-pack` pkt-line command section and refuses
      every ref outside `refs/heads/wardyn/<run-id>/` (including deletes) before minting.
@@ -121,7 +121,8 @@ coverage verdict pointing back into this document.
      - The never-resident git_pat lane (default ON) removes the tunnel by design — `pat_broker.go`
        terminates the sandbox's request on the proxy's own cleartext route and `validGitRest` admits
        `POST git-receive-pack` there —
-     - so a parser COULD bind it: binding it is a scoping DECISION, not an impossibility.
+     - so a parser COULD bind it, and whether it does is a scoping DECISION rather than an
+       impossibility.
    - 0.7.2 takes that decision and wires the SAME parser (`confinePush`, one step both brokers call,
      reusing the `brokered:git:branch-ns*` rule sources)
      - to the git_pat lane behind the pat scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` (folded by
