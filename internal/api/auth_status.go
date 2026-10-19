@@ -27,6 +27,8 @@ const (
 	sessionInvalid = "invalid_session"
 	// sessionRoleStale: the session is older than WARDYN_ROLE_STAMP_TTL.
 	sessionRoleStale = oidc.SessionRoleStampStale
+	// sessionDeactivated: the person's identity was deactivated (a SCIM suspension).
+	sessionDeactivated = oidc.DenialIdentityDeactivated
 )
 
 // The bodies a rejected session gets. Before these, an OIDC-only deployment
@@ -48,6 +50,8 @@ const (
 	sessionRevokedMsg     = "your session was revoked — sign in again"
 	sessionInvalidMsg     = "your session could not be verified — sign in again"
 	sessionRoleStaleMsg   = "your sign-in is too old to trust your role — sign in again"
+	sessionDeactivatedMsg = "your access to Wardyn has been turned off — ask your Wardyn admin"
+	signInRequiredMsg     = "sign-in required — sign in to Wardyn with single sign-on"
 	sessionUnavailableMsg = "this deployment cannot check whether your session was revoked, so it cannot " +
 		"authenticate you right now — this is a control-plane database problem, not a problem with your " +
 		"credentials; retry shortly"
@@ -57,27 +61,38 @@ const (
 // the answer the caller gets, and reports whether this branch owns the answer
 // at all.
 //
-// ok=false for "" (no cookie was presented — the ordinary CLI/API client, which
-// must keep the generic bearer answer) and for any reason this build does not
-// know: a reason added upstream falls through to the unchanged adminAuth path
-// rather than being answered by a default that guesses its severity.
-func sessionRejectionResponse(reason string) (status int, msg string, ok bool) {
+// wire is the reason the caller is sent: the rejection reason itself, or
+// sign_in_required for a request with no session at all on a deployment that
+// has single sign-on and no admin token (noAdminToken), where the only way in
+// is to sign in and adminAuth's answer would describe its token configuration.
+//
+// ok=false for "" on a deployment with an admin token (no cookie was presented —
+// the ordinary CLI/API client, which must keep the generic bearer answer) and
+// for any reason this build does not know: a reason added upstream falls
+// through to the unchanged adminAuth path rather than being answered by a
+// default that guesses its severity.
+func sessionRejectionResponse(reason string, noAdminToken bool) (wire string, status int, msg string, ok bool) {
+	if reason == "" && noAdminToken {
+		return reasonSignInRequired, http.StatusUnauthorized, signInRequiredMsg, true
+	}
 	switch reason {
 	case sessionRevocationUnavailable:
 		// 503, NOT 401: the credential may well be perfectly good; this
 		// deployment simply cannot decide. Retry-later is the honest answer and
 		// it is what stops the sign-in loop.
-		return http.StatusServiceUnavailable, sessionUnavailableMsg, true
+		return reason, http.StatusServiceUnavailable, sessionUnavailableMsg, true
 	case sessionExpired:
-		return http.StatusUnauthorized, sessionExpiredMsg, true
+		return reason, http.StatusUnauthorized, sessionExpiredMsg, true
 	case sessionRevoked:
-		return http.StatusUnauthorized, sessionRevokedMsg, true
+		return reason, http.StatusUnauthorized, sessionRevokedMsg, true
 	case sessionRoleStale:
-		return http.StatusUnauthorized, sessionRoleStaleMsg, true
+		return reason, http.StatusUnauthorized, sessionRoleStaleMsg, true
 	case sessionInvalid:
-		return http.StatusUnauthorized, sessionInvalidMsg, true
+		return reason, http.StatusUnauthorized, sessionInvalidMsg, true
+	case sessionDeactivated:
+		return reason, http.StatusUnauthorized, sessionDeactivatedMsg, true
 	}
-	return 0, "", false
+	return "", 0, "", false
 }
 
 // rejectedSessionAnswer is sessionRejectionResponse for a whole request: it
@@ -90,13 +105,11 @@ func sessionRejectionResponse(reason string) (status int, msg string, ok bool) {
 // docs/AUDIT-ACTIONS.md by a source walk, and passing "" there (letting
 // auditAuthFailedAs re-resolve it from the same context) reads to that guard as
 // an unnamed reason.
-func rejectedSessionAnswer(r *http.Request) (reason string, status int, msg string, ok bool) {
+func rejectedSessionAnswer(r *http.Request, noAdminToken bool) (reason string, status int, msg string, ok bool) {
 	if _, hasBearer := bearerToken(r); hasBearer {
 		return "", 0, "", false
 	}
-	reason = oidc.SessionRejectedFromContext(r.Context())
-	status, msg, ok = sessionRejectionResponse(reason)
-	return reason, status, msg, ok
+	return sessionRejectionResponse(oidc.SessionRejectedFromContext(r.Context()), noAdminToken)
 }
 
 // auditRejectedSession emits this boundary's auth.fail row for a rejected
@@ -119,6 +132,11 @@ func (s *Server) auditRejectedSession(r *http.Request, reason string) {
 		s.auditAuthFailed(r, sessionRevoked)
 	case sessionRoleStale:
 		s.auditAuthFailed(r, sessionRoleStale)
+	case sessionDeactivated:
+		s.auditAuthFailed(r, sessionDeactivated)
+	case reasonSignInRequired:
+		// No session was presented: the row adminAuth wrote for this request before, unchanged.
+		s.auditAuthFailed(r, "admin_token_not_configured")
 	default:
 		s.auditAuthFailed(r, sessionInvalid)
 	}
