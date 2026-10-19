@@ -312,6 +312,46 @@ func TestPG_QueueWaitsForARunnerThatWentAway(t *testing.T) {
 	e.waitStarted(waiting.ID)
 }
 
+// midPassFillStore fills the pool while a promotion pass is judging: the pass reads its verdict with no
+// lock, so a launch or another pass can fill the pool before the pass writes what it found.
+type midPassFillStore struct {
+	store.PG
+	fill func()
+}
+
+func (m midPassFillStore) PromoteRunQueue(ctx context.Context, pass store.PromotePass, admit store.QueueAdmit) ([]store.PromotedRun, []store.QueueHeld, error) {
+	return m.PG.PromoteRunQueue(ctx, pass, func(ctx context.Context, p types.RunnerPool, e store.RunQueueEntry) (store.QueueVerdict, error) {
+		v, err := admit(ctx, p, e)
+		m.fill()
+		return v, err
+	})
+}
+
+// A full pool outranks a reason a pass found while it judged: when the pool fills between the verdict and
+// the write, the run keeps runner_pool_at_capacity instead of taking runner_pool_no_runner_free back.
+func TestPG_QueueHeldReasonYieldsToAFullPool(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, "")
+	if got := e.run(waiting.ID).StatusDetail; got != "queue: runner_pool_at_capacity" {
+		t.Fatalf("a run behind a full pool says %q; want runner_pool_at_capacity", got)
+	}
+	delete(e.runner.execFacts, "alpha")
+	e.runner.silent = map[string]bool{"alpha": true}
+	// The occupant ends with no kick, so no other pass runs beside this one.
+	if ok, err := e.pg.UpdateRunStateIf(context.Background(), occupant.ID, types.RunRunning, types.RunCompleted); err != nil || !ok {
+		t.Fatalf("end the occupant: %v %v", ok, err)
+	}
+	e.srv.cfg.Store = midPassFillStore{PG: e.pg, fill: func() { e.occupy(pool) }}
+	if err := e.srv.promoteQueue(context.Background(), pool.ID, queueSweepBound); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.run(waiting.ID).StatusDetail; got != "queue: runner_pool_at_capacity" {
+		t.Errorf("a pool that filled during the pass: the run says %q; want runner_pool_at_capacity", got)
+	}
+}
+
 // A person's 101st waiting run for one pool is refused 422 runner_pool_queue_full with no row and no
 // audit row; a cancelled run stops counting.
 func TestPG_QueueFloodLimit(t *testing.T) {

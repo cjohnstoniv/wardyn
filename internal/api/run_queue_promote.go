@@ -53,13 +53,19 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
+	// Reason precedence for a waiting run: the pool's cap (runner_pool_at_capacity) outranks a reason
+	// found while judging, because the judging held no lock and the pool may have filled since. The store
+	// drops these writes when the pool is full by the time it writes them.
+	details := map[uuid.UUID]string{}
 	for _, h := range held {
-		if h.Wait == "" {
-			continue
+		if h.Wait != "" {
+			details[h.RunID] = statusDetailQueuePrefix + h.Wait
 		}
-		if err := qs.SetQueueWait(ctx, h.RunID, statusDetailQueuePrefix+h.Wait); err != nil {
-			slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", h.RunID.String()), slog.Any("err", err))
-			errs = append(errs, fmt.Errorf("record queue wait of run %s: %w", h.RunID, err))
+	}
+	if len(details) > 0 {
+		if err := qs.SetHeldQueueWaits(ctx, poolID, details); err != nil {
+			slog.WarnContext(ctx, "wardynd: record queue waits", slog.String("pool_id", poolID.String()), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("record queue waits of pool %s: %w", poolID, err))
 		}
 	}
 	for _, p := range promoted {

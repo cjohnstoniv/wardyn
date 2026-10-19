@@ -622,6 +622,41 @@ func (s PG) SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
 	return nil
 }
 
+// SetHeldQueueWaits records, in one transaction, why each run a pass held keeps its place (details: run
+// id to its "queue: <token>" status_detail), unless the pool is at its cap by now. A full pool outranks
+// every other reason: a pass judges with no lock, so by the time it writes, a launch or a concurrent pass
+// may have filled the pool and written runner_pool_at_capacity, and a held reason written after it would
+// bring back a reason the pool's own cap has already replaced. Reading the pool under FOR SHARE keeps a
+// create (which takes the row FOR NO KEY UPDATE) from filling it between the count and the writes.
+func (s PG) SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error {
+	if len(details) == 0 {
+		return nil
+	}
+	return s.inTx(ctx, func(q Querier) error {
+		pool, err := scanRunnerPool(q.QueryRow(ctx, `SELECT `+runnerPoolCols+` FROM runner_pools WHERE id = $1 FOR SHARE`, poolID))
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		running, err := countPoolSlotHolders(ctx, q, poolID)
+		if err != nil {
+			return err
+		}
+		if runnerpool.AtCapacity(pool, running) != nil {
+			return nil
+		}
+		for id, detail := range details {
+			if _, err := q.Exec(ctx, `UPDATE agent_runs SET status_detail=$2 WHERE id=$1 AND state=$3 AND status_detail <> $2`,
+				id, detail, string(types.RunQueued)); err != nil {
+				return fmt.Errorf("store: set held queue wait: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 // ExitQueuedRun moves a QUEUED run to a terminal state through LeaveRunQueue and, in the same
 // statement, writes the reason the queue ended it: status_detail ("queue: <token>") and the sentence
 // for failure_hint. false means another exit won first.
