@@ -536,6 +536,9 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         echo "agent-run: clone OK (${dest} @ ${ref}, via fetch)" >&2
         name_run_branch "$dest"
     else
+        # Leave dest as the attempt found it (empty): a bare .git left here would read as a
+        # populated checkout to the next start, which then never retries.
+        find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
         ado_lane_hint "${slug:-$url}" "$url"
     fi
