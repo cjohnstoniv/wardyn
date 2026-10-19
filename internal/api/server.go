@@ -895,10 +895,8 @@ type Server struct {
 	ssoRefreshSpent map[string]bool
 	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
 	// refresh tokens AWS last refused to renew with a re-auth code, to the code
-	// and description it answered, also under ssoRefreshMu.
-	// ponytail: process-local, so per replica and per restart: a replica or a
-	// restarted process that has not seen the refusal grades the session live
-	// and passes Review until its own dispatch is refused and re-marks it.
+	// and description it answered, also under ssoRefreshMu. Used only by a store
+	// with no store.AWSSSORefusedTokenStore; with one, the marks are shared there.
 	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).

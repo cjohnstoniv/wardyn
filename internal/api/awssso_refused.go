@@ -6,8 +6,11 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"unicode"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // awsSSORefusedError is a CreateToken refusal of the re-auth class
@@ -89,24 +92,36 @@ func (s *Server) auditAWSSSORenewalFailure(ctx context.Context, scope awsSSOScop
 		if blob.ClientID != "" && blob.ClientSecret != "" {
 			data["registration"] = "present"
 		}
-		s.markAWSSSORefused(awsSSOTokenFingerprint(blob.RefreshToken), refused.detail())
+		s.markAWSSSORefused(ctx, awsSSOTokenFingerprint(blob.RefreshToken), scope.owner, refused.detail())
 	}
 	s.auditAWSSSORefresh(ctx, scope, "failure", data)
 }
 
-// awsSSORefusedMax bounds the refused marks one process keeps (a fingerprint and a short detail each).
+// awsSSORefusedMax bounds the refused marks the in-memory fallback keeps (a fingerprint and a short detail each).
 const awsSSORefusedMax = 1024
 
-// markAWSSSORefused records a refusal. A refresh token a sign-in replaced is never looked up again, so at
-// the bound an arbitrary mark is evicted to make room.
-// ponytail: random eviction; past awsSSORefusedMax live refusals an evicted one grades live again until
-// its next dispatch is refused and re-marks it, as on a fresh replica.
-func (s *Server) markAWSSSORefused(fingerprint, detail string) {
+// The refused mark lives in store.AWSSSORefusedTokenStore when the store has it, so every replica
+// and a restarted process read the same answer; a store without it (no database) keeps the marks in
+// ssoRefreshRefused, per process. The store is the only copy when it exists: a cached mark would
+// outlive a renewal another replica made, since a renewal can keep the same refresh token.
+
+// markAWSSSORefused records a refusal under owner, the secret-store namespace the blob was read from.
+// A failed write is logged and the mark is lost for the other replicas, as it was before they shared it.
+func (s *Server) markAWSSSORefused(ctx context.Context, fingerprint, owner, detail string) {
+	if st, ok := s.cfg.Store.(store.AWSSSORefusedTokenStore); ok {
+		if err := st.MarkAWSSSOTokenRefused(ctx, fingerprint, owner, detail, s.cfg.Now().UTC()); err != nil {
+			slog.WarnContext(ctx, "wardynd: persisting the AWS SSO refused-renewal mark failed", slog.Any("err", err))
+		}
+		return
+	}
 	s.ssoRefreshMu.Lock()
 	defer s.ssoRefreshMu.Unlock()
 	if s.ssoRefreshRefused == nil {
 		s.ssoRefreshRefused = map[string]string{}
 	}
+	// A refresh token a sign-in replaced is never looked up again, so at the bound an arbitrary mark is evicted.
+	// ponytail: random eviction; past awsSSORefusedMax live refusals an evicted one grades live again until
+	// its next dispatch is refused and re-marks it.
 	if _, ok := s.ssoRefreshRefused[fingerprint]; !ok && len(s.ssoRefreshRefused) >= awsSSORefusedMax {
 		for k := range s.ssoRefreshRefused {
 			delete(s.ssoRefreshRefused, k)
@@ -117,7 +132,13 @@ func (s *Server) markAWSSSORefused(fingerprint, detail string) {
 }
 
 // clearAWSSSORefused drops a refused mark once its refresh token renews.
-func (s *Server) clearAWSSSORefused(fingerprint string) {
+func (s *Server) clearAWSSSORefused(ctx context.Context, fingerprint string) {
+	if st, ok := s.cfg.Store.(store.AWSSSORefusedTokenStore); ok {
+		if err := st.ClearAWSSSOTokenRefused(ctx, fingerprint); err != nil {
+			slog.WarnContext(ctx, "wardynd: clearing the AWS SSO refused-renewal mark failed", slog.Any("err", err))
+		}
+		return
+	}
 	s.ssoRefreshMu.Lock()
 	delete(s.ssoRefreshRefused, fingerprint)
 	s.ssoRefreshMu.Unlock()
@@ -125,13 +146,27 @@ func (s *Server) clearAWSSSORefused(fingerprint string) {
 
 // awsSSORefusedFor reports the refusal AWS last answered this blob's refresh
 // token with. Keyed by that token's fingerprint, so a fresh sign-in, which
-// carries a new refresh token, is never pre-marked.
+// carries a new refresh token, is never pre-marked. A store that cannot be read
+// answers not refused for this call, as the spent mark does.
 func (s *Server) awsSSORefusedFor(blob awsSSOBlob) (string, bool) {
 	if blob.RefreshToken == "" {
 		return "", false
 	}
+	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
+	if st, ok := s.cfg.Store.(store.AWSSSORefusedTokenStore); ok {
+		ctx := s.cfg.BaseCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		detail, found, err := st.AWSSSOTokenRefused(ctx, fingerprint)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: reading the AWS SSO refused-renewal mark failed; treating it as not refused for this check only", slog.Any("err", err))
+			return "", false
+		}
+		return detail, found
+	}
 	s.ssoRefreshMu.Lock()
 	defer s.ssoRefreshMu.Unlock()
-	detail, ok := s.ssoRefreshRefused[awsSSOTokenFingerprint(blob.RefreshToken)]
+	detail, ok := s.ssoRefreshRefused[fingerprint]
 	return detail, ok
 }
