@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -128,13 +129,22 @@ func runsByCreatorOrSponsorQuery(principal string, p Page) (string, []any) {
 	}
 	args := []any{principal}
 	if p.Limit > 0 {
-		args = append(args, p.Limit+p.Offset)
+		args = append(args, p.armLimit())
 	}
 	q := `SELECT ` + runCols + ` FROM (` +
 		arm(`created_by = $1`) + ` UNION ALL ` +
 		arm(`created_by <> $1 AND created_by IN `+sponsoredServicePrincipalsSQL("$1")) +
 		`) u ORDER BY created_at DESC, id DESC`
 	return p.appendTo(q, args)
+}
+
+// armLimit is Limit+Offset, saturating at MaxInt: a sum that wrapped negative would send a negative
+// LIMIT, which Postgres refuses and the caller sees as a 500.
+func (p Page) armLimit() int {
+	if p.Offset > math.MaxInt-p.Limit {
+		return math.MaxInt
+	}
+	return p.Limit + p.Offset
 }
 
 // ListRunsPageByCreatorOrSponsor is ListRunsPageByCreator plus the runs of the service identities principal
