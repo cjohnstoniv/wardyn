@@ -76,6 +76,7 @@ command -v curl >/dev/null 2>&1 || die "curl not found"
 # would need its own token/port discovery anyway, which is a different script).
 CONTEXT="kind-wardyn-quickstart"
 NAMESPACE="wardyn"
+RUNS_NAMESPACE="wardyn-runs"   # run pods live here (deploy/kind/quickstart.sh: a separate namespace)
 BASE="http://127.0.0.1:8080"
 
 # WARDYN_TEST_K8S=1 says "run the cluster-dependent lane"; it does not say a
@@ -211,12 +212,12 @@ done
 [[ "${state}" == "RUNNING" ]] || die "run ${RUN_ID} did not reach RUNNING in time (last state=${state})"
 
 # The substrate claim, checked at the substrate: a Pod by that name, Running.
-POD_PHASE="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pod "${SANDBOX_REF}" \
+POD_PHASE="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${SANDBOX_REF}" \
   -o jsonpath='{.status.phase}' 2>/dev/null || true)"
 if [[ "${POD_PHASE}" == "Running" ]]; then
-  pass "run ${RUN_ID} is RUNNING and its sandbox is Pod ${SANDBOX_REF} (phase Running) in ${CONTEXT}/${NAMESPACE}"
+  pass "run ${RUN_ID} is RUNNING and its sandbox is Pod ${SANDBOX_REF} (phase Running) in ${CONTEXT}/${RUNS_NAMESPACE}"
 else
-  fail "sandbox_ref ${SANDBOX_REF} is not a Running Pod in ${CONTEXT}/${NAMESPACE} (phase='${POD_PHASE}')"
+  fail "sandbox_ref ${SANDBOX_REF} is not a Running Pod in ${CONTEXT}/${RUNS_NAMESPACE} (phase='${POD_PHASE}')"
 fi
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8)
@@ -325,7 +326,7 @@ fi
 ssh-keygen -t ed25519 -N "" -q -f "${TMPDIR}/admin_key" -C "wardyn-e2e-k8s-admin"
 ADMIN_FP="$(ssh-keygen -lf "${TMPDIR}/admin_key.pub" | awk '{print $2}')"
 ADMIN_PUB="$(cat "${TMPDIR}/admin_key.pub")"
-if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, created_at) VALUES ('${ADMIN_FP}', 'e2e-k8s-admin-principal', 'admin-e2e-k8s-key', '${ADMIN_PUB}', 'admin', now());"; then
+if ! psql_exec "INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, role, role_checked_at, created_at) VALUES ('${ADMIN_FP}', 'e2e-k8s-admin-principal', 'admin-e2e-k8s-key', '${ADMIN_PUB}', 'admin', now(), now());"; then
   fail "admin-override setup: could not insert the admin-role key: $(cat "${TMPDIR}/psql.log")"
 else
   override_out="$(ssh "${SSH_OPTS[@]}" -i "${TMPDIR}/admin_key" -p "${SSH_PORT}" "${RUN_ID}@${SSH_HOST}" "echo wardyn-override-ok" 2>&1)"

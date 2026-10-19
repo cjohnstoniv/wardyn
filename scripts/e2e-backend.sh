@@ -299,6 +299,11 @@ cmd_down_quiet() {
   local pid; pid="$(cat "${PID_FILE}")"
   rm -f "${PID_FILE}"
   kill -0 "${pid}" 2>/dev/null || return 0
+  # A stale pid file may now name an unrelated process (the number was recycled): TERM/KILL only a
+  # process whose command line names this e2e wardynd, otherwise just drop the file (done above).
+  local cmd
+  cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || ps -p "${pid}" -o args= 2>/dev/null || true)"
+  [[ "${cmd}" == *"${BIN_DIR}/wardynd"* ]] || { log "pid file ${PID_FILE##*/} names pid ${pid}, which is not this e2e wardynd; not signalling it"; return 0; }
 
   # Stop ONLY the process this script itself started and tracked in
   # PID_FILE — never a port-based kill (no `fuser -k`). A port-based kill can
