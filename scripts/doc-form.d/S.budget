@@ -165,8 +165,9 @@
 # 0.9.4 L6b +19: docs/sdk.md 19052 adds 19 over 19033 for the additive `cause` on the git_credential 422 row.
 # 0.9.4 W4 TESTS-1 +34: docs/sdk.md, the runner_pool_queue_full / runner_pool_full reason row (#2661).
 # docs/sdk.md=19242 adds 25 (0.9.4 W4-API-B): the drive write 503/500 reasons and POST /runs store_unavailable (#2767, #2781).
-# docs/sdk.md=19309 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
-docs/sdk.md=19331 share=21
+# docs/sdk.md=19378 adds 69, measured: the identity_deactivated sign-in answer on a deactivated session (#2762).
+# docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
+docs/sdk.md=19400 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
