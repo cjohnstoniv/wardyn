@@ -201,7 +201,7 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 
 ### Upgrading a runner
 
-Upgrade the organisation before its runners. Then either run the new release's `wardyn-runnerd setup` with the same flags (it renames a new file over the installed copy and restarts the service), or install the new `wardyn-runnerd.pkg`, which stops the service first. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
+Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 ## A runner behind a corporate proxy
 
