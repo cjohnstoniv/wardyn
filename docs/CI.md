@@ -339,7 +339,6 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 **Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race` 537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets (coverage, then race).
 
 - #467 merged them: `cover-check`'s three `test-report` suites now run under `-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
-- Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land below the old 537+395=932 s combined, not above it.
 - `make lint` has since gained the console's ESLint ([`ui/eslint.config.js`](../ui/eslint.config.js)), so the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the 120 s above.
 
 **Why `ui-e2e` runs as two shards.**
@@ -388,13 +387,18 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `main-red` | – | pending | pending | 10 |
 | `notify-flaky` | – | pending | pending | 10 |
 | `runner-units` | – | pending | pending | 15 |
+| `ci-ran` | – | pending | pending | 10 |
+| `train-suites` | – | pending | pending | 10 |
+| `train-gate` | – | pending | pending | 10 |
+| `go-modules` | – | pending | pending | 15 |
+| `go-cache-prune` | – | pending | pending | 10 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
 
 - `helm-install-test` now also runs the old `desktop-envelope` job's proof (#472).
 - Before the merge the two took 3.2 and 2.5 minutes at most, so 20 minutes clears twice their sum.
-- Fill in its row once the merged job has about ten green runs.
+- Fill in its row after about ten green runs.
 
 Re-measure (job name, runs, median and maximum over successful jobs):
 
