@@ -293,6 +293,12 @@ func winningSetting(candidates []proxyCandidate, category string) *HostProxySett
 	return nil
 }
 
+// newProxyPAC builds a HostProxyPAC whose URL has any embedded credential masked.
+func newProxyPAC(raw string, source HostProxySource, detail string) *HostProxyPAC {
+	masked, _ := maskProxyURL(raw)
+	return &HostProxyPAC{URL: masked, Source: source, Detail: detail}
+}
+
 // newProxySetting builds a masked-safe HostProxySetting from a raw value.
 func newProxySetting(raw string, source HostProxySource, detail string) *HostProxySetting {
 	masked, hasCred := maskProxyURL(raw)
@@ -325,7 +331,8 @@ func detectionHasCredentials(det HostProxyDetection) bool {
 
 // maskProxyURL parses raw as a proxy address and, when it carries userinfo
 // (user[:pass]@host), returns a display-safe form with any password replaced
-// by "***" — the raw credential is never returned. Values with no userinfo
+// by "***" — the raw credential is never returned. A token-only login
+// (":token@host") counts as userinfo. Values with no userinfo
 // (including a bare "host:port", and anything net/url can't parse) are
 // returned UNCHANGED with hasCredentials=false: there is nothing to mask.
 func maskProxyURL(raw string) (masked string, hasCredentials bool) {
@@ -351,9 +358,10 @@ func maskProxyURL(raw string) (masked string, hasCredentials bool) {
 		}
 		return raw, false
 	}
-	if u.User == nil || u.User.Username() == "" {
+	if u.User == nil {
 		return raw, false
 	}
+	// A token-only login (":token@host") has an empty username but still a secret.
 	display := u.User.Username()
 	if _, hasPass := u.User.Password(); hasPass {
 		display += ":***"
@@ -731,8 +739,7 @@ func parseWindowsRegistryProxyJSON(raw []byte) ([]proxyCandidate, *HostProxyPAC)
 	}
 	var pac *HostProxyPAC
 	if reg.AutoConfigURL != "" {
-		pac = &HostProxyPAC{URL: reg.AutoConfigURL, Source: ProxySourceOS,
-			Detail: "Windows Internet Settings AutoConfigURL (via powershell.exe)"}
+		pac = newProxyPAC(reg.AutoConfigURL, ProxySourceOS, "Windows Internet Settings AutoConfigURL (via powershell.exe)")
 	}
 	return candidates, pac
 }
@@ -824,7 +831,7 @@ func parseScutilProxyOutput(text string) ([]proxyCandidate, *HostProxyPAC) {
 	var pac *HostProxyPAC
 	if scutilPACEnableRE.MatchString(text) {
 		if u := scutilPACURLRE.FindStringSubmatch(text); u != nil {
-			pac = &HostProxyPAC{URL: u[1], Source: ProxySourceOS, Detail: "macOS scutil --proxy ProxyAutoConfigURLString"}
+			pac = newProxyPAC(u[1], ProxySourceOS, "macOS scutil --proxy ProxyAutoConfigURLString")
 		}
 	}
 	return candidates, pac

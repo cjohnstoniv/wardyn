@@ -25,6 +25,7 @@ func TestMaskProxyURL(t *testing.T) {
 	}{
 		{"userpass", "http://user:pass@proxy.corp:8080", "http://user:***@proxy.corp:8080", true},
 		{"user_only", "http://user@proxy.corp:8080", "http://user@proxy.corp:8080", true},
+		{"token_only", "http://:t0ken@proxy.corp:8080", "http://:***@proxy.corp:8080", true},
 		{"no_creds_scheme", "http://proxy.corp:8080", "http://proxy.corp:8080", false},
 		{"no_creds_bare", "proxy.corp:8080", "proxy.corp:8080", false},
 		{"bare_userpass", "user:pass@proxy.corp:8080", "user:***@proxy.corp:8080", true},
@@ -52,6 +53,18 @@ func TestMaskProxyURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A PAC/WPAD URL is surfaced to the operator, so an embedded login is masked there too.
+func TestParseScutilProxyOutput_PACURLMasked(t *testing.T) {
+	_, pac := parseScutilProxyOutput("<dictionary> {\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://u:s3cr3t@wpad.corp/proxy.pac\n}\n")
+	if pac == nil || strings.Contains(pac.URL, "s3cr3t") || pac.URL != "http://u:***@wpad.corp/proxy.pac" {
+		t.Fatalf("pac = %+v, want the password masked", pac)
+	}
+	_, pac = parseWindowsRegistryProxyJSON([]byte(`{"AutoConfigURL":"http://u:s3cr3t@wpad.corp/proxy.pac"}`))
+	if pac == nil || strings.Contains(pac.URL, "s3cr3t") {
+		t.Fatalf("windows pac = %+v, want the password masked", pac)
 	}
 }
 
