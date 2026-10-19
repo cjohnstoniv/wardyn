@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -106,25 +108,55 @@ func TestProxyHopTLSK8s(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
-		sb, err := sub.CreateSandbox(ctx, spec(string(other.CertPEM)))
+		wrong := spec(string(other.CertPEM))
+		sb, err := sub.CreateSandbox(ctx, wrong)
 		if err == nil {
 			t.Cleanup(func() { _ = sub.KillSandbox(context.Background(), sb.Ref) })
-			t.Fatal("CreateSandbox succeeded with a control-plane CA the fake does not chain to: the proxy must exit at its startup resolve, so the create must fail")
 		}
-		// The proxy's startup resolve is the one TLS call; the MAIN container died there, not the
-		// stage-proxy-config init container, an image pull or a scheduling stall. Its termination
-		// message is the log tail (FallbackToLogsOnError), so the error also names the certificate
-		// refusal.
-		msg := err.Error()
-		if !strings.Contains(msg, "proxy container wardyn-proxy exited before the proxy was ready") {
-			t.Fatalf("CreateSandbox failed, but not because the wardyn-proxy container exited at startup; a different failure would pass this subtest vacuously: %v", err)
+		// The proxy's startup resolve is the one TLS call, and the MAIN container must die there, not
+		// the stage-proxy-config init container, an image pull or a scheduling stall. The pod has no
+		// readiness probe, so a create can return before the resolve has failed: both outcomes are
+		// accepted, and either way the cause is read from the container's termination message (the
+		// log tail, FallbackToLogsOnError).
+		var cause string
+		if err != nil {
+			cause = err.Error()
+			if !strings.Contains(cause, "proxy container wardyn-proxy exited before the proxy was ready") {
+				t.Fatalf("CreateSandbox failed, but not because the wardyn-proxy container exited at startup; a different failure would pass this subtest vacuously: %v", err)
+			}
+		} else {
+			cause = waitProxyExitMessage(t, cs, ns, "wardyn-proxy-"+wrong.RunID.String(), 90*time.Second)
 		}
-		if !strings.Contains(msg, "x509") && !strings.Contains(msg, "certificate") {
-			t.Fatalf("the proxy exited at startup, but the error does not name the certificate refusal: %v", err)
+		if !strings.Contains(cause, "x509") && !strings.Contains(cause, "certificate") {
+			t.Fatalf("the proxy exited at startup, but its output does not name the certificate refusal: %s", cause)
 		}
 		time.Sleep(10 * time.Second) // past the proxy's startup resolve and its first restart
 		if after := resolves(); after != before {
 			t.Fatalf("a resolve reached the control plane through a proxy pinned to the wrong CA (%d -> %d)", before, after)
 		}
 	})
+}
+
+// waitProxyExitMessage waits for the proxy pod's wardyn-proxy container to terminate and returns its
+// termination message. A clean exit, or one that never comes, fails the subtest.
+func waitProxyExitMessage(t *testing.T, cs *kubernetes.Clientset, ns, pod string, within time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		p, err := cs.CoreV1().Pods(ns).Get(context.Background(), pod, metav1.GetOptions{})
+		if err == nil {
+			for _, st := range p.Status.ContainerStatuses {
+				if tm := st.State.Terminated; st.Name == "wardyn-proxy" && tm != nil {
+					if tm.ExitCode == 0 {
+						t.Fatalf("the wardyn-proxy container exited 0 with a wrong control-plane CA: %s", tm.Message)
+					}
+					return tm.Message
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the wardyn-proxy container of %s never exited (Get err %v): a proxy pinned to the wrong CA must die at its startup resolve", pod, err)
+		}
+		time.Sleep(time.Second)
+	}
 }
