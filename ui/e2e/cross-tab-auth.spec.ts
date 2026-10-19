@@ -35,3 +35,22 @@ test("signed out in one tab, the other says so and carries on once signed back i
   await expect(dialog).toBeHidden({ timeout: 15_000 });
   await expect(sidebarLink(other, "Runs")).toBeVisible();
 });
+
+// The tab that signed out deliberately shows the sign-in gate; it must still hear another tab sign in.
+test("the tab that signed out enters the console again when the other tab signs in", async ({ page }) => {
+  await gotoConsole(page);
+  const other = await page.context().newPage();
+  await gotoConsole(other);
+
+  await page.locator('header button[aria-haspopup="menu"]').click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await expect(page.locator("#token")).toBeVisible();
+
+  const dialog = other.getByRole("dialog", { name: REAUTH_DIALOG.TITLE });
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await dialog.locator("#reauth-token").fill(ADMIN_TOKEN);
+  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+
+  await expect(sidebarLink(page, "Runs")).toBeVisible({ timeout: 15_000 });
+});

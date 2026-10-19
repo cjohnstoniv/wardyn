@@ -342,7 +342,11 @@ export function AuditScreen() {
   // Must NOT client re-sort by wall-clock time — the server returns events in
   // authoritative append (seq) order; re-sorting by `time` can reorder events
   // that share a timestamp and misrepresent causality. Preserve as-is.
+  // Only the LATEST events read may write the list: a poll tick still in flight for the previous run filter
+  // would otherwise land after the new filter's read and show the wrong run's trail under it.
+  const eventsRequestId = React.useRef(0);
   const fetchEvents = React.useCallback(() => {
+    const requestId = ++eventsRequestId.current;
     // The kernel sensor's health rides along with every audit refresh (initial
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
     // events, so an event list structurally cannot show them — a dead sensor
@@ -350,7 +354,9 @@ export function AuditScreen() {
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
-    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(setEvents);
+    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then((list) => {
+      if (eventsRequestId.current === requestId) setEvents(list);
+    });
   }, [runFilter]);
 
   // Whether the LAST read actually answered. `status` cannot carry this: the

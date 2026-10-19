@@ -523,11 +523,16 @@ function DrivePreview() {
   const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: string } | null>(null);
   const { userTypes, show: showUserType } = usePreviewUserTypes();
   const [userType, setUserType] = React.useState(USER_TYPE_STANDARD);
+  // Bumped on every input edit: an answer whose request started under an older value is dropped, so it can
+  // never sit under claims or a user type it was not asked about.
+  const inputGen = React.useRef(0);
 
   const run = async () => {
+    const asked = inputGen.current;
     setBusy(true);
     try {
-      setResult({ answer: await api.previewDrive(previewClaims(claims, userType)) });
+      const answer = await api.previewDrive(previewClaims(claims, userType));
+      if (asked === inputGen.current) setResult({ answer });
     } catch (e) {
       // The SAME thing the drive editor does with a refused save. The preview
       // runs the launch path's own gates now — the governance door's 403, the
@@ -537,7 +542,7 @@ function DrivePreview() {
       // the panel for. The console contributes no string: the server's sentence
       // renders verbatim, and the canon line stays as the fallback for a
       // failure that carried no body at all.
-      setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
+      if (asked === inputGen.current) setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
     } finally {
       setBusy(false);
     }
@@ -559,6 +564,7 @@ function DrivePreview() {
               // PREVIOUS group's resolved drive sat under new, unrun input as
               // if it answered it.
               onChange={(e) => {
+                inputGen.current += 1;
                 setClaims(e.target.value);
                 setResult(null);
               }}
@@ -572,6 +578,7 @@ function DrivePreview() {
               value={userType}
               userTypes={userTypes}
               onChange={(id) => {
+                inputGen.current += 1;
                 setUserType(id);
                 setResult(null);
               }}

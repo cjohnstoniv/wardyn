@@ -8,6 +8,7 @@ import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
 import { SITE } from "../src/app/components/wardyn/copy";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { WELCOME } from "../src/app/components/wardyn/copy/getting-started";
+import { T as INTEGRATIONS } from "../src/app/lib/integrations";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -700,5 +701,36 @@ test.describe("Corporate network step — site-config round trip and a stale sav
     expect((await after.json()).upstream_proxy_url).toBe(outsideUrl);
     // The draft is not reverted or cleared — the operator can just retry.
     await expect(page.getByLabel("Proxy URL")).toHaveValue(draftUrl);
+  });
+});
+
+// Values the server refuses must be recognised before Save: a password-only proxy URL is a credential (it is
+// masked and stored as a secret, not sent as plain configuration), and a From that differs from an existing one
+// only in case is a duplicate (the server lowercases the whole string).
+test.describe("Corporate network step — typed values the server would refuse (#2576, #2562)", () => {
+  test("a password-only proxy URL is masked and takes the store-as-secret path", async ({ page }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    const field = page.getByLabel("Proxy URL");
+    await field.fill("http://:s3cret@proxy.e2e-userinfo.invalid:8080");
+    await expect(field).toHaveAttribute("type", "password");
+    await expect(page.getByText(INTEGRATIONS.CRED_URL_NOTE)).toBeVisible();
+  });
+
+  test("a From that differs from an existing one only in path case is flagged before Add", async ({ page }) => {
+    await page.route("**/api/v1/site-config", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { egress_redirects: [{ from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" }] } })
+        : route.fallback(),
+    );
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await page.getByRole("combobox").click();
+    await page.getByPlaceholder("https://…, host, or IP").last().fill("https://pypi.org/Simple");
+    await page.getByText("use as typed").click();
+    await page.getByPlaceholder(/artifactory\.corp\.internal/i).fill("https://mirror.corp.internal/pypi2");
+    await expect(page.getByText(/A redirect already exists for this From/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ Add redirect" })).toBeDisabled();
   });
 });

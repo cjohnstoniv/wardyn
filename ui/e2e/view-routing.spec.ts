@@ -106,6 +106,15 @@ test.describe("view routing", () => {
     await expect(page).toHaveURL(/\/admin\/runs$/);
   });
 
+  // #2600: the personal pool form is a User-view page like /account, so every /account/* path takes the rule.
+  test("an admin in the Admin view is asked before opening a personal pool page", async ({ page }) => {
+    await ssoAdmin(page);
+    await page.goto("/account/pools/new");
+    await expect(page.getByRole("heading", { name: VIEW_TO_USER.TITLE })).toBeVisible();
+    await page.getByRole("button", { name: VIEW_TO_USER.STAY }).click();
+    await expect(page).toHaveURL(/\/admin\/runs$/);
+  });
+
   test("the admin token on an SSO install is told User-view pages belong to a person", async ({ page }) => {
     await patchJSON(page, "**/healthz", (j) => { j.sso = true; });
     await page.goto("/runs");

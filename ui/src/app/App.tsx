@@ -384,6 +384,9 @@ export default function App() {
   // never a deliberate sign-out.
   const [signedOut, setSignedOut] = React.useState(false);
   const signingOutRef = React.useRef(false);
+  // The logout call failed, so this browser's session cookie may still be live: a focus or visibility re-probe
+  // would walk straight back in. Another tab announcing a sign-in is still believed.
+  const signOutFailedRef = React.useRef(false);
   // Someone else signed in over the page: nothing of it may survive, so the
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
@@ -400,6 +403,8 @@ export default function App() {
   const authRef = React.useRef<AuthStatus>(auth);
   React.useEffect(() => {
     authRef.current = auth;
+    // A deliberate sign-out has settled once the sign-in gate is up; from here the gate listens like any other.
+    if (auth === "unauthed") signingOutRef.current = false;
   }, [auth]);
   const location = useLocation();
 
@@ -460,22 +465,24 @@ export default function App() {
   React.useEffect(() => {
     if (auth !== "unauthed") return;
     let alive = true;
-    const reprobe = () => {
+    const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
+      if (!fromOtherTab && signOutFailedRef.current) return;
       void probeAuth().then((probe) => {
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         setSignedOut(false);
         setAuth("authed");
       });
     };
-    const onVisible = () => document.visibilityState === "visible" && reprobe();
-    const stop = onRemoteAuthChange(reprobe);
-    window.addEventListener("focus", reprobe);
+    const onFocus = () => reprobe(false);
+    const onVisible = () => document.visibilityState === "visible" && reprobe(false);
+    const stop = onRemoteAuthChange(() => reprobe(true));
+    window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       stop();
-      window.removeEventListener("focus", reprobe);
+      window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [auth]);
@@ -635,6 +642,7 @@ export default function App() {
           reason={signedOut ? SESSION_ENDED_REASON : undefined}
           onSignIn={() => {
             signingOutRef.current = false;
+            signOutFailedRef.current = false;
             setSignedOut(false);
             setAuth("authed");
             void navigate("/runs", { replace: true });
@@ -694,6 +702,7 @@ export default function App() {
                 signingOutRef.current = true;
                 setSignedOutHold(true);
                 if (!(await health.logout())) {
+                  signOutFailedRef.current = true;
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });

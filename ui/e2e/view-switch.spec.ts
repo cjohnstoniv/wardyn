@@ -473,4 +473,25 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
   });
+
+  // §2.4 re-sync, #2618: a user type switched in another tab is what a launch from this one is governed as, so
+  // this tab reloads into it, as it already does for a switched view.
+  test("a user type switched in another tab reloads this one on focus", async ({ page, context }) => {
+    const roster = [
+      { id: "standard", name: "Standard user" },
+      { id: "contractor", name: "Contractor" },
+    ];
+    const session = await ssoAdminSession(context, { user_view_types: roster });
+    session.userView = true;
+    session.viewType = "standard";
+    await gotoConsole(page);
+    await expect(sidebarLink(page, "Getting started")).toBeVisible();
+
+    // A marker on this document: a reload drops it.
+    await page.evaluate(() => ((window as unknown as { __loaded?: boolean }).__loaded = true));
+    session.viewType = "contractor";
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForFunction(() => !(window as unknown as { __loaded?: boolean }).__loaded);
+    await expect(sidebarLink(page, "Getting started")).toBeVisible();
+  });
 });

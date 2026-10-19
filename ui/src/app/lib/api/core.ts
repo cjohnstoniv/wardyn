@@ -398,7 +398,7 @@ export async function wfetch(
     });
     answered = true;
     // Optional: a test's stand-in Response may carry no headers.
-    noteSessionExpiry(res.headers?.get(SESSION_EXPIRES_HEADER));
+    noteSessionExpiry(res.headers?.get(SESSION_EXPIRES_HEADER), startedAt);
   } catch (e) {
     // A caller's OWN abort stays an abort (it is their control flow, not a
     // failure); only the deadline is reported as the unreachable-daemon case.

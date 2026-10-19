@@ -171,6 +171,9 @@ export function GovernanceScreen() {
             }
           : { message: getErrorMessage(e) },
       );
+      // The 409 says the list this row was read from is stale (Not assigned, the count): re-read it, as the
+      // drives delete does, or every later Delete re-opens the same doomed confirm.
+      if (e instanceof HttpError && e.status === 409) load();
     } finally {
       setBusy(false);
     }

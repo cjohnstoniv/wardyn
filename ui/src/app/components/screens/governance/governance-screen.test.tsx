@@ -408,6 +408,20 @@ describe("GovernanceScreen — delete: the pre-fill and the race are different r
     expect(within(dialog).queryByText(GOV.DELETE_RESTRICT_BODY(GREENFIELD.name, 0))).not.toBeInTheDocument();
     expect(confirm).not.toBeDisabled();
   });
+
+  // #2507: the refused delete re-reads, so the row stops saying "Not assigned" (the drives delete does the same).
+  it("the race: a 409 re-reads the list", async () => {
+    deleteProfileMock.mockRejectedValue(new HttpError(409, "this governance profile is still assigned"));
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    const before = getGovernanceMock.mock.calls.length;
+
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${GREENFIELD.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: GOV.DELETE }));
+    await within(dialog).findByText(GOV.DELETE_RESTRICT_TITLE);
+    expect(getGovernanceMock.mock.calls.length).toBe(before + 1);
+  });
 });
 
 describe("GovernanceScreen — assignments and the resolved preview", () => {
@@ -451,6 +465,23 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
     expect(deleteAssignmentMock).toHaveBeenCalledWith("a1");
+  });
+
+  // #2508: the confirm must not take a second click while the first DELETE is in flight.
+  it("the unassign confirm is disabled while the delete is in flight, so it is sent once", async () => {
+    let finish!: () => void;
+    deleteAssignmentMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderScreen();
+    await screen.findByText("wardyn.platform");
+
+    await userEvent.click(screen.getByRole("button", { name: `${PERM.REMOVE} wardyn.platform` }));
+    const dialog = await screen.findByRole("alertdialog");
+    const confirm = within(dialog).getByRole("button", { name: PERM.REMOVE });
+    await userEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(deleteAssignmentMock).toHaveBeenCalledTimes(1);
+    finish();
   });
 
   // THE §I swap, end to end: the Who field is the same free-text box it was,
