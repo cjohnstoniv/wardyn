@@ -237,9 +237,12 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	time.Sleep(20 * time.Second)
 
 	// Give the sink's async worker a moment after the read window closes.
+	// The agent may dial nothing here (hosted CI has no model credential), so the test
+	// dials one known host itself: that decision is what proves the log was read.
+	control := bootEgressControl(t, sub, sb.Ref, claudeImage)
 	time.Sleep(3 * time.Second)
 	logs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs, claudeImage)
+	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs, control)
 
 	// PHASE 3 — the AUTONOMOUS shape, which meets no dialog at all and is what the
 	// live walk's case G launches. Its first-use approvals are the ones a member
@@ -254,22 +257,41 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 		t.Fatalf("Exec autonomous agent-run: %v", err)
 	}
 	time.Sleep(45 * time.Second)
+	control = bootEgressControl(t, sub, sb.Ref, claudeImage)
+	time.Sleep(3 * time.Second)
 	autoLogs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs, claudeImage)
+	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs, control)
+}
+
+// bootEgressControl is the positive control: it drives one known dial, to the allowlisted
+// model host, through the sandbox's proxy and returns that host, or "" when the image is not
+// held to a control. The fetch's own outcome is irrelevant (an unauthenticated Bedrock call
+// fails); only the proxy's decision row for the host is read back.
+func bootEgressControl(t testing.TB, sub *docker.Driver, ref string, want bool) string {
+	t.Helper()
+	if !want {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := sub.Exec(ctx, ref, []string{"curl", "-sS", "--max-time", "20", "-o", "/dev/null", "https://" + bootEgressModelHost + "/"})
+	t.Logf("control dial to %s: err=%v out=%q", bootEgressModelHost, err, out)
+	return bootEgressModelHost
 }
 
 // bootEgressAssertQuiet is the whole verdict: what the sandbox dialled, and
 // whether any of it parked. Logged pass or fail — the measurement is the
-// deliverable, not just the verdict. wantHosts is set for the claude-code image,
-// which always dials its own bootstrap: no parsed decision at all means the log
-// was not read (or its format moved), and "nothing parked" over nothing proves nothing.
-func bootEgressAssertQuiet(t testing.TB, image, phase, logs string, wantHosts bool) {
+// deliverable, not just the verdict. control is a host the test itself dialled through
+// the proxy (see bootEgressControl), or "" for an image not held to one: its decision
+// missing means the log was not read (or its format moved), and "nothing parked" over
+// nothing proves nothing.
+func bootEgressAssertQuiet(t testing.TB, image, phase, logs, control string) {
 	t.Helper()
 	hosts, pending, denied := bootEgressDecisions(logs)
 	t.Logf("hosts dialled by %s (%s): %v", image, phase, hosts)
 	t.Logf("proxy decision stream (%s):\n%s", phase, bootEgressDecisionLines(logs))
-	if wantHosts && len(hosts) == 0 {
-		t.Fatalf("%s: no egress decision was parsed from the proxy log, so the quiet verdict below would be vacuous\nlog:\n%s", phase, logs)
+	if control != "" && !bootEgressDialled(hosts, control) {
+		t.Fatalf("%s: the control dial to %s left no decision in the proxy log (hosts parsed: %v), so the quiet verdict below would be vacuous\nlog:\n%s", phase, control, hosts, logs)
 	}
 	if len(pending) > 0 {
 		t.Errorf("%s raised %d first-use approval(s): %v\n"+
@@ -425,6 +447,16 @@ func bootEgressDecisions(logs string) (hosts, pending, denied []string) {
 		}
 	}
 	return bootEgressKeys(seen), bootEgressKeys(pend), bootEgressKeys(den)
+}
+
+// bootEgressDialled reports whether hosts holds control, with or without a port.
+func bootEgressDialled(hosts []string, control string) bool {
+	for _, h := range hosts {
+		if h == control || strings.HasPrefix(h, control+":") {
+			return true
+		}
+	}
+	return false
 }
 
 func bootEgressKeys(m map[string]bool) []string {

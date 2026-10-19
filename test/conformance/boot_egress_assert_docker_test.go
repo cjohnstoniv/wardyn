@@ -27,7 +27,7 @@ func (f *failureRecorder) Errorf(s string, a ...any) {
 func (f *failureRecorder) Fatalf(s string, a ...any) { f.Errorf(s, a...); panic(f) }
 
 // assertQuiet runs bootEgressAssertQuiet against logs and reports whether it failed the test.
-func assertQuiet(logs string, wantHosts bool) (failed bool) {
+func assertQuiet(logs, control string) (failed bool) {
 	rec := &failureRecorder{}
 	defer func() {
 		if r := recover(); r != nil && r != any(rec) {
@@ -35,25 +35,37 @@ func assertQuiet(logs string, wantHosts bool) (failed bool) {
 		}
 		failed = rec.failed
 	}()
-	bootEgressAssertQuiet(rec, "wardyn/agent-claude-code:local", "test", logs, wantHosts)
+	bootEgressAssertQuiet(rec, "wardyn/agent-claude-code:local", "test", logs, control)
 	return
 }
 
-const bootEgressAllowLine = `{"decision":"allow","request":{"host":"api.anthropic.com"}}`
+const (
+	bootEgressControlLine = `{"decision":"allow","request":{"host":"bedrock-runtime.us-east-1.amazonaws.com"}}`
+	bootEgressOtherLine   = `{"decision":"allow","request":{"host":"api.anthropic.com"}}`
+	bootEgressPendingLine = `{"decision":"pending","request":{"host":"statsig.anthropic.com"}}`
+)
 
-// A claude-code boot that parsed no decisions at all is a failure, not a quiet boot; a log with
-// an allowed host passes, and an image that may legitimately dial nothing is not held to it.
+// A boot whose control dial left no decision in the log is a failure, not a quiet boot, even
+// when the agent's own traffic filled the log; the control's decision passes, a first-use
+// approval beside it still fails, and an image held to no control may dial nothing.
 func TestBootEgressAssertQuietRefusesAnEmptyDecisionStream(t *testing.T) {
-	if !assertQuiet("", true) {
-		t.Error("an empty proxy log passed for the claude-code image")
+	const control = bootEgressModelHost
+	if !assertQuiet("", control) {
+		t.Error("an empty proxy log passed with a control dial")
 	}
-	if !assertQuiet("proxy started\nnot a decision\n", true) {
-		t.Error("a log with no parsed decision passed for the claude-code image")
+	if !assertQuiet("proxy started\nnot a decision\n", control) {
+		t.Error("a log with no parsed decision passed with a control dial")
 	}
-	if assertQuiet(bootEgressAllowLine, true) {
-		t.Error("a log with an allowed host failed")
+	if !assertQuiet(bootEgressOtherLine, control) {
+		t.Error("a log holding only the agent's own host passed with a control dial")
 	}
-	if assertQuiet("", false) {
-		t.Error("an empty log failed for an image not required to dial anything")
+	if assertQuiet(bootEgressControlLine, control) {
+		t.Error("a log with the control's decision failed")
+	}
+	if !assertQuiet(bootEgressControlLine+"\n"+bootEgressPendingLine, control) {
+		t.Error("a pending first-use approval beside the control passed")
+	}
+	if assertQuiet("", "") {
+		t.Error("an empty log failed for an image not held to a control")
 	}
 }
