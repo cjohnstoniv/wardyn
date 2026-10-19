@@ -54,7 +54,7 @@ fi
 
 out="$(WARDYN_REGISTRY_PORT="${port}" "${REPO_ROOT}/scripts/up.sh" doctor 2>&1)"
 
-if ! printf '%s' "${out}" | grep -q "port ${port} already in use"; then
+if ! printf '%s' "${out}" | grep "port ${port} already in use" >/dev/null; then
   echo "FAIL: doctor did not warn about the occupied registry port ${port}" >&2
   echo "--- doctor output ---" >&2
   printf '%s\n' "${out}" >&2
@@ -64,7 +64,7 @@ fi
 # The SSH gateway port check must also exist (asserted against its default,
 # since occupying a second real port for it is redundant coverage of the same
 # code path already proven above).
-if ! printf '%s' "${out}" | grep -qE "port 2222 (free|already in use)"; then
+if ! printf '%s' "${out}" | grep -E "port 2222 (free|already in use)" >/dev/null; then
   echo "FAIL: doctor has no port check for the SSH gateway mapping (2222)" >&2
   echo "--- doctor output ---" >&2
   printf '%s\n' "${out}" >&2

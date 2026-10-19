@@ -112,7 +112,7 @@ ADMIN_GROUP_OID="$(create_group wardyn-admins)"
 ENG_GROUP_OID="$(create_group wardyn-eng)"
 
 group_add() { # group_add GROUP_OID MEMBER_OID
-  az ad group member check --group "$1" --member-id "$2" --query value -o tsv 2>/dev/null | grep -qx true \
+  az ad group member check --group "$1" --member-id "$2" --query value -o tsv 2>/dev/null | grep -x true >/dev/null \
     && echo "    already a member — skipping" \
     || az ad group member add --group "$1" --member-id "$2"
 }
