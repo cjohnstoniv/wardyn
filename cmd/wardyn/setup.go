@@ -113,6 +113,21 @@ func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, erro
 	return st, nil
 }
 
+// nextStepOf is the line printed beside an unmet check. `wardyn setup` has no model-access or
+// sign-in subcommand: a person connects their own model credential in the console, so an unmet
+// model-access row names the console path rather than promising a command. The server's text for
+// the row (the action the console's own button carries) rides after it.
+func nextStepOf(ck setupCheckLite, consoleURL string) string {
+	if ck.Status != "warn" || (ck.ID != "llm_provider" && !strings.HasPrefix(ck.ID, "llm_provider:")) {
+		return ck.Fix
+	}
+	step := "use the console: Your account → Your model connections (" + strings.TrimRight(consoleURL, "/") + "/account)"
+	if strings.HasPrefix(ck.ID, "llm_provider:") && ck.Fix != "" {
+		step += " — " + ck.Fix
+	}
+	return step
+}
+
 // setupStatusCmd prints the terminal-parity readiness checklist — the same
 // GET /api/v1/setup/status data the UI Getting-started renders — with the exact
 // next command beside each unmet check, so the CLI route needs no separate model
@@ -151,8 +166,8 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 			}
 			for _, ck := range st.Checks {
 				fmt.Fprintf(cmd.OutOrStdout(), "  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
-				if ck.Fix != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "          → %s\n", ck.Fix)
+				if fix := nextStepOf(ck, c.BaseURL); fix != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "          → %s\n", fix)
 				}
 			}
 			return nil
