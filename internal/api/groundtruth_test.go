@@ -235,7 +235,7 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
-	pinned := time.Date(2026, time.March, 4, 5, 6, 7, 0, time.UTC)
+	pinned := time.Now().Add(-time.Hour) // the server clock, an hour behind the real one and 100 days behind the supplied time
 	h.srv.cfg.Now = func() time.Time { return pinned }
 
 	future := time.Now().Add(100 * 24 * time.Hour)            // ~100 days ahead
