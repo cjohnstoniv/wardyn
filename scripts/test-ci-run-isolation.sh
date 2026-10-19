@@ -52,6 +52,7 @@ cat > "$STUB/docker" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALLS"
 env | grep -E '^WARDYN_(UP|PG|REGISTRY|SSH|UI_SANDBOX)_PORT=' >> "$STUB/ports.log" || true
+env | grep -E '^WARDYN_ADMIN_TOKEN=' >> "$STUB/token.log" || true
 case "$1" in
   ps) cat "$STUB/running" 2>/dev/null || true ;;
   context) exit 1 ;;
@@ -110,6 +111,17 @@ for v in WARDYN_UP_PORT WARDYN_PG_PORT WARDYN_REGISTRY_PORT WARDYN_SSH_PORT WARD
     if grep -qx "${v}=0" "$STUB/ports.log" 2>/dev/null; then ok "ci-run.sh binds ${v} ephemerally"
     else bad "ci-run.sh leaves ${v} at its fixed default - two concurrent jobs on one Docker socket collide on that host port"; fi
 done
+
+# 2d. the throwaway stack's bootstrap bearer is random per job unless the caller sets one.
+: > "$STUB/token.log"
+run_ci >/dev/null; run_ci >/dev/null
+env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WARDYN_ADMIN_TOKEN=caller-chosen WARDYN_CI_PROJECT="wardyn-ci-selftest" \
+    WARDYN_CI_TASK="echo hi" WARDYN_CI_TASK_MODE=exec WARDYN_CI_SKIP_BUILD=1 DOCKER_HOST="unix:///nonexistent.sock" ./scripts/ci-run.sh >/dev/null 2>&1
+if grep -qx 'WARDYN_ADMIN_TOKEN=demo-admin-token' "$STUB/token.log"; then bad "ci-run.sh still defaults the bootstrap bearer to a published string"
+elif [ "$(grep -cxE 'WARDYN_ADMIN_TOKEN=[0-9a-f]{40}' "$STUB/token.log")" -ge 2 ] \
+    && [ "$(grep -xE 'WARDYN_ADMIN_TOKEN=[0-9a-f]{40}' "$STUB/token.log" | sort -u | wc -l)" -ge 2 ] \
+    && grep -qx 'WARDYN_ADMIN_TOKEN=caller-chosen' "$STUB/token.log"; then ok "the bootstrap bearer is random per job, and a caller's own is kept"
+else bad "the bootstrap bearer was not a fresh random value per job, or a caller's own was replaced: $(sort -u "$STUB/token.log" | tr '\n' ' ')"; fi
 
 # ── 3. the admin bearer is not on the host docker argv (F199) ────────────────
 # Behavioural: the REAL shim is extracted from the live script and called with a
