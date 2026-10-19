@@ -45,8 +45,8 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.4/instal
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh
-# NOT releases/latest — it excludes pre-releases, and every Wardyn release is
-# one, so that endpoint 404s and leaves this empty.
+# NOT releases/latest — it excludes pre-releases, and a Wardyn release may be
+# one, so that endpoint can skip the newest release or 404.
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 

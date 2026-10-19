@@ -36,7 +36,7 @@
 
 ```sh
 # The newest release. NOT releases/latest — that endpoint excludes pre-releases,
-# and every Wardyn release is one, so it 404s and leaves this empty.
+# and a Wardyn release may be one, so it can skip the newest release or 404.
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 : "${WARDYN_VERSION:?could not resolve a version — set it by hand, e.g. WARDYN_VERSION=0.6.6}"
