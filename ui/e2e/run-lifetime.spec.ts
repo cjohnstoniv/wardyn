@@ -17,6 +17,8 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
+import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 async function seedRun(page: Page, task: string): Promise<string> {
   const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task });
@@ -104,7 +106,7 @@ test.describe("Run lifetime — the Change dialog's date", () => {
     await expect(save).toBeEnabled();
     await input.fill("");
     await expect(save).toBeDisabled();
-    await input.fill("2099-01-02T03:04");
+    await input.fill(toDatetimeLocalValue(new Date(aheadByHours(9600))));
     await expect(save).toBeEnabled();
   });
 });

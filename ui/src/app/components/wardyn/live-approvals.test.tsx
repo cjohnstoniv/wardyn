@@ -26,6 +26,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 
 import { LiveApprovals } from "./live-approvals";
 import { HttpError } from "../../lib/api/core";
+import { toDatetimeLocalValue } from "../../lib/datetime-local";
 
 function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return makeApproval({
@@ -469,11 +470,11 @@ describe("LiveApprovals", () => {
     const input = screen.getByLabelText("Pick a time") as HTMLInputElement;
     expect(input.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
     const confirm = screen.getByRole("button", { name: /use this time/i });
-    fireEvent.change(input, { target: { value: "2001-01-02T03:04" } });
+    fireEvent.change(input, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(-9600))) } });
     expect(confirm).toBeDisabled();
     expect(screen.getByRole("alert")).toHaveTextContent("That time has already passed. Pick a later one.");
 
-    fireEvent.change(input, { target: { value: "2099-01-02T03:04" } });
+    fireEvent.change(input, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(9600))) } });
     expect(confirm).not.toBeDisabled();
     expect(screen.queryByRole("alert")).toBeNull();
   });

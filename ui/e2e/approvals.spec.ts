@@ -9,6 +9,8 @@ import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, cons
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
+import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -906,10 +908,10 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await dialog.getByRole("radiogroup", { name: "Decision scope" }).getByRole("radio", { name: /^Until…/ }).click();
       const field = dialog.getByLabel("Pick a time");
       const approve = dialog.getByRole("button", { name: "Approve", exact: true });
-      await field.fill("2001-01-02T03:04");
+      await field.fill(toDatetimeLocalValue(new Date(aheadByHours(-9600))));
       await expect(dialog.getByRole("alert")).toHaveText("That time has already passed. Pick a later one.");
       await expect(approve).toBeDisabled();
-      await field.fill("2099-01-02T03:04");
+      await field.fill(toDatetimeLocalValue(new Date(aheadByHours(9600))));
       await expect(dialog.getByRole("alert")).toHaveCount(0);
       await expect(approve).toBeEnabled();
     } finally {

@@ -11,6 +11,8 @@ import { unsavedSnapshot } from "../../lib/unsaved-registry";
 
 import { ReasonDialog } from "./reason-dialog";
 import { OperatorProvider } from "./operator-context";
+import { toDatetimeLocalValue } from "../../lib/datetime-local";
+import { aheadByHours } from "../../lib/test-clock";
 
 describe("ReasonDialog", () => {
   it("bounds the reason at 512 characters, the length the server accepts", () => {
@@ -92,8 +94,9 @@ describe("ReasonDialog", () => {
     expect(hour).toHaveAttribute("aria-pressed", "false");
     expect(Math.abs(new Date(field.value).getTime() - (Date.now() + 86_400_000))).toBeLessThan(2 * 60_000);
 
-    fireEvent.change(field, { target: { value: "2031-01-02T03:04" } });
-    expect(field.value).toBe("2031-01-02T03:04");
+    const picked = toDatetimeLocalValue(new Date(aheadByHours(9600)));
+    fireEvent.change(field, { target: { value: picked } });
+    expect(field.value).toBe(picked);
     expect(screen.getByRole("button", { name: "24 hours" })).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -102,10 +105,10 @@ describe("ReasonDialog", () => {
     await userEvent.click(screen.getByRole("radio", { name: /^Until/ }));
     const field = screen.getByLabelText("Pick a time") as HTMLInputElement;
     expect(field.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
-    fireEvent.change(field, { target: { value: "2001-01-02T03:04" } });
+    fireEvent.change(field, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(-9600))) } });
     expect(screen.getByRole("alert")).toHaveTextContent("That time has already passed. Pick a later one.");
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
-    fireEvent.change(field, { target: { value: "2099-01-02T03:04" } });
+    fireEvent.change(field, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(9600))) } });
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
   });
