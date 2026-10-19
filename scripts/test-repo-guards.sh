@@ -698,8 +698,9 @@ else
     done
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
-    # ci.yml's train-suites job calls this workflow with scope=candidate (workflow_call), so the called
-    # input must exist, be a string (no choice type there) and default to full like the dispatch one.
+    # The workflow_call entry is kept though nothing calls it today (train-suites dispatches with
+    # scope=candidate and publish=false); its input must exist, be a string (no choice type there)
+    # and default to full like the dispatch one.
     [ "$(yq -r '.on.workflow_call.inputs.scope.default' "$NIGHTLY")" = full ] \
         && [ "$(yq -r '.on.workflow_call.inputs.scope.type' "$NIGHTLY")" = string ] \
         || { bad "$NIGHTLY: workflow_call input 'scope' must exist, be a string and default to full"; scope_fail=1; }

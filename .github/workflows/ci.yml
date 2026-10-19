@@ -2088,20 +2088,51 @@ jobs:
   # passed. On any other head, and on push, train-suites skips and train-gate
   # passes at once, so the one name can be required everywhere. A fork's
   # train/* branch never runs train-suites, so train-gate stays red there.
+  #
+  # train-suites dispatches the nightly rather than calling it: GitHub checks a
+  # called workflow's job permissions against the caller's token when a run
+  # starts, and a fork's or Dependabot's read-only token would fail every ci.yml
+  # run. A dispatched run takes the nightly's own permissions, and a newer
+  # dispatch on the same ref cancels it (the nightly's concurrency group), as a
+  # newer push cancels this run. The job holds one runner while it waits.
+  # publish=false: a train is not a release candidate, so the nightly's
+  # buildx-smoke still builds but skips its image push and attest steps.
   train-suites:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 180
+    permissions:
+      actions: write
+      contents: read
     steps:
-      # Fail closed until nightly.yml can be called (on: workflow_call): a train
-      # must not pass this gate without the suites.
-      - name: The candidate suites cannot be called yet
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The nightly checks out the branch, so its run is the head's only while
+      # the branch has not moved; a run on another sha is never taken.
+      - name: Dispatch the nightly's candidate scope on this head and wait for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "::error::nightly.yml has no workflow_call trigger, so the candidate suites cannot run on this train"
-          exit 1
+          set -euo pipefail
+          since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
+          id=
+          for _ in $(seq 40); do
+            id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
+              --json databaseId,headSha,createdAt | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since")"
+            [ -z "$id" ] || break
+            sleep 15
+          done
+          [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
+          echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          gh run watch "$id" --interval 60 >/dev/null || true
+          conclusion="$(gh run view "$id" --json conclusion --jq .conclusion)"
+          [ "$conclusion" = success ] || { echo "::error::nightly run $id concluded '$conclusion'"; exit 1; }
 
   train-gate:
     needs: train-suites
