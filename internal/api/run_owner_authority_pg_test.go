@@ -124,7 +124,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 				asOwner, code, lost(), rn.replaced)
 		}
 	}
-	if err := st.DeleteCapabilityGrant(ctx, deny.ID); err != nil {
+	if _, err := st.DeleteCapabilityGrant(ctx, deny.ID); err != nil {
 		t.Fatalf("DeleteCapabilityGrant: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 				asOwner, code, lost(), rn.replaced)
 		}
 	}
-	if err := st.DeleteCapabilityGrant(ctx, deny.ID); err != nil {
+	if _, err := st.DeleteCapabilityGrant(ctx, deny.ID); err != nil {
 		t.Fatalf("DeleteCapabilityGrant: %v", err)
 	}
 

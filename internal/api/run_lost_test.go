@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -33,15 +34,29 @@ func (s *lostStore) StampRunTokenRenewed(_ context.Context, _ uuid.UUID, jti, pr
 	if s.run.LostAt != nil {
 		return false, nil
 	}
+	if len(s.jtis) == 2 && s.jtis[0] != "" && prevJTI != s.jtis[0] && prevJTI != s.jtis[1] {
+		return false, store.ErrRunTokenLineage
+	}
 	s.lapsed = false
 	s.jtis = []string{jti, prevJTI}
 	return true, nil
 }
 
-func (s *lostStore) RunTokenJTIs(context.Context, uuid.UUID) ([]string, error) {
+func (s *lostStore) RetireRunTokenLineage(_ context.Context, _ uuid.UUID, fresh string) (string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.jtis), nil
+	old := append(slices.Clone(s.jtis), "", "")
+	s.jtis = []string{fresh, ""}
+	return old[0], old[1], nil
+}
+
+func (s *lostStore) RestoreRunTokenLineage(_ context.Context, _ uuid.UUID, fresh, jti, prev string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.jtis) == 2 && s.jtis[0] == fresh && s.jtis[1] == "" {
+		s.jtis = []string{jti, prev}
+	}
+	return nil
 }
 
 func (s *lostStore) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]types.AgentRun, error) {
@@ -377,7 +392,13 @@ type renewStampStore struct {
 	stampErr error
 }
 
-func (s *renewStampStore) RunTokenJTIs(context.Context, uuid.UUID) ([]string, error) { return nil, nil }
+func (s *renewStampStore) RetireRunTokenLineage(context.Context, uuid.UUID, string) (string, string, error) {
+	return "", "", nil
+}
+
+func (s *renewStampStore) RestoreRunTokenLineage(context.Context, uuid.UUID, string, string, string) error {
+	return nil
+}
 
 func (s *renewStampStore) StampRunTokenRenewed(context.Context, uuid.UUID, string, string) (bool, error) {
 	s.mu.Lock()

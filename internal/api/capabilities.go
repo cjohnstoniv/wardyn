@@ -238,6 +238,37 @@ func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool
 	return users, groups, groups == nil || oidcGroupsTruncatedFromContext(ctx)
 }
 
+// unverifiedEmailSubject is the caller's email as a `user` subject when it is
+// a subject of its own (not also their sub) and sign-in does not vouch for it:
+// email_verified is not enforced (oidc.Authenticator.EnforcesEmailVerified) and
+// the operator has not opted into email keys (Config.AllowEmailMappings), the
+// one trust rule role mappings already apply. "" otherwise.
+func (s *Server) unverifiedEmailSubject(ctx context.Context) string {
+	email := types.CanonicalUserSubject(oidcEmailFromContext(ctx))
+	if email == "" || email == types.CanonicalUserSubject(oidcHumanFromContext(ctx)) || s.cfg.AllowEmailMappings ||
+		(s.cfg.OIDC != nil && s.cfg.OIDC.EnforcesEmailVerified()) {
+		return ""
+	}
+	return email
+}
+
+// unverifiedEmailAllow reports whether allow row g matches the caller only
+// through their unverified email. With Config.CapabilityGrantsVerifiedEmail on
+// such a row grants nothing; off, it still grants and the match is logged as
+// one the switch would stop. A deny row is never asked: it binds either way.
+func (b *capBatch) unverifiedEmailAllow(ctx context.Context, g types.CapabilityGrant) bool {
+	if b.subj.unverifiedEmail == "" || g.SubjectType != types.CapabilitySubjectUser ||
+		types.CanonicalUserSubject(g.Subject) != b.subj.unverifiedEmail {
+		return false
+	}
+	if b.s.cfg.CapabilityGrantsVerifiedEmail {
+		return true
+	}
+	slog.InfoContext(ctx, "api: a capability allow matched only the caller's unverified email; WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL would stop it",
+		"capability", g.Capability, "grant_id", g.ID.String(), "principal", oidcHumanFromContext(ctx))
+	return false
+}
+
 // the kind table
 
 // capDirection is which way a kind moves a member's power, and so what its
@@ -770,7 +801,8 @@ func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bo
 			}
 			continue
 		}
-		if capValueMatches(kind, g.Value, value) {
+		if capValueMatches(kind, g.Value, value) && !b.unverifiedEmailAllow(ctx, g) &&
+			!(b.s.cfg.EgressHostPortGrantsInert && egressHostPortAllow(g)) {
 			allow = true
 		}
 	}

@@ -397,25 +397,27 @@ func UpsertGovernanceAssignmentQ(ctx context.Context, q Querier, a types.Governa
 	return out, nil
 }
 
-// DeleteGovernanceAssignment removes one assignment by id, ErrNotFound when
-// no row matched. Unassigning is the SUPPORTED way to widen someone back to
-// the deployment ceiling.
-func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error {
+// DeleteGovernanceAssignment removes one assignment by id and returns the row it
+// removed, ErrNotFound when no row matched. Unassigning is the SUPPORTED way to
+// widen someone back to the deployment ceiling.
+func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) (types.GovernanceAssignment, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return err
+		return types.GovernanceAssignment{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
-		return err
+		return types.GovernanceAssignment{}, err
 	}
-	if err := DeleteGovernanceAssignmentQ(ctx, tx, id); err != nil {
-		return err
+	a, err := scanGovernanceAssignment(tx.QueryRow(ctx, `DELETE FROM governance_assignments WHERE id = $1 RETURNING `+governanceAssignmentCols, id))
+	if err != nil {
+		return types.GovernanceAssignment{}, err
 	}
-	return tx.Commit(ctx)
+	return a, tx.Commit(ctx)
 }
 
-// DeleteGovernanceAssignmentQ is DeleteGovernanceAssignment's statement on q.
+// DeleteGovernanceAssignmentQ is the held-change apply's delete on q: ErrNotFound when no row
+// matched, a statement failure as a plain error. It does not read the removed row back.
 func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) error {
 	tag, err := q.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
 	if err != nil {

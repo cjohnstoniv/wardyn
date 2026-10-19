@@ -7,9 +7,12 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // labelRecord stamps the agent container with its run's recording choice at create
@@ -29,16 +32,23 @@ func (d *Driver) recordsLabels(labels map[string]string) bool {
 	return d.cfg.Record && rec
 }
 
-// recordsAgent is recordsLabels for the agent container ref; Config.Record when it cannot be read.
-func (d *Driver) recordsAgent(ctx context.Context, ref string) bool {
+// recordsAgent is recordsLabels for the agent container ref, under Exec's rule: an inspect that
+// fails again on one retry is ErrRecordingChoiceUnknown, never a guess either way.
+func (d *Driver) recordsAgent(ctx context.Context, ref string) (bool, error) {
 	if !d.cfg.Record {
-		return false
+		return false, nil
 	}
 	insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
-	if err != nil || insp.Container.Config == nil {
-		return d.cfg.Record
+	if err != nil {
+		insp, err = d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	}
-	return d.recordsLabels(insp.Container.Config.Labels)
+	if err != nil {
+		return false, fmt.Errorf("docker: %w: %v", runner.ErrRecordingChoiceUnknown, err)
+	}
+	if insp.Container.Config == nil {
+		return d.cfg.Record, nil
+	}
+	return d.recordsLabels(insp.Container.Config.Labels), nil
 }
 
 // withRecordLabel stamps labelRecord on an agent's labels, after any caller-supplied entry.

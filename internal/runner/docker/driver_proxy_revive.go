@@ -496,10 +496,15 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	if p.Container.State == nil || !p.Container.State.Running {
 		return fmt.Errorf("docker: the proxy of agent %s is not running; refusing to start the agent", ref)
 	}
+	// Read before the start, so an agent whose recording choice cannot be read never starts.
+	record, err := d.recordsAgent(ctx, ref)
+	if err != nil {
+		return err
+	}
 	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start agent: %w", err)
 	}
-	if d.recordsAgent(ctx, ref) {
+	if record {
 		d.prepareRecordingDirs(ctx, ref)
 	}
 	return nil

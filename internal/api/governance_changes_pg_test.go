@@ -983,7 +983,7 @@ func TestPG_GovernanceChanges_AssignmentWritesWaitForTheProfileGraph(t *testing.
 				Subject: "ops", ProfileID: prof.ID, Priority: 5, CreatedBy: "seed"})
 			return err
 		},
-		"a delete": func() error { return e.pg.DeleteGovernanceAssignment(ctx, seeded.ID) },
+		"a delete": func() error { _, err := e.pg.DeleteGovernanceAssignment(ctx, seeded.ID); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The hold is on a pool of its own: this goroutine probes e.pool while it holds the graph

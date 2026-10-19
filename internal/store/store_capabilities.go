@@ -54,14 +54,15 @@ func UpsertCapabilityGrantQ(ctx context.Context, q Querier, g types.CapabilityGr
 		g.ID, g.SubjectType, g.Subject, g.Capability, g.Value, g.Effect, g.CreatedBy))
 }
 
-// DeleteCapabilityGrant removes one grant by id. Returns ErrNotFound when no
-// row matched — this is an admin-only surface, so there is no principal to
-// scope the delete to and no existence oracle to worry about.
-func (s PG) DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error {
-	return DeleteCapabilityGrantQ(ctx, s.Pool, id)
+// DeleteCapabilityGrant removes one grant by id and returns the row it removed.
+// Returns ErrNotFound when no row matched — this is an admin-only surface, so
+// there is no principal to scope the delete to and no existence oracle to worry about.
+func (s PG) DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) (types.CapabilityGrant, error) {
+	return scanCapabilityGrant(s.Pool.QueryRow(ctx, `DELETE FROM capability_grants WHERE id = $1 RETURNING `+capabilityGrantCols, id))
 }
 
-// DeleteCapabilityGrantQ is DeleteCapabilityGrant's statement on q.
+// DeleteCapabilityGrantQ is the held-change apply's delete on q: ErrNotFound when no row matched,
+// a statement failure as a plain error. It does not read the removed row back.
 func DeleteCapabilityGrantQ(ctx context.Context, q Querier, id uuid.UUID) error {
 	tag, err := q.Exec(ctx, `DELETE FROM capability_grants WHERE id = $1`, id)
 	if err != nil {

@@ -545,6 +545,30 @@ func TestDeriveSetupItems_BackendCapabilitiesProbeError(t *testing.T) {
 		t.Errorf("probe-error backend item = %+v (ok=%v), want unverified carrying the probe error", got, ok)
 	}
 }
+
+// A member's backend row says the same thing without the operator detail
+// redactSetupStatusForUser withholds: no probe error, no substrate name.
+func TestDeriveSetupItems_BackendRowForAMemberHoldsNoOperatorDetail(t *testing.T) {
+	srv := newSetupTestServer()
+	member := memberCtxFor("sub-backend-member")
+	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral", ConfinementClass: string(types.CC2)}
+
+	srv.cfg.Runner = setupTestRunner{capsErr: errors.New("dial unix /var/run/docker.sock: connection refused")}
+	got, _ := findItem(srv.deriveSetupItems(member, "", run, types.RunPolicySpec{}, secretsWith(), nil), "backend:CC2")
+	if got.Status != "unverified" || strings.Contains(got.Detail, "docker.sock") {
+		t.Errorf("member probe-error row = %+v, want unverified with no probe error", got)
+	}
+
+	srv.cfg.Runner = setupTestRunner{caps: runner.Capabilities{
+		ConfinementClasses: []types.ConfinementClass{types.CC2},
+		Resolved:           map[types.ConfinementClass]string{types.CC2: "oci/runsc"},
+	}}
+	got, _ = findItem(srv.deriveSetupItems(member, "", run, types.RunPolicySpec{}, secretsWith(), nil), "backend:CC2")
+	if got.Status != "satisfied" || strings.Contains(got.Detail, "runsc") {
+		t.Errorf("member satisfied row = %+v, want satisfied with no substrate name", got)
+	}
+}
+
 func TestDeriveSetupItems_Residency(t *testing.T) {
 	srv := newSetupTestServer()
 

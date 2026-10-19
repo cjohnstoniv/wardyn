@@ -307,13 +307,8 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 		s.holdAssignmentDelete(w, r, id)
 		return
 	}
-	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
-		row, err := store.GetGovernanceAssignmentQ(r.Context(), q, id, false)
-		return map[string]any{"subject_type": row.SubjectType, "subject": row.Subject, "profile_id": row.ProfileID}, err
-	})
-	if err == nil {
-		err = s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
-	}
+	// The audit names the row the delete removed, not one read beside it.
+	removed, err := s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
 	if notFoundIf(w, err, "governance assignment", reasonGovernanceAssignmentNotFound) {
 		return
 	}
@@ -322,7 +317,7 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.assignment.delete", id.String(), "success", mustJSON(data)))
+		"governance.assignment.delete", id.String(), "success", mustJSON(assignmentWriteAuditData(removed))))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindAssignment, id.String(), "success", nil)
 	}
