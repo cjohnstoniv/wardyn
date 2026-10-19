@@ -149,12 +149,26 @@ func GatewayIPRefused(ip net.IP) bool {
 		ip.IsMulticast() || ip.IsUnspecified() {
 		return true
 	}
-	if addr, _ := addrOf(ip); slices.ContainsFunc(NeverLift, func(p netip.Prefix) bool { return p.Contains(addr) }) {
+	addr, _ := addrOf(ip)
+	if slices.ContainsFunc(NeverLift, func(p netip.Prefix) bool { return p.Contains(addr) }) {
 		return true
+	}
+	// The two other shapes that embed an IPv4, both of which the egress guard
+	// reads too: IPv4-compatible ::a.b.c.d and 6to4 2002:AABB:CCDD::/48. Each is
+	// refused exactly when the address it embeds is.
+	if b := addr.As16(); addr.Is6() && v4CompatiblePrefix.Contains(addr) {
+		return GatewayIPRefused(net.IP(b[12:16]))
+	} else if addr.Is6() && sixToFourPrefix.Contains(addr) {
+		return GatewayIPRefused(net.IP(b[2:6]))
 	}
 	_, isNAT64 := NAT64EmbeddedV4(ip)
 	return isNAT64
 }
+
+var (
+	v4CompatiblePrefix = netip.MustParsePrefix("::/96")     // RFC 4291 §2.5.5.1, deprecated
+	sixToFourPrefix    = netip.MustParsePrefix("2002::/16") // RFC 3056, deprecated (RFC 7526)
+)
 
 // addrOf converts to a comparable netip.Addr, unmapping IPv4-mapped IPv6 so "::ffff:10.0.0.1" is tested
 // as the IPv4 address it is.

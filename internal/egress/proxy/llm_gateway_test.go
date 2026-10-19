@@ -253,35 +253,40 @@ func TestLLMGateway_ResolvesToOwnSubnet_Refused(t *testing.T) {
 // misleading allow-shaped "brokered:llm" and not a dial failure (nothing was
 // ever dialled).
 func TestLLMGateway_ResolverAnswersMetadata_RefusedNeverDialled(t *testing.T) {
-	dialed := false
-	res := fakeResolver{m: map[string][]net.IP{"llm-gateway.corp.internal": ips("169.254.169.254")}}
-	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
-	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     sink,
-		Resolver: res,
-		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialed = true
-			return nil, errors.New("must not be called")
-		},
-		Injector:     staticInj(map[string]injectedHeader{"llm-gateway.corp.internal": {name: "X-Api-Key", value: "K"}}),
-		LLMUpstreams: map[string]string{anthropicHost: "https://llm-gateway.corp.internal/v1"},
-	})
+	// The metadata address, and the same address embedded IPv4-compatible and 6to4.
+	for _, answer := range []string{"169.254.169.254", "::a9fe:a9fe", "2002:a9fe:a9fe::1"} {
+		t.Run(answer, func(t *testing.T) {
+			dialed := false
+			res := fakeResolver{m: map[string][]net.IP{"llm-gateway.corp.internal": ips(answer)}}
+			buf := &bytes.Buffer{}
+			sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+			p := newProxy(Options{
+				RunID:    uuid.New(),
+				Policy:   CompilePolicy(types.RunPolicySpec{}),
+				Sink:     sink,
+				Resolver: res,
+				Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					dialed = true
+					return nil, errors.New("must not be called")
+				},
+				Injector:     staticInj(map[string]injectedHeader{"llm-gateway.corp.internal": {name: "X-Api-Key", value: "K"}}),
+				LLMUpstreams: map[string]string{anthropicHost: "https://llm-gateway.corp.internal/v1"},
+			})
 
-	rec := httptest.NewRecorder()
-	req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader("{}"))
-	p.ServeHTTP(rec, req)
+			rec := httptest.NewRecorder()
+			req := mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader("{}"))
+			p.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", rec.Code)
-	}
-	if dialed {
-		t.Fatal("a refused gateway resolution must never reach the dialer")
-	}
-	if d := lastDecision(t, buf); d.RuleSource != ruleSourceGatewayVetFailed || d.Decision != egress.Deny {
-		t.Fatalf("decision = %+v, want deny/%s", d, ruleSourceGatewayVetFailed)
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502", rec.Code)
+			}
+			if dialed {
+				t.Fatal("a refused gateway resolution must never reach the dialer")
+			}
+			if d := lastDecision(t, buf); d.RuleSource != ruleSourceGatewayVetFailed || d.Decision != egress.Deny {
+				t.Fatalf("decision = %+v, want deny/%s", d, ruleSourceGatewayVetFailed)
+			}
+		})
 	}
 }
 
