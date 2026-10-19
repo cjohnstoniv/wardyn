@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,4 +324,35 @@ func TestInternalHost_DispatchedConfigVerdicts(t *testing.T) {
 	if d := lastDecision(t, buf); rec.Code != http.StatusForbidden || d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
 		t.Fatalf("undeclared: status %d, decision %+v; want 403 deny builtin:private-ip", rec.Code, d)
 	}
+}
+
+// A lift or exact-literal trust the own-network clamp refused is told so: the internal_hosts and
+// allowed_domains remedies name a fix the clamp would refuse again, however it is declared.
+func TestInternalHost_ClampRefusalNamesTheClamp(t *testing.T) {
+	_, ownSubnet, err := net.ParseCIDR("10.40.0.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := fakeResolver{m: map[string][]net.IP{"registry.corp.internal": ips("10.40.0.5")}}
+	p, _ := newInternalHostsProxy(t, types.RunPolicySpec{AllowedDomains: []string{"registry.corp.internal", "10.40.0.5"}}, res,
+		[]types.InternalHost{{HostSuffix: "corp.internal", CIDRs: []string{"10.40.0.0/16"}}},
+		[]*net.IPNet{ownSubnet}, nil, "127.0.0.1:1")
+	check := func(t *testing.T, detail, want string) {
+		t.Helper()
+		if !strings.Contains(detail, want) || strings.Contains(detail, egressInternalHostsRemedy) || strings.Contains(detail, "it is not listed") {
+			t.Errorf("detail = %q, want it to say %q and not send the operator to internal_hosts or allowed_domains", detail, want)
+		}
+	}
+	guard := p.vetHost("registry.corp.internal")
+	if !guard.Denied || guard.kind != blockOwnNetwork {
+		t.Fatalf("guard = %+v, want a denial of kind blockOwnNetwork", guard)
+	}
+	check(t, literalIPDenialDetail("registry.corp.internal", 443, p.policy, guard.kind), "own network")
+	check(t, literalIPDenialDetail("10.40.0.5", 443, p.policy, p.privateIPBlockKind("10.40.0.5", 443)), "own network")
+
+	p.exclusionUnknown = true
+	if guard := p.vetHost("registry.corp.internal"); guard.kind != blockExclusionUnknown {
+		t.Fatalf("with the capture failed, guard kind = %v, want blockExclusionUnknown", guard.kind)
+	}
+	check(t, literalIPDenialDetail("registry.corp.internal", 443, p.policy, blockExclusionUnknown), "could not capture its own network")
 }
