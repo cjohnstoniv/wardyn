@@ -903,7 +903,9 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
 	helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true >/dev/null || { echo "chart does not render against v0.8.5's values (a --reuse-values upgrade): guard the new block with default dict"; exit 1; }; \
 	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=x --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs) || { echo "k8s chart does not render against v0.8.5's values (a --reuse-values upgrade)"; exit 1; }; \
-	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true
+	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true; \
+	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretStore=null --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/x --set kek.required=true) || { echo "kek.provider=awskms does not render without a secretStore block"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEK$$" | grep -q 'value: "awskms"' && echo "$$out" | grep -q "name: WARDYN_KEK_REQUIRED$$" || { echo "a values map with no secretStore block dropped the kek env (WARDYN_KEK / WARDYN_KEK_REQUIRED)"; exit 1; }
 	@# metrics.serviceMonitor (o-o1): off by default (a default render holds no ServiceMonitor), and on
 	@# it renders exactly one, scraping the named http port at the base-pathed /metrics with the
 	@# operator's Secret as the bearer credential (the chart never creates that Secret).
