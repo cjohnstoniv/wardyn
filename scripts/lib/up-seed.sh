@@ -6,6 +6,9 @@
 # never run standalone. Uses names defined there: REPO_ROOT, ENV_FILE,
 # IMAGES_ORIGIN, host_goarch(), plus log/warn/env_set from the common helpers.
 
+# _shp_sum FILE — the file's sha256, empty when no hashing tool is installed.
+_shp_sum() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1" 2>/dev/null; } | awk '{print $1; exit}'; }
+
 # seed_host_proxy — run the host-proxy detector ON THE HOST and stash the result
 # for the containerized wardynd. Inside the container every tier is blind (the OS
 # tier dispatches on the process's GOOS; git needs a binary distroless lacks; HOME
@@ -26,9 +29,13 @@ seed_host_proxy() {
   _shp_mark="${REPO_ROOT}/bin/.wardyn-from-image"
   mkdir -p "${REPO_ROOT}/bin" 2>/dev/null || return 0
   # A CLI already on this host that runs is the operator's (a `go build`, a
-  # package): keep it. Only a binary this function extracted earlier (marked), or
-  # one that cannot run here (a foreign-arch seed from before 0.10), is replaced.
-  if [ -x "${_shp_bin}" ] && { [ ! -e "${_shp_mark}" ] && "${_shp_bin}" --help >/dev/null 2>&1; }; then
+  # package): keep it. Only a binary this function extracted earlier, whose
+  # sha256 the marker still records, or one that cannot run here (a foreign-arch
+  # seed from before 0.10), is replaced. A marker-less seed from before 0.10 is
+  # kept too: delete bin/wardyn once to re-seed it.
+  _shp_have=$(cat "${_shp_mark}" 2>/dev/null) || _shp_have=""
+  if [ -x "${_shp_bin}" ] && "${_shp_bin}" --help >/dev/null 2>&1 \
+     && { [ -z "${_shp_have}" ] || [ "${_shp_have}" != "$(_shp_sum "${_shp_bin}")" ]; }; then
     :
   else
     _shp_os="${WARDYN_HOST_GOOS:-linux}"
@@ -48,7 +55,7 @@ seed_host_proxy() {
     docker rm -f "${_shp_cid}" >/dev/null 2>&1 || true
     if [ -f "${_shp_new}" ] && chmod +x "${_shp_new}" && "${_shp_new}" --help >/dev/null 2>&1; then
       mv -f "${_shp_new}" "${_shp_bin}"
-      : > "${_shp_mark}"
+      _shp_sum "${_shp_bin}" > "${_shp_mark}"
     else
       rm -f "${_shp_new}"
       # A seed that cannot run here is worse than none: the hand-off would print
@@ -58,7 +65,7 @@ seed_host_proxy() {
     fi
     unset _shp_os _shp_arch _shp_new _shp_cid
   fi
-  [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_mark; return 0; }
+  [ -x "${_shp_bin}" ] || { unset _shp_bin _shp_mark _shp_have; return 0; }
   # This is HOST-NATIVE execution of a binary taken out of a container image —
   # not a container entrypoint, so no confinement applies to it at all. Fine
   # when the image was built from this tree, and fine when cosign verified it;
@@ -73,5 +80,5 @@ seed_host_proxy() {
       log "Host proxy detection seeded from this host (the container can't read your shell/OS/PAC settings)."
     fi
   fi
-  unset _shp_bin _shp_mark _shp_json _shp_b64
+  unset _shp_bin _shp_mark _shp_have _shp_json _shp_b64
 }

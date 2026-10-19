@@ -173,7 +173,7 @@ export const FIELD_HELP = {
     // shipped enforcement, and never mentioned require_review_paths/hold_seconds
     // at all. This is the mock's canon sentence, verbatim.
     values:
-      "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32), max_file_size_mib (0-1024, 0 = off; refuses a push that adds a larger file) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
+      "deny_paths (refused) + require_review_paths (held for an admin's decision) — path patterns anchored at the repository root, ** crosses segments — plus max_inspect_pack_mib (0-64, default 32), max_file_size_mib (0-32, 0 = off; refuses a push that adds a larger file) and hold_seconds (0-600, default 120). Enforced on every brokered git lane. Unenforceable (a warning, not a refusal) when this run's only git grant is ssh_key.",
     doc: "push_rules--pushrulesspec",
     snippet: { deny_paths: [".github/workflows/**"] },
   },

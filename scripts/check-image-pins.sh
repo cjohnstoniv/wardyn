@@ -260,7 +260,12 @@ fi
 # statement to every recipient of that image (#2192). Skipped when no release tag
 # is reachable (a shallow clone), like the other tag-history guards.
 if [ -f "$GPL_OFFER" ]; then
-  prev_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+  # The newest final tag by version, not the nearest ancestor: a patch tagged on a
+  # release branch is not an ancestor of main, and git describe would name the one
+  # before it. Falls back to a pre-release tag only when no final exists.
+  tags=$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null || true)
+  prev_tag=$(printf '%s\n' "$tags" | grep -v -- '-' | head -1 || true)
+  [ -n "$prev_tag" ] || prev_tag=$(printf '%s\n' "$tags" | head -1)
   if [ -n "$prev_tag" ] && prev_wf=$(git show "$prev_tag:.github/workflows/release.yml" 2>/dev/null); then
     prev_published=$(printf '%s\n' "$prev_wf" | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u)
     stale=$({ grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+` \(not yet published\)' "$GPL_OFFER" || true; } \

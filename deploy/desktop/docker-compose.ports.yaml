@@ -13,7 +13,8 @@
 #   - registry 5010: the envbuild registry is reached by service name inside the
 #     stack; this tier has no host-side consumer.
 #   - UI-sandbox relay 8081: off on this tier (wardyn.env.example).
-# Needs Docker Compose 2.24 or newer (`!reset` / `!override`).
+# Needs Docker Compose 2.24.4 or newer: `!override` replaces the list from 2.24.4;
+# 2.24.0 merges it and still publishes 5432, 5010 and 8081.
 services:
   postgres:
     ports: !reset []

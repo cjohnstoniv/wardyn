@@ -135,12 +135,30 @@ purge_out="$(bash "${DESK_DIR}/install.sh" --purge 2>&1)" && purge_rc=0 || purge
   || fail "install.sh --purge without --uninstall must refuse with '--purge only works with --uninstall' (rc=${purge_rc}): ${purge_out}"
 
 # ── the packages require the compose plugin, not just a docker binary (#2183) ─
-grep -qE '^Depends: .*docker-compose-plugin \| docker-compose-v2' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+grep -qE '^Depends: .*docker-compose-plugin \(>= 2\.24\.4\) \| docker-compose-v2 \(>= 2\.24\.4\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
   || fail "the .deb Depends no longer requires the Docker Compose v2 plugin; wardyn-desktop.sh runs 'docker compose'"
-grep -qE '^Requires:\s+\(docker-compose-plugin or docker-compose\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
+grep -qE '^Requires:\s+\(docker-compose-plugin >= 2\.24\.4 or docker-compose >= 2\.24\.4\)' "${REPO_ROOT}/scripts/build-desktop-package.sh" \
   || fail "the .rpm Requires no longer names the Docker Compose v2 plugin"
 grep -q "docker compose version" "${DESK_DIR}/install.sh" \
   || fail "install.sh no longer preflights 'docker compose version'; a host without the plugin registers a converge job that fails every tick"
+
+# ── the Compose floor is 2.24.4, enforced (#2165) ───────────────────────────
+# `!override` replaces a list from 2.24.4; 2.24.0 merges it and still publishes
+# 5432, 5010 and 8081. Drives the REAL compose_too_old() from install.sh against a
+# stub `docker` that reports each version; the launcher must carry the same check.
+fn="$(sed -n '/^compose_too_old() {/,/^}/p' "${DESK_DIR}/install.sh")"
+[ -n "${fn}" ] || fail "could not extract compose_too_old() from install.sh"
+eval "${fn}"
+docker() { printf '%s\n' "${STUB_COMPOSE_VERSION}"; }
+for v in v2.24.0 2.24.3 2.23.9 1.29.2 v2.9.0; do
+  STUB_COMPOSE_VERSION="${v}"; compose_too_old || fail "compose_too_old accepted Compose ${v}, which is below the 2.24.4 floor"
+done
+for v in 2.24.4 v2.24.4-desktop.1 2.24.10 2.30.1 3.0.0 "" unknown; do
+  STUB_COMPOSE_VERSION="${v}"; compose_too_old && fail "compose_too_old refused '${v}'; it is at or above the floor or unparseable"
+done
+unset -f docker
+grep -q 'compose_too_old' "${DESK_DIR}/install.sh" && grep -q 'compose_too_old &&' "${DESK_DIR}/wardyn-desktop.sh" \
+  || fail "install.sh and wardyn-desktop.sh must both refuse a Compose older than 2.24.4"
 
 # ── 5. the plist is valid XML ────────────────────────────────────────────────
 PLIST="${DESK_DIR}/com.wardyn.daemon.plist"

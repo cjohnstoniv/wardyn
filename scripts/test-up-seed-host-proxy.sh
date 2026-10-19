@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-body="$(sed -n '/^seed_host_proxy() {/,/^}/p' "${ROOT}/scripts/lib/up-seed.sh")"
+body="$(sed -n '/^_shp_sum() /p;/^seed_host_proxy() {/,/^}/p' "${ROOT}/scripts/lib/up-seed.sh")"
 [ -n "${body}" ] || fail "scripts/lib/up-seed.sh has no seed_host_proxy()"
 eval "${body}"
 
@@ -73,5 +73,22 @@ IMAGES_ORIGIN=pulled WARDYN_HOST_GOOS=linux WARDYN_HOST_GOARCH=arm64 seed_host_p
 reset; rm -f "${IMG}"/*; badfix "${REPO_ROOT}/bin/wardyn"
 IMAGES_ORIGIN=pulled WARDYN_HOST_GOOS=darwin WARDYN_HOST_GOARCH=arm64 seed_host_proxy
 [ ! -e "${REPO_ROOT}/bin/wardyn" ] || fail "an unrunnable bin/wardyn was left in place"
+
+# 7. Seed, then the operator builds their own CLI over it: the next `up` keeps the
+#    native build. The marker holds the sha256 of what was extracted, so a changed
+#    file is no longer ours (the old bare marker overwrote it).
+reset; rm -f "${IMG}"/*; mkfix "${IMG}/wardyn-linux-amd64" image-cli
+IMAGES_ORIGIN=pulled WARDYN_HOST_GOOS=linux WARDYN_HOST_GOARCH=amd64 seed_host_proxy
+[ "$("${REPO_ROOT}/bin/wardyn" --help)" = image-cli ] || fail "first up did not seed the image CLI"
+mkfix "${REPO_ROOT}/bin/wardyn" native-build
+mkfix "${IMG}/wardyn-linux-amd64" image-cli-v2
+IMAGES_ORIGIN=pulled WARDYN_HOST_GOOS=linux WARDYN_HOST_GOARCH=amd64 seed_host_proxy
+[ "$("${REPO_ROOT}/bin/wardyn" --help)" = native-build ] || fail "a native build made after seeding was overwritten on re-up"
+
+# 8. A seed from before 0.10 has no marker: it is kept, not guessed at.
+reset; rm -f "${IMG}"/*; mkfix "${IMG}/wardyn-linux-amd64" image-cli
+mkfix "${REPO_ROOT}/bin/wardyn" old-seed
+IMAGES_ORIGIN=pulled WARDYN_HOST_GOOS=linux WARDYN_HOST_GOARCH=amd64 seed_host_proxy
+[ "$("${REPO_ROOT}/bin/wardyn" --help)" = old-seed ] || fail "a marker-less bin/wardyn was overwritten"
 
 echo "test-up-seed-host-proxy: PASS"

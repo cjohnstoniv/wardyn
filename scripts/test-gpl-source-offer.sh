@@ -80,5 +80,13 @@ printf '## `ghcr.io/cjohnstoniv/wardynd-fips:1.0.0`\n## `ghcr.io/cjohnstoniv/new
 out="$(run_stale)"
 case "$out" in *"fail=0"*) ;; *) fail "a published section, and a bootstrap section for an image no tag published, must pass. Got: $out" ;; esac
 echo "ok  stale not-yet-published section fails the gate"
+# The newest final tag counts even when it is not an ancestor of HEAD (a patch cut
+# on a release branch), and a later pre-release tag does not displace it.
+(cd "$R" && git checkout -q -b side && printf 'jobs:\n  publish:\n    strategy:\n      matrix:\n        include:\n          - name: wardynd\n          - name: newimage\n' > .github/workflows/release.yml \
+  && git -c user.name=t -c user.email=t@t commit -qam two && git tag v1.1.0 && git checkout -q - && git tag v1.2.0-rc.1)
+printf '## `ghcr.io/cjohnstoniv/newimage` (not yet published)\n' > "$R/deploy/images/THIRD-PARTY-GPL.md"
+out="$(run_stale)"
+case "$out" in *"newimage"*"fail=1"*) ;; *) fail "the newest final tag (v1.1.0, not an ancestor of HEAD) was not used for the staleness check. Got: $out" ;; esac
+echo "ok  staleness check uses the newest final tag"
 
 echo "test-gpl-source-offer: PASS"

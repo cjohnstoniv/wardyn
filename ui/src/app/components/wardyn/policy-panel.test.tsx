@@ -156,7 +156,7 @@ describe("PolicyPanel — helper rail", () => {
 
   // #2603: the help named neither the enforced push size cap nor the two resident grant kinds the server accepts.
   it("push_rules and eligible_grants help name max_file_size_mib, env_secret and file_secret", () => {
-    expect(FIELD_HELP.push_rules.values).toMatch(/max_file_size_mib \(0-1024/);
+    expect(FIELD_HELP.push_rules.values).toMatch(/max_file_size_mib \(0-32/);
     expect(FIELD_HELP.eligible_grants.values).toMatch(/\| env_secret \| file_secret/);
     expect(FIELD_HELP.eligible_grants.values).toMatch(/resident, never revoked, and admin-only/);
   });
