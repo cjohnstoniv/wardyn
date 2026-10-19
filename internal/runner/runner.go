@@ -174,6 +174,8 @@ type ProxyConfig struct {
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
 	AzureARM *proxy.AzureARMGrant
+	// AWSSigV4 is the run's AWS SigV4 re-signing grant (WARDYN_AWS_SIGV4_AT_PROXY); nil == off.
+	AWSSigV4 *proxy.AWSSigV4Config
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its

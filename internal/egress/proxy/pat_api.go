@@ -191,6 +191,9 @@ type apiDoor struct {
 	// upstream is what the door's own errors call the far side; "" is "forge".
 	upstream   string
 	credential func(ctx context.Context) (header, value string, err error)
+	// sign, when set, authorises the built upstream request itself in place of a credential
+	// header (aws_sigv4.go); credential is then nil.
+	sign func(out *http.Request) error
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -234,13 +237,17 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 			scanSummary = p.skipSummary("skip", "uninspected_channel", contentscan.ChannelGeneric)
 		}
 	}
-	name, value, err := d.credential(r.Context())
-	if err != nil {
-		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
-		p.httpError(w, d.mintFailed, err, http.StatusBadGateway)
-		return
+	var name, value string
+	if d.credential != nil {
+		var err error
+		name, value, err = d.credential(r.Context())
+		if err != nil {
+			p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
+			p.httpError(w, d.mintFailed, err, http.StatusBadGateway)
+			return
+		}
+		registerHeaderCredentialFor(p.maskKey, value) // the rendering that leaves the process, beside the raw token the mint masked
 	}
-	registerHeaderCredentialFor(p.maskKey, value) // the rendering that leaves the process, beside the raw token the mint masked
 
 	target, _, err := p.egressTarget(host, port)
 	if err != nil {
@@ -269,9 +276,18 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	copyHeader(out.Header, r.Header)
 	removeHopByHop(out.Header)
 	stripSandboxCredentials(out.Header, "")
-	out.Header.Set(name, value)
+	if d.credential != nil {
+		out.Header.Set(name, value)
+	}
 	out.Host = hostport
 	out.Header.Del("Host")
+	if d.sign != nil {
+		if err := d.sign(out); err != nil {
+			p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
+			p.httpError(w, d.mintFailed, err, http.StatusBadGateway)
+			return
+		}
+	}
 
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {

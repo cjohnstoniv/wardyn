@@ -55,6 +55,8 @@ type Options struct {
 	GitHubAPI *GitHubAPIGrant
 	// AzureARM backs the Azure CLI door (azure_arm_door.go). Nil == off.
 	AzureARM *AzureARMGrant
+	// AWSSigV4 backs AWS SigV4 re-signing (aws_sigv4.go). Nil == off.
+	AWSSigV4 *AWSSigV4Config
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.

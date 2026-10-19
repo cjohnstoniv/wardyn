@@ -14,6 +14,12 @@ attribution.owner
 attribution.request_text
 attribution.request_url
 attribution.source
+aws_sigv4
+aws_sigv4.account_id
+aws_sigv4.grant_id
+aws_sigv4.hosts
+aws_sigv4.portal_host
+aws_sigv4.role_name
 azure_arm
 azure_arm.subscriptions
 azure_arm.tenant_id

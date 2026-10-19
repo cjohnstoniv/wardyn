@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
+		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
@@ -43,6 +43,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.AzureGateConfig]():      strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),
 	reflect.TypeFor[proxy.AzureARMGrant]():        strings.Fields("TenantID Subscriptions Write"),
+	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned Content"),

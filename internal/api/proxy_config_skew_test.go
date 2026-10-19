@@ -107,6 +107,10 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 	ghCaps := base
 	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
+	sigv4Off := base // WARDYN_AWS_SIGV4_AT_PROXY off sends no aws_sigv4 key
+	sigv4On := base
+	sigv4On.AWSSigV4 = &proxy.AWSSigV4Config{GrantID: uuid.New(), PortalHost: "portal.sso.us-east-1.amazonaws.com",
+		AccountID: "111122223333", RoleName: "Developer", Hosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}}
 
 	for _, tc := range []struct {
 		name string
@@ -121,6 +125,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"a governed run's attribution", attributed, ""},
 		{"azure devops capabilities chosen by the policy", adoCaps, ""},
 		{"github capabilities chosen by the policy", ghCaps, ""},
+		{"aws sigv4 re-signing off", sigv4Off, ""},
+		{"aws sigv4 re-signing on", sigv4On, "aws_sigv4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)
