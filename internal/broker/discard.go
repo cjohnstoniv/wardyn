@@ -7,6 +7,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -15,8 +17,9 @@ import (
 // api_key are no-ops by design, not omissions. Best effort: failures are logged,
 // never returned, so they don't mask the caller's own error. The revoke is
 // detached from ctx, under the probe token's short hand-back bound: a caller
-// that hung up is exactly when the token would otherwise stay live.
-func (b *Broker) discardMinted(ctx context.Context, m Minted) {
+// that hung up is exactly when the token would otherwise stay live. runID and
+// grantID name the token on the warning: m.GrantID is unset until the commit.
+func (b *Broker) discardMinted(ctx context.Context, runID, grantID uuid.UUID, m Minted) {
 	if b.github == nil || m.Kind != types.GrantGitHubToken || m.Token == "" {
 		return
 	}
@@ -24,6 +27,6 @@ func (b *Broker) discardMinted(ctx context.Context, m Minted) {
 	defer cancel()
 	if err := b.github.Revoke(rctx, m.Token); err != nil {
 		slog.WarnContext(ctx, "broker: discarded github token could not be revoked; it stays live until GitHub expires it",
-			"grant_id", m.GrantID, "jti", m.JTI, "err", err)
+			"run_id", runID, "grant_id", grantID, "jti", m.JTI, "err", err)
 	}
 }

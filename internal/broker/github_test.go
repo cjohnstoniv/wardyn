@@ -41,6 +41,20 @@ func TestSplitRepos(t *testing.T) {
 			wantNames: []string{"widgets", "gadgets"},
 		},
 		{
+			// Trimmed as githubScopeRepos trims, so the mint names the repo the route was keyed on.
+			name:      "surrounding_space_trimmed",
+			repos:     []string{" acme/widgets", "acme/gadgets\n"},
+			wantOwner: "acme",
+			wantNames: []string{"widgets", "gadgets"},
+		},
+		{
+			// GitHub owners are case-insensitive: one installation, so one owner.
+			name:      "owner_case_folded",
+			repos:     []string{"Acme/widgets", "acme/gadgets"},
+			wantOwner: "Acme",
+			wantNames: []string{"widgets", "gadgets"},
+		},
+		{
 			name:    "cross_owner_rejected",
 			repos:   []string{"acme/widgets", "globex/secrets"},
 			wantErr: "share an owner",

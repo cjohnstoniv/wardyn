@@ -21,14 +21,14 @@ import (
 func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantID, approvalHint uuid.UUID, prepared grantApprovalRow, minted Minted) (Minted, error) {
 	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {
-		b.discardMinted(ctx, minted)
+		b.discardMinted(ctx, caller.RunID, grantID, minted)
 		return Minted{}, fmt.Errorf("broker: begin tx: %w", err)
 	}
 	committed := false
 	defer func() {
 		if !committed {
 			_ = tx.Rollback(context.WithoutCancel(ctx))
-			b.discardMinted(ctx, minted)
+			b.discardMinted(ctx, caller.RunID, grantID, minted)
 		}
 	}()
 
