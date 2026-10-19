@@ -559,11 +559,17 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 	// The lane's hosts are the ones dispatch stored on the grant, which the
 	// revived proxy carries: no repository is re-resolved, so revive cannot
 	// disagree with dispatch about the lane.
-	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoEntraRun{}, false)
+	// The operator bit is not kept on the run: the owner's own revive asks their role now, as dispatch does
+	// (runUngoverned); anyone else's reads OperatorOwned (the admin token, local mode) alone.
+	operator := run.OperatorOwned || (actor != "" && actor == run.CreatedBy && s.runUngoverned(ctx))
+	env := s.patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, operator, cfg.GitGrants, site, adoEntraRun{}, false)
 	if cfg.ADOGrant != nil {
 		env.adoHosts = slices.Clone(cfg.ADOGrant.Hosts)
 	}
-	reason, detail := patNarrowingRefusal(patGrantSpecs(grants), env)
+	reason, detail := brokerOffPATRefusal(brokeredLaneSpecs(grants), env)
+	if reason == "" {
+		reason, detail = patNarrowingRefusal(patGrantSpecs(grants), env)
+	}
 	if reason == "" {
 		return nil
 	}

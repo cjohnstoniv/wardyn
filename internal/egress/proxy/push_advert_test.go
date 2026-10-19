@@ -50,7 +50,7 @@ func advertResponse(body string) *http.Response {
 func relayed(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	relayNoThinAdvert(rec, resp)
+	(&Proxy{}).relayNoThinAdvert(rec, resp)
 	return rec.Body.String()
 }
 
@@ -149,7 +149,7 @@ func TestPushAdvertRelaysUnexpectedShapeVerbatim(t *testing.T) {
 		resp := advertResponse("repository not found")
 		resp.StatusCode = http.StatusNotFound
 		rec := httptest.NewRecorder()
-		relayNoThinAdvert(rec, resp)
+		(&Proxy{}).relayNoThinAdvert(rec, resp)
 		if rec.Code != http.StatusNotFound || rec.Body.String() != "repository not found" {
 			t.Errorf("relayed %d %q, want 404 and the body verbatim", rec.Code, rec.Body.String())
 		}

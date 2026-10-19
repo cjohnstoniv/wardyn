@@ -411,7 +411,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	injections = ado.injections
 	// A narrowed git_pat grant this run could not enforce refuses the run here
 	// (runs_dispatch_pat_scope.go).
-	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject, ceiling.adoStanding.operator) {
 		return
 	}
 	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)
@@ -488,6 +488,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
+	// Last of the env writers' credential work, after every injection above is
+	// authored, so its one-credential-per-host check sees them all.
+	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -549,7 +552,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts, placeholderMITM),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -607,6 +610,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,

@@ -110,6 +110,8 @@ type Proxy struct {
 	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
 	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
 	maskKey uuid.UUID
+	// scrubResponses is Options.ScrubResponses (scrub.go).
+	scrubResponses bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -383,6 +385,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		scrubResponses:       opts.ScrubResponses,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
@@ -390,7 +393,6 @@ func newProxy(opts Options) *Proxy {
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
-
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
 	// control-plane transport (which must never traverse the corp proxy).

@@ -100,6 +100,8 @@ type Options struct {
 	LLMUnavailableDetail string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
+	// ScrubResponses is Config.ScrubResponses.
+	ScrubResponses bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
 

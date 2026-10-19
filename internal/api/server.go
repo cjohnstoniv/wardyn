@@ -570,6 +570,20 @@ type Config struct {
 	// unexpectedly under that rewrite must not leave a fleet unable to clone.
 	// Reverting is a flag flip and a restart, not a redeploy.
 	DisableGitPATBroker bool
+	// RefuseGitPATBrokerOff (WARDYN_GIT_PAT_BROKER_OFF_REFUSED) refuses, while
+	// the broker is off, a resident PAT on an operator's run too; a member's
+	// run is refused it either way (patNarrowingRefusal).
+	RefuseGitPATBrokerOff bool
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
+	// proxy.Config.ScrubResponses on every new dispatch.
+	ScrubProxyResponses bool
+	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
+	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
+	// or file_secret grant whose scope names a host gets a placeholder in the
+	// sandbox, which the run's proxy fills on requests to that host
+	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
+	EnvSecretPlaceholders  bool
+	FileSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only

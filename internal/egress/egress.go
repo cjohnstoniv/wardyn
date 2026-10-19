@@ -163,6 +163,12 @@ type InjectionRule struct {
 	// is not looked at). Unlike PinPath it admits methods other than GET.
 	// When PinPath is also set, a request must satisfy both.
 	PinRoutes []PinRoute `json:"pin_routes,omitempty"`
+	// Placeholder, when set, makes this a placeholder rule: the sandbox holds
+	// these bytes in place of the secret (an env or file secret's value) and
+	// the proxy swaps them for the secret wherever they appear in a request
+	// header to Host, instead of stripping and setting Header. Wardyn
+	// authors it at dispatch; empty = every other rule.
+	Placeholder string `json:"placeholder,omitempty"`
 }
 
 // PinRoute is one method-and-path pair an InjectionRule's PinRoutes admits.

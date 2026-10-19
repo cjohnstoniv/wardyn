@@ -194,9 +194,9 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 	switch {
 	case p.refuseADOGitUpstream(w, r, host, rest, push, resp):
 	case noThin:
-		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		p.relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
 	default:
-		relay(w, resp)
+		p.relay(w, resp)
 	}
 }
 

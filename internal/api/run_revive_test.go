@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -898,6 +900,7 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 		f := newReviveFixture(t)
 		narrowed(t, f)
 		f.srv.cfg.DisableGitPATBroker = true
+		f.st.run.OperatorOwned = true // a member's run meets git_pat_broker_off_resident first
 		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
 		if w.Code != http.StatusConflict {
 			t.Fatalf("revive = %d, want 409 (body %s)", w.Code, w.Body.String())
@@ -934,6 +937,7 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 	t.Run("broker off revives an unnarrowed grant", func(t *testing.T) {
 		f := newReviveFixture(t)
 		f.srv.cfg.DisableGitPATBroker = true
+		f.st.run.OperatorOwned = true
 		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
 		if code := f.revive(t); code != http.StatusOK {
 			t.Fatalf("revive = %d, want 200", code)
@@ -942,6 +946,55 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 			t.Fatalf("BrokeredPATGrantIDs = %v with the broker off, want none", got)
 		}
 	})
+
+	t.Run("broker off refuses a member's run its unnarrowed grant", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.srv.cfg.DisableGitPATBroker = true
+		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); w.Code != http.StatusConflict || err != nil || body.Reason != reasonGitPATBrokerOffResident {
+			t.Fatalf("revive = %d %s, want 409 %s", w.Code, w.Body.String(), reasonGitPATBrokerOffResident)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Fatalf("ReplaceProxy calls = %d, want none", len(f.rr.replaced))
+		}
+	})
+
+	// On the owner's own revive the operator bit is their session role now, as
+	// dispatch reads it, so an SSO admin's run (OperatorOwned false) revives
+	// unless GovernAdminRuns governs it.
+	for _, c := range []struct {
+		name, role string
+		govern     bool
+		want       int
+	}{
+		{"admin", oidc.RoleAdmin, false, http.StatusOK},
+		{"user", oidc.RoleUser, false, http.StatusConflict},
+		{"admin under GovernAdminRuns", oidc.RoleAdmin, true, http.StatusConflict},
+	} {
+		role, want := c.role, c.want
+		t.Run("broker off on the owner's own revive as "+c.name, func(t *testing.T) {
+			f := newReviveFixture(t)
+			f.srv.cfg.DisableGitPATBroker = true
+			f.srv.cfg.GovernAdminRuns = c.govern
+			f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", nil)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("id", f.run.ID.String())
+			r = r.WithContext(context.WithValue(withOIDCRole(withOIDCHuman(r.Context(), f.run.CreatedBy), role), chi.RouteCtxKey, rctx))
+			w := httptest.NewRecorder()
+			f.srv.handleReviveRun(w, r)
+			if w.Code != want {
+				t.Fatalf("revive = %d %s, want %d", w.Code, w.Body.String(), want)
+			}
+			if replaced := len(f.rr.replaced); (want == http.StatusOK) != (replaced == 1) {
+				t.Fatalf("ReplaceProxy calls = %d on a %d revive", replaced, want)
+			}
+		})
+	}
 }
 
 // TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny: a remote run with the

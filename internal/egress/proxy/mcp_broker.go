@@ -509,12 +509,14 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		return
 	}
 	p.emitDialledAllow(decisionLog(x.req, egress.Allow, ruleSourceMCP), s.host)
-	relayStreaming(w, resp)
+	p.relayStreaming(w, resp)
 }
 
 // relayStreaming is relay, flushing each chunk: a streamable HTTP server may
 // answer with an event stream the harness reads as it arrives.
-func relayStreaming(w http.ResponseWriter, resp *http.Response) {
+func (p *Proxy) relayStreaming(w http.ResponseWriter, resp *http.Response) {
+	w, done := p.scrubbed(w)
+	defer done()
 	dst := w.Header()
 	copyHeader(dst, resp.Header)
 	removeHopByHop(dst)

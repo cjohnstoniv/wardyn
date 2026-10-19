@@ -300,6 +300,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LLMChannelHosts:      cfg.LLMChannelHosts,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
 		Unattended:           cfg.Unattended,
+		ScrubResponses:       cfg.ScrubResponses,
 		Attribution:          cfg.Attribution,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
