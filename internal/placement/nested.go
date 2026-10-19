@@ -21,7 +21,7 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended ScrubResponses Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
@@ -37,7 +37,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[ClassPolicy]():                strings.Fields("Mode RequirePosture"),
 	reflect.TypeFor[PostureRequirement]():         strings.Fields("MDMManaged DiskEncrypted OSMin"),
 	reflect.TypeFor[types.RunnerPosture]():        strings.Fields("MDMManaged DiskEncrypted OS OSVersion Evidence"),
-	reflect.TypeFor[egress.InjectionRule]():       strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes"),
+	reflect.TypeFor[egress.InjectionRule]():       strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes Placeholder"),
 	reflect.TypeFor[egress.PinRoute]():            strings.Fields("Method Path"),
 	reflect.TypeFor[policyref.Ref]():              strings.Fields("Source Name Owner Email RequestURL RequestText Overridden Layer"),
 	reflect.TypeFor[proxy.ADOGrantConfig]():       strings.Fields("Organization Capabilities Hosts"),
@@ -47,7 +47,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.AWSSigV4Config]():       strings.Fields("GrantID PortalHost AccountID RoleName Hosts"),
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
-	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned Content"),
+	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),

@@ -167,6 +167,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "LLMChannelHosts", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "PushRuleBase", Class: ClassExempt, Rule: RuleExempt, Variant: "the run's push rules after the ceiling, for an entry with no set; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},

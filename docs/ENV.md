@@ -253,6 +253,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCAN_AI_ADVISOR` | bool | `false` | opt-in advisory AI workspace-scan fallback (flag `-scan-ai-advisor`); the resident `claude` CLI runs with no tools or MCP servers, so it must accept `--tools` and `--strict-mcp-config` |
 | `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | bool | `true` (**on since 0.7**) | Gate an `egress:<host>` workspace requirement the same way a `secret:<name>` one is gated: only `operator_set` provenance is auto-added at launch (flag `-require-operator-set-egress`). [Details](#wardyn_require_operator_set_egress) |
 | `WARDYN_GIT_PAT_BROKER` | string | `on` | Never-resident `git_pat` lane: `on` (default since 0.7) mints a non-GitHub forge's PAT proxy-side, so the credential never enters the sandbox; only the literal `off` disables it (flag `-git-pat-broker`). [Details](#wardyn_git_pat_broker) |
+| `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` | bool | `false` | 0.10.0: while `WARDYN_GIT_PAT_BROKER` is `off`, refuse a PAT in the sandbox on operators' runs too; a member's run is refused it either way (flag `-git-pat-broker-off-refused`). [Details](#wardyn_git_pat_broker) |
+| `WARDYN_PROXY_RESPONSE_SCRUB` | bool | `false` | 0.10.0 switch: each run's proxy replaces a credential it added with `<secret-hidden>` when a response echoes it, in headers and body on intercepted and brokered routes (flag `-proxy-response-scrub`). On a stream, an event's last bytes can arrive with the next |
+| `WARDYN_ENV_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: an `env_secret` grant whose scope names a `host` gets a placeholder in its variable, which the run's proxy fills in the `Authorization` header to that host. [POLICIES.md](POLICIES.md#env_secret) has the limits (flag `-env-secret-placeholders`) |
+| `WARDYN_FILE_SECRET_PLACEHOLDERS` | bool | `false` | 0.10.0 switch: the same for a `file_secret` grant whose scope names a `host`: the file holds the placeholder (flag `-file-secret-placeholders`) |
 | `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` | bool | `false` (**off**) | Opt in to the Bitbucket Server forge API door; with it off, a policy or governance write that sets it answers `400`. A garbage value exits 2 at boot. [Details](#wardyn_git_pat_api_bitbucket_server) |
 | `WARDYN_GIT_PAT_BROKER_HOSTS` | string (space-separated) | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The hosts `agent-run` must route through the git_pat broker. Host names only — it carries no grant id, so it cannot be used to mint anything |
 | `WARDYN_ADO_LANE_DECLINED` | string | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The reason code, set only when the run names an Azure DevOps repository but was not given the per-person credential. `agent-run` names it on a clone failure |
@@ -286,7 +290,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
-| `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | whether a captured AWS SSO session is injected **proxy-side** or written into the sandbox (flag `-aws-sso-proxy-inject`); on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
+| `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | a captured AWS SSO session is injected **proxy-side** (flag `-aws-sso-proxy-inject`). `off` was removed in 0.10.0 and refuses boot. On a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
 | `WARDYN_AWS_SIGV4_AT_PROXY` | enum | `off` | `on`: an AWS sign-in lane's sandbox profile holds a placeholder key pair and the proxy re-signs each AWS request with role credentials the sandbox never holds (flag `-aws-sigv4-at-proxy`). New dispatches only. [Details](#wardyn_aws_sigv4_at_proxy) |
 | `WARDYN_AWS_SSO_REFRESH_SKEW` | duration | `10m` | how long before a captured AWS SSO session's access token expires Wardyn renews it, at dispatch and for a live run (flag `-aws-sso-refresh-skew`); `5m` to `30m`. [Details](#wardyn_aws_sso_refresh_skew) |
 | `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR` | duration | `2m` | the validity an AWS SSO access token must keep to be served while another renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`); `30s` to `10m`, below the skew. [Details](#wardyn_aws_sso_refresh_serve_floor) |
@@ -1312,6 +1316,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A `git_pat` grant that sets `repos`, `access` or `api` **needs it on**
 - Only the broker enforces the narrowing, so with `off` such a run is refused (`git_pat_narrowing_needs_broker`)
 - And a revive or restart of one launched while it was on is refused the same way until it is on again or the run is ended.
+- 0.10.0: with `off`, only an operator's run may hold the PAT. A member's run with a `git_pat` grant the broker-off lane would serve is refused at Review, at dispatch and on revive (`git_pat_broker_off_resident`).
+  - An operator's run is one the governance ceiling treats as the operator's. On revive, it is one launched with the admin token or in local mode, or the owner's own revive while their role is an operator's.
+  - A `runner_resident` grant, an Azure DevOps host and a GitHub-brokered forge are not refused: none is served by this lane.
+  - `WARDYN_GIT_PAT_BROKER_OFF_REFUSED=true` refuses operators' runs too: the staged retirement of `off` (flag `-git-pat-broker-off-refused`, default `false`).
 - An escape hatch for a forge that misbehaves under the rewrite, not a supported posture (flag `-git-pat-broker`).
 
 ### `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`
@@ -1518,30 +1526,23 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_AWS_SSO_PROXY_INJECT`
 
-- Whether a captured AWS SSO session (the `bedrock_sso` lane, `ssoInject`) is injected **proxy-side** or written into the sandbox (flag `-aws-sso-proxy-inject`; `api.ResolveAWSSSOProxyInject`).
-- `on` (the default): the sandbox's SSO token cache holds an inert placeholder.
+- A captured AWS SSO session (the `bedrock_sso` lane, `ssoInject`, and AWS CLI components) is injected **proxy-side** (flag `-aws-sso-proxy-inject`; `api.ResolveAWSSSOProxyInject`).
+- `on` (the default and, since 0.10.0, the only value): the sandbox's SSO token cache holds an inert placeholder.
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - A live run's session is renewed before it lapses (`WARDYN_AWS_SSO_REFRESH_SKEW`, below). So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
-- `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
-  - A `bedrock_sso` run cannot be placed on a person's own runner with it off: it is refused at Review, preflight and create (`placement_credential`).
-- An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
 - On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
-- **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
-- So a run already running keeps the lane it was authored with until it ends.
-- Flip it, then relaunch the runs that matter or wait them out.
-- `on`/`true`/`1` and `off`/`false`/`0` are the accepted spellings; anything else takes the default rather than refusing boot, because this switch exists to be reached in a hurry.
-- It is the rollback for an SDK or corporate-MITM surprise without a downgrade; the approval rows a previous `on` period created stay readable either way (migration `0064`).
-- **Corporate-proxy stopgap:** on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed exactly like every other dial failure (`builtin:dial-failed`, no detail).
-- Unless `WARDYN_TRUSTED_CA_FILE` below is ALSO staged onto the `wardyn-proxy` sidecar.
-- Flipping this switch `off` is the sanctioned stopgap while that is sorted out, at the cost of the sandbox residency this switch exists to avoid — see [docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md).
+- **Corporate proxy:** on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed exactly like every other dial failure (`builtin:dial-failed`, no detail).
+- Unless `WARDYN_TRUSTED_CA_FILE` below is ALSO staged onto the `wardyn-proxy` sidecar; see [docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md).
+- `off`, which wrote the token into the sandbox, was removed in 0.10.0: boot refuses `off`, `false` and `0` by name. Any other value takes the default.
+- The approval rows an earlier period created stay readable (migration `0064`).
 
 ### `WARDYN_AWS_SIGV4_AT_PROXY`
 
 - Off by default (flag `-aws-sigv4-at-proxy`; `api.ResolveAWSSigV4AtProxy`). Off, both AWS sign-in lanes dispatch exactly what they did before it existed.
 - `on`: a `bedrock_sso` provider's lane, or an AWS CLI component's, gets a `~/.aws` profile whose `credential_process` prints a placeholder key pair. It has no SSO token cache and no route to the IAM Identity Center hosts.
 - The proxy terminates the lane's AWS hosts on port 443, checks each request and signs it again with role credentials it gets from the portal's `GetRoleCredentials` with the run's captured session. The session and the role's credentials never enter the sandbox while the switch is on.
-- It builds on `WARDYN_AWS_SSO_PROXY_INJECT=on` and does nothing while that is off or `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is set.
+- It builds on the proxy-side session (`WARDYN_AWS_SSO_PROXY_INJECT`) and does nothing while `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is set.
 - A lane is re-signed only when every one of its hosts is an exact AWS service host the proxy can sign for: `<service>.<region>.amazonaws.com`, a global `<service>.amazonaws.com`, or an S3 bucket host. Bedrock's runtime and control hosts qualify.
 - Not re-signed, so the lane keeps its old path: a wildcard host, a port other than 443, a dual-stack or PrivateLink host, S3 Control, and hosts outside `amazonaws.com`.
 - On a re-signed host, the proxy refuses (`403`, reason in `X-Wardyn-Reason`, decision row `brokered:aws-sigv4:refused`) and never forwards:

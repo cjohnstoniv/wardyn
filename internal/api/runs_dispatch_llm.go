@@ -428,7 +428,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	var mitmCACertPEM, mitmCAKeyPEM string
 	if subscription || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject ||
 		slices.ContainsFunc(llms, llmTransport.azureInject) || p.PATAPI || len(p.Components.MITMHosts) > 0 ||
-		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil {
+		p.Components.GitHubAPI != nil || p.Components.AWSCLI != nil || p.Components.AzureCLI != nil || s.placeholdersWanted(*policy) {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}

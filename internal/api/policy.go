@@ -590,6 +590,9 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if apiKeyScopeShared(g.Scope) {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
 		}
+		if rule.Placeholder != "" {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
+		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}

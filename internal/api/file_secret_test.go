@@ -470,6 +470,9 @@ func TestDispatch_FileSecretReachesTheSpecAndNothingElse(t *testing.T) {
 	if len(got) != 1 || got[0].Path != runner.ComponentSecretDir+"/api-token" || string(got[0].Content) != fileOwnValue {
 		t.Fatalf("agent-owned files on the spec = %+v", got)
 	}
+	if !got[0].WipeAfterRead {
+		t.Error("the delivered file is not marked to be deleted after its first read")
+	}
 	if !slices.ContainsFunc(srv.cfg.MaskRegistry.Snapshot(run.ID), func(b []byte) bool { return string(b) == fileOwnValue }) {
 		t.Error("the delivered value is not on the run's mask registry")
 	}

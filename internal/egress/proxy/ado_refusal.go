@@ -159,7 +159,7 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 		c = classifyADOUpstream(resp)
 	}
 	if c == adoUpstreamOK {
-		relay(w, resp)
+		p.relay(w, resp)
 		return
 	}
 	p.noteADOUpstream(r, host, port, c, false, resp.StatusCode)
@@ -167,7 +167,7 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 	if c != adoUpstreamNotSignedIn {
 		resp.Header.Del(egressHeaderDetail)
 		w.Header().Set(egressHeaderDetail, msg)
-		relay(w, resp)
+		p.relay(w, resp)
 		return
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

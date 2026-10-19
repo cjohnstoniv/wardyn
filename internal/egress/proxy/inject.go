@@ -78,6 +78,8 @@ type injectedHeader struct {
 	value string
 	// jti names the credential (ResolvedInjection.JTI), so an upstream refusal of it can say which one went stale.
 	jti string
+	// placeholder is the rule's Placeholder: the bytes value replaces in the request's headers.
+	placeholder string
 }
 
 // injEntry is one host's injection: grantID is immutable; header + expiresAt are guarded by reMu,
@@ -107,7 +109,7 @@ type injEntry struct {
 // install writes a re-resolved credential onto e, pacing like an outage if the answer is already
 // inside injectRefreshMargin (else every request would re-resolve: a mint + secret.read row). Caller holds reMu.
 func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
-	e.header = injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI}
+	e.header = injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI, placeholder: e.rule.Placeholder}
 	e.expiresAt = resolved.ExpiresAt
 	e.retryAt, e.staleJTI = time.Time{}, ""
 	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
@@ -177,7 +179,7 @@ func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token
 		// The control plane resolves header + formatted value server-side; the local rule only governs the host binding, gated above.
 		inj.byHost[host] = &injEntry{
 			grantID:    r.GrantID,
-			header:     injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI},
+			header:     injectedHeader{name: resolved.Header, value: resolved.Value, jti: resolved.JTI, placeholder: r.Placeholder},
 			requireTLS: r.RequireTLS,
 			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
@@ -515,6 +517,12 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	if err != nil || !ok {
 		return
 	}
+	if h.placeholder != "" {
+		if i.allowsInjection(host, req.Method, req.URL.Path, req.URL.RawQuery) {
+			fillPlaceholder(req.Header, h)
+		}
+		return
+	}
 	// Strip always, inject only where the rule's PIN allows — same two decisions the MITM lane makes,
 	// or the pin is bypassable by skipping TLS.
 	stripSandboxCredentials(req.Header, h.name)
@@ -522,6 +530,17 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 		return
 	}
 	req.Header.Set(h.name, h.value)
+}
+
+// fillPlaceholder swaps a placeholder rule's bytes for its secret in the rule's own header
+// (Authorization unless the rule names another). Nothing is stripped: the sandbox's header
+// carries the placeholder, which is no credential. A placeholder in any other header, inside an
+// encoding (Basic auth's base64), or in a URL or body passes unchanged.
+func fillPlaceholder(h http.Header, hdr injectedHeader) {
+	vs := h[http.CanonicalHeaderKey(hdr.name)]
+	for i, v := range vs {
+		vs[i] = strings.ReplaceAll(v, hdr.placeholder, hdr.value)
+	}
 }
 
 // bootResolveQuery marks the sidecar's boot-time resolves (mirrors adoResolvePhase/adoResolvePhaseBoot).
@@ -594,6 +613,10 @@ func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 //
 // ownedHeader == "" means no rule governs this host, so nothing is stripped.
 func applyCredential(h http.Header, ownedHeader string, hdr *injectedHeader) {
+	if hdr != nil && hdr.placeholder != "" {
+		fillPlaceholder(h, *hdr)
+		return
+	}
 	if ownedHeader == "" {
 		return
 	}

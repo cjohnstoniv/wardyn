@@ -86,6 +86,8 @@
 # 0.9.4 L3 +29: docs/ENV.md 39336 adds 29 over 39307 (the staged CA trust variable bullet: the value an organisation staged is kept on every runner substrate, #2104).
 # 0.9.4 W4-DOCS-1: docs/ENV.md 39587 adds 68 over 39519, measured: #2357 #2359 #2360 #2362: recording mount value form, PAT scope row, switch count and parser exception, OIDC scopes.
 # docs/ENV.md=39536 adds 17 (0.9.4 W4-API-B): the Azure authority host row says the Key Vault client stays on the public cloud (#2809).
+# docs/ENV.md 39682 adds 62 (0.10.0 SEC-1), measured: the four 0.10.0 credential switches, and the AWS SSO off removal.
+# docs/ENV.md 39707 adds 25 (0.10.0 SEC-1 round 2), measured: the Authorization-only fill, the owner's own revive role, and the streaming scrub sentence.
 # docs/ENV.md 39622 adds 2 (0.10 API-2): the host-capacity 503 carries a message.
 # API-5: ENV.md 39768 adds 148 over 39620 (WARDYN_OIDC_BACKCHANNEL_LOGOUT row and Details), measured; the lead re-measures at merge.
 # API-5 r2: ENV.md 39799 adds 31 over 39768 (the logout event is an object; the 429 bound on tokens that fail to verify), measured.
@@ -96,7 +98,9 @@
 # docs/ENV.md 40453 adds 422 over 40031: the WARDYN_AWS_SIGV4_AT_PROXY row and section, measured at the main merge.
 # docs/ENV.md 40751 is 40453 + 40329 - 40031: both sides' additions over the merge base.
 # docs/ENV.md 40856 adds 105 over 40751, measured: the STS and IAM action guard, the token-API line and the access-facts known gap in the WARDYN_AWS_SIGV4_AT_PROXY section.
-docs/ENV.md=40856 share=5
+# docs/ENV.md 40416 = ours 39707 + theirs 40329 - base 39620 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+# docs/ENV.md 40943 is 40856 + 40416 - 40329: both sides' additions over the merge base.
+docs/ENV.md=40943 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

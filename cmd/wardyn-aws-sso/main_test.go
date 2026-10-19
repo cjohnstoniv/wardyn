@@ -376,6 +376,30 @@ func TestRun_PinnedPairUploaded(t *testing.T) {
 	}
 }
 
+// A stored capture leaves no copy of the session in the sign-in sandbox; a
+// refused one keeps the cache, so the person can retry from it.
+func TestRun_WipesTheCachesOnlyAfterAStoredCapture(t *testing.T) {
+	portal := multiAccountPortal(t)
+	t.Setenv("WARDYN_AWS_SSO_ACCOUNT_ID", rightAccount)
+	t.Setenv("WARDYN_AWS_SSO_ROLE_NAME", rightRole)
+	t.Run("stored", func(t *testing.T) {
+		if uploaded, _ := runHelper(t, portal); uploaded == nil {
+			t.Fatal("nothing uploaded")
+		}
+		for _, d := range []string{ssoCacheSubdir, cliCacheSubdir} {
+			if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), d)); !os.IsNotExist(err) {
+				t.Errorf("%s after a stored capture: stat err = %v, want it gone", d, err)
+			}
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		runHelperAgainst(t, portal, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) })
+		if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ssoCacheSubdir, "abc123.json")); err != nil {
+			t.Errorf("the cache after a refused capture: %v, want it kept", err)
+		}
+	})
+}
+
 // TestRun_ChooserPicksAccountAndRole is ask 2: no pin, several accounts, a
 // terminal to answer on. The person chooses; "2" is the account at index 1,
 // and "1" its first role. Nothing here may fall back to index 0.

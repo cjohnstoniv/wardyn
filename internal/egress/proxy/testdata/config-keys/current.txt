@@ -68,6 +68,7 @@ injection.pin_query
 injection.pin_routes
 injection.pin_routes.method
 injection.pin_routes.path
+injection.placeholder
 injection.require_tls
 injection.secret_name
 internal_hosts
@@ -189,6 +190,7 @@ resident_mints.token
 resident_mints.username
 run_id
 run_token
+scrub_responses
 self_lapse
 trusted_ca_pem
 unattended

@@ -7,4 +7,7 @@
 # docs/CREDENTIALS.md 3780 adds 96 over 3684, measured: the AWS CLI role credentials, the permission-set session length and the kept-end cache wipe.
 # docs/CREDENTIALS.md 3869 adds 89 over 3780, measured: AWS re-signing at the proxy keeps the role credentials out, which lanes it applies to, and what it refuses.
 # docs/CREDENTIALS.md 3962 adds 93 over 3869, measured: the IAM refusals, the token-API and access-facts lines, and the kept-end wipe scope and write-back window.
-docs/CREDENTIALS.md=3962 share=35
+# docs/CREDENTIALS.md 3981 adds 297 (0.10.0 SEC-1), measured: the credential-hardening rows: k8s 0400 and wipe-after-read, git_pat off for members, AWS SSO off removed, sign-in wipe, CLI cache on tmpfs, PT1H, and the placeholder and response-scrub switches.
+# docs/CREDENTIALS.md 4000 adds 19 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
+# docs/CREDENTIALS.md 4278 is 3962 + 4000 - 3684: both sides' additions over the merge base.
+docs/CREDENTIALS.md=4278 share=35
