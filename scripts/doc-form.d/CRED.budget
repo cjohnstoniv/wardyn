@@ -10,4 +10,5 @@
 # docs/CREDENTIALS.md 3981 adds 297 (0.10.0 SEC-1), measured: the credential-hardening rows: k8s 0400 and wipe-after-read, git_pat off for members, AWS SSO off removed, sign-in wipe, CLI cache on tmpfs, PT1H, and the placeholder and response-scrub switches.
 # docs/CREDENTIALS.md 4000 adds 19 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
 # docs/CREDENTIALS.md 4278 is 3962 + 4000 - 3684: both sides' additions over the merge base.
-docs/CREDENTIALS.md=4278 share=35
+# docs/CREDENTIALS.md 4321 adds 43 over 4278, measured: AWS re-signing covers the lanes the proxy re-signs, which hosts keep a lane on its old path, what the role may still obtain, and where a runner-served wipe failure is logged.
+docs/CREDENTIALS.md=4321 share=35

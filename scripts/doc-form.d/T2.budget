@@ -49,6 +49,7 @@
 # 0.10.0 SEC-1 round 2 +33, measured: the placeholder fills only the Authorization header, and the response-echo caveat.
 # threatmodel/THREAT-MODEL.md 65089 = ours 64868 + theirs 64762 - base 64541 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # threatmodel/THREAT-MODEL.md 65135 is 64808 + 65089 - 64762: both sides' additions over the merge base.
-threatmodel/THREAT-MODEL.md=65135
+# threatmodel/THREAT-MODEL.md 65158 adds 23 over 65135, measured: the derived AWS role credentials row names the re-signing switch and its old-path exception.
+threatmodel/THREAT-MODEL.md=65158
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.
