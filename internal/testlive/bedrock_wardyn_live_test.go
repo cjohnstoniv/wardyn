@@ -106,21 +106,21 @@ func TestLive_BedrockWardyn(t *testing.T) {
 		}
 		events, err := c.AuditEvents(context.Background(), run.ID)
 		if err != nil {
-			t.Fatalf("audit events for %s: %v", run.ID, err)
+			t.Fatalf("audit events for %s: %s", run.ID, Redact(err.Error()))
 		}
 		if err := BedrockWardynRunProvesPerUserSSO(events, memberPrincipal); err != nil {
-			t.Fatalf("run %s: %v", run.ID, err)
+			t.Fatalf("run %s: %s", run.ID, Redact(err.Error()))
 		}
 		if err := RunCreatedByIsMember(run.CreatedBy, memberPrincipal); err != nil {
-			t.Fatalf("run %s: %v", run.ID, err)
+			t.Fatalf("run %s: %s", run.ID, Redact(err.Error()))
 		}
 		transcript, err := bedrockWardynTranscript(context.Background(), c, run.ID)
 		if err != nil {
-			t.Fatalf("run %s: recording: %v (GET /api/v1/runs/{id}/recording/{id} needs RecordingStore configured "+
-				"on this install; docs/LIVE-TESTS.md, LL3w)", run.ID, err)
+			t.Fatalf("run %s: recording: %s (GET /api/v1/runs/{id}/recording/{id} needs RecordingStore configured "+
+				"on this install; docs/LIVE-TESTS.md, LL3w)", run.ID, Redact(err.Error()))
 		}
 		if err := TranscriptContainsReply(transcript, bedrockWardynReply); err != nil {
-			t.Fatalf("run %s: %v", run.ID, err)
+			t.Fatalf("run %s: %s", run.ID, Redact(err.Error()))
 		}
 		t.Logf("run %s COMPLETED: per-user SSO lane, allow-listed model, minted credential, attributed to the "+
 			"member, reply in the transcript", run.ID)
@@ -140,11 +140,11 @@ func TestLive_BedrockWardyn(t *testing.T) {
 		run := liveBedrockWardynRun(t, c, denied, "live-local LL3w-deny")
 		events, err := c.AuditEvents(context.Background(), run.ID)
 		if err != nil {
-			t.Fatalf("audit events for %s: %v", run.ID, err)
+			t.Fatalf("audit events for %s: %s", run.ID, Redact(err.Error()))
 		}
 		mode, err := bedrockConfiguredMode(events)
 		if err != nil {
-			t.Fatalf("run %s: %v", run.ID, err)
+			t.Fatalf("run %s: %s", run.ID, Redact(err.Error()))
 		}
 		if mode != "bearer" {
 			t.Fatalf("run %s: run.bedrock.configure mode is %q, not \"bearer\" — %s must name a Bedrock "+
@@ -153,7 +153,7 @@ func TestLive_BedrockWardyn(t *testing.T) {
 				run.ID, mode, EnvBedrockWardynDeniedModelProvider)
 		}
 		if err := BedrockWardynForcedFaultOK(run.FailureHint, "AccessDeniedException"); err != nil {
-			t.Fatalf("run %s ended %s: %v", run.ID, run.State, err)
+			t.Fatalf("run %s ended %s: %s", run.ID, run.State, Redact(err.Error()))
 		}
 		t.Logf("run %s: AccessDeniedException reached failure_hint on the bearer lane", run.ID)
 	})
@@ -235,7 +235,7 @@ func liveBedrockWardynRun(t *testing.T, c *client.Client, modelProvider, title s
 		select {
 		case <-ctx.Done():
 			if _, kerr := c.KillRun(context.Background(), run.ID); kerr != nil {
-				t.Logf("kill %s: %v (may already have exited)", run.ID, kerr)
+				t.Logf("kill %s: %s (may already have exited)", run.ID, Redact(kerr.Error()))
 			}
 			t.Fatalf("run %s still %s after 5 minutes; killed it", run.ID, run.State)
 		case <-time.After(3 * time.Second):
