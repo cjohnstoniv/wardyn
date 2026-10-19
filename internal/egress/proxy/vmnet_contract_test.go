@@ -153,6 +153,43 @@ func TestVMNetContract(t *testing.T) {
 	})
 }
 
+// TestVMNetUnaskedRefusalsAreCounted: a port-80 flow the relay refuses before
+// any proxy ask (not HTTP) is free for the guest to repeat, so a flood of them
+// makes at most one row per second per kind, the rest carried as a repeat count.
+func TestVMNetUnaskedRefusalsAreCounted(t *testing.T) {
+	g, buf := vmRun(t, types.RunPolicySpec{AllowedDomains: []string{"origin.test"}}, "127.0.0.1:1")
+	addr := g.Resolve(t, "origin", "test")
+	const n = 40
+	t0 := time.Now()
+	for i := 0; i < n; i++ {
+		c, err := g.Dial(addr, 80, 3*time.Second)
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		_, _ = io.WriteString(c, "\x16\x03\x01 not http at all\r\n\r\n")
+		_ = c.Close()
+	}
+	elapsed := time.Since(t0)
+	// Each row stands for itself plus its repeats; wait for the periodic flush.
+	count := func(rs []egress.DecisionLog) (sum int) {
+		for _, r := range rs {
+			if r.RuleSource != "vmnet:not-http" {
+				t.Fatalf("row %+v", r)
+			}
+			sum += 1 + r.Repeat
+		}
+		return sum
+	}
+	rs := rows(t, buf)
+	for deadline := time.Now().Add(4 * time.Second); count(rs) < n && time.Now().Before(deadline); rs = rows(t, buf) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	sum := count(rs)
+	if max := int(elapsed/time.Second) + 2; sum != n || len(rs) > max {
+		t.Fatalf("%d connections in %v: %d rows accounting for %d, want at most %d rows accounting for %d", n, elapsed, len(rs), sum, max, n)
+	}
+}
+
 // TestVMNetPlainHTTPMethodRule: a VM's port-80 traffic reaches the proxy as
 // forward requests, so allowed_methods applies to it as to a container's.
 func TestVMNetPlainHTTPMethodRule(t *testing.T) {

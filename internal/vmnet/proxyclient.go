@@ -116,6 +116,8 @@ type refusal struct {
 	Port   int    `json:"port,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	Repeat int    `json:"repeat,omitempty"`
+
+	asked bool // the proxy asked about and parked this flow; never rate-limited
 }
 
 // send posts one refusal. Best effort: the relay's own log line already

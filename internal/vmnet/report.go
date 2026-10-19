@@ -14,9 +14,11 @@ import (
 // limited per kind before they reach the relay's log or the run's decision log:
 // the first of a kind in each interval goes out at once, the rest are counted,
 // and the count rides the next report of that kind or the periodic flush.
-// A refusal that carries a flow id is never held: it ends a flow the proxy
-// asked about and parked, and it is that flow's one row. Each flow cost the
+// A refusal of an asked flow is never held: it ends a flow the proxy asked
+// about and parked, and it is that flow's one row. Each such flow cost the
 // guest a proxy decision, so these are bounded by the proxy, not by this limit.
+// Every other refusal, a port-80 flow's not-http or host-mismatch included
+// (made before any ask), is limited per kind.
 const reportInterval = time.Second
 
 type held struct {
@@ -47,7 +49,7 @@ func key(r refusal) string {
 
 // refuse records one refusal: reported now, or held for the next report.
 func (rp *reporter) refuse(r refusal) {
-	if r.Flow != "" {
+	if r.asked {
 		rp.emit(r)
 		return
 	}

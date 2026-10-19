@@ -266,7 +266,7 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 		reason = "first-flight-timeout"
 	}
 	if reason != "" {
-		rl.rep.refuse(refusal{Flow: flow, Reason: reason, Host: name, Port: int(port), Detail: detail})
+		rl.rep.refuse(refusal{Flow: flow, Reason: reason, Host: name, Port: int(port), Detail: detail, asked: true})
 		return
 	}
 	pc, status, err := rl.proxy.tunnel(name, port, flow)
