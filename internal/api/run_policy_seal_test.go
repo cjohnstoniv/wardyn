@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,7 +45,7 @@ func TestSealPolicyWithNoLayersIsTheIdentity(t *testing.T) {
 // denies and names itself as the deciding layer; nothing else in the spec moves.
 func TestSealPolicyMeetsEachLayer(t *testing.T) {
 	spec := sealFixture()
-	walls := sealLayer{name: "walls", spec: types.RunPolicySpec{
+	walls := sealLayer{rec: policyref.Provenance{Layer: "walls"}, spec: types.RunPolicySpec{
 		AllowedDomains: []string{"api.anthropic.com", "github.com", "*.registry.npmjs.org"},
 		DeniedDomains:  []string{"gist.github.com"},
 	}}
@@ -55,7 +56,7 @@ func TestSealPolicyMeetsEachLayer(t *testing.T) {
 	if want := []string{"bad.example", "gist.github.com"}; !slices.Equal(spec.DeniedDomains, want) {
 		t.Errorf("denied = %v, want %v", spec.DeniedDomains, want)
 	}
-	if want := []sealDecision{{"allowed_domains", "walls"}, {"denied_domains", "walls"}}; !slices.Equal(d, want) {
+	if want := []sealDecision{{"allowed_domains", walls.rec}, {"denied_domains", walls.rec}}; !slices.Equal(d, want) {
 		t.Errorf("decisions = %v, want %v", d, want)
 	}
 	rest, fix := spec, sealFixture()
@@ -69,20 +70,20 @@ func TestSealPolicyMeetsEachLayer(t *testing.T) {
 // allows it, and a layer that allows all leaves the allowlist alone.
 func TestSealPolicyAllowAll(t *testing.T) {
 	spec := types.RunPolicySpec{AllowAllEgress: true, AllowedDomains: []string{"github.com"}}
-	open := sealLayer{name: "walls", spec: types.RunPolicySpec{AllowAllEgress: true}}
+	open := sealLayer{rec: policyref.Provenance{Layer: "walls"}, spec: types.RunPolicySpec{AllowAllEgress: true}}
 	if d := sealPolicy(&spec, []sealLayer{open}); d != nil || !spec.AllowAllEgress || !slices.Equal(spec.AllowedDomains, []string{"github.com"}) {
 		t.Errorf("an allow-all layer changed the spec: %+v, decisions %v", spec, d)
 	}
-	closed := sealLayer{name: "agent", spec: types.RunPolicySpec{AllowedDomains: []string{"github.com"}}}
+	closed := sealLayer{rec: policyref.Provenance{Layer: "agent"}, spec: types.RunPolicySpec{AllowedDomains: []string{"github.com"}}}
 	d := sealPolicy(&spec, []sealLayer{open, closed})
 	if spec.AllowAllEgress || !slices.Equal(spec.AllowedDomains, []string{"github.com"}) {
 		t.Errorf("spec = %+v, want allow-all off and github.com kept", spec)
 	}
-	if want := []sealDecision{{"allow_all_egress", "agent"}}; !slices.Equal(d, want) {
+	if want := []sealDecision{{"allow_all_egress", closed.rec}}; !slices.Equal(d, want) {
 		t.Errorf("decisions = %v, want %v", d, want)
 	}
 	nothing := types.RunPolicySpec{AllowedDomains: []string{"github.com"}}
-	if sealPolicy(&nothing, []sealLayer{{name: "walls"}}); len(nothing.AllowedDomains) != 0 || nothing.AllowedDomains == nil {
+	if sealPolicy(&nothing, []sealLayer{{rec: policyref.Provenance{Layer: "walls"}}}); len(nothing.AllowedDomains) != 0 || nothing.AllowedDomains == nil {
 		t.Errorf("a layer that allows nothing left %#v, want the explicit empty allowlist", nothing.AllowedDomains)
 	}
 }

@@ -454,7 +454,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 	// The final seal, after every phase that adds a host and after the ceiling's
 	// re-assertion: nothing below may widen policy (run_policy_seal.go).
-	s.sealRunPolicy(ctx, run, &policy)
+	s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.

@@ -230,7 +230,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, rerr
 	}
-	s.sealRunPolicy(ctx, run, &cfg.Policy) // the final seal, as dispatch's (run_policy_seal.go)
+	s.sealRunPolicy(ctx, run, &cfg.Policy, nil) // the final seal, as dispatch's (run_policy_seal.go)
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}

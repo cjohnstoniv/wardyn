@@ -48,6 +48,7 @@ var lateAddCensus = map[string]int{
 	"run_overrides_apply.go applyRunEgressOverrides":            2,
 	"run_overrides_apply.go applyRunHostOverrides":              1,
 	"run_overrides_apply.go boundOverrideAdds":                  1,
+	"run_policy_provenance.go canonicalKnobs":                   1,
 	"runs_autonomy.go autonomyPostureSpec":                      2,
 	"runs_autonomy.go unionADOEntraLane":                        1,
 	"runs_cli_github.go confineBrokerEgress":                    1,

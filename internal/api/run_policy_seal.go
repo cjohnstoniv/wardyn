@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -19,16 +20,17 @@ import (
 // of them have run. run_policy_seal_census_test.go lists those additions and
 // fails on a new one, or on a widening that runs after the seal.
 
-// sealLayer is one outer limit on a run's egress, named as the layer that
-// decided a value.
+// sealLayer is one outer limit on a run's egress, and the record a knob it
+// decides carries in the run's provenance.
 type sealLayer struct {
-	name string
+	rec  policyref.Provenance
 	spec types.RunPolicySpec
 }
 
 // sealDecision is one knob a layer narrowed.
 type sealDecision struct {
-	knob, layer string
+	knob  string
+	layer policyref.Provenance
 }
 
 // outerLayers is the ordered outer layers a run is sealed against: the
@@ -38,12 +40,16 @@ func (s *Server) outerLayers(context.Context, types.AgentRun) []sealLayer {
 	return nil
 }
 
-// sealRunPolicy seals policy against the run's outer layers and logs which
-// layer decided each knob it narrowed.
-func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec) {
+// sealRunPolicy seals policy against the run's outer layers and records which
+// layer decided each knob it narrowed: in prov when the path keeps a provenance
+// record (dispatch; nil on a revive), and in the log.
+func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, prov knobProvenance) {
 	for _, d := range sealPolicy(policy, s.outerLayers(ctx, run)) {
+		if prov != nil {
+			prov[d.knob] = d.layer
+		}
 		slog.InfoContext(ctx, "wardynd: the final seal narrowed the run's policy",
-			slog.String("run_id", run.ID.String()), slog.String("knob", d.knob), slog.String("layer", d.layer))
+			slog.String("run_id", run.ID.String()), slog.String("knob", d.knob), slog.String("layer", d.layer.Layer))
 	}
 }
 
@@ -69,14 +75,16 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 			met.Ceiling = types.RunPolicySpec{AllowedDomains: []string{}, DeniedDomains: spec.DeniedDomains}
 		}
 		out := met.Ceiling
-		if !slices.Equal(out.AllowedDomains, spec.AllowedDomains) {
-			decided = append(decided, sealDecision{"allowed_domains", l.name})
+		// Compared canonical, as the provenance record compares, so a re-spelling decides nothing.
+		before, after := canonicalKnobs(in), canonicalKnobs(out)
+		if !slices.Equal(before.AllowedDomains, after.AllowedDomains) {
+			decided = append(decided, sealDecision{"allowed_domains", l.rec})
 		}
-		if out.AllowAllEgress != spec.AllowAllEgress {
-			decided = append(decided, sealDecision{"allow_all_egress", l.name})
+		if before.AllowAllEgress != after.AllowAllEgress {
+			decided = append(decided, sealDecision{"allow_all_egress", l.rec})
 		}
-		if !slices.Equal(out.DeniedDomains, spec.DeniedDomains) {
-			decided = append(decided, sealDecision{"denied_domains", l.name})
+		if !slices.Equal(before.DeniedDomains, after.DeniedDomains) {
+			decided = append(decided, sealDecision{"denied_domains", l.rec})
 		}
 		spec.AllowedDomains, spec.DeniedDomains, spec.AllowAllEgress = out.AllowedDomains, out.DeniedDomains, out.AllowAllEgress
 	}
