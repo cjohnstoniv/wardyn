@@ -292,7 +292,9 @@ func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels m
 	}
 	if err != nil && strings.Contains(err.Error(), "non-overlapping IPv4 address pool") {
 		// Each run holds one subnet of the daemon's default address pools; the defaults hold about 30.
-		return "", fmt.Errorf("docker: create internal network: the Docker daemon has no free subnet left for this run's network (each sandbox holds one): give the daemon small per-network subnets with default-address-pools in daemon.json, for example base 10.200.0.0/16 with size 28, then restart it (docs/OPERATIONS.md, \"Docker host: one subnet per run\"): %w", err)
+		return "", fmt.Errorf("docker: create internal network: the Docker daemon has no free subnet left for this run's network (each sandbox holds one): "+
+			"give the daemon small per-network subnets with default-address-pools in daemon.json, for example base 10.200.0.0/16 with size 28, "+
+			"then restart it (docs/OPERATIONS.md, \"Docker host: one subnet per run\"): %w", err)
 	}
 	return "", fmt.Errorf("docker: create internal network: %w", err)
 }
