@@ -340,7 +340,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
-	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable); ok {
 		checks = append(checks, chk)
 	}
 	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
@@ -622,8 +622,9 @@ func (s *Server) siteConfigSnapshot(ctx context.Context) (types.SiteConfig, bool
 // Capabilities() call itself just errored (the `err != nil` return below) —
 // that third case is not hypothetical, it is this very function's own
 // early-return path, which already leaves Driver "k8s" with nothing else
-// filled in. k8sEgressContainmentCheck grades all three the same honest way
-// (Indeterminate/FAIL, never a silent Enforcing).
+// filled in. k8sEgressContainmentCheck grades all three Indeterminate/FAIL, never
+// a silent Enforcing; the unreadable case (capsUnreadable) is told apart so its
+// fix points at substrate_health rather than an upgrade.
 func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string) {
 	out := SetupRunner{Driver: "none", ConfinementClasses: []string{}}
 	if rn == nil {
