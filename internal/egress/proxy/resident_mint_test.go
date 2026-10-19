@@ -60,10 +60,13 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 	var now atomic.Int64
 	start := time.Now().UTC()
 	now.Store(start.UnixNano())
-	ssh, pat, zero := uuid.New(), uuid.New(), uuid.New()
+	ssh, sshLate, pat, zero := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	expires := start.Add(2 * time.Hour)
 	p, buf, cpCalls := residentMintProxy(t, &now, []ResidentMint{
 		{GrantID: ssh, Kind: types.GrantSSHKey, Username: "git", KnownHosts: "ssh.example.test ssh-ed25519 AAAA", Token: "ssh-key-value", ExpiresAt: expires},
+		// Asked first at expiry: an ssh_key is answered once, so the expiry arm
+		// is proven on a grant no earlier ask has spent.
+		{GrantID: sshLate, Kind: types.GrantSSHKey, Username: "git", Token: "ssh-late-value", ExpiresAt: expires},
 		{GrantID: pat, Kind: types.GrantGitPAT, Username: "pat", Token: "pat-value", ExpiresAt: expires},
 		{GrantID: zero, Kind: types.GrantGitPAT, Username: "oauth2", Token: "no-expiry-value"},
 	}, nil)
@@ -112,7 +115,7 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 	}
 	now.Store(expires.UnixNano())
 	refused("at expiry", pat)
-	refused("at expiry", ssh)
+	refused("at expiry", sshLate)
 	now.Store(expires.Add(time.Hour).UnixNano())
 	refused("after expiry", pat)
 	if n := cpCalls.Load(); n != 0 {
@@ -120,6 +123,37 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 	}
 	if rec := residentMintCall(t, p, uuid.New()); rec.Code != http.StatusOK || cpCalls.Load() != 1 {
 		t.Fatalf("a grant outside the resident set: status %d, relays %d, want one relay", rec.Code, cpCalls.Load())
+	}
+}
+
+// A runner_resident ssh_key is answered once per proxy: the second ask is a 409
+// in the control plane's already_minted shape, with no value and a mint deny.
+// A git_pat keeps its helper-refresh answers.
+func TestBrokerMint_ResidentSSHKeyAnsweredOnce(t *testing.T) {
+	var now atomic.Int64
+	now.Store(time.Now().UnixNano())
+	ssh, pat := uuid.New(), uuid.New()
+	expires := time.Now().Add(time.Hour)
+	p, buf, _ := residentMintProxy(t, &now, []ResidentMint{
+		{GrantID: ssh, Kind: types.GrantSSHKey, Username: "git", Token: "ssh-key-value", ExpiresAt: expires},
+		{GrantID: pat, Kind: types.GrantGitPAT, Username: "pat", Token: "pat-value", ExpiresAt: expires},
+	}, nil)
+	if rec := residentMintCall(t, p, ssh); rec.Code != http.StatusOK {
+		t.Fatalf("first ask: status %d, want 200", rec.Code)
+	}
+	rec := residentMintCall(t, p, ssh)
+	var body struct{ Code string }
+	if rec.Code != http.StatusConflict || strings.Contains(rec.Body.String(), "ssh-key-value") ||
+		json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Code != types.MintConflictAlreadyMinted {
+		t.Fatalf("second ask: status %d body %q, want a 409 already_minted with no value", rec.Code, rec.Body.String())
+	}
+	if d := lastDecision(t, buf); d.RuleSource != ruleSourceMint || d.Decision != egress.Deny {
+		t.Fatalf("second ask decision = %+v, want a mint deny", d)
+	}
+	for range 2 {
+		if rec := residentMintCall(t, p, pat); rec.Code != http.StatusOK {
+			t.Fatalf("git_pat ask: status %d, want 200 every time", rec.Code)
+		}
 	}
 }
 

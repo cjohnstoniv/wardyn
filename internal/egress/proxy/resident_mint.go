@@ -88,6 +88,15 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 		http.Error(w, "wardyn: this runner_resident credential has expired on this runner; start a new run to use it again", http.StatusForbidden)
 		return
 	}
+	// An ssh_key is issued once per run; this proxy answers it once (a revived
+	// run's new proxy answers once more).
+	if m.Kind == types.GrantSSHKey && !p.firstResidentSSHAnswer(m.GrantID) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": types.MintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
+		return
+	}
 	p.emitLocalDecision(r, egress.Allow, ruleSourceMint, nil)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -97,4 +106,19 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 		ExpiresAt  string          `json:"expires_at"`
 		KnownHosts string          `json:"known_hosts,omitempty"`
 	}{m.Kind, m.Token, m.Username, m.ExpiresAt.UTC().Format(time.RFC3339), m.KnownHosts})
+}
+
+// firstResidentSSHAnswer records grant as answered and reports whether it was
+// not already.
+func (p *Proxy) firstResidentSSHAnswer(grant uuid.UUID) bool {
+	p.residentSSHMu.Lock()
+	defer p.residentSSHMu.Unlock()
+	if p.residentSSHAnswered[grant] {
+		return false
+	}
+	if p.residentSSHAnswered == nil {
+		p.residentSSHAnswered = map[uuid.UUID]bool{}
+	}
+	p.residentSSHAnswered[grant] = true
+	return true
 }
