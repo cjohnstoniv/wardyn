@@ -11,8 +11,8 @@
 #   - per-run identity mint, policy resolution, audit append
 #
 # The run is created via the admin-token CLI path (headless, deterministic).
-# Human SSO via Dex is a UI bonus: open http://localhost:8080 and log in as
-# demo@wardyn.local / password (see README for the /etc/hosts note).
+# The UI at http://localhost:8080 signs in with the admin token (this stack
+# configures no OIDC, so the SSO button is disabled; docs/TRY-IT.md).
 #
 # Usage:  scripts/demo.sh            # build + up + demo run + audit
 #         scripts/demo.sh --no-build # skip image build (reuse existing)
@@ -118,7 +118,7 @@ cmd_up() {
 
   echo
   log "Demo complete."
-  echo "    UI:        http://localhost:8080  (SSO: demo@wardyn.local / password)"
+  echo "    UI:        http://localhost:8080  (sign in with the admin token below)"
   echo "    Dex:       http://localhost:5556/.well-known/openid-configuration"
   echo "    Admin API: Authorization: Bearer ${ADMIN_TOKEN}"
   echo "    Tear down: scripts/demo.sh down"
