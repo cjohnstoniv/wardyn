@@ -136,6 +136,35 @@ func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
 	return client
 }
 
+// upstreamProxyFor parses and validates the upstream/parent corp proxy
+// (optional) and registers any embedded credential in the mask registry so it
+// can never leak into a decision log or stdout. The credential is held
+// proxy-memory-only.
+func upstreamProxyFor(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*upstreamProxy, error) {
+	up, err := parseUpstreamProxy(cfg.UpstreamProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if up != nil {
+		for _, v := range up.maskValues() {
+			procMaskFor(maskKey, v)
+		}
+		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
+			slog.String("upstream_addr", up.addr))
+		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's
+		// log must name the bypass entries themselves, not just a count. Also
+		// state what it does NOT do, because "bypass" reads like "exempt" and
+		// isn't: a bypassed dial still runs the private-IP guard and needs
+		// its policy allow.
+		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
+			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
+				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
+				slog.Any("bypass", noProxyStrings(noProxy)))
+		}
+	}
+	return up, nil
+}
+
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
@@ -236,30 +265,10 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM enabled (content inspection and/or subscription credential injection)")
 	}
 
-	// Upstream/parent corp proxy (optional). Parse+validate; register any
-	// embedded credential in the mask registry so it can never leak into a
-	// decision log or stdout. The credential is held proxy-memory-only.
-	up, err := parseUpstreamProxy(cfg.UpstreamProxyURL)
+	up, err := upstreamProxyFor(ctx, cfg, hooks.maskKey)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("upstream proxy: %w", err)
-	}
-	if up != nil {
-		for _, v := range up.maskValues() {
-			procMaskFor(hooks.maskKey, v)
-		}
-		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
-			slog.String("upstream_addr", up.addr))
-		// Say LOUDLY and EXHAUSTIVELY what is NOT chained: the deployment's
-		// log must name the bypass entries themselves, not just a count. Also
-		// state what it does NOT do, because "bypass" reads like "exempt" and
-		// isn't: a bypassed dial still runs the private-IP guard and needs
-		// its policy allow.
-		if noProxy := compileNoProxy(cfg.UpstreamProxyNoProxy); len(noProxy) > 0 {
-			slog.InfoContext(ctx, "wardyn-proxy: upstream proxy BYPASSED for declared destinations — dialed directly "+
-				"(still SSRF-guarded: a private address needs a site-config internal_hosts declaration; still policy-gated)",
-				slog.Any("bypass", noProxyStrings(noProxy)))
-		}
 	}
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
