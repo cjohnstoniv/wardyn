@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -37,17 +36,18 @@ const (
 // so a typo must refuse to start rather than silently keep the old (narrower)
 // trust set. n is the number of certificates the bundle actually added — used
 // only for the boot log line; installTrustedCA needs just the pool.
+// refuseWritable is WARDYN_TRUSTED_CA_REFUSE_WRITABLE (readTrustedCAFile).
 //
 // Deliberately NOT x509.CertPool.AppendCertsFromPEM (which reports only
 // ok/not-ok): a per-certificate parse gives the boot log real subjects
 // instead of "loaded a trusted CA file", the honesty the sibling
 // WARDYN_AGENT_IMAGES/WARDYN_DEFAULT_POLICY boot lines already have.
-func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, err error) {
+func loadTrustedCA(path string, refuseWritable bool) (pemBundle string, pool *x509.CertPool, n int, err error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", nil, 0, nil
 	}
-	raw, rerr := readTrustedCAFile(path)
+	raw, rerr := readTrustedCAFile(path, refuseWritable)
 	if rerr != nil {
 		return "", nil, 0, rerr
 	}
@@ -68,10 +68,11 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	return bundle, sys, len(certs), nil
 }
 
-// readTrustedCAFile reads the bundle from the file it checked: a group- or world-writable bundle is
-// refused, as for a secret file, because whoever can write it chooses the roots wardynd and every
-// sandbox trust. Other-read is fine; a CA bundle is public.
-func readTrustedCAFile(path string) ([]byte, error) {
+// readTrustedCAFile reads the bundle from the file it checked. A group- or world-writable bundle
+// logs a warning naming the remedy, or refuses boot when refuseWritable is on, so the roots wardynd
+// and every sandbox trust come from a file only its owner writes. Other-read is fine; a CA bundle
+// is public.
+func readTrustedCAFile(path string, refuseWritable bool) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", err)
@@ -81,8 +82,12 @@ func readTrustedCAFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", err)
 	}
-	if err := cliutil.CheckSecretFileMode("WARDYN_TRUSTED_CA_FILE", path, fi.Mode().Perm(), -1, os.Geteuid()); err != nil {
-		return nil, err
+	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
+		if refuseWritable {
+			return nil, fmt.Errorf("WARDYN_TRUSTED_CA_FILE=%q is mode %04o, writable by group or others, and WARDYN_TRUSTED_CA_REFUSE_WRITABLE is on; chmod 644 it", path, perm)
+		}
+		slog.Warn("wardynd: WARDYN_TRUSTED_CA_FILE is writable by group or others; chmod 644 it",
+			slog.String("path", path), slog.String("mode", fmt.Sprintf("%04o", perm)))
 	}
 	raw, err := io.ReadAll(f)
 	if err != nil {

@@ -11,6 +11,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -47,12 +49,12 @@ func genTestCert(t *testing.T, cn string) []byte {
 func TestLoadTrustedCA_UnsetIsAllNil(t *testing.T) {
 	// Negative control for the whole feature: with the knob unset, nothing
 	// changes — no PEM, no pool, count 0, no error.
-	pemOut, pool, n, err := loadTrustedCA("")
+	pemOut, pool, n, err := loadTrustedCA("", false)
 	if err != nil || pemOut != "" || pool != nil || n != 0 {
 		t.Fatalf("loadTrustedCA(\"\") = (%q, %v, %d, %v), want (\"\", nil, 0, nil)", pemOut, pool, n, err)
 	}
 	// Whitespace-only is the same as empty (flagEnv can hand a trimmed blank).
-	if _, _, _, err := loadTrustedCA("   "); err != nil {
+	if _, _, _, err := loadTrustedCA("   ", false); err != nil {
 		t.Fatalf("loadTrustedCA(whitespace) errored: %v", err)
 	}
 }
@@ -66,7 +68,7 @@ func TestLoadTrustedCA_ValidAppendsToSystemPool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pemOut, pool, n, err := loadTrustedCA(path)
+	pemOut, pool, n, err := loadTrustedCA(path, false)
 	if err != nil {
 		t.Fatalf("loadTrustedCA: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestLoadTrustedCA_RefusesGarbage(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a pem file at all"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := loadTrustedCA(path); err == nil {
+	if _, _, _, err := loadTrustedCA(path, false); err == nil {
 		t.Fatal("loadTrustedCA(garbage) did not error")
 	} else if !strings.Contains(err.Error(), "WARDYN_TRUSTED_CA_FILE") {
 		t.Fatalf("error %q does not name WARDYN_TRUSTED_CA_FILE", err.Error())
@@ -121,13 +123,13 @@ func TestLoadTrustedCA_RefusesUnparseableCertBlock(t *testing.T) {
 	if err := os.WriteFile(path, bad, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := loadTrustedCA(path); err == nil {
+	if _, _, _, err := loadTrustedCA(path, false); err == nil {
 		t.Fatal("loadTrustedCA(unparseable block) did not error")
 	}
 }
 
 func TestLoadTrustedCA_RefusesMissingFile(t *testing.T) {
-	_, _, _, err := loadTrustedCA(filepath.Join(t.TempDir(), "does-not-exist.pem"))
+	_, _, _, err := loadTrustedCA(filepath.Join(t.TempDir(), "does-not-exist.pem"), false)
 	if err == nil {
 		t.Fatal("loadTrustedCA(missing file) did not error")
 	}
@@ -197,7 +199,7 @@ func TestLoadTrustedCA_RefusesPrivateKeyBlock(t *testing.T) {
 	if err := os.WriteFile(path, combined, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bundle, pool, n, err := loadTrustedCA(path)
+	bundle, pool, n, err := loadTrustedCA(path, false)
 	if err == nil || !strings.Contains(err.Error(), "EC PRIVATE KEY") {
 		t.Fatalf("expected a refusal naming the private-key block, got err=%v", err)
 	}
@@ -218,7 +220,7 @@ func TestLoadTrustedCA_BundleIsRebuiltFromCertificates(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bundle, _, n, err := loadTrustedCA(path)
+	bundle, _, n, err := loadTrustedCA(path, false)
 	if err != nil || n != 1 {
 		t.Fatalf("loadTrustedCA: n=%d err=%v", n, err)
 	}
@@ -237,28 +239,42 @@ func TestLoadTrustedCA_RefusesOversizedBundle(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Repeat(string(ca), maxOrgTrustedCA/len(ca)+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := loadTrustedCA(path); err == nil || !strings.Contains(err.Error(), "only your organisation's roots") {
+	if _, _, _, err := loadTrustedCA(path, false); err == nil || !strings.Contains(err.Error(), "only your organisation's roots") {
 		t.Fatalf("loadTrustedCA(oversized) = %v, want a refusal naming the remedy", err)
 	}
 }
 
-// A bundle someone other than the owner can write is refused, since the writer picks the roots; a
-// world-readable one is a normal CA bundle.
-func TestLoadTrustedCA_RefusesAWritableBundle(t *testing.T) {
+// A bundle someone other than its owner can write boots with a warning naming the path, the mode
+// and the remedy; with WARDYN_TRUSTED_CA_REFUSE_WRITABLE on it refuses boot. A world-readable one is
+// a normal CA bundle either way.
+func TestLoadTrustedCA_WritableBundleWarnsOrRefuses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(path, genTestCert(t, "mode-test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, n, err := loadTrustedCA(path); err != nil || n != 1 {
-		t.Fatalf("a 0644 bundle = %d certs, %v; want it loaded", n, err)
+	for _, refuse := range []bool{false, true} {
+		if _, _, n, err := loadTrustedCA(path, refuse); err != nil || n != 1 {
+			t.Fatalf("a 0644 bundle (refuse=%v) = %d certs, %v; want it loaded", refuse, n, err)
+		}
 	}
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
 	for _, mode := range []os.FileMode{0o664, 0o666, 0o646} {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}
-		_, _, _, err := loadTrustedCA(path)
-		if err == nil || !strings.Contains(err.Error(), "WARDYN_TRUSTED_CA_FILE") {
-			t.Errorf("a %04o bundle was not refused: %v", mode, err)
+		logs.Reset()
+		if _, _, n, err := loadTrustedCA(path, false); err != nil || n != 1 {
+			t.Errorf("a %04o bundle with the switch off = %d certs, %v; want it loaded", mode, n, err)
+		}
+		if got := logs.String(); !strings.Contains(got, path) || !strings.Contains(got, fmt.Sprintf("%04o", mode)) || !strings.Contains(got, "chmod 644") {
+			t.Errorf("a %04o bundle with the switch off logged %q; want the path, the mode and chmod 644", mode, got)
+		}
+		_, _, _, err := loadTrustedCA(path, true)
+		if err == nil || !strings.Contains(err.Error(), "WARDYN_TRUSTED_CA_REFUSE_WRITABLE") {
+			t.Errorf("a %04o bundle with the switch on was not refused: %v", mode, err)
 		}
 	}
 }

@@ -132,6 +132,9 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
+	// refuseWritableCA is WARDYN_TRUSTED_CA_REFUSE_WRITABLE: refuse boot, rather than warn,
+	// when that bundle is group- or world-writable (readTrustedCAFile).
+	refuseWritableCA *bool
 	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
 	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
 	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
@@ -454,6 +457,7 @@ func parseBootFlags() *bootFlags {
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
+		refuseWritableCA:       flagBool("trusted-ca-refuse-writable", "WARDYN_TRUSTED_CA_REFUSE_WRITABLE", false, "refuse boot when the -trusted-ca-file bundle is group- or world-writable; off, boot logs a warning naming the file and mode (default false)"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
