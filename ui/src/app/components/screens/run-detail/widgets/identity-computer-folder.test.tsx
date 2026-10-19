@@ -6,11 +6,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { shortTime } from "../../../../lib/format";
+import { aheadByHours } from "../../../../lib/test-clock";
 import type { RunComputerFolder, RunDetail } from "../../../../lib/types";
 import { RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
 import { ComputerFolderRows } from "./identity-computer-folder";
 
-const AT = "2026-10-19T10:12:00Z";
+const AT = aheadByHours(-1);
 const FOLDER: RunComputerFolder = { name: "payments-service", runner: "laptop-7f2", remote_dir: "/home/agent/work", direction: "both", state: "waiting" };
 const show = (state: string, folder?: RunComputerFolder) =>
   render(<dl>{<ComputerFolderRows run={{ id: "r1", state, computer_folder: folder } as unknown as RunDetail} />}</dl>);
