@@ -397,3 +397,23 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		t.Fatalf("DELETE again = %d, want 404", w.Code)
 	}
 }
+
+// orphanedIDStore refuses every create the way the PG store does for an id a deleted type left references on.
+type orphanedIDStore struct{ *userTypeStore }
+
+func (orphanedIDStore) CreateUserType(context.Context, types.UserType) (types.UserType, error) {
+	return types.UserType{}, store.ErrUserTypeIDReferenced
+}
+
+// A create refused because the id is still named by a grant or assignment says so, not "already exists"; same 409.
+func TestCreateUserType_OrphanedReferenceIsAccuratelyWorded(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, orphanedIDStore{newUserTypeStore()}))
+	w := do(t, srv, http.MethodPost, "/api/v1/user-types", adminToken, `{"name":"Contractor"}`)
+	if w.Code != http.StatusConflict || errorReasonOf(w.Body.String()) != reasonUserTypeConflict {
+		t.Fatalf("create = %d %s, want 409 %s", w.Code, w.Body.String(), reasonUserTypeConflict)
+	}
+	if msg := userTypeError(t, w.Body.Bytes()); !strings.Contains(msg, "still names it") || strings.Contains(msg, "already exists") {
+		t.Errorf("409 message = %q, want the referenced-id wording", msg)
+	}
+}
