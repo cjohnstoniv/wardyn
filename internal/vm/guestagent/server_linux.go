@@ -152,6 +152,9 @@ func (s *Server) writeFile(f File) error {
 	if !filepath.IsAbs(f.Path) || filepath.Clean(f.Path) != f.Path {
 		return fmt.Errorf("managed file %q is not a clean absolute path", f.Path)
 	}
+	if strings.Contains(f.Path, "..") {
+		return fmt.Errorf("managed file %q has \"..\" in its path", f.Path)
+	}
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return err
 	}

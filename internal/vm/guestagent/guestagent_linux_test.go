@@ -138,6 +138,15 @@ func TestReadyAndInitOnce(t *testing.T) {
 	}
 }
 
+func TestManagedFilePathsAreCleanAndAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"etc/managed.json", dir + "/x/../managed.json", dir + "/a..b"} {
+		if err := (&Server{}).writeFile(File{Path: p, Mode: 0o644}); err == nil {
+			t.Errorf("managed file %q was written", p)
+		}
+	}
+}
+
 func TestAttachedExecPipes(t *testing.T) {
 	c := newRig(t).client(t)
 	s, err := c.Exec(ctxT(t), ExecRequest{Argv: []string{"sh", "-c", `read x; echo "out:$x"; echo err >&2; exit 3`}})
