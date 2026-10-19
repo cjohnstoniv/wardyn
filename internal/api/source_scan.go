@@ -429,6 +429,14 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		}
 		switch src.Kind {
 		case types.SourceLocalDir:
+			// The member mount gate the run door re-runs (validateWorkspaceSources):
+			// a scan reads the directory host-side, so roots narrowed after
+			// onboarding, or a source repointed since, refuse it here too.
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, types.WorkspaceMount{Source: src.Locator}); err != nil {
+				partialAudit(id, err.Error())
+				writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err.Error())
+				return
+			}
 			if _, _, _, detail, ok := s.scanLocalDirSource(r.Context(), src); !ok {
 				partialAudit(id, detail)
 				writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanFailed, detail)
