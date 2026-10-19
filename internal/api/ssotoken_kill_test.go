@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -220,4 +221,85 @@ func TestKillSignInRunAfterCapture_ReadIsBoundedShortOfTheCascade(t *testing.T) 
 		t.Fatalf("the post-capture read returned after %s, before its own %s timeout could even "+
 			"elapse — the fixture is not exercising a blocked read", elapsed, signInCaptureReadTimeout)
 	}
+}
+
+// racingLaunchStore stands in for the sign-in launch still finishing: on each
+// of its first losses calls the run changes state under the kill (STARTING and
+// RUNNING alternate) just before the kill's compare-and-swap, so that swap
+// loses exactly as it does when dispatchRun's STARTING->RUNNING lands first.
+type racingLaunchStore struct {
+	*killableLoginRunStore
+	losses int
+}
+
+func (s *racingLaunchStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	s.mu.Lock()
+	if s.losses > 0 {
+		s.losses--
+		s.state = types.RunStarting
+		if from == types.RunStarting {
+			s.state = types.RunRunning
+		}
+	}
+	s.mu.Unlock()
+	return s.killableLoginRunStore.UpdateRunStateIf(ctx, id, from, to)
+}
+
+// TestKillSignInRunAfterCapture_LostSwap pins the kill against the launch
+// winning the state race (#3259): a kill whose swap loses to a forward
+// transition re-reads and kills from the state the run now holds, and gives up
+// out loud, never silently, only when every attempt is lost.
+func TestKillSignInRunAfterCapture_LostSwap(t *testing.T) {
+	newSrv := func(t *testing.T, losses int) (*Server, *memAudit, *racingLaunchStore, uuid.UUID) {
+		t.Helper()
+		runID := uuid.New()
+		st := &racingLaunchStore{
+			killableLoginRunStore: &killableLoginRunStore{
+				ssoLoginRunStore: ssoLoginRunStore{run: types.AgentRun{
+					ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent,
+					CreatedBy: "alice@example.com", UpdatedAt: time.Now().UTC(),
+				}},
+				state: types.RunStarting,
+			},
+			losses: losses,
+		}
+		audit := &memAudit{}
+		cfg := baseTestConfig(newHarness(t), st)
+		cfg.Audit = audit
+		srv := New(cfg)
+		srv.signInCaptureKillGrace = 0
+		return srv, audit, st, runID
+	}
+
+	t.Run("one lost swap is retried and the run is killed", func(t *testing.T) {
+		srv, audit, st, runID := newSrv(t, 1)
+		srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+		srv.WaitBackground()
+		if got := st.stateNow(); got != types.RunKilled {
+			t.Fatalf("sign-in run state = %s after a lost swap, want KILLED", got)
+		}
+		if data := killData(t, killRow(t, audit, runID.String())); data["reason"] != signInCapturedReason {
+			t.Errorf("run.kill reason = %v, want %q", data["reason"], signInCapturedReason)
+		}
+	})
+
+	t.Run("every attempt lost is not reported as a kill and is logged", func(t *testing.T) {
+		srv, audit, st, runID := newSrv(t, supersedeCASAttempts)
+		var logged lockedBuffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+
+		srv.killSignInRunAfterCapture(context.Background(), runID, "alice@example.com")
+		srv.WaitBackground()
+		if got := st.stateNow(); got == types.RunKilled {
+			t.Fatalf("sign-in run state = %s, want it left alive when every swap is lost", got)
+		}
+		if rows := audit.find("run.kill"); len(rows) != 0 {
+			t.Errorf("run.kill rows = %d, want none", len(rows))
+		}
+		if !strings.Contains(logged.String(), "gave up ending a captured sign-in sandbox") {
+			t.Errorf("no give-up log; got:\n%s", logged.String())
+		}
+	})
 }

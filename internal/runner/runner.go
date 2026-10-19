@@ -475,6 +475,39 @@ type Selftester interface {
 // for ref has no selftest of its own.
 var ErrSelftestUnsupported = errors.New("runner: this substrate has no BYOI selftest of its own")
 
+// LocalAttacher is an OPTIONAL Runner capability: attach the person's CLI on the runner's own
+// computer to a run, with the terminal bytes on that computer and only a copy sent to the org for
+// recording. Nonce is the grant the CLI holds on the runner's local socket. A substrate that cannot
+// refuses with ErrLocalAttachUnsupported before anything is sent.
+type LocalAttacher interface {
+	LocalAttach(ctx context.Context, ref string, req LocalAttachRequest) (LocalSession, error)
+}
+
+// LocalAttachRequest is LocalAttacher's input. Tee says the org records the run: the runner then sends
+// every output chunk to the session's Read before it shows it, and the org acknowledges with AckTee.
+type LocalAttachRequest struct {
+	Nonce   string
+	Options AttachOptions
+	Tee     bool
+}
+
+// LocalSession is the org's end of a local attach: Read is the tee (the output the runner shows), and
+// Close ends the session, which makes the runner end the PTY. It writes nothing to the terminal.
+type LocalSession interface {
+	Read(p []byte) (int, error)
+	// SetObserver switches the session to observer or writer and returns once the runner has applied
+	// it. A change the runner does not acknowledge before ctx ends has closed the session.
+	SetObserver(ctx context.Context, observer bool, cols, rows uint16) error
+	// AckTee tells the runner the org has recorded the first offset bytes Read returned. Without a tee
+	// there is nothing to acknowledge and it errors.
+	AckTee(ctx context.Context, offset int64) error
+	Close() error
+}
+
+// ErrLocalAttachUnsupported is LocalAttacher's refusal from a substrate or runner that cannot attach
+// locally (an older runner, or a router whose substrate has no local attach of its own).
+var ErrLocalAttachUnsupported = errors.New("runner: this runner does not support local attach")
+
 // SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
 // stopped agent again (revive after a reboot). Files survive; the main
 // process re-runs from the start. Never starts the proxy itself: the caller
