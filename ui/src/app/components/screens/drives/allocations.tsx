@@ -168,7 +168,7 @@ export function AllocationsBlock({
         )}
         <div className="mt-4">
           {grants.length === 0 ? (
-            <EmptyState icon={Users} title={DRIVES.EMPTY_ALLOC_TITLE} description={DRIVES.EMPTY_ALLOC_BODY} />
+            <EmptyState size="compact" icon={Users} title={DRIVES.EMPTY_ALLOC_TITLE} description={DRIVES.EMPTY_ALLOC_BODY} />
           ) : (
             <Table>
               <TableHeader>

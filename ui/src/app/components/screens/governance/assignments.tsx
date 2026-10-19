@@ -139,7 +139,7 @@ export function AssignmentsBlock({
         </div>
         <div className="mt-4">
           {snapshot.assignments.length === 0 ? (
-            <EmptyState icon={Users} title={GOV.EMPTY_ASSIGN_TITLE} description={GOV.EMPTY_ASSIGN_BODY} />
+            <EmptyState size="compact" icon={Users} title={GOV.EMPTY_ASSIGN_TITLE} description={GOV.EMPTY_ASSIGN_BODY} />
           ) : (
             <Table>
               <TableHeader>
