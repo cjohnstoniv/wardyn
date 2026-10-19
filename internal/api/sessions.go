@@ -174,8 +174,10 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		// the caller gets it verbatim rather than the generic "revoke credentials"
 		// (the cutoff already committed, so the responder needs the remedy, not
 		// just the log line).
+		// An email that names no known principal, or more than one, is the caller's input to fix,
+		// the same 422 every other owner resolver answers.
 		if refusal != "" {
-			writeErrorReason(w, http.StatusInternalServerError, keyReason, refusal)
+			writeErrorReason(w, http.StatusUnprocessableEntity, keyReason, refusal)
 			return
 		}
 		writeServerError(w, r, "revoke credentials", err)

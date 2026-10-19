@@ -439,8 +439,8 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
 	}
 	const wantRefusal = "no known principal matches that email address; name the subject exactly"
 	if !strings.Contains(w.Body.String(), wantRefusal) {
