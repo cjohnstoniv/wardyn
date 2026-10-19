@@ -64,9 +64,9 @@
 - **The relayed app's JavaScript runs in the operator's own browser**, which
   Wardyn does not confine at all — outside `wardyn-proxy` and outside any egress
   policy. A desktop is a larger surface for that than an editor.
-- **The relay cookie is valid for 8 hours by default** (`WARDYN_UI_SANDBOX_SESSION_TTL`).
-  The relay re-checks role, ownership and revocation before every new connection, but an open
-  connection runs on. A desktop session is exactly the kind of thing left open all day.
+- **The relay cookie lasts 8 hours by default** (`WARDYN_UI_SANDBOX_SESSION_TTL`).
+  Ownership, revocation and portal grant are re-checked per new connection and every 30 s on an open one (upgraded streams: at start).
+  The role is the sign-in snapshot, bounded by it.
 
 - None of these is new in 0.7 — they are properties of the relay, documented in
   [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
