@@ -846,6 +846,55 @@ func TestExec_WrapsWithRecorderWhenEnabled(t *testing.T) {
 	}
 }
 
+// The recording choice comes from the agent's labels. An inspect that fails once
+// is retried and the exec then takes the ordinary path; one that fails again
+// refuses with the named reason rather than guess the choice either way. A
+// driver that records nothing never inspects.
+func TestExec_RecordingChoiceInspectFailure(t *testing.T) {
+	start := func(t *testing.T, record bool, failures int) (*fakeDocker, error) {
+		f := newFakeDocker()
+		f.images["busybox:latest"] = true
+		d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", Record: record})
+		sb, err := d.CreateSandbox(context.Background(), testSpec())
+		if err != nil {
+			t.Fatalf("CreateSandbox: %v", err)
+		}
+		f.mu.Lock()
+		f.inspectFailures = failures
+		f.lastExecCmd = nil // CreateSandbox's own setup exec
+		f.mu.Unlock()
+		_, err = d.Exec(context.Background(), sb.Ref, []string{"claude"})
+		return f, err
+	}
+	t.Run("one failure is retried", func(t *testing.T) {
+		f, err := start(t, true, 1)
+		if err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		if cmd := f.lastExecCmd; len(cmd) == 0 || cmd[0] != "wardyn-rec" || !slices.Contains(cmd, testSpec().RunID.String()) {
+			t.Fatalf("exec after a retried inspect = %v, want the recorder with the run id", cmd)
+		}
+	})
+	t.Run("a second failure refuses", func(t *testing.T) {
+		f, err := start(t, true, 2)
+		if !errors.Is(err, runner.ErrRecordingChoiceUnknown) {
+			t.Fatalf("Exec = %v, want ErrRecordingChoiceUnknown", err)
+		}
+		if f.lastExecCmd != nil {
+			t.Fatalf("a refused exec still created %v", f.lastExecCmd)
+		}
+	})
+	t.Run("recording off never inspects", func(t *testing.T) {
+		f, err := start(t, false, 2)
+		if err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		if got := f.lastExecCmd; len(got) != 1 || got[0] != "claude" {
+			t.Fatalf("exec = %v, want the bare argv", got)
+		}
+	})
+}
+
 func TestExec_NoRecorderWhenDisabled(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
