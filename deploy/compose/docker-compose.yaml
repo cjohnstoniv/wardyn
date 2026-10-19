@@ -222,15 +222,11 @@ services:
       # bridge gateway, not loopback — trust the forwarder here. This is safe ONLY
       # because of that 127.0.0.1 publish (a LAN peer cannot reach the port at all);
       # the DNS-rebinding Host guard still applies. Never set this on a directly-bound
-      # host-mode wardynd. Residual (defense-in-depth): with this on, EVERY member of
-      # wardyn-internal can also reach the no-auth API. The membership is enumerated
-      # ONCE, at this file's `networks:` block — it is wider than "postgres and dex",
-      # and it includes `registry`, which is multi-homed onto the untrusted
-      # wardyn-envbuild build bridge, so an envbuild container that compromises the
-      # registry is one hop from the no-auth API. Agents are NOT on this network, so
-      # this still needs an already-compromised in-network container. Follow-up
-      # hardening: accept only a trusted gateway CIDR instead of any non-loopback peer.
+      # host-mode wardynd. Only the peers WARDYN_LOCAL_TRUSTED_PEERS names are
+      # trusted (unset: the default gateway and wardynd's own addresses, resolved at
+      # boot), so other members of wardyn-internal get a 403; docs/ENV.md.
       WARDYN_LOCAL_TRUST_FORWARDER: "${WARDYN_LOCAL_TRUST_FORWARDER:-true}"
+      WARDYN_LOCAL_TRUSTED_PEERS: "${WARDYN_LOCAL_TRUSTED_PEERS:-}"
       WARDYN_RUNNER: "docker"
       # Mirrors the volumes-side WARDYN_WORKSPACES_ROOT mapping below, so wardynd
       # can NAME the configured root when a local-directory scan misses — "not
