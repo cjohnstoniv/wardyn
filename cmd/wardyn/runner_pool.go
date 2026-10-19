@@ -41,9 +41,12 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "pool", Short: "List the runner pools you may use, keep your own user pools and set your own default pool"}
 	var asJSON, all bool
 	list := &cobra.Command{Use: "list", Short: "List the runner pools you may use", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		out, err := client().ListRunnerPools(cmd.Context())
+		out, truncated, err := client().ListRunnerPoolsPage(cmd.Context())
 		if err != nil {
 			return err
+		}
+		if truncated {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: runner pool list truncated at %d row(s); the server lists no more than that\n", len(out.Pools))
 		}
 		if asJSON {
 			return emitJSON(cmd.OutOrStdout(), out)

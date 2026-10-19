@@ -346,8 +346,17 @@ func (r UpdateRunnerPoolRequest) Validate() error {
 }
 
 // ListRunnerPools lists the pools the caller may use, judged for every run type each takes.
+// Prefer ListRunnerPoolsPage, which also returns the server's truncation signal.
 func (c *Client) ListRunnerPools(ctx context.Context) (RunnerPoolList, error) {
 	return c.ListRunnerPoolsFor(ctx, "")
+}
+
+// ListRunnerPoolsPage is ListRunnerPools with the server's truncation signal: an administrator's
+// list, which carries the oversight rows of everyone's user pools, stops at a ceiling and says so.
+func (c *Client) ListRunnerPoolsPage(ctx context.Context) (list RunnerPoolList, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, "/api/v1/runner-pools", nil, &list, &hdr)
+	return list, hdr.Get("X-Wardyn-Truncated") == "true", err
 }
 
 // ListRunnerPoolsFor lists the pools judged for one run type: a pool that refuses it is unavailable

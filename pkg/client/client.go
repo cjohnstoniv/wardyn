@@ -145,7 +145,7 @@
 // EVERY list family surfaces that signal, through a *Page variant returning it
 // as a bool: ListRunsPage, ListApprovalsPage, ListPoliciesPage,
 // ListWorkspacesPage, AuditEventsPage, ListGrantsPage, ListSSHKeysPage,
-// ListSecretsPage. The plain forms are thin wrappers that
+// ListSecretsPage, ListRunnerPoolsPage. The plain forms are thin wrappers that
 // discard it, so existing callers are unchanged — but they leave the caller to
 // infer completeness from len(page) == the limit it happened to pass, a guess
 // that silently breaks the moment a caller omits Limit and gets the server's

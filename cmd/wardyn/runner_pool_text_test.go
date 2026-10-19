@@ -4,7 +4,9 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -359,5 +361,20 @@ func TestPoolCreatedNamesThePoolByItsIDInTheCommand(t *testing.T) {
 		if want := "wardyn runner pool add " + id.String() + " <runner>\n"; cmd != want {
 			t.Errorf("pool %q: next step = %q, want %q", name, cmd, want)
 		}
+	}
+}
+
+// A list the server cut at its ceiling says so on stderr, so a truncated list never reads as the whole one.
+func TestRunnerPoolListWarnsWhenTheServerTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Wardyn-Truncated", "true")
+		_ = json.NewEncoder(w).Encode(sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{{RunnerPoolChoice: sdk.RunnerPoolChoice{
+			ID: uuid.New(), Name: "General", Scope: sdk.RunnerPoolOrganization, Availability: sdk.RunnerPoolAvailable}}}})
+	}))
+	t.Cleanup(srv.Close)
+	_, stderr, err := runCaptured(t, "runner", "pool", "list", "--url", srv.URL, "--token", "t")
+	if err != nil || !strings.Contains(stderr, "runner pool list truncated at 1 row(s)") {
+		t.Fatalf("list = %v, stderr %q, want the truncation named", err, stderr)
 	}
 }
