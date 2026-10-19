@@ -85,23 +85,53 @@ func TestExec_StreamsAgentLogIntoExecOutput(t *testing.T) {
 }
 
 // TestExec_NoExecOutputReadsNoLog: a run that keeps no output tail costs no
-// log read at all.
+// log read at all. Absence cannot be waited for, so a second pod's Exec that
+// does keep a tail follows the same path with the same fake: its log read is
+// the signal, awaited on a channel, and by then the first pod's follower (had
+// it existed) has made the same read. Exactly one log read may have happened.
 func TestExec_NoExecOutputReadsNoLog(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
-	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
-	setPodStatus(t, cs, testNamespace, ref, func(st *corev1.PodStatus) {
+	running := func(st *corev1.PodStatus) {
 		st.EphemeralContainerStatuses = []corev1.ContainerStatus{{
 			Name: execContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 		}}
-	})
-	if _, err := d.Exec(context.Background(), ref, []string{"/usr/local/bin/agent-run", "task"}); err != nil {
-		t.Fatalf("Exec: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	for _, a := range cs.Actions() {
-		if a.GetSubresource() == "log" {
-			t.Fatalf("a run with no ExecOutput read the pod log: %v", a)
+	quiet := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	tailed := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	setPodStatus(t, cs, testNamespace, quiet, running)
+	setPodStatus(t, cs, testNamespace, tailed, running)
+
+	var mu sync.Mutex
+	logReads := 0
+	firstRead := make(chan struct{})
+	var once sync.Once
+	cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "log" {
+			return false, nil, nil
 		}
+		mu.Lock()
+		logReads++
+		mu.Unlock()
+		once.Do(func() { close(firstRead) })
+		return true, &runtime.Unknown{Raw: []byte("ok\n")}, nil
+	})
+	d.execOutputs.Store(tailed, &lockedBuffer{})
+
+	if _, err := d.Exec(context.Background(), quiet, []string{"/usr/local/bin/agent-run", "task"}); err != nil {
+		t.Fatalf("Exec (no output): %v", err)
+	}
+	if _, err := d.Exec(context.Background(), tailed, []string{"/usr/local/bin/agent-run", "task"}); err != nil {
+		t.Fatalf("Exec (with output): %v", err)
+	}
+	select {
+	case <-firstRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pod that keeps an output tail never had its log read: the absence below would prove nothing")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if logReads != 1 {
+		t.Fatalf("log reads = %d, want 1: only the pod that keeps an output tail may be read", logReads)
 	}
 }
 

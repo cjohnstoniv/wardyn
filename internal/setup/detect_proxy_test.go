@@ -6,6 +6,7 @@ package setup
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -121,7 +122,12 @@ func TestDetectEnvProxyCandidates_EmptyValueIsNotDetected(t *testing.T) {
 		t.Fatalf("candidates = %+v, want none (empty/whitespace values are not a proxy)", candidates)
 	}
 	// End to end: the aggregate must leave the fields nil, which is what the
-	// setup check tests.
+	// setup check tests. Keep it off this machine's own proxy settings: an empty home for the
+	// profile and tool-config readers, and no external command (git, powershell.exe, scutil) answers.
+	t.Setenv("HOME", t.TempDir())
+	orig := execCommandOutput
+	defer func() { execCommandOutput = orig }()
+	execCommandOutput = func(string, ...string) ([]byte, error) { return nil, errors.New("no external commands in this test") }
 	t.Setenv(hostProxySeedEnv, "")
 	os.Unsetenv(hostProxySeedEnv)
 	if det := DetectHostProxy(); det.HTTPProxy != nil || det.HTTPSProxy != nil {
