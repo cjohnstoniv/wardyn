@@ -105,7 +105,7 @@ cleanup() {
   return "$rc"
 }
 
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && die "a kind cluster named $CLUSTER already exists"
+kind get clusters 2>/dev/null | grep -x "$CLUSTER" >/dev/null && die "a kind cluster named $CLUSTER already exists"
 # Installed only after the guard, so a pre-existing cluster of this name is never deleted.
 trap cleanup EXIT
 
@@ -343,7 +343,7 @@ install_runnerd() {
   helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
   if kubectl -n "$own" rollout status "deployment/$INSTALLED" --timeout=300s >/dev/null &&
-     timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep -q 'k8s runner ready to connect'; do sleep 3; done"; then
+     timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep 'k8s runner ready to connect' >/dev/null; do sleep 3; done"; then
     return 0
   fi
   kubectl -n "$own" describe pods -l "app.kubernetes.io/instance=$release" | tail -40 || true

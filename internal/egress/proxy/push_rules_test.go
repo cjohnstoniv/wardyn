@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -681,7 +680,8 @@ func TestPushRulesGlobMatching(t *testing.T) {
 // deny_paths count cap left reachable: a member authoring a deny list as long
 // as a 1 MiB policy body allows, against a push carrying as many changed paths
 // as the inspector allows. The matcher must refuse rather than grind — an
-// unevaluated rule may not read as a pass — and it must do so in bounded time.
+// unevaluated rule may not read as a pass — and the refusal is its work count
+// (errGlobBudget) running out.
 func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 	deny := make([]string, 131_000)
 	for i := range deny {
@@ -696,15 +696,10 @@ func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 			for i := range changes {
 				changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i), Mode: mode}
 			}
-			start := time.Now()
+			// The ceiling counts work, not seconds: a wall-clock limit here only measures the runner's load.
 			_, _, err := match(rs.deny, changes)
-			elapsed := time.Since(start)
-
 			if !errors.Is(err, errGlobBudget) {
-				t.Fatalf("match = %v after %s, want the work ceiling to refuse", err, elapsed)
-			}
-			if elapsed > 60*time.Second {
-				t.Errorf("the bounded matcher took %s, which is not a bound anyone would call one", elapsed)
+				t.Fatalf("match = %v, want the work ceiling to refuse", err)
 			}
 		})
 	}

@@ -26,7 +26,7 @@ docker() {
 COMPOSE_FILE="unused-in-this-test"
 out="$(compose_ns test-proj-$$ noop)"
 
-if echo "$out" | grep -q 'WARDYN_REGISTRY_PORT=0'; then
+if echo "$out" | grep 'WARDYN_REGISTRY_PORT=0' >/dev/null; then
   echo "ok: compose_ns scopes WARDYN_REGISTRY_PORT=0 ($out)"
   echo "--- test-compose-ns-registry-port: PASS ---"
   exit 0
