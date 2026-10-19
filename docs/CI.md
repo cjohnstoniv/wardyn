@@ -598,6 +598,10 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
 - Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
 
+### Go module cache for image builds
+
+`WARDYN_BUILD_GOMODCACHE` names a Go module cache directory. The e2e scripts pass it to the proxy and oracle image builds as `--build-context gomodcache=<dir>`, so `go mod download` reads the job's cache; go.sum still verifies every module. Unset, builds download as before. Release builds do not set it.
+
 ### Self-hosted canary
 
 - [`selfhosted-canary.yml`](../.github/workflows/selfhosted-canary.yml) (dispatch only) runs `make staticcheck` on a runner labelled `wardyn-ci`, before any `ci.yml` job moves to one.
