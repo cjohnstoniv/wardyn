@@ -1,44 +1,25 @@
 name: Nightly Go build cache
 description: >-
-  Restores the Go module and build caches for one nightly job, and saves them
-  when the run is a scheduled or dispatched one on main (a train PR's called
-  run only restores, so it never writes a cache entry no other ref can read).
-  The key is the one ci.yml uses: per job and OS, the go.mod/go.sum hash, then
-  the run id, so every main run writes a fresh entry and restore-keys fall back
-  to the newest entry of the same job, then of the same job on any dependency
-  set. Place it after setup-go.
+  Restores the Go module and build caches that ci.yml's `go-<suite>-` entry
+  last saved on main, and never saves one. The repository's Actions cache is
+  at its size limit, so a nightly job borrows the entry of the ci.yml suite
+  whose build tags it shares and adds nothing of its own. The exact key never
+  exists, so the restore-keys prefix does the work and takes the newest entry
+  of that suite, whatever key scheme ci.yml saves it under. Place it after
+  setup-go.
 inputs:
-  job:
-    description: The nightly job's id, the first part of the cache key.
+  suite:
+    description: The ci.yml Go suite whose cache to borrow (unit, docker, k8s, conformance-docker).
     required: true
-  save:
-    description: >-
-      "true" saves at the end of a successful job. The caller passes the
-      main-only expression, because `github.event_name` inside a called
-      workflow is the caller's event.
-    default: "false"
 runs:
   using: composite
   steps:
-    - name: Restore and save the Go caches (main scheduled or dispatched run)
-      if: inputs.save == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: go-${{ inputs.job }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
-        restore-keys: |
-          go-${{ inputs.job }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
-          go-${{ inputs.job }}-${{ runner.os }}-
-    - name: Restore the Go caches
-      if: inputs.save != 'true'
+    - name: Restore the Go caches saved by ci.yml
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: go-${{ inputs.job }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+        key: go-${{ inputs.suite }}-nightly-restore-only
         restore-keys: |
-          go-${{ inputs.job }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
-          go-${{ inputs.job }}-${{ runner.os }}-
+          go-${{ inputs.suite }}-

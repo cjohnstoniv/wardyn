@@ -78,8 +78,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: e2e-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - name: Docker available
         run: docker --version
       # test/e2e/e2e.sh prints its per-check PASS/FAIL lines and its summary to
@@ -130,8 +129,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: task-e2e-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -189,8 +187,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: gvisor-cc2-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: conformance-docker
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -273,8 +270,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: ssh-e2e-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - name: Docker available
         run: docker --version
       # Same evidence problem as e2e-live above: run-e2e-ssh.sh writes no
@@ -399,8 +395,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: ci-mode-dogfood-model-fake
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -462,8 +457,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: docker-tagged-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: docker
       - name: Docker available
         run: docker --version
       # test/e2e/live's newHarness FATALs (not skips) once WARDYN_TEST_DOCKER=1
@@ -559,8 +553,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: provider-subscription-docker-pg
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: docker
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
@@ -708,8 +701,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: ui-sandbox-e2e-live
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - name: Docker available
         run: docker --version
       - name: Live UI-sandbox relay e2e (dedicated compose stack)
@@ -1318,8 +1310,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: kind-survival-walk
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1410,8 +1401,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: k6-kind-conformance
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1485,8 +1475,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: kind-acceptance-walks
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1554,8 +1543,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: hybrid-walk
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1699,8 +1687,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: runner-compat-walk
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - name: Runner/organisation version compatibility walk
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -1756,8 +1743,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: kek-conformance
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1805,8 +1791,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: daemon-proxy-secret-kind
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: k8s
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1840,8 +1825,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/nightly-go-cache
         with:
-          job: fuzz
-          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+          suite: unit
       - name: Fuzz the session decoder
         run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
 
