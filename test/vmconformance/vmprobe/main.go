@@ -10,14 +10,17 @@
 // the relay contract; against an unpinned network the escape rows fail.
 //
 // Parameters come from the kernel command line: vmprobe.dns (the resolver),
-// vmprobe.origin (the origin's literal address) and vmprobe.proxy (the
-// proxy's literal address on the run network).
+// vmprobe.origin (the origin's literal address), vmprobe.proxy (the proxy's
+// literal address on the run network) and vmprobe.ca (the origin's
+// certificate, base64url DER, which TLS rows verify against).
 package main
 
 import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -44,7 +47,12 @@ var synthetic = netip.MustParsePrefix("198.18.0.0/15")
 
 func main() {
 	args := cmdline()
-	p := &probe{dns: args["vmprobe.dns"], origin: args["vmprobe.origin"], proxy: args["vmprobe.proxy"]}
+	p := &probe{dns: args["vmprobe.dns"], origin: args["vmprobe.origin"], proxy: args["vmprobe.proxy"], roots: x509.NewCertPool()}
+	if der, err := base64.RawURLEncoding.DecodeString(args["vmprobe.ca"]); err == nil {
+		if c, err := x509.ParseCertificate(der); err == nil {
+			p.roots.AddCert(c)
+		}
+	}
 	p.res = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "udp", net.JoinHostPort(p.dns, "53"))
 	}}
@@ -96,6 +104,7 @@ func cmdline() map[string]string {
 type probe struct {
 	dns, origin, proxy string
 	res                *net.Resolver
+	roots              *x509.CertPool
 }
 
 func (p *probe) resolve(name string) string {
@@ -178,7 +187,7 @@ func (p *probe) tlsGET(name string, port int, sni string, split, want bool) (boo
 	if split {
 		c = &splitConn{Conn: c}
 	}
-	tc := tls.Client(c, &tls.Config{ServerName: sni, InsecureSkipVerify: true})
+	tc := tls.Client(c, &tls.Config{ServerName: sni, RootCAs: p.roots})
 	_ = tc.SetDeadline(time.Now().Add(15 * time.Second))
 	if _, err := io.WriteString(tc, "GET /tls HTTP/1.1\r\nHost: "+sni+"\r\nConnection: close\r\n\r\n"); err != nil {
 		return !want, err.Error()

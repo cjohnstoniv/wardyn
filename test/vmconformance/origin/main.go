@@ -5,27 +5,26 @@
 // on every port the guest probe tries, so a refusal the probe sees is the
 // relay's or the proxy's, never a closed port: HTTPS on 443 and 8443 (any
 // server name), plain HTTP on 80, an SSH-style banner on 22 and 2222, and a
-// UDP echo on 53, 123 and 443.
+// UDP echo on 53, 123 and 443. Its certificate (-cert, -key) is the suite's,
+// which the guest probe trusts.
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"flag"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"time"
 )
 
 func main() {
-	cert, err := selfSigned()
+	certFile := flag.String("cert", "", "PEM certificate")
+	keyFile := flag.String("key", "", "PEM key")
+	flag.Parse()
+	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,23 +90,4 @@ func echo(c net.PacketConn) {
 		}
 		_, _ = c.WriteTo(buf[:n], addr)
 	}
-}
-
-func selfSigned() (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "origin.test"},
-		DNSNames:     []string{"origin.test", "other.test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }

@@ -15,10 +15,17 @@ package vmconformance
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,8 +52,8 @@ const (
 )
 
 type env struct {
-	id, sockDir string
-	images      map[string]string
+	id, sockDir, caB64 string
+	images             map[string]string
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {
@@ -106,9 +113,11 @@ func setup(t *testing.T) *env {
 	e.must(t, "network", "create", "--internal", "--subnet", runSubnet, e.id+"-run")
 	e.must(t, "network", "create", "--internal", "--subnet", upSubnet, e.id+"-up")
 
-	e.must(t, "run", "-d", "--name", e.id+"-origin", "--network", e.id+"-up", "--ip", originIP,
+	tlsDir := t.TempDir()
+	e.caB64 = originCert(t, tlsDir)
+	e.must(t, "run", "-d", "--name", e.id+"-origin", "-v", tlsDir+":/tls:ro", "--network", e.id+"-up", "--ip", originIP,
 		"--network-alias", "origin.test", "--network-alias", "other.test",
-		"--sysctl", "net.ipv4.ip_unprivileged_port_start=0", e.images["origin"])
+		"--sysctl", "net.ipv4.ip_unprivileged_port_start=0", e.images["origin"], "-cert", "/tls/cert.pem", "-key", "/tls/key.pem")
 
 	cfgDir := t.TempDir()
 	cfg := map[string]any{
@@ -155,6 +164,35 @@ func setup(t *testing.T) *env {
 	return e
 }
 
+// originCert writes the origin's self-signed certificate (origin.test and
+// other.test) into dir and returns it as base64url DER for the guest.
+func originCert(t *testing.T, dir string) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "origin.test"},
+		DNSNames: []string{"origin.test", "other.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kder, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]*pem.Block{"cert.pem": {Type: "CERTIFICATE", Bytes: der}, "key.pem": {Type: "EC PRIVATE KEY", Bytes: kder}} {
+		if err := os.WriteFile(filepath.Join(dir, name), pem.EncodeToMemory(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(der)
+}
+
 type probeRow struct {
 	Row    string `json:"row"`
 	Pass   bool   `json:"pass"`
@@ -182,7 +220,7 @@ func (e *env) boot(t *testing.T, pinned bool) map[string]probeRow {
 	args = append(args, e.images["vm"],
 		"-machine", "q35,accel="+accel, "-cpu", "max", "-m", "512", "-smp", "2",
 		"-nographic", "-no-reboot", "-kernel", "/vm/vmlinuz", "-initrd", "/vm/initrd.gz",
-		"-append", fmt.Sprintf("console=ttyS0 quiet panic=-1 vmprobe.dns=%s vmprobe.origin=%s vmprobe.proxy=%s", dns, originIP, proxyIP),
+		"-append", fmt.Sprintf("console=ttyS0 quiet panic=-1 vmprobe.dns=%s vmprobe.origin=%s vmprobe.proxy=%s vmprobe.ca=%s", dns, originIP, proxyIP, e.caB64),
 		"-netdev", netdev, "-device", "virtio-net-pci,netdev=n0,romfile=")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
