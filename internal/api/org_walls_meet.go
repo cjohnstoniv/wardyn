@@ -188,6 +188,18 @@ func (s *Server) wallsRunStep(ceiling governanceCeiling, spec *types.RunPolicySp
 	return warns, nil
 }
 
+// wallsRecordPolicy is a Record Mode session's policy met with the walls while they are on: the
+// session's own spec skips the member clamp and allows all egress to learn, so without this a super
+// admin's recording would reach every host. It learns inside the walls instead: allow-all becomes
+// their allowlist, their denies are added and the floor is raised. Off, the policy is unchanged.
+func wallsRecordPolicy(ceiling governanceCeiling, policy types.RunPolicySpec) (types.RunPolicySpec, error) {
+	if !ceiling.walled() {
+		return policy, nil
+	}
+	met, _, _, err := wallsMeet(*ceiling.walls, policy, types.GovernanceLimits{})
+	return met, err
+}
+
 // wallsAdmitHost reports whether the walls allow an egress approval to admit host: a host the walls
 // deny, or one outside an allowlist they name, is never admitted while they are on.
 func wallsAdmitHost(w types.OrgWalls, host string) bool {
@@ -201,25 +213,32 @@ func wallsAdmitHost(w types.OrgWalls, host string) bool {
 }
 
 // wallsEndPlan is the run a change to its end is planned against, and whether the change is exempt
-// from its limits. A super admin's is, except while the walls bind it (wallsEndCap): then it is held
-// to the walls' maximum alone, not to the profile the run launched under. ok=false: the 500 is written.
+// from its limits. While the walls name a maximum (wallsEndCap) every change is held to it: a super
+// admin's to the walls' maximum alone, not to the profile the run launched under, anyone else's to the
+// tighter of it and what the run captured. ok=false: the 500 is written.
 func (s *Server) wallsEndPlan(w http.ResponseWriter, r *http.Request, run types.AgentRun) (types.AgentRun, bool, bool) {
-	if !s.runUngoverned(r.Context()) {
-		return run, false, true
-	}
+	exempt := s.runUngoverned(r.Context())
 	capSec, err := s.wallsEndCap(r.Context(), run)
 	if err != nil {
 		writeServerError(w, r, "read org walls", err)
 		return run, false, false
 	}
-	if capSec == 0 {
-		return run, true, true
+	switch {
+	case capSec == 0:
+		return run, exempt, true
+	case exempt:
+		run.RunLimits, run.GovernanceProfileID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
+	default:
+		// Any other caller is held to the limits the run captured, and to the walls' maximum when that is
+		// tighter: a run created before the walls went on captured no wall.
+		if tighter := composer.TighterSec(run.RunLimits.MaxEndAheadSec, capSec); tighter != run.RunLimits.MaxEndAheadSec {
+			run.RunLimits.MaxEndAheadSec, run.GovernanceProfileID = tighter, nil
+		}
 	}
-	run.RunLimits, run.GovernanceProfileID = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: capSec}, nil
 	return run, false, true
 }
 
-// wallsEndCap is the walls' bound on a super admin's change to run's end, 0 for none: a break-glass
+// wallsEndCap is the walls' bound on a change to run's end, 0 for none: a break-glass
 // run's captured maximum always, any other run's the walls' maximum while they are on and name one.
 func (s *Server) wallsEndCap(ctx context.Context, run types.AgentRun) (int, error) {
 	if run.BreakGlass {

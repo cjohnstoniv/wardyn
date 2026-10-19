@@ -15,13 +15,14 @@
 | `spec.allow_all_egress` | `false` turns allow-all off everywhere. Naming `allowed_domains` implies it. |
 | `spec.min_confinement_class` | Every run's confinement floor is raised to at least this class. |
 | `spec.eligible_grants` | A credential grant the walls' grants do not cover is dropped from the run's eligible grants. |
-| `limits.max_end_ahead_sec` | No run's end may be set further ahead than this, at create or by a later change. |
+| `limits.max_end_ahead_sec` | No run's end may be set further ahead than this, at create or by a later change, including a run created before the walls went on. |
 
 A knob the walls do not name is left as the layers below set it.
 
 ## How they narrow
 
-- The walls meet the result of the profile chain, the deployment default, a stored policy, an inline policy and an operator's own run. They only ever narrow.
+- The walls meet the result of the profile chain, the deployment default, a stored policy, an inline policy, an operator's own run and a Record Mode session. They only ever narrow.
+- A Record Mode session learns inside the walls: its allow-all becomes their allowlist, their denies are added and its floor is raised. It is never a break-glass run.
 - A policy wider than the walls is narrowed with a warning (`the org walls narrowed <knob>`). A run is never refused for having been wider.
 - The run's policy record names the layer `walls` for each knob the walls decided.
 - While they are on, no one can approve an egress request for a host the walls deny or do not allow. The refusal is `403 org_walls_host`.
@@ -31,6 +32,7 @@ A knob the walls do not name is left as the layers below set it.
 1. Draft the document and send it to `POST /api/v1/governance/walls/dry-run`. Nothing is written.
 2. Read the answer. It lists the deployment default, every profile, every stored policy and every assignment the walls would narrow, knob by knob.
 3. Send the same document with `"enabled": true` to `PUT /api/v1/governance/walls`. Pass the `ETag` of your last `GET` in `If-Match`.
+   - `PUT` replaces the whole document, `enabled` included. A write that leaves `enabled` out turns the walls off.
 4. With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, the write is held as a pending change. A second security admin approves it (see [governance-writes.md](governance-writes.md)).
 
 The dry run calls the same function the resolve calls once the walls are on, so its report is the effect.
@@ -47,5 +49,4 @@ The dry run calls the same function the resolve calls once the walls are on, so 
 | Gap | Follow-up |
 | --- | --- |
 | Runner placement, concurrent-run caps and door switches | Planned walls knobs; not held by this document yet. |
-| Hosts and grants a launch adds after its policy resolves (workspace and component hosts) | The final launch seal closes this. |
-| A queued break-glass run | It starts walled, because the queue re-resolves it without the reason. |
+| Hosts and grants a launch adds after its policy resolves (workspace, clone and component hosts, a Record Mode session's included) | The final launch seal closes this. |
