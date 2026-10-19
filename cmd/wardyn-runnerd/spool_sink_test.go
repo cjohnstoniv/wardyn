@@ -475,7 +475,9 @@ func TestSinkHarnessCleanupWaitsForSessions(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	t.Run("a live session", func(t *testing.T) {
 		h := newSinkHarness(t)
-		mustRead(t, h.dial(h.key, inst), proxy.FrameAccept)
+		c := h.dial(h.key, inst)
+		mustRead(t, c, proxy.FrameAccept)
+		mustRead(t, c, proxy.FrameGrant) // the session is in its read loop once the grant is out
 	})
 	if !strings.Contains(logs.String(), "decision sink session disconnected") {
 		t.Fatalf("the session ended after its test, not before it returned; log so far:\n%s", logs.String())
