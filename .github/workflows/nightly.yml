@@ -16,6 +16,14 @@ on:
         type: choice
         options: [full, candidate]
         default: full
+  # ci.yml's train-gate calls this with scope=candidate on a train PR's head. The input is a
+  # string here (workflow_call has no choice type); a value other than candidate runs every lane.
+  workflow_call:
+    inputs:
+      scope:
+        description: "full = every lane; candidate = only the lanes a release is gated on"
+        type: string
+        default: full
 
 permissions:
   contents: read
@@ -27,8 +35,15 @@ permissions:
 # running beside the run it replaces. Only a dispatched run is ever cancelled:
 # the event name is in the key, so a scheduled run shares a group with no
 # dispatch, is never cancelled by one, and never cancels one.
+# A run called from ci.yml sees the CALLER's github context: its event_name is the
+# caller's (pull_request or push) and github.workflow is the caller's name. So the
+# key starts with a literal (a key shared with the caller's own group cancels the
+# called run on start) and ends with the caller's run id, which gives each called
+# run a group of its own: it never cancels or queues behind a dispatched nightly
+# on the same ref, and ci.yml's own cancel-in-progress is what stops it when a
+# newer push supersedes the PR.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
+  group: nightly-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '' || format('-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 # SCOPE. scope=candidate skips every job that release.yml's preflight-green does
@@ -61,6 +76,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: e2e-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Docker available
         run: docker --version
       # test/e2e/e2e.sh prints its per-check PASS/FAIL lines and its summary to
@@ -109,6 +128,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: task-e2e-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -164,6 +187,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: gvisor-cc2-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -244,6 +271,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: ssh-e2e-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Docker available
         run: docker --version
       # Same evidence problem as e2e-live above: run-e2e-ssh.sh writes no
@@ -366,6 +397,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: ci-mode-dogfood-model-fake
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -425,6 +460,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: docker-tagged-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Docker available
         run: docker --version
       # test/e2e/live's newHarness FATALs (not skips) once WARDYN_TEST_DOCKER=1
@@ -518,6 +557,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: provider-subscription-docker-pg
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Docker available
         run: docker --version
       # The test's two subfake instances (control-plane + vendor) run inside
@@ -663,6 +706,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: ui-sandbox-e2e-live
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Docker available
         run: docker --version
       - name: Live UI-sandbox relay e2e (dedicated compose stack)
@@ -1269,6 +1316,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: kind-survival-walk
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1327,10 +1378,20 @@ jobs:
   # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
   # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
   # has gone green here, the same posture kind-survival-walk has.
+  # One job per kubelet and suite (four legs, each its own kind cluster), because the two kubelets
+  # one after the other with both suites took 61 minutes. The kubelet pins live here, not in the
+  # script's default, so a bump is made in both places. fail-fast is off: a red leg must not hide
+  # the other three.
   k6-kind-conformance:
     if: inputs.scope != 'candidate'
+    name: k6-kind-conformance (${{ matrix.kubelet }}, ${{ matrix.suite }})
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        kubelet: [v1.31.4, v1.35.0]
+        suite: [org, inproc]
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -1347,16 +1408,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: k6-kind-conformance
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           install_only: "true"
-      - name: Kubernetes runner kind conformance (floor and latest kubelet)
+      - name: Kubernetes runner kind conformance (${{ matrix.kubelet }}, ${{ matrix.suite }} suite)
         env:
           WARDYN_TEST_K8S: "1"
           K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+          K6_NODE_IMAGES: kindest/node:${{ matrix.kubelet }}
+          K6_SUITES: ${{ matrix.suite }}
         shell: bash
         run: |
           set +e
@@ -1381,8 +1448,87 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: k6-kind-conformance-results
+          name: k6-kind-conformance-results-${{ matrix.kubelet }}-${{ matrix.suite }}
           path: test/reports/e2e/
+          if-no-files-found: error
+
+  # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
+  # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
+  # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
+  # restart, recovered from the recording in pg mode, #1831). Each walk makes and deletes its OWN
+  # quickstart cluster, so the three legs share nothing and run apart. NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until each
+  # leg has gone green here, the same posture kind-survival-walk has.
+  kind-acceptance-walks:
+    if: inputs.scope != 'candidate'
+    name: kind-acceptance-walks (${{ matrix.walk }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {walk: kind-components-walk, script: kind-components-walk.sh, recording: off}
+          - {walk: kind-run-output-walk, script: kind-run-output-walk.sh, recording: off}
+          - {walk: kind-run-output-walk-recording, script: kind-run-output-walk.sh, recording: pg}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim|debian:trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: kind-acceptance-walks
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: "true"
+      - name: Build the agent images the quickstart cluster needs
+        run: make agent-images
+      - name: ${{ matrix.walk }}
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_WALK_RECORDING: ${{ matrix.recording }}
+          WALK_SCRIPT: ${{ matrix.script }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          "./scripts/$WALK_SCRIPT" 2>&1 | tee "test/reports/e2e/${{ matrix.walk }}.log"
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the walk actually ran (not a self-skip) and passed
+        env:
+          WALK_NAME: ${{ matrix.walk }}
+          WALK_SCRIPT: ${{ matrix.script }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="test/reports/e2e/${WALK_NAME}.log"
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::$WALK_SCRIPT self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::$WALK_SCRIPT exited ${WALK_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q "^${WALK_SCRIPT%.sh}: PASS" "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      - name: Upload walk evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.walk }}-results
+          path: test/reports/e2e/${{ matrix.walk }}.log
           if-no-files-found: error
 
   # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
@@ -1406,6 +1552,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: hybrid-walk
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1547,6 +1697,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: runner-compat-walk
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Runner/organisation version compatibility walk
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -1600,6 +1754,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: kek-conformance
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1645,6 +1803,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: daemon-proxy-secret-kind
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
@@ -1676,6 +1838,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          job: fuzz
+          save: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
       - name: Fuzz the session decoder
         run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
 
