@@ -2095,6 +2095,8 @@ jobs:
   # run. A dispatched run takes the nightly's own permissions, and a newer
   # dispatch on the same ref cancels it (the nightly's concurrency group), as a
   # newer push cancels this run. The job holds one runner while it waits.
+  # publish=false: a train is not a release candidate, so the nightly's
+  # buildx-smoke still builds but skips its image push and attest steps.
   train-suites:
     if: >-
       github.event_name == 'pull_request' &&
@@ -2118,7 +2120,7 @@ jobs:
         run: |
           set -euo pipefail
           since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
-          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
           id=
           for _ in $(seq 40); do
             id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
