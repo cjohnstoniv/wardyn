@@ -148,8 +148,18 @@ func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, byType types.Act
 	if f.decideErr != nil {
 		return types.ApprovalRequest{}, f.decideErr
 	}
-	ap := f.byID[id]
-	ap.ID = id
+	// The store contract approval.Decide relays: an unknown id is not found and a row that is no
+	// longer PENDING (decided, cancelled, expired) is refused, so a second decision cannot
+	// silently flip it.
+	ap, ok := f.byID[id]
+	if !ok {
+		return types.ApprovalRequest{}, store.ErrNotFound
+	}
+	if ap.State != types.ApprovalPending {
+		return types.ApprovalRequest{}, approval.ErrAlreadyDecided
+	}
+	now := time.Now().UTC()
+	ap.DecidedAt = &now
 	ap.State = decision.State
 	ap.DecidedBy = decision.DecidedBy
 	ap.Reason = decision.Reason
@@ -1011,4 +1021,35 @@ func mustIDP(t *testing.T) *embedded.Provider {
 		t.Fatalf("embedded.New: %v", err)
 	}
 	return idp
+}
+
+// TestDecideTwice_SecondIs409AndKeepsFirstDecision pins fakeApprovals.Decide to the real contract:
+// the second decision on a row answers 409 and leaves the first one in place.
+func TestDecideTwice_SecondIs409AndKeepsFirstDecision(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &dispatchTestStore{
+		run:   types.AgentRun{ID: runID, CreatedBy: "t@example.com"},
+		state: types.RunRunning,
+	}
+	fa := newFakeApprovals()
+	apID := seedPendingApproval(t, fa, runID)
+	cfg := baseTestConfig(h, st)
+	cfg.Approvals = fa
+	cfg.Audit = &syncAudit{}
+	srv := New(cfg)
+
+	if w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("first approve: code = %d, want 200. body=%s", w.Code, w.Body.String())
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/deny", adminToken, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonApprovalAlreadyDecided) {
+		t.Fatalf("second decision: code = %d body=%s, want 409 %s", w.Code, w.Body.String(), reasonApprovalAlreadyDecided)
+	}
+	if ap, _ := fa.Get(context.Background(), apID); ap.State != types.ApprovalApproved {
+		t.Errorf("state after a refused second decision = %q, want the first decision (APPROVED) kept", ap.State)
+	}
+	if _, err := fa.Decide(context.Background(), uuid.New(), types.ActorHuman, types.ApprovalDecision{State: types.ApprovalApproved}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Decide of an unknown id = %v, want store.ErrNotFound", err)
+	}
 }
