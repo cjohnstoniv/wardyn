@@ -79,8 +79,9 @@ What Wardyn does for a delivered value:
 - A `file_secret` grant on a runner that cannot deliver a file fails the run ([`internal/api/runs_dispatch_files.go#Server.fileSecretRunnerDelivers`](../internal/api/runs_dispatch_files.go)).
 - On Kubernetes, a delivered file beside a shared drive is refused ([`internal/runner/k8s/managed_files.go#errAgentSecretBesideShare`](../internal/runner/k8s/managed_files.go)).
 - With `WARDYN_ENV_SECRET_PLACEHOLDERS` or `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a grant whose scope names a `host` puts a placeholder in the sandbox instead of the value. Both are off by default in 0.10.0.
-  - The proxy replaces the placeholder with the value in request headers to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
+  - The proxy replaces the placeholder with the value in the `Authorization` header of requests to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
   - A program that signs locally, or uses the value any other way, holds only the placeholder and fails.
+  - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
 - It skips a grant it cannot honour, and leaves the variable or file absent; it does not set a blank ([`internal/api/runs_dispatch_files.go#Server.resolveFileSecretGrants`](../internal/api/runs_dispatch_files.go)).
 
 What it does not do:

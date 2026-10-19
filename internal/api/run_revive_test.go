@@ -8,13 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -937,6 +940,28 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 			t.Fatalf("ReplaceProxy calls = %d, want none", len(f.rr.replaced))
 		}
 	})
+
+	// On the owner's own revive the operator bit is their session role now, as
+	// dispatch reads it, so an SSO admin's run (OperatorOwned false) revives.
+	for role, want := range map[string]int{oidc.RoleAdmin: http.StatusOK, oidc.RoleUser: http.StatusConflict} {
+		t.Run("broker off on the owner's own revive as "+role, func(t *testing.T) {
+			f := newReviveFixture(t)
+			f.srv.cfg.DisableGitPATBroker = true
+			f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", nil)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("id", f.run.ID.String())
+			r = r.WithContext(context.WithValue(withOIDCRole(withOIDCHuman(r.Context(), f.run.CreatedBy), role), chi.RouteCtxKey, rctx))
+			w := httptest.NewRecorder()
+			f.srv.handleReviveRun(w, r)
+			if w.Code != want {
+				t.Fatalf("revive = %d %s, want %d", w.Code, w.Body.String(), want)
+			}
+			if replaced := len(f.rr.replaced); (want == http.StatusOK) != (replaced == 1) {
+				t.Fatalf("ReplaceProxy calls = %d on a %d revive", replaced, want)
+			}
+		})
+	}
 }
 
 // TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny: a remote run with the

@@ -15,8 +15,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A placeholder rule swaps the sandbox's placeholder for the secret in each
-// request header to its host and strips nothing; a rule without one replaces
+// A placeholder rule swaps the sandbox's placeholder for the secret in its own
+// header (Authorization) to its host, leaves it in every other header, and
+// strips nothing; a rule without one replaces
 // the sandbox's Authorization with the header the control plane resolved
 // (mintServer: Authorization), as before.
 func TestPlaceholderRuleFillsTheSandboxsHeader(t *testing.T) {
@@ -35,7 +36,7 @@ func TestPlaceholderRuleFillsTheSandboxsHeader(t *testing.T) {
 			t.Fatalf("buildInjector: %v", err)
 		}
 		for _, lane := range []string{"plain", "intercepted"} {
-			h := http.Header{"Authorization": {"Token " + ph}, "X-Other": {ph + "," + ph}}
+			h := http.Header{"Authorization": {"Token " + ph}, "X-Other": {ph + "," + ph}, "X-Request-Id": {ph}}
 			if lane == "plain" {
 				req := httptest.NewRequest(http.MethodGet, "http://api.test/v1", nil)
 				req.Header = h
@@ -50,8 +51,8 @@ func TestPlaceholderRuleFillsTheSandboxsHeader(t *testing.T) {
 				}
 				continue
 			}
-			if h.Get("Authorization") != "Token "+value || h.Get("X-Other") != value+","+value {
-				t.Errorf("%s, placeholder: headers %v, want the placeholder filled in place and nothing set", lane, h)
+			if h.Get("Authorization") != "Token "+value || h.Get("X-Other") != ph+","+ph || h.Get("X-Request-Id") != ph {
+				t.Errorf("%s, placeholder: headers %v, want Authorization filled in place and every other header left as sent", lane, h)
 			}
 		}
 	}

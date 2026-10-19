@@ -532,15 +532,14 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	req.Header.Set(h.name, h.value)
 }
 
-// fillPlaceholder swaps a placeholder rule's bytes for its secret in every request header value.
-// Nothing is stripped: the sandbox's header carries the placeholder, which is no credential.
-// ponytail: headers only, as the sandbox wrote them; a placeholder inside an encoding (Basic
-// auth's base64) or in a URL or body passes unchanged.
+// fillPlaceholder swaps a placeholder rule's bytes for its secret in the rule's own header
+// (Authorization unless the rule names another). Nothing is stripped: the sandbox's header
+// carries the placeholder, which is no credential. A placeholder in any other header, inside an
+// encoding (Basic auth's base64), or in a URL or body passes unchanged.
 func fillPlaceholder(h http.Header, hdr injectedHeader) {
-	for _, vs := range h {
-		for i, v := range vs {
-			vs[i] = strings.ReplaceAll(v, hdr.placeholder, hdr.value)
-		}
+	vs := h[http.CanonicalHeaderKey(hdr.name)]
+	for i, v := range vs {
+		vs[i] = strings.ReplaceAll(v, hdr.placeholder, hdr.value)
 	}
 }
 
