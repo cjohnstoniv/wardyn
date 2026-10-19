@@ -301,10 +301,24 @@ func TestMemberDriveOwnerStarting_CreateStillHoldingItsLease(t *testing.T) {
 	if err := st.HeartbeatRunWatcher(ctx, run.ID, "replica-a"); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.ReleaseUncreatedRunWatcher(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ask("the same run once its dispatch returned with no sandbox", false)
+	if err := st.HeartbeatRunWatcher(ctx, run.ID, "replica-a"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET sandbox_ref = 'sb-1' WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	ask("a run whose sandbox is recorded (its container holds the drive)", false)
+	if err := st.ReleaseUncreatedRunWatcher(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	var owner string
+	if err := pool.QueryRow(ctx, `SELECT watcher_owner FROM agent_runs WHERE id = $1`, run.ID).Scan(&owner); err != nil || owner != "replica-a" {
+		t.Errorf("a recorded sandbox's lease owner after a release = %q, %v; want it kept", owner, err)
+	}
 }
 
 // TestGetMemberDrive: the admin route's read finds a member drive by id
