@@ -203,7 +203,8 @@
 # docs/AUDIT-ACTIONS.md 49187 = ours 48988 + theirs 49050 - base 48851 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # docs/AUDIT-ACTIONS.md 49333 = 49187 + 146 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
 # docs/AUDIT-ACTIONS.md 49276 measured (0.10 BOUNDARY): the three walls rows become governance.boundary.write; enable and disable leave the verb list.
-docs/AUDIT-ACTIONS.md=49276 share=8
+# docs/AUDIT-ACTIONS.md 49294 measured (0.10 BOUNDARY): break-glass binds, the revive floor refusal.
+docs/AUDIT-ACTIONS.md=49294 share=8
 # docs/AUDIT-ACTIONS.md 49013 adds 146 over 48867, measured (0.10 LAY-A): the three governance.walls rows, run.break_glass.open, the run.create break_glass keys and the enable and disable verbs.
 # docs/AUDIT-ACTIONS.md 49030 measured after merging main into 0.10 LAY-A.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.

@@ -526,11 +526,9 @@ type governanceCeiling struct {
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
 	// for the Azure DevOps standing rule (adoStandingBound).
 	Operator bool
-	// boundary is the Wardyn boundary this ceiling resolved under (nil in no_limits); breakGlass is
-	// the admin token's break-glass run, which it does not narrow; boundaryKnobs are the knobs the
-	// boundary narrowed here (boundary_meet.go).
+	// boundary is the Wardyn boundary this ceiling resolved under (nil in no_limits); boundaryKnobs
+	// are the knobs it narrowed here (boundary_meet.go).
 	boundary      *types.Boundary
-	breakGlass    bool
 	boundaryKnobs []string
 }
 

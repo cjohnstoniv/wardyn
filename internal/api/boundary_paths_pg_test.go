@@ -79,11 +79,17 @@ func TestBoundaryBindRecordSessions(t *testing.T) {
 }
 
 // TestBoundaryQueuedBreakGlassStartsAsTagged: an admin-token launch with a reason that waits in a
-// full pool starts as the break-glass run it was tagged: unnarrowed, break_glass, one audit row.
+// full pool starts as the break-glass run it was tagged: break_glass, one audit row, and bound by
+// the boundary like any run.
 func TestBoundaryQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Shared", 1)
 	occupant := e.occupy(pool)
+	if _, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
+		Name: "team", CreatedBy: "seed", Ceiling: govTestPolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := e.pg.PutBoundary(context.Background(), testBoundary(types.BoundaryHardLimits), "seed"); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +106,8 @@ func TestBoundaryQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	e.free(occupant)
 	e.sweep()
 	run := e.waitStarted(queued.ID)
-	if policy := e.specFor(queued.ID).ProxyConfig.Policy; !policy.AllowAllEgress {
-		t.Errorf("the started break-glass run was narrowed by the boundary: %+v", policy)
+	if policy := e.specFor(queued.ID).ProxyConfig.Policy; withinBoundary(policy) != "" {
+		t.Errorf("the started break-glass run is outside the boundary: %s (%+v)", withinBoundary(policy), policy)
 	}
 	if !run.BreakGlass {
 		t.Error("run row break_glass = false, want true")
@@ -140,5 +146,58 @@ func TestBoundaryCapAnEarlierRunsEnd(t *testing.T) {
 	}
 	if resp.EndsAt == nil || time.Until(*resp.EndsAt) > boundaryMaxEnd*time.Second || !slices.Contains(resp.Capped, "ends_at") {
 		t.Errorf("ends_at = %v capped %v, want capped at most %ds ahead", resp.EndsAt, resp.Capped, boundaryMaxEnd)
+	}
+}
+
+// floorRun is a PENDING run of class cc, created in no_limits, under govEnv's store.
+func floorRun(t *testing.T, e *govEnv, cc types.ConfinementClass) types.AgentRun {
+	t.Helper()
+	run, err := e.pg.CreateRun(context.Background(), types.AgentRun{ID: uuid.New(), CreatedBy: "owner", Agent: "claude-code",
+		ConfinementClass: cc, State: types.RunPending, RunnerTarget: "docker", Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run
+}
+
+// TestDispatchAdmittedRefusesAClassBelowTheBoundaryFloor: a run whose class, fixed at create, is
+// below the boundary's floor (the floor was raised after it was created) is failed at dispatch with a
+// run.dispatch row, never launched; a run at the floor is admitted.
+func TestDispatchAdmittedRefusesAClassBelowTheBoundaryFloor(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	low, high := floorRun(t, e, types.CC1), floorRun(t, e, types.CC3)
+	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
+	ctx := context.Background()
+	if !e.srv.dispatchAdmitted(ctx, high, dispatchCeiling{resolved: true}) {
+		t.Error("a CC3 run under a CC3 floor was refused")
+	}
+	if e.srv.dispatchAdmitted(ctx, low, dispatchCeiling{resolved: true}) {
+		t.Fatal("a CC1 run under a CC3 floor was admitted")
+	}
+	if run, err := e.pg.GetRun(ctx, low.ID); err != nil || run.State != types.RunFailed {
+		t.Errorf("refused run state = %q (%v), want FAILED", run.State, err)
+	}
+	if rows := e.audits("run.dispatch"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), "below the Wardyn boundary's floor") {
+		t.Errorf("run.dispatch rows = %+v, want one naming the floor", rows)
+	}
+}
+
+// TestBoundaryRefusesAReviveBelowTheFloor: a paused run whose class is below the boundary's floor as it
+// stands now is refused at revive, 409 confinement_class_conflict with a denied row; a run at the floor
+// passes the same check.
+func TestBoundaryRefusesAReviveBelowTheFloor(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	low, high := floorRun(t, e, types.CC1), floorRun(t, e, types.CC3)
+	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
+	ctx := context.Background()
+	if _, rerr := e.srv.reviveCeilingAdmitting(ctx, high, types.ActorHuman, "owner"); rerr != nil {
+		t.Errorf("a CC3 run under a CC3 floor: %+v", rerr)
+	}
+	_, rerr := e.srv.reviveCeilingAdmitting(ctx, low, types.ActorHuman, "owner")
+	if rerr == nil || rerr.status != http.StatusConflict || rerr.reason != reasonConfinementClassConflict {
+		t.Fatalf("a CC1 run under a CC3 floor: %+v, want 409 %s", rerr, reasonConfinementClassConflict)
+	}
+	if rows := e.audits("run.revive"); len(rows) != 1 || rows[0].Outcome != "denied" {
+		t.Errorf("run.revive rows = %+v, want one denied", rows)
 	}
 }

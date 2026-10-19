@@ -52,13 +52,26 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 		}
 		current[p.Row.ID] = p.Resolved.Limits.RunLimits
 	}
+	// The Wardyn boundary's run-limit maximum binds every one of them as well, whatever its profile.
+	capSec, err := s.boundaryMaxEndSec(ctx)
+	if err != nil {
+		return err
+	}
 	now := s.cfg.Now()
 	for _, run := range runs {
 		// A deleted profile has no current limits to tighten to; the run keeps
-		// the ones it captured.
-		if l, ok := current[*run.GovernanceProfileID]; ok {
-			s.reclampRun(ctx, rc, run, l, now)
+		// the ones it captured, held to the boundary's maximum.
+		l, ok := current[*run.GovernanceProfileID]
+		if !ok {
+			if capSec == 0 {
+				continue
+			}
+			l = run.RunLimits
 		}
+		if capSec > 0 {
+			l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false
+		}
+		s.reclampRun(ctx, rc, run, l, now)
 	}
 	return nil
 }

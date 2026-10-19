@@ -202,10 +202,12 @@ func TestBoundaryDryRunEqualsTheOnSwitch(t *testing.T) {
 	check("stored policy", report.StoredPolicies[0].Changes, off["stored_policy_unassigned"].Spec, on.Spec)
 }
 
-// TestBoundaryBreakGlass: in hard_limits, the admin token's run needs a reason; with one it
-// is tagged, audited, capped at the boundary's run-limit maximum and not narrowed.
+// TestBoundaryBreakGlass: in hard_limits, with a profile whose walls it would lift, the admin
+// token's run needs a reason; with one it is tagged, audited, capped at the boundary's run-limit
+// maximum and still bound by the boundary.
 func TestBoundaryBreakGlass(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
+	e.seedProfile("team", "pypi.org")
 	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
 	body := `{"agent":"claude-code","task":"t","ends_after_sec":86400,"inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`
 	create := func(reason string) *httptest.ResponseRecorder {
@@ -258,13 +260,17 @@ func TestBoundaryBreakGlass(t *testing.T) {
 	if datum["break_glass"] != true || datum["break_glass_reason"] != "prod outage INC-1" {
 		t.Errorf("run.create break_glass = %v / %v", datum["break_glass"], datum["break_glass_reason"])
 	}
-	// Only the boundary are lifted: the run keeps its own policy, the floor included.
+	// Break-glass lifts a profile's walls, never the boundary: the run's own open policy resolves
+	// inside it, and so does its ceiling.
 	ctx := context.WithValue(context.Background(), breakGlassKey{}, "prod outage INC-1")
 	open := types.RunPolicySpec{MinConfinementClass: types.CC1, AllowAllEgress: true}
 	spec, _, _, _, ok := e.srv.resolveRunPolicy(ctx, httptest.NewRecorder(), governReq(ctx),
 		&createRunRequest{Agent: "claude-code", Repo: "acme/widgets", InlinePolicy: &open}, true)
-	if !ok || !spec.AllowAllEgress {
-		t.Errorf("break-glass policy = %+v (ok %v), want it unnarrowed", spec, ok)
+	if why := withinBoundary(spec); !ok || why != "" {
+		t.Errorf("break-glass policy = %+v (ok %v): %s, want it inside the boundary", spec, ok, why)
+	}
+	if c, err := e.srv.effectiveCeiling(ctx); err != nil || withinBoundary(c.Spec) != "" {
+		t.Errorf("break-glass ceiling = %+v (%v), want it inside the boundary", c.Spec, err)
 	}
 	// In no_limits the header changes nothing and no reason is asked for.
 	putBoundary(t, e, testBoundary(types.BoundaryNoLimits))
@@ -274,9 +280,10 @@ func TestBoundaryBreakGlass(t *testing.T) {
 }
 
 // TestBoundaryBoundEgressApprovals: in hard_limits no decider admits a host the boundary does not
-// allow, a host it allows is decided as before, and a break-glass run's approval is not bound.
+// allow, a host it allows is decided as before, and a break-glass run's approval is bound the same.
 func TestBoundaryBoundEgressApprovals(t *testing.T) {
 	e := newGovEnvOn(t, throwawayPGPool(t))
+	e.seedProfile("team", "pypi.org") // so the admin token's reason makes a break-glass run
 	mkRun := func(breakGlass bool) uuid.UUID {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t"}`))
 		r.Header.Set("Authorization", "Bearer "+adminToken)
@@ -315,8 +322,65 @@ func TestBoundaryBoundEgressApprovals(t *testing.T) {
 	if w := approve(ask(walled, "pypi.org")); w.Code != http.StatusOK {
 		t.Errorf("allowed host: %d %s, want 200", w.Code, w.Body)
 	}
-	if w := approve(ask(glass, boundaryOutsideHost)); w.Code != http.StatusOK {
-		t.Errorf("break-glass run: %d %s, want 200", w.Code, w.Body)
+	if run, _ := e.pg.GetRun(context.Background(), glass); !run.BreakGlass {
+		t.Fatal("the reasoned admin-token run is not tagged break_glass")
+	}
+	if w := approve(ask(glass, boundaryOutsideHost)); w.Code != http.StatusForbidden || wireReason(t, w) != reasonBoundaryHost {
+		t.Errorf("break-glass run, outside host: %d %s, want 403 %s", w.Code, w.Body, reasonBoundaryHost)
+	}
+}
+
+// TestBreakGlassOnlyWhenItLifts: in hard_limits with no governance profile, an admin-token run lifts
+// nothing, so it needs no reason, is not tagged and is bound by the boundary like any run; preflight
+// agrees. Once one profile exists the same request is a break-glass run and needs a reason.
+func TestBreakGlassOnlyWhenItLifts(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
+	post := func(path string) *httptest.ResponseRecorder {
+		return e.admin(http.MethodPost, path, `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","allow_all_egress":true}}`)
+	}
+	w := post("/api/v1/runs")
+	var created createRunResponse
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatalf("no profile, no reason: %d %s, want 201", w.Code, w.Body)
+	}
+	run, err := e.pg.GetRun(context.Background(), created.ID)
+	if err != nil || run.BreakGlass || len(e.audits("run.break_glass.open")) != 0 {
+		t.Errorf("run break_glass = %v, open rows %d (%v), want an untagged run", run.BreakGlass, len(e.audits("run.break_glass.open")), err)
+	}
+	if run.ConfinementClass != types.CC3 {
+		t.Errorf("confinement class = %q, want the boundary's floor CC3", run.ConfinementClass)
+	}
+	if w := post("/api/v1/runs/preflight"); w.Code != http.StatusOK {
+		t.Errorf("preflight, no profile, no reason: %d %s, want 200", w.Code, w.Body)
+	}
+	e.seedProfile("team", "pypi.org")
+	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
+		if w := post(path); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonBreakGlassReasonRequired {
+			t.Errorf("%s with a profile, no reason: %d %s, want 400 %s", path, w.Code, w.Body, reasonBreakGlassReasonRequired)
+		}
+	}
+}
+
+// TestBoundaryBindsLocalMode: local mode's runs stand outside governance, yet in hard_limits the
+// boundary binds them, and a local caller is never asked for a break-glass reason, even with a
+// profile present.
+func TestBoundaryBindsLocalMode(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t), func(c *Config) {
+		c.LocalMode, c.LocalOperator, c.OIDC = true, "local:alice", nil
+	})
+	e.seedProfile("team", "pypi.org")
+	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC1","allow_all_egress":true}}`))
+	req.Host, req.RemoteAddr = "127.0.0.1:8080", "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	panicFails(t, e.srv.Handler()).ServeHTTP(w, req)
+	var created createRunResponse
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatalf("local-mode run = %d %s, want 201 with no reason", w.Code, w.Body)
+	}
+	if run, err := e.pg.GetRun(context.Background(), created.ID); err != nil || run.BreakGlass || run.ConfinementClass != types.CC3 {
+		t.Errorf("local-mode run = break_glass %v class %q (%v), want untagged at the boundary's floor CC3", run.BreakGlass, run.ConfinementClass, err)
 	}
 }
 

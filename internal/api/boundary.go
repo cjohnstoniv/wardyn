@@ -316,31 +316,45 @@ func breakGlassReason(ctx context.Context) string {
 	return reason
 }
 
-// admitBreakGlass is POST /runs' break-glass door (#2946), run before anything resolves a ceiling.
-// While the boundary is in hard_limits, the admin token's run must give a reason in
-// X-Wardyn-Break-Glass-Reason (refused 400 without one); with one, the request is stamped so the
-// boundary does not narrow that run, and its row is tagged break_glass. Every other caller, and every
-// request in no_limits, passes untouched: the header means nothing to them.
+// admitBreakGlass is POST /runs' break-glass door (#2946), run before anything resolves a ceiling, and
+// at preflight and policy preview, so they answer as the launch does. An admin-token run is a
+// break-glass run only when it would lift something (breakGlassLifts). Then it must give a reason in
+// X-Wardyn-Break-Glass-Reason (refused 400 without one), and with one the request is stamped so the
+// run is tagged break_glass. The boundary binds the run either way. Every other caller, and an
+// admin-token request that lifts nothing, passes untouched: the header means nothing to them.
 func (s *Server) admitBreakGlass(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if !isAdminTokenCaller(r) {
 		return r, true
 	}
-	b, err := s.governanceBoundary(r.Context())
+	lifts, err := s.breakGlassLifts(r.Context())
 	if err != nil {
 		writeServerError(w, r, "read the Wardyn boundary", err)
 		return r, false
 	}
-	if !b.HardLimits() {
+	if !lifts {
 		return r, true
 	}
 	reason := strings.TrimSpace(r.Header.Get(breakGlassReasonHeader))
 	if reason == "" || utf8.RuneCountInString(reason) > maxGovernanceRejectReasonLen || !controlCharFree(reason) {
 		writeErrorReason(w, http.StatusBadRequest, reasonBreakGlassReasonRequired,
-			"the Wardyn boundary is in hard_limits: an admin-token run is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
+			"the Wardyn boundary is in hard_limits and governance profiles exist: an admin-token run lifts their walls, so it is a break-glass run and needs a reason in the "+breakGlassReasonHeader+
 				" header (at most 512 characters, no control characters)")
 		return r, false
 	}
 	return r.WithContext(context.WithValue(r.Context(), breakGlassKey{}, reason)), true
+}
+
+// breakGlassLifts reports whether an admin-token run would lift anything: the boundary is in
+// hard_limits and at least one governance profile exists, whose walls the admin token stands outside.
+// The deployment default does not count: the admin token never was held to it. With no profile there
+// is nothing to lift, so the run is an ordinary one, bound by the boundary, untagged.
+func (s *Server) breakGlassLifts(ctx context.Context) (bool, error) {
+	b, err := s.governanceBoundary(ctx)
+	if err != nil || !b.HardLimits() {
+		return false, err
+	}
+	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	return len(profiles) > 0, err
 }
 
 // stampBreakGlass records a break-glass run on its run.create datum and writes its run.break_glass.open

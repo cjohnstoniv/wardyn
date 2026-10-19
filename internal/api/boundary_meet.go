@@ -4,8 +4,10 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"slices"
@@ -106,22 +108,14 @@ func (s *Server) governanceBoundary(ctx context.Context) (types.Boundary, error)
 
 // boundaryCeiling is the last step of resolveEffectiveCeiling: the ceiling the profile chain (or the
 // deployment, or an operator's own) resolved, met with the boundary in hard_limits. A store error is
-// an error, never the unbounded ceiling. The admin token's break-glass run (breakGlassReason) is the
-// one caller the boundary does not narrow; its end is capped at the boundary's run-limit maximum
-// instead.
+// an error, never the unbounded ceiling. Every caller is bound, the admin token's break-glass run
+// included: break-glass lifts a profile's walls, never the boundary.
 func (s *Server) boundaryCeiling(ctx context.Context, c governanceCeiling) (governanceCeiling, error) {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil || !b.HardLimits() {
 		return c, err
 	}
 	c.boundary = &b
-	if breakGlassReason(ctx) != "" {
-		c.breakGlass = true
-		if m := b.Limits.MaxEndAheadSec; m != nil {
-			c.Limits.RunLimits.MaxEndAheadSec = composer.TighterSec(c.Limits.RunLimits.MaxEndAheadSec, *m)
-		}
-		return c, nil
-	}
 	spec, limits, changes, err := boundaryMeet(b, c.Spec, c.Limits)
 	if err != nil {
 		return governanceCeiling{}, err
@@ -144,15 +138,15 @@ func (s *Server) boundaryOperatorCeiling(ctx context.Context) (governanceCeiling
 	if err != nil || !b.HardLimits() {
 		return c, err
 	}
-	c.boundary, c.breakGlass = &b, breakGlassReason(ctx) != ""
+	c.boundary = &b
 	if m := b.Limits.MaxEndAheadSec; m != nil {
 		c.Limits.RunLimits = types.RunLimits{UserChangesLimits: true, MaxEndAheadSec: *m}
 	}
 	return c, nil
 }
 
-// bounded reports whether the boundary binds this ceiling's runs.
-func (c governanceCeiling) bounded() bool { return c.boundary != nil && !c.breakGlass }
+// bounded reports whether the boundary binds this ceiling's runs: in hard_limits, every run.
+func (c governanceCeiling) bounded() bool { return c.boundary != nil }
 
 // boundaryBoundsEnd reports whether the boundary bounds a run's end where governance alone would not
 // (an operator's run, or a break-glass run): only when the boundary names a run-limit maximum.
@@ -247,6 +241,11 @@ func (s *Server) boundaryEndCap(ctx context.Context, run types.AgentRun) (int, e
 	if run.BreakGlass {
 		return run.RunLimits.MaxEndAheadSec, nil
 	}
+	return s.boundaryMaxEndSec(ctx)
+}
+
+// boundaryMaxEndSec is the boundary's run-limit maximum in hard_limits, 0 for none.
+func (s *Server) boundaryMaxEndSec(ctx context.Context) (int, error) {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil || !b.HardLimits() || b.Limits.MaxEndAheadSec == nil {
 		return 0, err
@@ -254,10 +253,53 @@ func (s *Server) boundaryEndCap(ctx context.Context, run types.AgentRun) (int, e
 	return *b.Limits.MaxEndAheadSec, nil
 }
 
+// boundaryFloorAdmits reports whether a run of class may run inside b: in hard_limits, not below the
+// boundary's confinement floor. An unset class reads as the lowest, CC1.
+func boundaryFloorAdmits(b types.Boundary, class types.ConfinementClass) bool {
+	floor := b.Spec.MinConfinementClass
+	return !b.HardLimits() || floor == nil || cmp.Or(class, types.CC1).Rank() >= floor.Rank()
+}
+
+// dispatchBelowBoundaryFloor refuses, at dispatchAdmitted, a run whose confinement class (fixed at
+// create) is below the boundary's floor, as a run created before the floor was raised is: the run is
+// failed with a run.dispatch row, never launched below it. A boundary that cannot be read refuses too.
+func (s *Server) dispatchBelowBoundaryFloor(ctx context.Context, run types.AgentRun) bool {
+	b, err := s.governanceBoundary(ctx)
+	if err == nil && boundaryFloorAdmits(b, run.ConfinementClass) {
+		return false
+	}
+	note, msg := "the run's confinement class is below the Wardyn boundary's floor",
+		"This run was not launched: its confinement class is below the Wardyn boundary's floor; start a new run"
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read the Wardyn boundary at dispatch", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		note, msg = "the Wardyn boundary could not be read", "This run was not launched: the Wardyn boundary could not be read"
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+		run.ID.String(), "failure", mustJSON(map[string]any{"note": note})))
+	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, msg)
+	return true
+}
+
+// reviveBelowBoundaryFloor refuses a revive of a run whose confinement class is below the
+// boundary's floor as it stands now, with the run.revive denied row the other revive doors write.
+func (s *Server) reviveBelowBoundaryFloor(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) *reviveError {
+	b, err := s.governanceBoundary(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the Wardyn boundary", err))
+	}
+	if boundaryFloorAdmits(b, run.ConfinementClass) {
+		return nil
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonConfinementClassConflict})))
+	return reviveRefused(http.StatusConflict, reasonConfinementClassConflict,
+		"this run's confinement class "+string(run.ConfinementClass)+" is below the Wardyn boundary's floor "+
+			string(*b.Spec.MinConfinementClass)+"; start a new run")
+}
+
 // boundaryAdmitApproval is the boundary's bound on an egress approval (approvals.go's egress_host
-// gate is the member's): in hard_limits no decider admits a host it denies or does not allow, except
-// on a break-glass run, which it does not bind. ok=false: the 403 is written and the approval stays
-// pending. It returns the run, read here when the gate before it had not.
+// gate is the member's): in hard_limits no decider admits a host it denies or does not allow, on any
+// run, a break-glass run's included. ok=false: the 403 is written and the approval stays pending. It returns the run, read here when the gate before it had not.
 func (s *Server) boundaryAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
 	b, err := s.governanceBoundary(r.Context())
 	if err != nil {
@@ -275,7 +317,7 @@ func (s *Server) boundaryAdmitApproval(w http.ResponseWriter, r *http.Request, a
 		haveRun = true
 	}
 	host := approvalHost(ap)
-	if run.BreakGlass || boundaryAdmitsHost(b, host) {
+	if boundaryAdmitsHost(b, host) {
 		return run, haveRun, true
 	}
 	writeErrorReason(w, http.StatusForbidden, reasonBoundaryHost,

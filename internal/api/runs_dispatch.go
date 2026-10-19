@@ -813,7 +813,7 @@ func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 // lane may dispatch (a non-remote placement create bound to no runner) and a
 // ceiling nobody resolved.
 func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling) bool {
-	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) {
+	if s.unsupportedLocalDispatch(ctx, run) || s.dispatchPlacementDenied(ctx, run, ceiling) || s.dispatchBelowBoundaryFloor(ctx, run) {
 		return false
 	}
 	// Fail closed on a ceiling nobody resolved. The compiler already forces a
