@@ -57,9 +57,10 @@ test.describe("the substrate_health band", () => {
     await expect(page.getByText(SUBSTRATE_BANNER.TITLE_AUTH, { exact: true })).toHaveCount(0);
   });
 
-  // The same Admin-view URL as the admin case, so the only difference is who is asking: a member
-  // is refused the view, and the operator gate on the band itself is what keeps it hidden.
-  test("a member never sees it", async ({ page }) => {
+  // A mocked member is always in the User view, where the band is not rendered at all, so this
+  // case cannot reach the operator gate: that gate is pinned by substrate-health-banner.test.tsx.
+  // What it does pin is that the Admin-view URL is refused to a member and the band stays off it.
+  test("the User view never shows it", async ({ page }) => {
     await mockMemberRole(page);
     await stubSubstrateRow(page, () => FAILING);
     await page.goto("/admin/setup?step=environment");
