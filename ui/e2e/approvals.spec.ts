@@ -1078,6 +1078,11 @@ test.describe("the run page: Waiting on you, History and the Overview bar", () =
       await expect(bar).toContainText("Waiting for an admin");
       await expect(bar.getByRole("button", { name: "Review" })).toHaveCount(0);
       await expect(page.getByText("Waiting on you to decide.")).toHaveCount(0);
+      // The header chip offers no Review either, and the Approvals tab does not claim it is waiting on this viewer.
+      await expect(page.getByTestId("run-summary-header").getByRole("button", { name: /Review/ })).toHaveCount(0);
+      await page.getByRole("tab", { name: /^Approvals/ }).click();
+      await expect(page.getByRole("region", { name: "Waiting for an admin" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Waiting on you" })).toHaveCount(0);
     } finally {
       deleteApproval(id);
     }

@@ -21,8 +21,8 @@ import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures"
 // defaulting HostCard's CollapsibleCard to `defaultOpen`.
 const VIEWPORT = { width: 1280, height: 744 };
 // Admin Settings (three group headings, eight collapsed cards, the no-barrier notice) needs 852px of viewport,
-// measured on the hosted runner at 1280 wide: 115px of chrome around <main> plus 737px of content. Collapsed
-// Host opened needs 1241px. The budget is the measured height plus a small margin; TOLERANCE_PX below is the
+// measured on the hosted runner at 1280 wide: 115px of chrome around <main> plus 737px of content. With the
+// Host card open it needs 1241px. The budget is the measured height plus a small margin; TOLERANCE_PX below is the
 // sub-pixel jitter allowance on top.
 const ADMIN_VIEWPORT = { width: 1280, height: 860 };
 

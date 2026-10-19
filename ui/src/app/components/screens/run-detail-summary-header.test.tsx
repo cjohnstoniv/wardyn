@@ -184,6 +184,18 @@ describe("SummaryHeader — command bar", () => {
     expect(screen.queryByTestId("pending-approval-chip-text")).toBeNull();
   });
 
+  it("drops the Review prompt from the chip when the viewer cannot decide", async () => {
+    const goApprovals = vi.fn();
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={taskRun} terminal={false} pendingApprovalCount={1} viewerBlocked onGoApprovals={goApprovals} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(/Review/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "1 waiting" }));
+    expect(goApprovals).toHaveBeenCalledTimes(1);
+  });
+
   it("makes the waiting chip a link to the Approvals tab when the page can open it", async () => {
     const goApprovals = vi.fn();
     renderHeader(

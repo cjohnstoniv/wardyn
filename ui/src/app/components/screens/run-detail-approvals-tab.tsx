@@ -21,6 +21,7 @@ import { EmptyState } from "../wardyn/states";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ReauthRow } from "../wardyn/live-approvals-rows";
 import { APPROVALS_TAB } from "../wardyn/copy/approvals";
+import { RUNS_ROW_WORD } from "../wardyn/copy/runs-landing";
 import { useRunAdoTokens } from "../../lib/hooks/use-run-ado-tokens";
 import { ApprovalCard, DecidedRow } from "./approvals-cards";
 
@@ -30,6 +31,7 @@ export function ApprovalsTab({
   onDecide,
   onAdoDecide,
   onPushDecide,
+  viewerBlocked = false,
 }: {
   approvals: ApprovalRequest[];
   // This page always has the run loaded by the time this tab can render
@@ -38,6 +40,8 @@ export function ApprovalsTab({
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
   onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  /** The pending decisions are ones this viewer cannot make (viewerBlockedOnDecision). */
+  viewerBlocked?: boolean;
 }) {
   const adminView = useConsoleMode() === "admin";
   // A run that holds Azure DevOps tokens widens one when access is approved.
@@ -54,12 +58,14 @@ export function ApprovalsTab({
     );
   }
   const waiting = approvals.filter((a) => a.state === "PENDING");
+  // The Runs list's wording, when the pending decisions are an admin's to make.
+  const waitingLabel = viewerBlocked ? RUNS_ROW_WORD.WAITING_FOR_ADMIN : APPROVALS_TAB.WAITING;
   const history = approvals.filter((a) => a.state !== "PENDING");
   return (
     <div className="flex max-w-3xl flex-col gap-5">
       {waiting.length > 0 && (
-        <section aria-label={APPROVALS_TAB.WAITING} className="space-y-3">
-          <SectionLabel>{APPROVALS_TAB.WAITING}</SectionLabel>
+        <section aria-label={waitingLabel} className="space-y-3">
+          <SectionLabel>{waitingLabel}</SectionLabel>
           {waiting.map((a) =>
             a.kind === "credential_reauth" && !isAdoConsentRequest(a) ? (
               // A door, not a decision: no tier can approve or deny this kind (the server answers 409), so the pair

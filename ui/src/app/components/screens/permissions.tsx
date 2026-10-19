@@ -547,7 +547,7 @@ function KindRow({
         {/* Nothing granted (no allow grant; a deny-only list counts as none, as in the confirm dialog) is the risky
             cell, so it says why in the row before the switch is touched. */}
         <p className={cn("mt-1 text-body", !hasAllow ? "text-warning" : "text-foreground")}>
-          {!hasAllow ? PERM.ROW_ZERO : PERM.ROW_GRANTS(grants.length)}
+          {hasAllow ? PERM.ROW_GRANTS(grants.length) : grants.length === 0 ? PERM.ROW_ZERO : PERM.ROW_DENY_ONLY(grants.length)}
         </p>
         <p className={cn("mt-2 max-w-[76ch] text-body", enforced ? "text-foreground" : "text-muted-foreground")}>
           {enforced ? copy.enforced : copy.unenforced}

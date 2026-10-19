@@ -179,7 +179,8 @@ describe("PermissionsScreen — the capability row (#3053)", () => {
     });
     renderScreen();
     const workspace = await screen.findByTestId("capability-row-workspace");
-    expect(within(workspace).getByText(PERM.ROW_ZERO)).toBeInTheDocument();
+    expect(within(workspace).getByText(PERM.ROW_DENY_ONLY(1))).toBeInTheDocument();
+    expect(within(workspace).queryByText(PERM.ROW_ZERO)).toBeNull();
     expect(workspace.className).toContain("bg-warning-subtle");
     await user.click(within(workspace).getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
     expect(within(await screen.findByRole("alertdialog")).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();

@@ -358,6 +358,7 @@ function RunDetailPage({ id }: { id: string }) {
             <ApprovalsTab
               approvals={approvals}
               run={run}
+              viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}

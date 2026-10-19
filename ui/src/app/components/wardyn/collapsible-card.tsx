@@ -8,7 +8,8 @@
 // the 744px viewport with every card fully open; the fix approved there is
 // "compact cards": every card collapses to a one-line summary and expands on
 // click, none open by default. Collapsed-by-default is load-bearing, not a
-// preference — it is what keeps both pages under 744px regardless of which
+// preference — it is what keeps Your account under 744px (Admin Settings is
+// budgeted at 860px, settings-compact-viewport.spec.ts) regardless of which
 // of a card's own conditional branches renders (an admin with a k8s runner,
 // a member with no model block, etc.); a card that opened by default could
 // not make that guarantee across every shape its body takes.

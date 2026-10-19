@@ -180,7 +180,7 @@ export function SummaryHeader({
     <Chip tone="warning" className="h-7 gap-1">
       <ShieldAlert className="size-3 shrink-0" />
       <span data-testid="pending-approval-chip-text" className="block min-w-0">
-        {onGoApprovals ? `${pendingText} · ${RUN_HEADER.REVIEW}` : pendingText}
+        {onGoApprovals && !viewerBlocked ? `${pendingText} · ${RUN_HEADER.REVIEW}` : pendingText}
       </span>
     </Chip>
   );

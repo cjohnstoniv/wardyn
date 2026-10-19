@@ -229,6 +229,8 @@ export const PERM = {
   ENFORCE_ZERO_CONFIRM: "Enforcing it refuses everyone until grants exist.",
   ROW_GRANTS: (n: number) => `${n} grant${n === 1 ? "" : "s"}`,
   ROW_ZERO: "0 grants · Add a grant first. Enforcing now refuses everyone.",
+  // Only deny grants: counted honestly, but nothing is allowed, so enforcing still refuses everyone.
+  ROW_DENY_ONLY: (n: number) => `${n} grant${n === 1 ? "" : "s"} (deny only) · Add an allow grant first. Enforcing now refuses everyone.`,
   HOW_TITLE: "How permissions work",
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",

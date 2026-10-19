@@ -422,6 +422,11 @@ describe("RunDetailScreen — who the pending decision waits on", () => {
     expect(bar).toHaveTextContent("Waiting for an admin");
     expect(within(bar).queryByRole("button", { name: "Review" })).toBeNull();
     expect(screen.queryByText("Waiting on you to decide.")).toBeNull();
+    // The header chip offers no Review, and the Approvals tab names an admin, not "Waiting on you".
+    expect(screen.getByTestId("pending-approval-chip-text")).not.toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting for an admin" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Waiting on you" })).toBeNull();
   });
 
   it("an admin sees it is their turn, with Review", async () => {
@@ -430,6 +435,9 @@ describe("RunDetailScreen — who the pending decision waits on", () => {
     const bar = await screen.findByTestId("decision-bar");
     expect(bar).toHaveTextContent("1 decision needs you");
     expect(within(bar).getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-approval-chip-text")).toHaveTextContent("Review");
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /approvals/i }));
+    expect(await screen.findByRole("region", { name: "Waiting on you" })).toBeInTheDocument();
   });
 });
 
