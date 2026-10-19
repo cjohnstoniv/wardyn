@@ -218,13 +218,13 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 - A background task's UI apps cannot be opened (`409 run_background_only`).
 - Three calls:
-  1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type),
+  1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
   2. **bind** it to the browser that will use it,
   3. then hand it to the enter endpoint on the UI origin —
      - as a `POST` form field (preferred: the ticket never lands in a URL, browser history, or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
 
 ```sh
-TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
+TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket?purpose=ui" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
 
 # Bind: what the console's own fetch sends. The binding cookie lands in the jar.

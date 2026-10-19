@@ -276,8 +276,10 @@ export const runs = {
   // accepts as ?ticket= (browsers cannot put the admin bearer on a WS
   // handshake). Minted through this NORMAL authenticated call; consumed on
   // first WS connect, so each (re)connect mints a fresh one.
-  async attachTicket(runId: string): Promise<string> {
-    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/ticket`, {
+  // purpose "ui" asks for a UI-app ticket, which the terminal session cap does not refuse.
+  async attachTicket(runId: string, purpose?: "ui"): Promise<string> {
+    const query = purpose ? `?purpose=${purpose}` : "";
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/ticket${query}`, {
       method: "POST",
     });
     const body = await asJson<{ ticket: string }>(res);
