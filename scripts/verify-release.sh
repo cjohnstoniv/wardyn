@@ -24,7 +24,9 @@ RELEASE_YML="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/release.yml"
 [ -r "$RELEASE_YML" ] || { echo "cannot read $RELEASE_YML" >&2; exit 2; }
 IMAGES=$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$RELEASE_YML" | awk '{print $3}' | sort -u)
 WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//' -e 's/; do.*//' -e 's/\\$//' | tr -s ' \n' '\n\n' | grep .)
-# The macOS package first shipped in 0.9.3; an older tag never had it.
+# The macOS package first shipped in 0.9.3-rc.3; an older tag, and the 0.9.3 rc.1 and rc.2 built just before
+# its job landed, never had it. (A plain sort -V on the full string cannot say this: it puts 0.9.3 before its rcs.)
+case "$V" in 0.9.3-rc.1|0.9.3-rc.2) WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT") ;; esac
 [ "$(printf '%s\n' "${V%%-*}" 0.9.3 | sort -V | head -1)" = 0.9.3 ] || WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT")
 [ -n "$IMAGES" ] && [ -n "$WANT" ] || { echo "could not derive the image or asset list from $RELEASE_YML" >&2; exit 2; }
 OUT=$(mktemp -d)
@@ -40,9 +42,9 @@ ID="https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tag
 ISS=https://token.actions.githubusercontent.com
 for img in $IMAGES; do
   ref="ghcr.io/cjohnstoniv/$img:$V"
-  digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
+  digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>"$OUT/imagetools-$img.err" | tr -d '"')
   plats=$(docker buildx imagetools inspect "$ref" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
-  if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; fails=$((fails+1)); continue; fi
+  if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; tail -3 "$OUT/imagetools-$img.err"; fails=$((fails+1)); continue; fi
   # Every published index must carry both laptop architectures (an arm64 laptop pulls the same tag).
   for plat in linux/amd64 linux/arm64; do
     [[ " $plats" == *" $plat "* ]] || { echo "FAIL $img: index has no $plat [$plats]"; fails=$((fails+1)); }
