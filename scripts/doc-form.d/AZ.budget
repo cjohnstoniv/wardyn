@@ -5,4 +5,5 @@
 # docs/AZURE-DEVOPS.md 11103 adds 217 over 10886, measured (0.9.3 ADO): a run's own repo gets the per-person credential, the decline rows and their troubleshooting.
 # docs/AZURE-DEVOPS.md 11129 = 11103 + 26 (RV5), measured at the wave-A merge.
 # docs/AZURE-DEVOPS.md 11149 adds 20 over 11129 (0.9.3 RR-de), measured: runner_resident covers four classes; an Azure DevOps git token is never resident.
-docs/AZURE-DEVOPS.md=11149 share=35
+# docs/AZURE-DEVOPS.md 11262 adds 113 over 11149 (0.9.7 MINT-L backport), measured: the minted_pat laptop row and the bullets on where the per-run token is held, its re-judged fetch, outage and pins.
+docs/AZURE-DEVOPS.md=11262 share=35

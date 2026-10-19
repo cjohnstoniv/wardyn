@@ -248,7 +248,7 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case cp.Mode != ModeRunnerResident:
 		return refuse(ReasonPlacementCredential, path, class+" credential is not delivered runner_resident under the current delivery policy")
 	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
-		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident")
+		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident, or its token mode is not minted_pat")
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
@@ -266,14 +266,18 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 // channel but DeliverResident: the dispatched leaf must already be its
 // placeholder. A grant's eligibility record names a scope, never a value, and is
 // admitted for a class whose resident delivery is built (residentBuilt): the
-// org's deliver step authors that grant's placeholder at dispatch. A record, a
-// placeholder or an intent (Azure DevOps) of any other class stays refused, so
-// classifyCredential never admits an unbuilt class, whatever the caller (via_org
-// admission included) concludes from nil.
+// org's deliver step authors that grant's placeholder at dispatch. An Azure
+// DevOps minted token has no value to dispatch at all: its intent, grant and
+// injection rule are admitted as they are. A record, a placeholder or an intent
+// of any other class stays refused, so classifyCredential never admits an
+// unbuilt class, whatever the caller (via_org admission included) concludes
+// from nil.
 func residentValueRefusal(path, class string, record bool, leaf reflect.Value) *Refusal {
 	switch {
 	case !residentBuilt[class]:
 		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
+	case class == ClassADOMintedPAT: // no value is dispatched: the runner's proxy fetches it per request
+		return nil
 	case record:
 		return nil
 	case !leaf.IsValid():

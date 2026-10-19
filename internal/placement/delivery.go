@@ -22,7 +22,7 @@ type Mode string
 const (
 	ModeOwn            Mode = "own"             // the person's own material, wherever it already lives
 	ModeViaOrg         Mode = "via_org"         // only in the org; used through the org's egress for the run's life
-	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox
+	ModeRunnerResident Mode = "runner_resident" // in the runner's OS keystore, then the local proxy or sandbox; an Azure DevOps minted token only in the runner proxy's memory
 	ModeRefuse         Mode = "refuse"          // nowhere; the default for every org-held class
 )
 
