@@ -512,7 +512,7 @@ func batchOpIsWorkItem(uri, org string) (string, error) {
 	}
 	// The resource is the segment after _apis/wit/, "" when there is none.
 	if i+2 < len(segs) {
-		return segs[i+2], nil
+		return foldSegment(segs[i+2]), nil
 	}
 	return "", nil
 }

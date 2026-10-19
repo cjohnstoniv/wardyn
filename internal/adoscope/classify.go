@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Request is ONE candidate Azure DevOps request, as much of it as a classifier
@@ -206,8 +208,12 @@ func knownMethod(m string) bool {
 type route struct {
 	// host is the lowercased host.
 	host string
-	// segs is every decoded, lowercased path segment after the organisation.
+	// segs is every decoded, lowercased path segment after the organisation,
+	// the form an id (a project, a repository) is read in.
 	segs []string
+	// folded is segs under foldSegment, the form every structural segment (an
+	// area, a resource, a sub-resource) is compared in.
+	folded []string
 	// apis is the index of "_apis" in segs, or -1.
 	apis int
 	// area is the segment after _apis ("git", "wit", …), or "".
@@ -224,10 +230,38 @@ func (r route) at(n int) string {
 	if r.apis < 0 {
 		return ""
 	}
+	if i := r.apis + n; i >= 0 && i < len(r.folded) {
+		return r.folded[i]
+	}
+	return ""
+}
+
+// id is at for a segment read as a name, not structure: lowercased only.
+func (r route) id(n int) string {
+	if r.apis < 0 {
+		return ""
+	}
 	if i := r.apis + n; i >= 0 && i < len(r.segs) {
 		return r.segs[i]
 	}
 	return ""
+}
+
+// foldSegment is strings.ToLower, except that a rune whose Unicode simple-fold
+// orbit holds an ASCII letter becomes that letter: U+017F (long s) is "s" and
+// U+212A (Kelvin sign) is "k", as a case-insensitive router may match them, so
+// "workitemſ" is compared as the "workitems" it can route to.
+func foldSegment(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= utf8.RuneSelf {
+			for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+				if f < utf8.RuneSelf {
+					return unicode.ToLower(f)
+				}
+			}
+		}
+		return unicode.ToLower(r)
+	}, s)
 }
 
 // parseRoute decodes path, pins it to org, and splits it at _apis. Decoding
@@ -350,7 +384,11 @@ func pinOrg(host string, segs []string, org string) ([]string, error) {
 // it. A path with no _apis (the web UI) yields an empty area, which reads as
 // the fail-closed answer for a write.
 func splitAtAPIs(host string, segs []string) route {
-	r := route{host: host, segs: segs, apis: slices.Index(segs, "_apis")}
+	folded := make([]string, len(segs))
+	for i, s := range segs {
+		folded[i] = foldSegment(s)
+	}
+	r := route{host: host, segs: segs, folded: folded, apis: slices.Index(folded, "_apis")}
 	r.area, r.res = r.at(1), r.at(2)
 	return r
 }
@@ -442,8 +480,8 @@ func packagePublish(r route) bool {
 	if r.apis >= 0 || (r.host != "pkgs.dev.azure.com" && !strings.HasSuffix(r.host, ".pkgs.visualstudio.com")) {
 		return false
 	}
-	i := slices.Index(r.segs, "_packaging")
-	return (i == 0 || i == 1) && i+2 < len(r.segs) && slices.Contains(packageProtocols, r.segs[i+2])
+	i := slices.Index(r.folded, "_packaging")
+	return (i == 0 || i == 1) && i+2 < len(r.folded) && slices.Contains(packageProtocols, r.folded[i+2])
 }
 
 // witAdminResources are the work-item resources whose every write is
