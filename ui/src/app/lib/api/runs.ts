@@ -82,6 +82,7 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
       state: "active",
       minted_at: str(g.created_at),
       host: grantHost(spec.scope),
+      scopeData: spec.scope != null && typeof spec.scope === "object" ? (spec.scope as Record<string, unknown>) : undefined,
     } satisfies CredentialGrant;
   });
 }

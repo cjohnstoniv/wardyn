@@ -13,6 +13,7 @@
 import { KeyRound } from "lucide-react";
 import type { AuditEvent, CredentialGrant } from "../../../../lib/types";
 import { relativeTime } from "../../../../lib/format";
+import { grantSentence } from "../../../../lib/grant-sentence";
 import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { Chip, WidgetCard } from "../../../wardyn/primitives";
@@ -57,11 +58,20 @@ export function CredentialsWidget({
       ) : (
         <div className="flex flex-col gap-1.5">
           {grants.map((g) => (
-            <div key={g.id} className="flex items-center gap-2">
-              <Chip tone="neutral">eligible</Chip>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={g.scope}>
-                {g.scope}
-              </span>
+            <div key={g.id} data-testid="credential-grant">
+              <div className="flex items-center gap-2">
+                <Chip tone="neutral">eligible</Chip>
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={g.scope}>
+                  {grantSentence(g.audience, g.scopeData ?? (g.host ? { host: g.host } : {}))}
+                </span>
+              </div>
+              {/* The API's own JSON stays one click away, never the first thing a person reads. */}
+              <details className="mt-1 pl-1">
+                <summary className="cursor-pointer text-meta text-muted-foreground">{RUN_COCKPIT.credentialDetails}</summary>
+                <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-meta text-muted-foreground">
+                  {g.scopeData ? JSON.stringify(g.scopeData, null, 2) : g.scope}
+                </pre>
+              </details>
             </div>
           ))}
         </div>

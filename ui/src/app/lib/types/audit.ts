@@ -165,6 +165,8 @@ export interface CredentialGrant {
   jti?: string;
   /** The host the grant's scope names (git_pat, ssh_key); absent for other kinds. */
   host?: string;
+  /** The grant's scope as the server sent it, for the sentence the console reads it as. */
+  scopeData?: Record<string, unknown>;
 }
 
 export interface EgressDecision {
