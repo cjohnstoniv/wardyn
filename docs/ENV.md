@@ -1540,7 +1540,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Off by default (flag `-aws-sigv4-at-proxy`; `api.ResolveAWSSigV4AtProxy`). Off, both AWS sign-in lanes dispatch exactly what they did before it existed.
 - `on`: a `bedrock_sso` provider's lane, or an AWS CLI component's, gets a `~/.aws` profile whose `credential_process` prints a placeholder key pair. It has no SSO token cache and no route to the IAM Identity Center hosts.
-- The proxy terminates the lane's AWS hosts on port 443, checks each request and signs it again with role credentials it gets from the portal's `GetRoleCredentials` with the run's captured session. Neither the session nor the role credentials are in the sandbox.
+- The proxy terminates the lane's AWS hosts on port 443, checks each request and signs it again with role credentials it gets from the portal's `GetRoleCredentials` with the run's captured session. The session and the role's credentials never enter the sandbox while the switch is on.
 - It builds on `WARDYN_AWS_SSO_PROXY_INJECT=on` and does nothing while that is off or `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is set.
 - A lane is re-signed only when every one of its hosts is an exact AWS service host the proxy can sign for: `<service>.<region>.amazonaws.com`, a global `<service>.amazonaws.com`, or an S3 bucket host. Bedrock's runtime and control hosts qualify.
 - Not re-signed, so the lane keeps its old path: a wildcard host, a port other than 443, a dual-stack or PrivateLink host, S3 Control, and hosts outside `amazonaws.com`.
@@ -1549,13 +1549,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);
   - a chunk-signed upload (`aws_sigv4_signed_chunks`; for the AWS CLI set `payload_signing_enabled = false`) and an event-stream request body, such as Bedrock's bidirectional stream (`aws_sigv4_event_stream`);
   - a payload hash it cannot read (`aws_sigv4_payload`), and a body over 16 MiB that carries no `x-amz-content-sha256` (`aws_sigv4_body_too_large`);
-  - an STS action other than `GetCallerIdentity`, since the others hand out credentials (`aws_sigv4_action`);
+  - on STS (every host of it, FIPS included) any action but `GetCallerIdentity`, since the others hand out credentials, and on IAM `CreateAccessKey`, `CreateLoginProfile`, `CreateServiceSpecificCredential`, `UpdateLoginProfile` and `CreateVirtualMFADevice` (`aws_sigv4_action`);
+  - on either, a request whose one `Action` it cannot read from the query and a plain form body (`aws_sigv4_action`). That is an `X-Amz-Target` or `Smithy-Protocol` header, a `Content-Encoding`, a chunked or streamed body, a body that is not a form, or no `Action` or more than one;
   - a request when the role credentials cannot be got (`aws_sigv4_credentials`).
 - Unsigned payloads (`UNSIGNED-PAYLOAD`, `STREAMING-UNSIGNED-PAYLOAD-TRAILER`) and streamed responses, such as `InvokeModelWithResponseStream`, are re-signed and relayed.
 - A session that lapses mid-run is not held while its owner signs in again, as `WARDYN_AWS_SSO_PROXY_INJECT` holds a sandbox's `GetRoleCredentials`. The request is refused with `aws_sigv4_credentials`; retry once the owner has signed in.
 - The role credentials live as long as the permission set's session duration, and the proxy renews them five minutes before they expire.
 - A run that re-signs cannot be placed on a person's own runner (`placement_credential`).
 - New dispatches only: a running sandbox keeps the lane it was authored with.
+- A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
+- Known gap: the run's access facts still list the role credentials as resident when this switch is on (#3243).
 
 ### `WARDYN_AWS_SSO_REFRESH_SKEW`
 

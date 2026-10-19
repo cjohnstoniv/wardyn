@@ -95,7 +95,8 @@
 # docs/ENV.md 39918 adds 298 over 39620, measured: three default-off switch rows and details sections, which the env-doc guard requires.
 # docs/ENV.md 40453 adds 422 over 40031: the WARDYN_AWS_SIGV4_AT_PROXY row and section, measured at the main merge.
 # docs/ENV.md 40751 is 40453 + 40329 - 40031: both sides' additions over the merge base.
-docs/ENV.md=40751 share=5
+# docs/ENV.md 40856 adds 105 over 40751, measured: the STS and IAM action guard, the token-API line and the access-facts known gap in the WARDYN_AWS_SIGV4_AT_PROXY section.
+docs/ENV.md=40856 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.
