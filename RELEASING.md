@@ -126,7 +126,7 @@ flowchart LR
 3. **Release PR.** When the milestone's release-gating issues are closed, one
    PR carries steps 1 and 1b below — the CHANGELOG rename, the version strings,
    the ROADMAP row, [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md) — and nothing else.
-   - The same PR regenerates the GPL source offer from the previous tag's published digests (header of `scripts/gpl-source-offer.sh`).
+   - The same PR regenerates the GPL source offer from the previous tag's published digests (header of [`scripts/gpl-source-offer.sh`](scripts/gpl-source-offer.sh)).
 4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
    for a patch, and the tag goes on that branch.

@@ -2,7 +2,7 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# test-up-seed-host-proxy.sh — scripts/up.sh seed_host_proxy extracts the host's
+# test-up-seed-host-proxy.sh — scripts/lib/up-seed.sh seed_host_proxy extracts the host's
 # own CLI from the wardynd image: the per-OS/arch binary, never a foreign one,
 # and never over a native bin/wardyn that runs here. Drives the real function
 # against a stub `docker` and fixture binaries; needs no daemon.
@@ -10,8 +10,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-body="$(sed -n '/^seed_host_proxy() {/,/^}/p' "${ROOT}/scripts/up.sh")"
-[ -n "${body}" ] || fail "scripts/up.sh has no seed_host_proxy()"
+body="$(sed -n '/^seed_host_proxy() {/,/^}/p' "${ROOT}/scripts/lib/up-seed.sh")"
+[ -n "${body}" ] || fail "scripts/lib/up-seed.sh has no seed_host_proxy()"
 eval "${body}"
 
 tmp="$(mktemp -d)"; trap 'rm -rf "${tmp}"' EXIT
