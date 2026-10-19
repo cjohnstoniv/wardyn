@@ -507,7 +507,8 @@ jobs:
         run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
       # W30-S1-2: docker/build-push-action's `tags:` accepts a newline-
       # separated list — push the semver tag always, plus `:latest` on the
-      # float-latest rows (see the matrix comment above for why). cosign
+      # float-latest rows (see the matrix comment above for why), never for a
+      # prerelease tag (one holding `-`), as the promote path below. cosign
       # still signs by DIGEST (build.outputs.digest), so floating `:latest`
       # doesn't change what gets signed.
       - name: Compute the image tags
@@ -517,10 +518,14 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           FLOAT_LATEST: ${{ matrix.float-latest }}
         run: |
+          latest=0
+          if [ "$FLOAT_LATEST" = "true" ]; then
+            case "$RELEASE_TAG" in *-*) ;; *) latest=1 ;; esac
+          fi
           {
             echo "tags<<EOF"
             echo "${IMAGE_NAME}:${RELEASE_TAG}"
-            if [ "$FLOAT_LATEST" = "true" ]; then
+            if [ "$latest" = 1 ]; then
               echo "${IMAGE_NAME}:latest"
             fi
             echo "EOF"
