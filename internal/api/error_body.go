@@ -46,7 +46,8 @@ func writeErrorReasonField(w http.ResponseWriter, status int, reason, msg, field
 }
 
 // writeErrorReasonPolicy is writeErrorReason for a ceiling refusal that names the
-// policy bound the person (nil ref: the body writeErrorReason would write).
+// policy bound the person, stamped with its layer (nil ref: the body
+// writeErrorReason would write).
 func writeErrorReasonPolicy(w http.ResponseWriter, status int, reason, msg string, ref *policyref.Ref) {
-	writeJSON(w, status, errorBody{Error: msg, Reason: reason, Policy: ref})
+	writeJSON(w, status, errorBody{Error: msg, Reason: reason, Policy: policyref.Layered(ref)})
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
@@ -453,10 +454,19 @@ var reservedComponentEnvNames = map[string]bool{
 // agent's own switches. WARDYN_ is refused beside them, with its own sentence.
 var reservedComponentEnvPrefixes = []string{"LD_", "GIT_CONFIG_", "CLAUDE_CODE_"}
 
+// reservedEditorEnvNames name the editor and pager programs git and other
+// tools start. Stored components set them today as a person's preference, so
+// they join the closed list only with EnvReserveEditors on (default off).
+var reservedEditorEnvNames = []string{"EDITOR", "VISUAL", "PAGER", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR"}
+
+// EnvReserveEditors is the switch that reserves reservedEditorEnvNames. Read on
+// every check; cmd/wardynd reads it once at boot so a bad value is refused there.
+const EnvReserveEditors = "WARDYN_COMPONENT_ENV_RESERVE_EDITORS"
+
 // reservedComponentEnvName reports whether name is one a component may not
 // set (WARDYN_* aside, which validComponentEnvName refuses first).
 func reservedComponentEnvName(name string) bool {
-	if reservedComponentEnvNames[name] {
+	if reservedComponentEnvNames[name] || slices.Contains(reservedEditorEnvNames, name) && cliutil.EnvBool(EnvReserveEditors, false) {
 		return true
 	}
 	for _, p := range reservedComponentEnvPrefixes {

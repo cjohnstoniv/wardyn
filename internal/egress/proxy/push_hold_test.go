@@ -37,6 +37,8 @@ type pushCP struct {
 	lists  []*types.PushPathList
 	polls  int
 	refuse int // when set, every raise is answered with this status
+	// rejoins are the raises naming a held row (rejoin_id); they create nothing, so raises omits them.
+	rejoins []uuid.UUID
 }
 
 func newPushCP(t *testing.T, state types.ApprovalState) *pushCP {
@@ -50,6 +52,7 @@ func newPushCP(t *testing.T, state types.ApprovalState) *pushCP {
 				Kind           string              `json:"kind"`
 				RequestedScope json.RawMessage     `json:"requested_scope"`
 				PathList       *types.PushPathList `json:"path_list"`
+				RejoinID       *uuid.UUID          `json:"rejoin_id"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			var scope types.PushContentScope
@@ -57,6 +60,11 @@ func newPushCP(t *testing.T, state types.ApprovalState) *pushCP {
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&scope); err != nil || scope.Validate() != nil {
 				http.Error(w, "bad scope", http.StatusBadRequest)
+				return
+			}
+			if body.RejoinID != nil {
+				c.rejoins = append(c.rejoins, *body.RejoinID)
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: c.id, State: types.ApprovalPending})
 				return
 			}
 			c.kinds = append(c.kinds, body.Kind)
@@ -338,6 +346,12 @@ func TestPushHoldRefusesOnTimeout(t *testing.T) {
 	}
 	if raises, _ := cp.counts(); raises != 1 {
 		t.Errorf("raises = %d, want 1: the retry must rejoin the PENDING row", raises)
+	}
+	// The retry re-entered the hold, so it names the row for the console to read as held again.
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	if len(cp.rejoins) != 1 || cp.rejoins[0] != cp.id {
+		t.Errorf("rejoins = %v, want one naming %s", cp.rejoins, cp.id)
 	}
 }
 

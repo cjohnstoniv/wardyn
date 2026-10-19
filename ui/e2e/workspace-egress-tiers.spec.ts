@@ -22,6 +22,7 @@
 // (internal/api's authz route matrix).
 import { test, expect, gotoConsole, navToRoute, mockSecurityAdminRole } from "./fixtures";
 import type { Page } from "@playwright/test";
+import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 
 const WS_ID = "e2e-egress-tiers-ws";
 const WS_GLOB = `**/api/v1/workspaces/${WS_ID}`;
@@ -86,6 +87,11 @@ test.describe("Workspace detail — the two egress tiers a security admin stradd
     await expect(page.getByRole("button", { name: "Remove pypi.org" })).toBeEnabled();
     // Approved AND operator_set-required -> the second write is operatorOnly.
     await expect(page.getByRole("button", { name: "Remove registry.npmjs.org" })).toBeDisabled();
+    // #2584: the reason is visible text in the row and the button's description, not a title alone.
+    const blocked = page.getByRole("button", { name: "Remove registry.npmjs.org" });
+    await expect(blocked).toHaveAccessibleDescription(OPERATOR_ONLY_REASON);
+    await expect(blocked).not.toHaveAttribute("title", /.+/);
+    await expect(page.getByRole("listitem").filter({ hasText: "registry.npmjs.org" }).getByText(OPERATOR_ONLY_REASON)).toBeVisible();
   });
 
   test("a security admin sees the Record pane open but both Approve-host controls dead", async ({ page }) => {

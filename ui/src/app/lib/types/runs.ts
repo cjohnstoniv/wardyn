@@ -9,6 +9,7 @@
 
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
+import type { PolicyContact } from "./site";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
 import type { RunnerPoolSelection } from "./runner-pools";
@@ -343,7 +344,7 @@ export interface AgentRun {
   // tracking, so an inline nested object's own keys (kind/by/pending) would
   // misread as top-level AgentRun keys and fail that parity test.
   attention?: RunAttention;
-  // AgentRun.MachineKind / VMMachine (migration 0192): "linux_vm" for a run
+  // AgentRun.MachineKind / VMMachine (migration 0196): "linux_vm" for a run
   // in a Linux VM, with the virtual hardware its runner started. Absent for a
   // container run. A named interface for the same line-scrape reason as above.
   machine_kind?: "linux_vm";
@@ -449,6 +450,9 @@ export interface RunSyncOpen {
 }
 export interface RunSync {
   open: RunSyncOpen[];
+  // deny is the organisation's WARDYN_SYNC_DENY patterns, which `wardyn sync`
+  // applies above every ignore file; the console does not show it yet.
+  deny?: string[];
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
@@ -568,6 +572,19 @@ export interface RunPolicyView {
   // False for a run that started before each change was recorded.
   complete: boolean;
   stored_policy_now?: StoredPolicyNow;
+  // Which layer set each top-level policy value, keyed by its json name.
+  provenance?: Record<string, PolicyProvenance>;
+}
+
+// internal/policyref.Provenance: the layer that set one value of a run's policy
+// ("deployment", "profile" with the leaf's name, "member" or "operator"), the
+// contact to ask, and locked once a layer forbids lower layers to change it
+// (never set until walls or delegation can lock a knob).
+export interface PolicyProvenance {
+  layer: string;
+  name?: string;
+  contact?: PolicyContact;
+  locked?: boolean;
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror

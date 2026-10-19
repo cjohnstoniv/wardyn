@@ -17,7 +17,7 @@ const buttonVariants = cva(
         // dropped it to 3.18:1, a stale leftover from when dark --destructive
         // was a hand-copied hex needing a tone-down).
         destructive:
-          "bg-destructive text-danger-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
+          "bg-destructive text-danger-foreground hover:bg-destructive/90",
         outline:
           "border bg-background text-foreground hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
         secondary:

@@ -165,6 +165,9 @@ type effectivePolicyDatum struct {
 	DiskMiBBasis  client.MainDriveBasis `json:"disk_mib_basis,omitempty"`
 	// DiskMiBDefaultSource is the layer whose default sized the run (pool or deployment), with basis default.
 	DiskMiBDefaultSource types.LimitSource `json:"disk_mib_default_source,omitempty"`
+	// Provenance is which layer set each value as create resolved it (layer,
+	// leaf name, locked), never a contact. Absent for a lane with no create resolution.
+	Provenance knobProvenance `json:"provenance,omitempty"`
 }
 
 // applyEphemeralDisk is where the org and profile maximums bind a run's ephemeral scratch size at

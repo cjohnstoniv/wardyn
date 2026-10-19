@@ -113,7 +113,12 @@ func writeHostCapacityRefusal(w http.ResponseWriter, r *http.Request, err error)
 	slog.WarnContext(r.Context(), "api: run launch refused: host capacity",
 		slog.String("path", r.URL.Path), slog.String("reason", refused.Reason))
 	w.Header().Set("Retry-After", "30")
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "host_capacity_refused", "reason": refused.Reason})
+	// error and reason keep the meaning existing clients read (the code, the measured limits);
+	// message is the sentence a person is shown.
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error": reasonHostCapacityRefused, "reason": refused.Reason,
+		"message": "this host is too busy to start a run right now (" + refused.Reason + ") — retry in 30 seconds",
+	})
 	return true
 }
 

@@ -81,7 +81,7 @@ persona is the audience, not an auditor.
 | 03a | Name the four things that can happen to a host a run dials, and which policy line decides each. What happens when you try to read a secret back? Where did the key live while the run used it? |
 | 03b (optional) | Which host did the agent reach, and how did you know it was the only one? What did the recording propose, and from what? What happened on the third `curl` after an approval scoped Once? |
 | 03c (optional) | What did the second mint return, and why is that the point? Why is a PAT minted into a pipe and not a header? What did the audit panel show for the approval-gated grant, in order? |
-| 03d (optional) | Which credential kind touches disk, and for how long? Which two demos never started a sandbox, and why is that the lesson rather than a failure? |
+| 03d (optional) | How does an SSH key sign in without entering the sandbox? Which two demos never started a sandbox, and why is that the lesson rather than a failure? |
 | 04 | What is a workspace? What can a run touch outside it? |
 | 04b (members) | Where may a member mount from, and who set that? What does a member see of another member's workspace? |
 | 04c (admin) | Name one thing a member cannot do, and where the console says so. Who may decide an egress approval on a run they created? |

@@ -23,6 +23,23 @@ func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, erro
 	return out, err
 }
 
+// RunSyncRules is the part of GET /runs/{id}'s sync field that `wardyn sync`
+// applies: Deny is the organisation's ignore patterns (WARDYN_SYNC_DENY), which
+// no ignore file in the synced tree can take back. A server that predates it
+// sends none.
+type RunSyncRules struct {
+	Deny []string `json:"deny"`
+}
+
+// GetRunSyncRules reads the run's sync rules.
+func (c *Client) GetRunSyncRules(ctx context.Context, id uuid.UUID) (RunSyncRules, error) {
+	var out struct {
+		Sync RunSyncRules `json:"sync"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id.String(), nil, &out)
+	return out.Sync, err
+}
+
 // ListRunsPage is ListRuns plus the server's X-Wardyn-Truncated signal:
 // truncated=true means a further page exists and this one is not the whole
 // list. See the package doc's "# Pagination" for why every list family answers

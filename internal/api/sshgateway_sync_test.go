@@ -462,7 +462,7 @@ func TestSSHGateway_SyncFailureRowsAreAlwaysWritten(t *testing.T) {
 			if tc.execFn != nil {
 				f.fr.execFn = tc.execFn
 			}
-			f.h.srv.bridgeSSHSync(cancelled, f.run.ID, "alice@example.com", &stubChannel{}, tc.env)
+			f.h.srv.bridgeSSHSync(cancelled, f.run.ID, "alice@example.com", &stubChannel{}, tc.env, &sshSyncPass{})
 			if ev := waitForAudit(t, f.h.audit, f.run.ID, "ssh.sync.transfer", "failure"); ev == nil {
 				t.Errorf("failure row lost on a cancelled context; events=%s", auditDump(f.h.audit.snapshot(), f.run.ID))
 			}

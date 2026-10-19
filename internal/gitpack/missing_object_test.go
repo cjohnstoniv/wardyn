@@ -134,3 +134,32 @@ func TestPackInspect_UnreadableTargetKeepsItsReason(t *testing.T) {
 		})
 	}
 }
+
+// Commands is set exactly when the request carries no object: an empty pack
+// or none at all. A pack carrying anything (another ref's commit, a tag that
+// peels to an absent commit) adds content, so it leaves Commands unset.
+func TestPackInspect_MissingCommandsOnlyWhenNothingIsCarried(t *testing.T) {
+	carried, commit := carriedCommit(t)
+	tag := fmt.Appendf(nil, "object %s\ntype commit\ntag v1\ntagger T <t@example.com> 1767225600 +0000\n\nx\n", missingOIDA)
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want int
+	}{
+		{"empty pack", pushOf(buildPack(t), cmdFor(missingOIDA, "refs/heads/a"), cmdFor(missingOIDB, "refs/heads/b")), 2},
+		{"no pack", commandSection("report-status object-format=sha1", cmdFor(missingOIDA, "refs/heads/a")), 1},
+		{"a pack carrying another ref", pushOf(carried, cmdFor(commit, "refs/heads/c"), cmdFor(missingOIDA, "refs/heads/a")), 0},
+		{"a pack carrying the tag", pushOf(buildPack(t, rawObject{typ: objTag, payload: tag}), cmdFor(hashObject("tag", tag), "refs/tags/v1")), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Inspect(tc.body)
+			var m *MissingObjectError
+			if !errors.As(err, &m) {
+				t.Fatalf("err = %v, want a *MissingObjectError", err)
+			}
+			if len(m.Commands) != tc.want {
+				t.Errorf("Commands = %v, want %d", m.Commands, tc.want)
+			}
+		})
+	}
+}

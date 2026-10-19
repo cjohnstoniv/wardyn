@@ -398,7 +398,8 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 				}
 			}
 		case isNotFound(err):
-			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w", err)
+			// The daemon drops a container's execs with it: the sandbox is gone.
+			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w: %w", runner.ErrSandboxGone, err)
 		default:
 			if errs++; errs >= waitMaxProbeErrors {
 				return 0, fmt.Errorf("docker: exec wait: exec inspect (%d consecutive errors): %w", errs, err)

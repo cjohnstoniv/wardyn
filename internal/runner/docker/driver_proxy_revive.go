@@ -100,7 +100,38 @@ func (d *Driver) prepareProxy(ctx context.Context, runID uuid.UUID, cfgJSON []by
 	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
 		return proxyPrep{}, err
 	}
+	if d.cfg.ProxySandboxPeersOnly {
+		subnets, err := d.runSubnets(ctx, runID)
+		if err != nil {
+			return proxyPrep{}, err
+		}
+		if len(subnets) == 0 {
+			return proxyPrep{}, fmt.Errorf("docker: the run's network %s has no subnet to serve", internalNetName(runID))
+		}
+		if cfgJSON, err = runner.WithProxyConfigKeys(cfgJSON, map[string]any{"allowed_peers": subnets}); err != nil {
+			return proxyPrep{}, err
+		}
+	}
 	return proxyPrep{extraHosts: hosts, cfgJSON: cfgJSON}, nil
+}
+
+// EnvProxySandboxPeersOnly is Config.ProxySandboxPeersOnly's switch.
+const EnvProxySandboxPeersOnly = "WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY"
+
+// runSubnets are the subnets of runID's own network.
+func (d *Driver) runSubnets(ctx context.Context, runID uuid.UUID) ([]netip.Prefix, error) {
+	name := internalNetName(runID)
+	insp, err := d.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("docker: inspect the run's network %s: %w", name, err)
+	}
+	var out []netip.Prefix
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Subnet.IsValid() {
+			out = append(out, c.Subnet)
+		}
+	}
+	return out, nil
 }
 
 // startProxy creates the wardyn-proxy sidecar for runID on the per-run

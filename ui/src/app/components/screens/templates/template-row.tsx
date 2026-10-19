@@ -58,8 +58,8 @@ export function TemplateRow({
   const lockedClass = cn(locked && "aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent");
 
   return (
-    <li className={`grid items-center gap-x-4 gap-y-3 border-t border-border px-4 py-3 first:border-t-0 ${ROW_GRID}`}>
-      <div className="min-w-0 space-y-1">
+    <li role="row" className={`grid items-center gap-x-4 gap-y-3 border-t border-border px-4 py-3 first:border-t-0 ${ROW_GRID}`}>
+      <div role="cell" className="min-w-0 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <strong id={nameId} className="font-medium text-foreground">
             {t.name}
@@ -74,12 +74,12 @@ export function TemplateRow({
         </div>
         {t.description && <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{t.description}</p>}
       </div>
-      <div className="min-w-0 space-y-1">
+      <div role="cell" className="min-w-0 space-y-1">
         <CellLabel>{T.COL_AVAILABLE}</CellLabel>
         <Chip>{scopeLabel(t)}</Chip>
         {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
       </div>
-      <div className="min-w-0">
+      <div role="cell" className="min-w-0">
         <CellLabel>{T.COL_INCLUDES}</CellLabel>
         <div className="flex flex-wrap gap-1">
           {includedGroups(t).map((g) => (
@@ -87,14 +87,14 @@ export function TemplateRow({
           ))}
         </div>
       </div>
-      <div className="min-w-0 text-sm text-muted-foreground tabular-nums">
+      <div role="cell" className="min-w-0 text-sm text-muted-foreground tabular-nums">
         <CellLabel>{T.COL_UPDATED}</CellLabel>
         <time dateTime={t.updated_at} title={absoluteTime(t.updated_at)}>
           {shortDate(t.updated_at)}
         </time>
         <p className="text-xs">{T.REVISION(t.revision)}</p>
       </div>
-      <div className="space-y-1.5 md:justify-self-end">
+      <div role="cell" className="space-y-1.5 md:justify-self-end">
         <div className="flex flex-wrap gap-1.5 md:justify-end">
           <Button asChild variant="outline" size="sm">
             <Link to={startHref(t)} aria-describedby={nameId}>

@@ -16,7 +16,7 @@
 //
 //   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
-//     RunSignIn, GetRunPolicy, RunContainment, RecordRunNode
+//     RunSignIn, GetRunPolicy, GetRunSyncRules, RunContainment, RecordRunNode
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy

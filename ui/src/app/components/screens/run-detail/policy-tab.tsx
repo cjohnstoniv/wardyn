@@ -12,6 +12,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { runs } from "../../../lib/api/runs";
+import { mediumDate } from "../../../lib/format";
 import type {
   ConfinementClass,
   RunDetail,
@@ -210,10 +211,6 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
   );
 }
 
-function longDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
 // The heading a change sits under, and what separates two headings of one cause
 // (a profile's name, a restart's date).
 function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key: string; heading: string } {
@@ -224,7 +221,7 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
       if (c.profile) return { key: `profile:${c.profile}`, heading: CHANGE_HEADING.profile(c.profile) };
       break;
     case "restart":
-      if (c.at) return { key: `restart:${c.at}`, heading: CHANGE_HEADING.restart(longDate(c.at)) };
+      if (c.at) return { key: `restart:${c.at}`, heading: CHANGE_HEADING.restart(mediumDate(c.at)) };
       break;
     case "workspace":
     case "source_control":

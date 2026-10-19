@@ -77,6 +77,7 @@ describe("template field registry", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
       "description",
       "integration_id",
+      "local_folder",
       "machine_kind",
       "max_wait_sec",
       "mode_contract",
@@ -87,7 +88,11 @@ describe("template field registry", () => {
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
-    expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual(["LLMInspectionSpec.workspace_secret_values"]);
+    expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
+      "LLMInspectionSpec.workspace_secret_values",
+      "RunLocalFolder.name",
+      "RunLocalFolder.remote_dir",
+    ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });
 

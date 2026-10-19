@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +45,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	runtimeName, _, err := resolveRuntime(spec.ConfinementClass, info, d.cfg.ConfinementRuntimes)
 	if err != nil {
 		return runner.Sandbox{}, err
+	}
+	// An exec-less runtime runs a workload only as the container's main process (below), so there is
+	// never a container for an interactive run to open a shell in: refuse it before creating anything.
+	if spec.Interactive && !runtimeSupportsExec(runtimeName) {
+		return runner.Sandbox{}, fmt.Errorf("docker: an interactive run needs a runtime Wardyn can open a shell in, and class %s resolves to %s on this host, which runs only a task: install the Kata runtime for interactive %s runs, or start this run with a task", spec.ConfinementClass, runtimeName, spec.ConfinementClass)
 	}
 
 	enforced := spec.ConfinementClass
@@ -309,6 +315,12 @@ func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels m
 		if res, err = d.cli.NetworkCreate(ctx, name, opts); err == nil {
 			return res.ID, nil
 		}
+	}
+	if err != nil && strings.Contains(err.Error(), "non-overlapping IPv4 address pool") {
+		// Each run holds one subnet of the daemon's default address pools; the defaults hold about 30.
+		return "", fmt.Errorf("docker: create internal network: the Docker daemon has no free subnet left for this run's network (each sandbox holds one): "+
+			"give the daemon small per-network subnets with default-address-pools in daemon.json, for example base 10.200.0.0/16 with size 28, "+
+			"then restart it (docs/OPERATIONS.md, \"Docker host: one subnet per run\"): %w", err)
 	}
 	return "", fmt.Errorf("docker: create internal network: %w", err)
 }
@@ -622,9 +634,11 @@ var _ containerListerAPI = (*client.Client)(nil)
 // live dispatch that hasn't yet written its ref. Reuses the existing deterministic-name teardown, so
 // a partially-created sandbox is torn down whole from the run id alone.
 //
-// ponytail: keyed on the AGENT container, whose deterministic name reconstructs the proxy + network
-// — a crash in the ~ms between network-create and agent-create can leave a network with no
-// container to key on; that vanishingly rare edge is left to `docker network prune`.
+// Keyed on the agent AND the proxy container, one teardown per run: a create that failed or crashed
+// after the proxy started and before the agent existed (or a rollback whose proxy removal the daemon
+// refused) leaves a proxy holding the run's config, and an exec-less sandbox has no agent until its
+// first Exec. A crash between network-create and proxy-start leaves a network with no container to
+// key on; that edge is left to `docker network prune`.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	lister, ok := d.cli.(containerListerAPI)
 	if !ok {
@@ -634,17 +648,22 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	cutoff := time.Now().Add(-minAge)
 	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
-		All:     true, // a crashed sandbox's agent may be exited, not running
-		Filters: client.Filters{}.Add("label", labelComponent+"="+componentAgent),
+		All: true, // a crashed sandbox's agent may be exited, not running
+		// Values of one label key are ANDed, so the component is matched below.
+		Filters: client.Filters{}.Add("label", labelComponent),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
 	swept, errs := seeds+vms, []error{seedErr, vmErr}
+	seen := map[uuid.UUID]bool{}
 	for _, c := range res.Items {
+		if comp := c.Labels[labelComponent]; comp != componentAgent && comp != componentProxy {
+			continue
+		}
 		runID, perr := parseRunID(c.Labels[labelRun])
-		if perr != nil {
-			continue // not a wardyn agent container we can key teardown on
+		if perr != nil || seen[runID] {
+			continue // not a wardyn sandbox container we can key teardown on, or its run is done
 		}
 		if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID || d.otherDeployment(c.Labels) {
 			continue // another runner's or deployment's sandbox, or one this runner did not create
@@ -655,6 +674,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		if !isOrphan(runID) {
 			continue // a live run legitimately owns it
 		}
+		seen[runID] = true
 		if terr := d.teardown(ctx, agentContainerName(runID)); terr != nil {
 			errs = append(errs, fmt.Errorf("docker: teardown orphaned run %s: %w", runID, terr))
 			continue

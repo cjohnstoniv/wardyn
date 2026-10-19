@@ -8,6 +8,7 @@ import { Download } from "lucide-react";
 import * as AsciinemaPlayer from "asciinema-player";
 import "asciinema-player/dist/bundle/asciinema-player.css";
 import type { Recording } from "../../lib/types";
+import { useRovingRadio } from "./use-roving-radio";
 
 // TerminalPlayer renders a recorded PTY session through the real asciinema
 // player, which embeds a terminal emulator. That is what makes escape
@@ -24,6 +25,7 @@ const SPEEDS = [1, 2, 4] as const;
 export function TerminalPlayer({ recording }: { recording: Recording }) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = React.useState<(typeof SPEEDS)[number]>(1);
+  const speedGroup = useRovingRadio(SPEEDS.length, SPEEDS.indexOf(speed), (i) => setSpeed(SPEEDS[i]));
 
   React.useEffect(() => {
     const el = ref.current;
@@ -87,13 +89,15 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         <span className="ml-auto font-mono text-meta text-white/60">
           {recording.events.length} events
         </span>
-        <div role="radiogroup" aria-label="Playback speed" className="ml-2 flex items-center gap-0.5">
-          {SPEEDS.map((x) => (
+        <div role="radiogroup" aria-label="Playback speed" className="ml-2 flex items-center gap-0.5" {...speedGroup.containerProps}>
+          {SPEEDS.map((x, i) => (
             <button
               key={x}
               type="button"
               role="radio"
               aria-checked={speed === x}
+              tabIndex={speedGroup.itemProps(i).tabIndex}
+              ref={speedGroup.itemProps(i).radioRef}
               aria-label={`${x}x speed`}
               onClick={() => setSpeed(x)}
               className={

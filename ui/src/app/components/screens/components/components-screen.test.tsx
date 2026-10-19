@@ -293,6 +293,25 @@ describe("delete", () => {
     expect(toastSuccess).toHaveBeenCalledWith("Component deleted.");
   });
 
+  // #2501: a second click on the confirm met a 404 and toasted "Delete failed" over a component that was gone.
+  it("the confirm is disabled while the delete runs, so it is sent once, and Escape does not dismiss it", async () => {
+    let finish!: () => void;
+    removeMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Payments API" }));
+    const dialog = await screen.findByRole("alertdialog");
+    const confirm = within(dialog).getByRole("button", { name: "Delete component" });
+    await userEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(removeMock).toHaveBeenCalledTimes(1);
+    listMock.mockResolvedValue([]);
+    finish();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
   it("a failed delete says so and leaves the row", async () => {
     removeMock.mockRejectedValue(new HttpError(500, "boom"));
     renderScreen();

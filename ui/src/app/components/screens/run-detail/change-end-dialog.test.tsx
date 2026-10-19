@@ -55,3 +55,32 @@ describe("ChangeEndDialog — a capped save", () => {
     expect(toastWarningMock).not.toHaveBeenCalledWith(LOOSENED);
   });
 });
+
+// #2524: a cleared date threw "Invalid time value" at Save, and the no-cap description offered a No end control
+// the dialog did not render.
+describe("ChangeEndDialog — an empty date, and the description", () => {
+  const mount = (allowNoEnd: boolean, maxDays?: number) =>
+    render(
+      <ChangeEndDialog open onOpenChange={() => {}} run={makeRun() as RunDetail} onChanged={() => {}} allowNoEnd={allowNoEnd} maxDays={maxDays} />,
+    );
+
+  it("Save waits for a date once the field is cleared, and sends nothing", async () => {
+    mount(false);
+    const field = screen.getByLabelText("Ends at");
+    await userEvent.clear(field);
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await userEvent.click(save);
+    expect(setRunEndAndWaitMock).not.toHaveBeenCalled();
+  });
+
+  it("only offers 'turn this run's end off' where the No end control exists", () => {
+    const { unmount } = mount(false);
+    expect(screen.getByText("Pick a date.")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    unmount();
+    mount(true);
+    expect(screen.getByText("Pick a date, or turn this run's end off.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox")).toBeInTheDocument();
+  });
+});

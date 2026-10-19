@@ -302,18 +302,36 @@ export function UserViewDroppedNotice({
 
 const RESYNC_MS = 60_000;
 
+/** What the User view was acting as when this page loaded: the user type and the no-credential posture. */
+export interface LoadedPosture {
+  userTypeId: string;
+  noCredential: boolean;
+}
+
 /** §2.4: an SSO tab re-reads /me on focus, every minute, at once after any 403
- *  and when another tab says it switched. When the session's view is no longer
- *  the one this page loaded in, the tab reloads into it, quietly. */
-export function useViewResync(access: ViewAccess, loadedMemberMode: boolean): void {
+ *  and when another tab says it switched. When the session's view, or the user type or no-credential posture
+ *  inside it, is no longer the one this page loaded in, the tab reloads into it, quietly. `posture` is null
+ *  until /me has answered; the first answer is kept for the life of the page, never the live meta, which
+ *  follows the session and would always agree with it. */
+export function useViewResync(access: ViewAccess, loadedMemberMode: boolean, posture: LoadedPosture | null = null): void {
   const active = access === "session-admin" || access === "session-user";
   const inFlight = React.useRef(false);
+  const loaded = React.useRef<LoadedPosture | null>(null);
+  if (loaded.current === null && posture !== null) loaded.current = posture;
   const check = React.useCallback(async () => {
     if (!active || inFlight.current || isSwitching()) return;
     inFlight.current = true;
     try {
       const me = await health.whoami();
-      if (!me || isSwitching() || (me.user_view ?? false) === loadedMemberMode) return;
+      if (!me || isSwitching()) return;
+      const was = loaded.current;
+      const sameView = (me.user_view ?? false) === loadedMemberMode;
+      // Inside the User view, a switched type or posture means every screen was fetched under the other one.
+      const samePosture =
+        !me.user_view ||
+        !was ||
+        ((me.user_type?.id ?? "") === was.userTypeId && (me.user_view_no_credential ?? false) === was.noCredential);
+      if (sameView && samePosture) return;
       const { search, hash } = window.location;
       window.location.assign(appURL(viewTarget(me.user_view ? "user" : "admin", routerPath(), `${search}${hash}`)));
     } finally {

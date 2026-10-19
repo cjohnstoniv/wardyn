@@ -52,7 +52,7 @@ func residentMintCall(t *testing.T, p *Proxy, grant uuid.UUID) *httptest.Respons
 	return rec
 }
 
-// A runner_resident ssh_key or git_pat mint is answered by the proxy from the
+// A runner_resident git_pat mint is answered by the proxy from the
 // runner-held value, never relayed, and only before its ExpiresAt: at it, after
 // it, or with no ExpiresAt at all, the answer is a 403 and a mint deny. The
 // answer carries ExpiresAt, so a helper's cache lapses with it.
@@ -73,7 +73,6 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 		kind               types.GrantKind
 		token, user, hosts string
 	}{
-		{ssh, types.GrantSSHKey, "ssh-key-value", "git", "ssh.example.test ssh-ed25519 AAAA"},
 		{pat, types.GrantGitPAT, "pat-value", "pat", ""},
 	} {
 		rec := residentMintCall(t, p, tc.grant)
@@ -106,13 +105,14 @@ func TestBrokerMint_ResidentAnswerRefusedAtExpiry(t *testing.T) {
 		}
 	}
 	refused("no ExpiresAt", zero)
+	// A resident ssh_key is the ssh agent's to sign with, never answered.
+	refused("ssh_key before expiry", ssh)
 	now.Store(expires.Add(-time.Nanosecond).UnixNano())
 	if rec := residentMintCall(t, p, pat); rec.Code != http.StatusOK {
 		t.Fatalf("a nanosecond before expiry: status %d, want 200", rec.Code)
 	}
 	now.Store(expires.UnixNano())
 	refused("at expiry", pat)
-	refused("at expiry", ssh)
 	now.Store(expires.Add(time.Hour).UnixNano())
 	refused("after expiry", pat)
 	if n := cpCalls.Load(); n != 0 {

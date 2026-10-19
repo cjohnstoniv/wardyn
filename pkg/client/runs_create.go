@@ -202,6 +202,11 @@ type CreateRunRequest struct {
 	// the run is FAILED with the reason queue_timeout. Ignored by a pool with no limit. A pointer, so
 	// a 0 is sent and refused rather than read as absent.
 	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
+	// LocalFolder names a folder on this computer that `wardyn sync` seeds into the sandbox: the
+	// agent does not start until the first sync of it into RemoteDir (default /home/agent/work)
+	// has completed, and a failed or late one fails the run with a reason naming the folder. For a
+	// Background task that keeps its SSH doors (not --background-only), on a runtime that can exec.
+	LocalFolder *types.RunLocalFolder `json:"local_folder,omitempty"`
 	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
 	// it is RunModeContractV09 and nothing else. The server then holds the
 	// request to the run-mode contract, so an unset Experience is refused

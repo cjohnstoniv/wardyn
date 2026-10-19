@@ -453,6 +453,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
+		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
 		AutoStopAfterSec: f.spec.AutoStopAfterSec,

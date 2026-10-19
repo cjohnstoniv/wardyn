@@ -217,6 +217,16 @@
       "path": "LLMInspectionSpec.workspace_secret_values",
       "excluded": "secret",
       "why": "Secret values are runtime-only: the server resolves them, and a template names secrets instead."
+    },
+    {
+      "path": "RunLocalFolder.name",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
+    },
+    {
+      "path": "RunLocalFolder.remote_dir",
+      "excluded": "launch",
+      "why": "Part of local_folder, which is named at each launch."
     }
   ],
   "policy": [
@@ -644,6 +654,11 @@
       "empty": "never",
       "meaning": "The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission.",
       "section": "run_wide"
+    },
+    {
+      "name": "local_folder",
+      "excluded": "launch",
+      "why": "A folder on one person's computer is named at each launch; a template cannot know where it is."
     },
     {
       "name": "machine_kind",

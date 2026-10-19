@@ -177,8 +177,8 @@ func TestRunnerAdmissionProofRefundsGlobalBudget(t *testing.T) {
 	}
 }
 
-// A refusal by the global bucket or the cap hands the address token back, so
-// a runner retrying through either keeps its own burst.
+// A refusal by the global bucket or a cap spends no address token, so a
+// runner retrying through either keeps its own burst.
 func TestRunnerAdmissionRefusalPastAddressBucketRefundsIt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
@@ -189,7 +189,7 @@ func TestRunnerAdmissionRefusalPastAddressBucketRefundsIt(t *testing.T) {
 	if !ok {
 		t.Fatal("first admission refused")
 	}
-	release()
+	release(false)
 	for i := range 2 * int(enrolBurst) {
 		if _, _, ok := h.srv.admitRunnerHandshake(peer); ok {
 			t.Fatalf("attempt %d admitted with the global bucket empty", i)

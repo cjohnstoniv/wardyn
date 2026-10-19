@@ -25,7 +25,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
-import { limitChips } from "./limit-chips";
+import { limitChips, limitsBoundNothing } from "./limit-chips";
 
 // ---- the base graph -------------------------------------------------------
 
@@ -361,7 +361,8 @@ export function EffectiveView({ profile }: { profile: GovernanceProfile }) {
   const eff = profile.effective;
   if (!eff) return null;
   const ceiling = eff.ceiling as unknown as Bag;
-  const chips = limitChips(eff.limits as GovernanceLimits);
+  const limits = eff.limits as GovernanceLimits;
+  const chips = limitChips(limits);
   return (
     <section className="mt-6" data-testid="governance-profile-effective">
       <h4 className="text-body font-medium text-foreground">{GOV.EFFECTIVE_TITLE}</h4>
@@ -381,7 +382,7 @@ export function EffectiveView({ profile }: { profile: GovernanceProfile }) {
             ))}
           </dl>
           <div className="mt-3 flex flex-wrap items-center gap-1.5" data-testid="governance-effective-limits">
-            {chips.length > 0 ? chips : GOV.LIMITS_NONE}
+            {chips.length > 0 ? chips : limitsBoundNothing(limits) && GOV.LIMITS_NONE}
           </div>
           {(eff.warnings ?? []).map((w) => (
             <p key={w} className="mt-2 font-mono text-xs text-warning">

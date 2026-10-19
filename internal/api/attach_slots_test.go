@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -431,5 +432,31 @@ func TestAttachSlots_ASponsorsServiceRunIsPerPrincipalToo(t *testing.T) {
 	held[0]()
 	if _, ok := s.reserveAttachSlot(run, "alice@example.com"); !ok {
 		t.Fatal("a release did not give the principal's slot back")
+	}
+}
+
+// TestAttachSlots_UITicketSkipsTheTerminalCap: a run whose terminal sessions are all taken still
+// mints a ticket for a UI app, which holds no terminal slot; a terminal ticket is refused as before.
+func TestAttachSlots_UITicketSkipsTheTerminalCap(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Lock()
+	ast.runs[run.ID] = run
+	ast.mu.Unlock()
+	for i := range maxAttachSessionsPerRun {
+		if _, ok := srv.reserveAttachSlot(run, fmt.Sprintf("p%d@example.com", i)); !ok {
+			t.Fatal("a slot below the run cap was refused")
+		}
+	}
+	path := "/api/v1/runs/" + run.ID.String() + "/attach/ticket"
+	if w := do(t, srv, http.MethodPost, path, adminToken, ""); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("terminal ticket on a full run = %d %s, want 503", w.Code, w.Body)
+	}
+	if w := do(t, srv, http.MethodPost, path+"?purpose=ui", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("UI ticket on a full run = %d %s, want 200", w.Code, w.Body)
 	}
 }

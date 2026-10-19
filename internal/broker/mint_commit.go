@@ -33,9 +33,10 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	}()
 
 	row, leased, err := b.checkedMintRow(ctx, tx, caller, grantID, approvalHint)
-	if errors.Is(err, ErrAlreadyMinted) {
+	if errors.Is(err, ErrAlreadyMinted) && prepared.hasApproval {
 		// Another mint burnt the approval while this one was prepared: record
-		// the discarded credential as the conditional burn below does.
+		// the discarded credential as the conditional burn below does. (The
+		// once-per-run ssh_key refusal audits itself.)
 		b.auditRefusedMint(ctx, tx, caller, grantID, prepared.approvalID, prepared.grantSpec.Scope, "denied")
 	}
 	if err != nil {

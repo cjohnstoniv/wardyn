@@ -361,7 +361,7 @@ export function SignIn({
           {showDivider && (
             <div className="my-5 flex items-center gap-3">
               <div className="h-px flex-1 bg-border" />
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              <span className="label-eyebrow">
                 or
               </span>
               <div className="h-px flex-1 bg-border" />

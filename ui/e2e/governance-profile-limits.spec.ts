@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
-import { GOVERNANCE as GOV, RUN_LIMITS as RL, runLimitsChip } from "../src/app/lib/governance-copy";
+import { GOVERNANCE as GOV, LIMITS_CHIP, RUN_LIMITS as RL, runLimitsChip } from "../src/app/lib/governance-copy";
 import type { Page } from "@playwright/test";
 
 // Split out of governance.spec.ts (#209): the profile-limits round trips —
@@ -73,13 +73,45 @@ test.describe("governance — a quota-only profile is not 'None'", () => {
   });
 });
 
+// The same claim for every other limit a profile made through the API can
+// carry (#2111, #2506): a placement denial, the UI apps, the CPU and memory
+// caps and the two disk caps each draw a chip, so none reads "None" while the
+// server enforces it.
+test.describe("governance — a profile bounding only a placement, a cap or the UI apps is not 'None'", () => {
+  test("names each limit in the Limits column", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const placement = `no-remote-${randomUUID().slice(0, 8)}`;
+    const caps = `caps-${randomUUID().slice(0, 8)}`;
+    for (const [name, limits] of [
+      [placement, { deny_placements: ["remote"] }],
+      [caps, { max_memory_mib: 2048, deny_ui_apps: true, max_ephemeral_disk_mib: 4096 }],
+    ] as const) {
+      const res = await page.request.post("/api/v1/governance/profiles", {
+        headers: auth,
+        data: { name, ceiling: YOLO_CEILING, limits },
+      });
+      expect(res.status()).toBe(201);
+    }
+
+    await gotoConsole(page, "admin");
+    await navTo(page, "Governance");
+
+    const placementRow = page.getByRole("row").filter({ hasText: placement });
+    await expect(placementRow.getByText(LIMITS_CHIP.PLACEMENT("remote"))).toBeVisible();
+    await expect(placementRow.getByText(GOV.LIMITS_NONE, { exact: true })).toHaveCount(0);
+
+    const capsRow = page.getByRole("row").filter({ hasText: caps });
+    await expect(capsRow.getByText(`${LIMITS_CHIP.MEMORY}: 2048`)).toBeVisible();
+    await expect(capsRow.getByText(LIMITS_CHIP.UI_APPS)).toBeVisible();
+    await expect(capsRow.getByText(`${GOV.LIMIT_EPHEMERAL_LABEL}: 4096`)).toBeVisible();
+    await expect(capsRow.getByText(GOV.LIMITS_NONE, { exact: true })).toHaveCount(0);
+  });
+});
+
 // The 0.7.2 storage ceilings: two more integer limits share LimitNumberRow's
 // shape with max_concurrent_runs (F032, above) — max_ephemeral_disk_mib and
-// max_drive_size_mib. Neither earns a Limits-column chip (only the run quota
-// does — governance-screen.tsx's derivation of GOV.LIMITS_NONE reads all
-// three doors plus the quota, deliberately not these two, which surface on
-// /providers' Storage tab as the ceiling an admin sets and on /drives at
-// write-time instead), so the round-trip through the EDITOR — real fields,
+// max_drive_size_mib. They draw Limits-column chips too (#2506), but the
+// chip alone cannot prove the value round-trips, so the round-trip through the EDITOR — real fields,
 // real save, real reload — is the only e2e proof either exists on the wire.
 test.describe("governance — the two storage ceilings round-trip through the editor", () => {
   // ticket: 0.7.2

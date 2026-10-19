@@ -24,6 +24,8 @@ import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
+import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
+import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 
@@ -33,12 +35,12 @@ import { cn } from "../../ui/utils";
 export const S = {
   // The three lanes differ in WHERE the credential goes, and the footer owns
   // that split so no lane has to overclaim: the App lane, and a PAT while the PAT
-  // broker is on, keep the token at the proxy; an SSH key enters the sandbox for
-  // the clone as a shredded 0400 file, delivered once when approval-gated (PAT broker off: helper stdout)
+  // broker is on, keep the token at the proxy; an SSH key stays at the proxy too,
+  // which signs the clone's sign-in as its ssh agent (PAT broker off: helper stdout)
   // (ARCHITECTURE.md invariant 1 and the git-egress table are the source).
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
   GIT_FOOTER:
-    "The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all.",
+    "The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy; for SSH the proxy signs the clone's sign-in and closes its agent after the start-up clone. Public repos clone with no credential at all.",
 } as const;
 
 // Lane rows.
@@ -195,18 +197,8 @@ export function SecretLane({
     }
   };
 
-  const disconnect = async () => {
-    setBusy(true);
-    try {
-      await secretsApi.deleteSecret(secretName);
-      toast.success(`Removed ${secretName}`);
-      onChanged();
-    } catch (e) {
-      toast.error(getErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Disconnect deletes a write-only value that cannot be shown or recovered, so it asks first.
+  const [confirming, setConfirming] = React.useState(false);
 
   // A STORED secret shows a summary, not an empty box. The box was read as
   // "your key didn't save" — the value is write-only, so there is nothing to
@@ -220,14 +212,25 @@ export function SecretLane({
           <Button size="sm" variant="secondary" disabled={disabled} onClick={() => setEditing(true)}>
             Replace
           </Button>
-          <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={disconnect}>
-            {busy && <Loader2 className="size-3.5 animate-spin" />}
+          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => setConfirming(true)}>
             Disconnect
           </Button>
           <span className="text-meta text-muted-foreground">
             Stored as <Mono>{secretName}</Mono>
           </span>
         </div>
+        <DeleteConfirmDialog
+          name={confirming ? secretName : null}
+          entity="credential"
+          allowed
+          description={PROVIDERS_EXTRA.DISCONNECT_CREDENTIAL_BODY}
+          onOpenChange={(o) => !o && setConfirming(false)}
+          onDelete={() => secretsApi.deleteSecret(secretName)}
+          onDeleted={() => {
+            setConfirming(false);
+            onChanged();
+          }}
+        />
       </div>
     );
   }
