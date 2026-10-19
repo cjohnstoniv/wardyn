@@ -161,6 +161,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Remote-hosted runner added to an organization pool | the runner is in another pool that carries a use policy | **super admin only** |
 | Remote-hosted runner removed from an organization pool | the pool carries a use policy | **super admin only** |
 | Runner trust class change (`PUT /runners/{id}/trust`) | the class changes | security admin or super admin |
+| Run node record (`POST /runs/{id}/node-record`) | the held run shows a reused node name or no causal association, or four-eyes is on | security admin or super admin |
 
 Exempt, so applied directly:
 

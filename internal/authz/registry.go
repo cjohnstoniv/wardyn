@@ -49,9 +49,10 @@ const (
 	// several, no usable credential of the caller's for it, or a policy grant
 	// that would set a model credential beside it (#987).
 	ReasonModelProviderUnavailable Reason = "model_provider_unavailable"
-	// ReasonAdminView: an admin in the user view launched a run after the type
-	// the view looks through was deleted. Not audited on its own — the cause
-	// row is ReasonUserViewTypeDeleted, which the launch response answered.
+	// ReasonAdminView: an SSO admin in the Admin view started or previewed a
+	// run (create, preflight or policy preview); runs start in the User view.
+	// Not audited on its own. After a deleted view type the cause row is
+	// ReasonUserViewTypeDeleted, which the launch response answered.
 	ReasonAdminView Reason = "admin_view"
 	// ReasonUserViewPreview: with WARDYN_GOVERN_ADMIN_RUNS on, an admin whose
 	// User view looks through a type other than their own sent a write; the

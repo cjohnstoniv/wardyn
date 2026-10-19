@@ -1247,6 +1247,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
+| `member_drives` | the drives the person created for themselves, each deleted with its files as their own delete would; a drive a run still holds fails the scope, naming the drive |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies; the approvals they decided keep their state but lose the person's name and the reason they typed |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`), their delegated tokens, and the Azure DevOps token rows of their runs that are revoked or past their expiry |
 
@@ -1439,8 +1440,8 @@ erases one person's retained records by explicit scope, in one audited act
 
 ##### Erase
 
-- The person's stored credentials and the masking copies of them, through the same erasure entry point as
-  `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes.
+- The person's stored credentials, components, run setups and runner pools, and the masking copies of them, through the same erasure entry point as
+  `POST /people/{principal}/erasure`, with the `credentials`, `mask_copies`, `components`, `run_setups` and `runner_pools` scopes.
 - Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the
   leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure`
 
@@ -2147,7 +2148,7 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 - The fields below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem`, the egress redirects — are compiled into the sidecar's proxy config at dispatch and read once at sidecar startup.
 - A run already running keeps the config it started with for the rest of its life, however many times you fix the SiteConfig underneath it.
 - `PUT /site-config`'s response says so (`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on save** — BOTH halves of the Network step.
-- The upstream-proxy saves ([`ui/src/app/components/screens/setup/corp-network-proxy.tsx:570,589,604`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`corp-network-egress.tsx:430`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
+- The upstream-proxy saves (`saveUrl`, `saveAsSecret` and `saveSecretRef` in [`corp-network-proxy.tsx`](../ui/src/app/components/screens/setup/corp-network-proxy.tsx)) and the egress-redirect saves (`setRedirects` in `corp-network-egress.tsx`, the one chokepoint every add, edit and remove passes through) carry it as the toast's description.
 - So the operator who just changed a field reads the lifetime at the moment they change it rather than in this document afterwards.
 - Both matter for the same reason: the redirects are one of the compiled-at-dispatch fields listed above, so a save that said nothing about its lifetime was the one most likely to be acted on twice.
 - Every OTHER console write of site config still repeats nothing — the toast is not a general rule you can rely on elsewhere.
@@ -3070,7 +3071,7 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 > This is a throwaway cluster by design, never one you keep state on.
 
 - Then both principals sign in through Dex, the admin declares the `per_user` lane and pins the account/role, the member completes the containerized `aws sso login` from their own seat.
-- `/setup/status` reads `model_access.state: "live"` for the member and `not_configured` for the admin at the same moment.
+- `/setup/status` reads the walk provider's `provider_access` row `live` for the member and `not_configured` for the admin at the same moment.
 - The closing assertion is the one that is not Wardyn asserting about itself: the fake's own `/_seen` reports which account and role real botocore asked it to mint, and that the Bedrock stub was hit.
 - **What the second spec adds (0.7.5).**
   - The walk now runs TWO spec files in one invocation and against one cluster — `./scripts/run-ui-e2e.sh sso-member sso-member-recovery` — in that order, because the second inherits the state the first leaves.
@@ -3095,9 +3096,9 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - It then asserts that the console says the start is SLOW, and never that Wardyn cannot read the sandbox, with the pane's own 2-second poll answering 200 throughout.
 - That is the live twin of the Go characterization test, and it is the datum that tells an operator whether an "unreadable" they saw was estate-side.
 - The 65 seconds are not arbitrary and neither is what they hold up.
-- A sandbox creates its PROXY pod first and waits for that pod's IP for **90 seconds** before the agent pod exists at all.
-- So under a taint it is the proxy pod that sits `Pending`, and 90 seconds is the point at which the run itself fails.
-- The hold is therefore five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made — about 25 seconds of margin.
+- A sandbox creates its PROXY pod first and waits for that pod's IP before the agent pod exists at all, so under a taint it is the proxy pod that sits `Pending`.
+- Since 0.8.6 an unschedulable pod waits under `WARDYN_SANDBOX_CAPACITY_WAIT` instead of failing at 90 seconds, so the run survives the hold.
+- The hold is five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made.
 - A walk that is killed mid-case would leave the node unschedulable, so the walk script clears that taint before its own restarts and again on exit.
 - **Run it on images built from the tip you are judging.**
   - The console is baked into the daemon image.
@@ -3135,44 +3136,30 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Where people are told about model access
 
-- From 0.7.6 an actionable model-access state reaches a person on every console screen, not only on Getting Started.
-- The console reads `model_access` from `GET /setup/status` once per session and then every five minutes (a hidden tab skips its ticks and a returning one refreshes at once).
-- It renders a banner for the three states a person can act on — `not_configured`, `expired_signin`, `expiring` — plus `shared_expired`, which a member cannot.
-- The banner carries the sign-in itself: the same AWS SSO login pane Settings mounts, in a dialog, on whatever screen they were on.
-- Two suppressions are deliberate.
-  - On Getting Started the page IS the door.
-  - On Settings and the Providers screen the banner is withheld for an ADMIN only, because those pages already mount the same pane for the same states.
-  - A member keeps the banner there, because the Settings card's AWS button is admin-only and would otherwise strand them on the page they were sent to.
-- `not_configured` (the first-run state) and, for a non-admin, `shared_expired` carry a "Not now" that hides the banner for that person in that browser session.
-- A lapse — `expired_signin` or `expiring` — cannot be dismissed.
-- Under a `shared` row the one credential is the admin's.
-- A member whose runs depend on it is told when it dies ("Your admin's model credential expired — ask them to reconnect it") with no button, because nobody but an admin can repair it.
-- The ADMIN reading the same state sees the blast radius named: "The shared AWS sign-in no longer works — every Claude Code run needs it".
-- The ADMIN also gets the sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator.
-- Wardyn has no way for that member to notify the admin; that gap is listed in the [CHANGELOG](../CHANGELOG.md).
+- Each person's connection to each model provider they may run on is the `provider_access` list in `GET /setup/status`: the provider id, a state (`live`, `expiring`, `expired_signin`, `not_configured` or `not_applicable`), a composed action sentence and, when the state names one, a deadline.
+- A caller that is not a person, such as the shared admin token, reads `not_applicable` with no action.
+- The console reads it once per session and then every five minutes (a hidden tab skips its ticks and a returning one refreshes at once).
+- A strip above every User-view screen speaks per provider, in two cases:
+  - the default provider of an agent the person may run, while their credential for it is `not_configured`, `expired_signin` or `expiring`;
+  - any provider where they hold a credential that is `expiring` or no longer works.
+- A Claude sign-in that is only `expiring` is left to Getting started.
+- The strip carries the way back in: the provider's own sign-in or typed-key door, in a dialog on whatever screen they were on.
+- Only the first-run line (`not_configured`) has a "Not now", which hides that provider's line for that person in that browser session. A lapse cannot be dismissed.
+- The Admin view shows no strip, because a credential is a person's own and belongs to the User view.
 
 ### A run refused for a model credential
 
-- When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is dead at dispatch, the run is failed with the server's own sentence.
-- From 0.7.6 that refusal is also machine-readable.
-- The `run.create` failure row it already wrote carries `reason: model_credential` and the run's DECLARED `mechanism`.
-- The console grades that ending `credential` and renders the sentence with the AWS sign-in beside it, in a dialog, on the run page.
-
-- The button is offered only where a sign-in the reader can complete would repair the state:
-  - the refused run's declared lane must still be the deployment's Claude Code lane;
-  - the reader's own `model_access` must be actionable;
-  - the reader must be the person who created the run.
-- An admin reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing for that run.
-
-- A refusal whose renewal merely did not complete ("launch again in a moment") grades `live` and gets no button either, correctly: nothing is wrong with that credential.
-- In the Admin view (`/admin/runs/:id`) the button never renders, even on the admin's own run.
-- The admin's own per-user run carries **Open in user view** in its place, since the Admin monitor carries no credential door of its own (M-7).
+- When the model provider a run chose has no usable credential for its owner, the run is refused with the server's own sentence: a `422` at create, or a failed run if the credential died before dispatch.
+- Both carry `reason: model_credential` with the `provider` and its `kind`, and only for a credential refusal; a provider that is off or unset gets no sign-in door.
+- The dispatch refusal's `run.create` failure row carries the same three fields.
+- The console grades that ending `credential` and renders the sentence with the provider's door beside it, in a dialog, on the run page.
+- The button is offered only to the person who created the run, in the User view, and only while they still have a door for that provider.
+- Anyone else, and every run in the Admin view, reads whose credential it was and gets no button, because a sign-in lands in the signer's own namespace and can serve nobody else's run.
+- The admin's own run carries **Open in user view** in its place.
 - Signing in from there does not restart anything.
 - The run stays FAILED; relaunch is the run header's "Start a run like this one".
-- **The refusal sentences' destination.**
-  - The refusals that name a destination — the dispatch refusal, its create-time 422 twin, the stored-AWS-identity refusal and the spent-renewal sentence — now name a door the reader can open.
-  - Under a `per_user` row that is the console's Getting started page or the model-access banner every screen carries; under a `shared` row it stays Settings → Model provider, which is the admin's own page.
-  - The CLI prints the same sentence, and Getting started is the destination that is true for its reader too.
+- The refusal sentences name a door the reader can open: Getting started or the model-access strip.
+- The CLI prints the same sentence.
 
 ### A run is holding for a sign-in
 
@@ -3695,7 +3682,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   next splits by where it lives.
 - A stored **workspace** source IS re-validated,
   at run-create — `seedRequestWorkspace` re-runs `ValidateAuthoredTarget` over
-  every `ws.Sources` target ([`internal/api/runs_create.go:94-115`](../internal/api/runs_create.go)) — and is
+  every `ws.Sources` target ([`internal/api/runs_create.go`](../internal/api/runs_create.go)) — and is
   refused `422` with `workspace <id> source target: target /home/agent/drive is
   reserved for the user drive`.
 - A stored **policy**'s `workspace_mounts` or
@@ -3705,12 +3692,12 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 - `buildRunMounts` re-checks the reserved target there and
   **drops** the mount rather than failing the run, logging `wardynd: stored
   policy binds the reserved user-drive target; dropping that mount` at WARN
-  ([`internal/api/runs_dispatch_mounts.go:96-104`](../internal/api/runs_dispatch_mounts.go)).
+  ([`buildRunMounts` in `internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
 - The run starts one bind
   short.
 - `buildRepoRecords` makes the same drop for a stored policy's
   `workspace_repos[].target`, folded into its destination validation
-  ([`internal/api/runs_scm.go:166`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
+  ([`buildRepoRecords` in `internal/api/runs_scm.go`](../internal/api/runs_scm.go)), but with **no** distinct log line for that
   arm.
 - That WARN is the *only* run-time signal a stored policy row produces —
   no HTTP error, nothing the member sees.
@@ -4054,8 +4041,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 - And it logs one of two lines:
   - `migrations applied via WARDYN_PG_MIGRATE_DSN … app role is a verified
     non-owner of audit_events — the append-only guard is DDL-protected`
-  - `WARDYN_PG_MIGRATE_DSN is set but the app role … still owns audit_events or is
-    a superuser — DDL protection is NOT in effect`
+  - `WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past
+    audit_events' append-only guard by the route(s) named here — DDL protection is NOT in effect`
 - The second line now carries a `bypass_routes` field naming the route(s) that
   fired, because the remedy differs per route.
 - The first two are closed by
