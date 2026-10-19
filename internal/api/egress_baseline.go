@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The operator-extensible egress baseline: SiteEgress.BaselineHosts (exact hostnames) and the
-// internal_hosts entries marked Baseline (a suffix and its subdomains). Both LOWER the egress grade and
+// internal_hosts entries marked Baseline (the entry's own host, never its subdomains). Both LOWER the egress grade and
 // the CC3 floor an api_key to an internal host would otherwise raise, so they have ONE writer and one
 // gate: securityOps, held for a second human under WARDYN_GOVERNANCE_SECOND_HUMAN, audited with both
 // before and after sets. Both live in the site-config document, but PUT /site-config never changes
@@ -50,13 +50,13 @@ func validBaselineName(h string) bool {
 }
 
 // validBaselineSuffix is validBaselineName plus a width guard: a registry-controlled suffix (co.uk,
-// github.io) would grade every host under it as baseline.
+// github.io) is no host an operator vouches for.
 func validBaselineSuffix(h string) error {
 	if !validBaselineName(h) {
 		return fmt.Errorf("%q must be a hostname", h)
 	}
 	if suffix, _ := publicsuffix.PublicSuffix(h); suffix == h {
-		return fmt.Errorf("%q is a public suffix: it would mark every host under it as baseline", h)
+		return fmt.Errorf("%q is a public suffix, which is no host an operator can vouch for", h)
 	}
 	return nil
 }
