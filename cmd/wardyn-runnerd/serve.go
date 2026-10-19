@@ -106,6 +106,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		opts.proxyImagePinned = proxyImagePinned(opts.proxyImage, identity.ProxyImage, proxyImageGiven(cmd), os.Getenv)
 		if !opts.proxyImagePinned {
 			opts.proxyImage = cmp.Or(identity.ProxyImage, releaseProxyImage(), opts.proxyImage)
+		} else {
+			warnPinnedProxyImageSkew(opts.proxyImage, buildVersion())
 		}
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
