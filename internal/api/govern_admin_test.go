@@ -327,7 +327,7 @@ func governSites() []governSite {
 var governSiteElsewhere = map[string]string{
 	"resolveRunPolicyFacts":   "row: inline_policy.go resolveRunPolicy inline clamp",
 	"resolveChainCeiling":     "row: governance.go resolveEffectiveCeiling",
-	"wallsEndPlan":            "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
+	"boundaryEndPlan":         "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
 	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
 	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
 	"deniedPlacements":        "test: run_placement_capabilities_test.go",

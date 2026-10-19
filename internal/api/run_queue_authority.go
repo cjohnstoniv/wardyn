@@ -55,7 +55,7 @@ type queueAuthority struct {
 	// Device is the laptop that submitted the launch, which carries no person: the start replays the fold
 	// as that device, so the rules a device keeps at the create door hold when the run is promoted.
 	Device *uuid.UUID `json:"device,omitempty"`
-	// BreakGlass is the reason an admin-token launch carried while the org walls were on, so the start
+	// BreakGlass is the reason an admin-token launch carried as a break-glass run, so the start
 	// resolves as the break-glass run it was tagged at launch.
 	BreakGlass string `json:"break_glass_reason,omitempty"`
 }

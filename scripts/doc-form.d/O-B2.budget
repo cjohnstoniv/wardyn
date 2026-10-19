@@ -105,7 +105,8 @@
 # 0.9.4 L8: docs/OPERATIONS.md 56344 adds 133 over 56211: the second-user role map and the internal_hosts ClusterIP rule.
 # 0.10 W1 train: docs/OPERATIONS.md 56744 = 56446 (main, measured) + 34 (API-4) + 153 (TEST-1) + 48 (API-2) + 39 (API-5) + 24 (HYB-A), each lane's measured growth; every lane fit under 56616 alone.
 # docs/OPERATIONS.md 56775 = 56744 + 31 (0.10 LAY-A's 0196 migrator line), measured after merging main into 0.10 LAY-A.
-docs/OPERATIONS.md=56775
+# docs/OPERATIONS.md 56776 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
+docs/OPERATIONS.md=56776
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.
 # docs/OPERATIONS.md 55891 adds 24 over 55867, measured: with several executors and no pool, the executor a run lands on, and once its sandbox exists the one that holds it, decides where its output comes from.

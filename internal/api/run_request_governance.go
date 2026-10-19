@@ -44,9 +44,9 @@ func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) 
 
 func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (governanceCeiling, *runRefusal) {
 	if s.runUngoverned(r.Context()) {
-		c, err := s.wallOperatorCeiling(r.Context())
+		c, err := s.boundaryOperatorCeiling(r.Context())
 		if err != nil {
-			return governanceCeiling{}, runServerError("read org walls", err)
+			return governanceCeiling{}, runServerError("read the Wardyn boundary", err)
 		}
 		return c, nil
 	}

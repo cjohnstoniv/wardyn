@@ -820,9 +820,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
 	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
-	securityOps.Get("/governance/walls", s.handleGetOrgWalls)
-	securityOps.Put("/governance/walls", s.handlePutOrgWalls)
-	securityOps.Post("/governance/walls/dry-run", s.handleOrgWallsDryRun)
+	securityOps.Get("/governance/boundary", s.handleGetBoundary)
+	securityOps.Put("/governance/boundary", s.handlePutBoundary)
+	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }

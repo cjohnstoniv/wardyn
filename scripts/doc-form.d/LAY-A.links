@@ -1,2 +1,2 @@
 # The must-link rule in scripts/check-doc-links.sh applies to these docs.
-docs/operations/org-walls.md
+docs/operations/boundary.md

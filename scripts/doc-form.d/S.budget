@@ -175,7 +175,8 @@
 # docs/sdk.md=19378 adds 22 (0.10 HYB-A): local_folder reasons and launch exclusion
 # docs/sdk.md 19635 = ours 19470 + theirs 19543 - base 19378 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # docs/sdk.md 19726 = 19635 + 91 (0.10 LAY-A), measured after merging main into 0.10 LAY-A.
-docs/sdk.md=19726 share=21
+# docs/sdk.md 19766 measured (0.10 BOUNDARY): the boundary reasons, boundary_hard_limits_gated added.
+docs/sdk.md=19766 share=21
 # docs/sdk.md 19409 adds 88 over 19321, measured (0.10 LAY-A): the four org walls and break-glass reasons.
 # docs/sdk.md 19481 measured after merging main into 0.10 LAY-A, with the preflight and preview doors on break_glass_reason_required.
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

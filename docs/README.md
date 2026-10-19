@@ -35,7 +35,7 @@
 | Cap what one person or group may do — governance profiles, the security-admin tier, capability grants | [operations/three-roles.md](operations/three-roles.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
-| Put one site-wide limit over every run, super admins' included, and use break-glass | [operations/org-walls.md](operations/org-walls.md) |
+| Set the Wardyn boundary, the outermost layer of every run, super admins' included, and use break-glass | [operations/boundary.md](operations/boundary.md) |
 | Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
 | Decide where runs go — runner pools, their limits and barriers, and the queue | [operations/runner-pools.md](operations/runner-pools.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |

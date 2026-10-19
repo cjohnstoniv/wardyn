@@ -275,11 +275,12 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
-	// GET/PUT /governance/walls, POST /governance/walls/dry-run, and the walls' own refusals.
-	reasonOrgWallsInvalid          = "org_walls_invalid"           // the walls document names a knob it cannot hold, or a value that knob refuses
-	reasonOrgWallsStale            = "org_walls_stale"             // If-Match does not match the current walls ETag
-	reasonOrgWallsHost             = "org_walls_host"              // an egress approval would admit a host the org walls do not allow
-	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token run while the walls are on, without a usable break-glass reason
+	// GET/PUT /governance/boundary, POST /governance/dry-run, and the boundary's own refusals.
+	reasonBoundaryInvalid          = "boundary_invalid"            // the boundary document has no mode, or names a knob it cannot hold, or a value that knob refuses
+	reasonBoundaryStale            = "boundary_stale"              // If-Match does not match the current boundary ETag
+	reasonBoundaryHost             = "boundary_host"               // an egress approval would admit a host the Wardyn boundary does not allow
+	reasonBoundaryHardLimitsGated  = "boundary_hard_limits_gated"  // a write into hard_limits before the boundary bounds every brokered credential path
+	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token break-glass run without a usable reason
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident

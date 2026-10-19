@@ -21,20 +21,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The org walls on the lanes that do not resolve through POST /runs' policy step: a Record Mode
+// The Wardyn boundary on the lanes that do not resolve through POST /runs' policy step: a Record Mode
 // session, a launch that waited in a pool's queue, and a later change to a run's end.
 
-// recordWalls allows two hosts and denies one; it raises no floor, so the fake runner still serves
+// recordBoundary allows two hosts and denies one; it raises no floor, so the fake runner still serves
 // the session.
-func recordWalls() types.OrgWallsWrite {
+func recordBoundary() types.BoundaryWrite {
 	allowed := []string{"api.anthropic.com", "pypi.org"}
 	denied := []string{"evil.example"}
-	return types.OrgWallsWrite{Enabled: true, Spec: types.OrgWallsSpec{AllowedDomains: &allowed, DeniedDomains: &denied}}
+	return types.BoundaryWrite{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{AllowedDomains: &allowed, DeniedDomains: &denied}}
 }
 
-// recordUnderWalls records an operator workspace as an SSO super admin, the walls on or off, and
+// recordUnderBoundary records an operator workspace as an SSO super admin, in hard_limits or not, and
 // returns the egress policy the session's proxy was handed.
-func recordUnderWalls(t *testing.T, walls bool) types.RunPolicySpec {
+func recordUnderBoundary(t *testing.T, boundary bool) types.RunPolicySpec {
 	t.Helper()
 	root, project := memberProjectRoot(t)
 	fr := &fakeRunner{}
@@ -44,12 +44,12 @@ func recordUnderWalls(t *testing.T, walls bool) types.RunPolicySpec {
 	srv.router = srv.routes()
 	h := supplierPG{srv: srv, fr: fr}
 	ws := h.workspace(t, false, "rec-"+uuid.NewString()[:8], project, nil)
-	if walls {
-		if _, err := srv.cfg.Store.(store.OrgWallsStore).PutOrgWalls(context.Background(), recordWalls(), "seed"); err != nil {
+	if boundary {
+		if _, err := srv.cfg.Store.(store.BoundaryStore).PutBoundary(context.Background(), recordBoundary(), "seed"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	super := ssoSession(t, "sub-walls-recorder", "recorder@corp.example", oidc.RoleAdmin)
+	super := ssoSession(t, "sub-boundary-recorder", "recorder@corp.example", oidc.RoleAdmin)
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces/"+ws.String()+"/record", super, `{"name":"capture"}`); w.Code != http.StatusAccepted {
 		t.Fatalf("record = %d %s", w.Code, w.Body)
 	}
@@ -57,34 +57,34 @@ func recordUnderWalls(t *testing.T, walls bool) types.RunPolicySpec {
 	return fr.lastSpec.ProxyConfig.Policy
 }
 
-// TestOrgWallsBindRecordSessions: with the walls on, a super admin's learning session reaches only
-// hosts the walls allow and carries their denies; with them off it allows all egress, as before.
-func TestOrgWallsBindRecordSessions(t *testing.T) {
-	if off := recordUnderWalls(t, false); !off.AllowAllEgress {
-		t.Fatalf("walls off: the learning session does not allow all egress: %+v", off)
+// TestBoundaryBindRecordSessions: in hard_limits, a super admin's learning session reaches only
+// hosts the boundary allow and carries their denies; in no_limits it allows all egress, as before.
+func TestBoundaryBindRecordSessions(t *testing.T) {
+	if off := recordUnderBoundary(t, false); !off.AllowAllEgress {
+		t.Fatalf("no_limits: the learning session does not allow all egress: %+v", off)
 	}
-	on := recordUnderWalls(t, true)
+	on := recordUnderBoundary(t, true)
 	if on.AllowAllEgress {
-		t.Fatal("walls on: the learning session still allows all egress")
+		t.Fatal("hard_limits: the learning session still allows all egress")
 	}
 	if !slices.Contains(on.DeniedDomains, "evil.example") {
-		t.Errorf("walls on: denied %v lacks evil.example", on.DeniedDomains)
+		t.Errorf("hard_limits: denied %v lacks evil.example", on.DeniedDomains)
 	}
-	allowed := *recordWalls().Spec.AllowedDomains
+	allowed := *recordBoundary().Spec.AllowedDomains
 	for _, d := range on.AllowedDomains {
 		if !ceilingDenies(allowed, d) {
-			t.Errorf("walls on: the session reaches %s, which the walls do not allow (allowed %v)", d, on.AllowedDomains)
+			t.Errorf("hard_limits: the session reaches %s, which the boundary do not allow (allowed %v)", d, on.AllowedDomains)
 		}
 	}
 }
 
-// TestOrgWallsQueuedBreakGlassStartsAsTagged: an admin-token launch with a reason that waits in a
+// TestBoundaryQueuedBreakGlassStartsAsTagged: an admin-token launch with a reason that waits in a
 // full pool starts as the break-glass run it was tagged: unnarrowed, break_glass, one audit row.
-func TestOrgWallsQueuedBreakGlassStartsAsTagged(t *testing.T) {
+func TestBoundaryQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	e := newQueueEnv(t)
 	pool := e.cappedPool("Shared", 1)
 	occupant := e.occupy(pool)
-	if _, err := e.pg.PutOrgWalls(context.Background(), testWalls(true), "seed"); err != nil {
+	if _, err := e.pg.PutBoundary(context.Background(), testBoundary(types.BoundaryHardLimits), "seed"); err != nil {
 		t.Fatal(err)
 	}
 	body := endBody("background", `"runner_pool_id":"`+pool.ID.String()+`","inline_policy":{"min_confinement_class":"CC1","allow_all_egress":true}`)
@@ -101,7 +101,7 @@ func TestOrgWallsQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	e.sweep()
 	run := e.waitStarted(queued.ID)
 	if policy := e.specFor(queued.ID).ProxyConfig.Policy; !policy.AllowAllEgress {
-		t.Errorf("the started break-glass run was narrowed by the walls: %+v", policy)
+		t.Errorf("the started break-glass run was narrowed by the boundary: %+v", policy)
 	}
 	if !run.BreakGlass {
 		t.Error("run row break_glass = false, want true")
@@ -111,9 +111,9 @@ func TestOrgWallsQueuedBreakGlassStartsAsTagged(t *testing.T) {
 	}
 }
 
-// TestOrgWallsCapAnEarlierRunsEnd: a run created before the walls went on, whose profile allows a day,
-// is held to the walls' hour when its owner later moves its end.
-func TestOrgWallsCapAnEarlierRunsEnd(t *testing.T) {
+// TestBoundaryCapAnEarlierRunsEnd: a run created in no_limits, whose profile allows a day,
+// is held to the boundary's hour when its owner later moves its end.
+func TestBoundaryCapAnEarlierRunsEnd(t *testing.T) {
 	e := newPlacementEnv(t)
 	pool := e.lifetimePool("Week", `{"default_sec":3600,"max_sec":604800}`)
 	profile, err := e.pg.UpsertGovernanceProfile(context.Background(), types.GovernanceProfile{
@@ -129,7 +129,7 @@ func TestOrgWallsCapAnEarlierRunsEnd(t *testing.T) {
 	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil {
 		t.Fatalf("create = %d %s", w.Code, w.Body)
 	}
-	if _, err := e.pg.PutOrgWalls(context.Background(), testWalls(true), "seed"); err != nil {
+	if _, err := e.pg.PutBoundary(context.Background(), testBoundary(types.BoundaryHardLimits), "seed"); err != nil {
 		t.Fatal(err)
 	}
 	far := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
@@ -138,7 +138,7 @@ func TestOrgWallsCapAnEarlierRunsEnd(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
 		t.Fatalf("owner's PATCH = %d %s", w.Code, w.Body)
 	}
-	if resp.EndsAt == nil || time.Until(*resp.EndsAt) > wallsMaxEnd*time.Second || !slices.Contains(resp.Capped, "ends_at") {
-		t.Errorf("ends_at = %v capped %v, want capped at most %ds ahead", resp.EndsAt, resp.Capped, wallsMaxEnd)
+	if resp.EndsAt == nil || time.Until(*resp.EndsAt) > boundaryMaxEnd*time.Second || !slices.Contains(resp.Capped, "ends_at") {
+		t.Errorf("ends_at = %v capped %v, want capped at most %ds ahead", resp.EndsAt, resp.Capped, boundaryMaxEnd)
 	}
 }

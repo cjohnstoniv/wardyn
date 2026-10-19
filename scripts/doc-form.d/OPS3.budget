@@ -58,7 +58,8 @@ docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3645 = 3630 + 15 (K4), measured at the wave-B merge.
 # docs/operations/admin-only-writes.md 3698 adds 53, measured: the POST /runs/{id}/node-record row.
 # docs/operations/admin-only-writes.md 3730 adds 32 over 3698, measured (0.10 LAY-A): the /governance/walls tier row.
-docs/operations/admin-only-writes.md=3730 share=35
+# docs/operations/admin-only-writes.md 3727 measured (0.10 BOUNDARY): the /governance/boundary tier row.
+docs/operations/admin-only-writes.md=3727 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.
@@ -76,7 +77,8 @@ docs/operations/ownership-and-offboarding.md=2414 share=35
 # docs/operations/governance-writes.md 3132 adds 46 over 3086 (0.9.3 FIN-E), measured: the runner trust row and held remote-hosted runner changes.
 # 0.9.4 W4-DOCS-1: docs/operations/governance-writes.md 3158 adds 26 over 3132, measured: #2369: the run node record row.
 # docs/operations/governance-writes.md 3170 adds 12 over 3158, measured (0.10 LAY-A): the org walls row in the covered-writes table.
-docs/operations/governance-writes.md=3170 share=35
+# docs/operations/governance-writes.md 3171 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
+docs/operations/governance-writes.md=3171 share=35
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
@@ -122,7 +124,8 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 5304 adds 113 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
 # 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
-docs/operations/denials.md=5327 share=35
+# docs/operations/denials.md 5331 measured (0.10 BOUNDARY): the boundary provenance layer.
+docs/operations/denials.md=5331 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

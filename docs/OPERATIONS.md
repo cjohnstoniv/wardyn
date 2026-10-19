@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [Org walls](operations/org-walls.md#org-walls-the-outermost-limit-on-every-run)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
 
 </details>
 
@@ -3940,7 +3940,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0192` (`0192_workspace_name_per_owner`) replaces `workspaces.name`'s deployment-wide uniqueness (`0008`'s table) with one per owner (`owned_by`, `name`); operator-owned workspaces stay unique among themselves.
 - `0193` (`0193_approval_last_rejoined_at`) adds `approvals.last_rejoined_at` (`0001`'s table), when a held push or egress request last re-entered the hold on a PENDING row; the console's held reading starts from it.
 - `0195` (`0195_agent_runs_local_folder`) adds `local_folder`, `local_folder_seeded_at` and `local_folder_seed_error` to `agent_runs` (`0001`'s table): the folder a run holds its agent for, and that folder's first sync.
-- `0196` (`0196_org_walls`) creates `org_walls` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `org_walls`.
+- `0196` (`0196_governance_boundary`) creates `governance_boundary` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `governance_boundary`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

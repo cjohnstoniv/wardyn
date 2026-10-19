@@ -526,12 +526,12 @@ type governanceCeiling struct {
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
 	// for the Azure DevOps standing rule (adoStandingBound).
 	Operator bool
-	// walls are the org walls this ceiling resolved under (nil when they are off); breakGlass is the
-	// admin token's break-glass run, which they do not narrow; wallKnobs are the knobs the walls
-	// narrowed here (org_walls_meet.go).
-	walls      *types.OrgWalls
-	breakGlass bool
-	wallKnobs  []string
+	// boundary is the Wardyn boundary this ceiling resolved under (nil in no_limits); breakGlass is
+	// the admin token's break-glass run, which it does not narrow; boundaryKnobs are the knobs the
+	// boundary narrowed here (boundary_meet.go).
+	boundary      *types.Boundary
+	breakGlass    bool
+	boundaryKnobs []string
 }
 
 // errGroupsSnapshotStale is the 403-class resolver failure: this caller's group
@@ -693,18 +693,18 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 }
 
 // resolveEffectiveCeiling is effectiveCeiling's uncached body — the resolution
-// order its doc comment describes, then the org walls over whatever it resolved
-// (wallCeiling), the outermost layer, operators included. Split out so the memo
+// order its doc comment describes, then the Wardyn boundary over whatever it resolved
+// (boundaryCeiling), the outermost layer, operators included. Split out so the memo
 // above wraps it exactly once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
 	c, err := s.resolveChainCeiling(ctx)
 	if err != nil {
 		return c, err
 	}
-	return s.wallCeiling(ctx, c)
+	return s.boundaryCeiling(ctx, c)
 }
 
-// resolveChainCeiling is the ceiling below the walls: the operator's, the
+// resolveChainCeiling is the ceiling below the boundary: the operator's, the
 // deployment's, or the caller's profile chain.
 func (s *Server) resolveChainCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}

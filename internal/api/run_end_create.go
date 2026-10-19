@@ -182,8 +182,8 @@ func (s *Server) resolveCreateEnd(r *http.Request, req createRunRequest, ceiling
 	in := createEndInput{
 		runType: runTypeForEnd(req.Experience),
 		pool:    pool,
-		// The org walls bound an operator's or a break-glass run's end too, when they name a maximum.
-		governed:  !s.runUngoverned(r.Context()) || ceiling.wallsBoundEnd(),
+		// The Wardyn boundary bounds an operator's or a break-glass run's end too, when it names a maximum.
+		governed:  !s.runUngoverned(r.Context()) || ceiling.boundaryBoundsEnd(),
 		gov:       ceiling.Limits.RunLimits,
 		maxAgeSec: max(0, int(s.cfg.RunMaxAge/time.Second)), // a negative WARDYN_RUN_MAX_AGE is off, as 0 is
 		noEnd:     req.NoEnd,

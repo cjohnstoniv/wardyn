@@ -124,7 +124,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	planned, exempt, ok := s.wallsEndPlan(w, r, run)
+	planned, exempt, ok := s.boundaryEndPlan(w, r, run)
 	if !ok {
 		return
 	}
