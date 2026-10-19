@@ -21,12 +21,12 @@
     - and `release` ([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by step 5's tag push itself, so it cannot be a prerequisite of tagging).
 - **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for it to complete.**
   - `gh workflow run nightly.yml --ref release/X.Y` (or `main`, if that is the commit).
-  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list, keeping the `multi-arch build` staging jobs, which saves about 60 runner-minutes.
+  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list but keeps the `multi-arch build` staging jobs, saving about 60 runner-minutes.
   - The default, `scope=full`, and the 07:00 schedule run every lane. [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) accepts either scope.
   - A second dispatch on the same ref and scope cancels the first. A scheduled run is never cancelled.
+  - A `train/*` or `prep/*` pull request's `train-gate` waits on this candidate run.
   - Evidence is keyed by the tag's **tree**, not its commit: any commit with the identical tree counts, so a nightly dispatched on the candidate branch still counts after a merge gives `release/X.Y` a different sha.
-  - The tree must be identical.
-  - A nightly on an ancestor, which has a different tree, does not count, and neither does a run from a fork.
+  - A nightly on an ancestor (a different tree) does not count, nor does a fork's run.
   - Only a `workflow_dispatch` nightly counts: a scheduled run never qualifies a tree, because it skips the staging jobs and GitHub may report its skipped `multi-arch build` matrix as one row named `multi-arch build (${{ matrix.name }})` with conclusion `skipped`.
   - The multi-arch build is part of this same nightly run:
     - it is `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so a pull request never runs it,
