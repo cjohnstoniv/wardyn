@@ -190,6 +190,9 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
   });
 
   test("storing a PAT inside the GitHub row writes the secret, inline", async ({ page }) => {
+    // A stored token hides the "Access token" field, so an attempt that already stored it fails its retry:
+    // start from no stored token (a 404 is the same state).
+    await page.request.delete("/api/v1/secrets/git-pat-github-com", { headers: auth });
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();

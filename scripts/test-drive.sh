@@ -295,8 +295,8 @@ if run_section 1; then
     sleep 4
 
     S1_LS="$(docker exec "${S1_CTR}" ls "${S1_REPO_DIR}" 2>&1 || echo "EXEC_FAILED")"
-    if echo "${S1_LS}" | grep -v EXEC_FAILED | grep -qiE 'README|\.git|EXEC_FAILED' 2>/dev/null; then
-      if echo "${S1_LS}" | grep -q EXEC_FAILED; then
+    if echo "${S1_LS}" | grep -v EXEC_FAILED | grep -iE 'README|\.git|EXEC_FAILED' 2>/dev/null >/dev/null; then
+      if echo "${S1_LS}" | grep EXEC_FAILED >/dev/null; then
         bad "section 1: docker exec failed — clone did not happen (dir absent)"
         note "section 1: ls output: ${S1_LS}"
       else
@@ -358,7 +358,7 @@ if run_section 2; then
     S2_CTR="wardyn-agent-${S2_RUN_ID}"
     S2_DENY="$(docker exec "${S2_CTR}" curl -sS -m 10 --connect-timeout 8 \
                  -x http://wardyn-proxy:3128 https://evil.example.com/ 2>&1 || true)"
-    if echo "${S2_DENY}" | grep -qE '403|PENDING|first.?use|approval'; then
+    if echo "${S2_DENY}" | grep -E '403|PENDING|first.?use|approval' >/dev/null; then
       ok "section 2: unlisted domain blocked by proxy (403 / pending hold)"
     else
       bad "section 2: expected 403/pending for evil.example.com; got: ${S2_DENY}"
@@ -574,9 +574,9 @@ if run_section 5; then
       >"${TMPOUT}" 2>"${TMPERR}" || true
     S5_REFUSE_OUT="$(cat "${TMPOUT}" 2>/dev/null || echo "")"
     S5_REFUSE_ERR="$(cat "${TMPERR}" 2>/dev/null || echo "")"
-    if echo "${S5_REFUSE_OUT}" | grep -q '^password='; then
+    if echo "${S5_REFUSE_OUT}" | grep '^password=' >/dev/null; then
       bad "section 5: git-helper emitted a credential on a BROKERED run (token entered the sandbox)"
-    elif echo "${S5_REFUSE_ERR}" | grep -qiE 'brokered through wardyn-proxy|refusing to mint'; then
+    elif echo "${S5_REFUSE_ERR}" | grep -iE 'brokered through wardyn-proxy|refusing to mint' >/dev/null; then
       ok "section 5: git-helper refused the brokered App lane — no token in the sandbox"
     else
       bad "section 5: git-helper neither refused nor emitted: ${S5_REFUSE_ERR:-<empty>}"
@@ -626,7 +626,7 @@ print(next((a['id'] for a in aps
         "curl -sS -o /dev/null -m 30 -w '%{http_code}' \"${S5_GB_URL}\"" 2>&1 || echo "")"
       S5_GB_BODY="$(docker exec "${S5_CTR}" sh -c "curl -sS -m 30 \"${S5_GB_URL}\"" 2>&1 || echo "")"
       note "section 5: git-broker route http_code=${S5_GB_CODE} body=${S5_GB_BODY}"
-      if echo "${S5_GB_BODY}" | grep -qE 'ghs_|"token"|password='; then
+      if echo "${S5_GB_BODY}" | grep -E 'ghs_|"token"|password=' >/dev/null; then
         bad "section 5: the git-broker route returned credential material to the sandbox"
       elif [[ "${S5_GB_CODE}" == "200" ]]; then
         bad "section 5: brokered route returned 200 with no GitHub App configured (fail-closed broken)"

@@ -452,7 +452,7 @@ JSON
   # The workflow's checks step must not carry the token in its env either.
   local wf="$ROOT/.github/workflows/nightly.yml"
   if [ -f "$wf" ]; then
-    sed -n '/name: Octopus scratch merge/,/--check-only/p' "$wf" | grep -q 'GH_TOKEN' \
+    sed -n '/name: Octopus scratch merge/,/--check-only/p' "$wf" | grep 'GH_TOKEN' >/dev/null \
       && fail "the --check-only workflow step must not set GH_TOKEN"
     grep -q -- '--check-only' "$wf" || fail "nightly.yml must run the checks with --check-only"
   fi
