@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -479,6 +480,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
+	// Last of the env writers' credential work, after every injection above is
+	// authored, so its one-credential-per-host check sees them all.
+	var placeholderMITM []string
+	if s.cfg.EnvSecretPlaceholders {
+		placeholderMITM = s.placeEnvSecrets(ctx, run, policy, grantRows, secretEnvKeys, sandboxEnv,
+			proxy.CompilePolicy(sidecarPolicy(policy, p)).AllowedExactHost, &injections)
+	}
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
@@ -540,7 +548,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts, placeholderMITM),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so

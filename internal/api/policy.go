@@ -590,6 +590,9 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if apiKeyScopeShared(g.Scope) {
 			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
 		}
+		if rule.Placeholder != "" {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets placeholder: Wardyn sets it for an env or file secret's host, never authored", i)
+		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
@@ -655,6 +658,9 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if nameSinkReservedSecret(secretName) {
 			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
 		}
+		if _, herr := secretScopeHost(g.Scope); herr != nil {
+			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, herr)
+		}
 		if g.RequiresApproval {
 			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
 				"not minted, so there is no mint for an approval to gate", i)
@@ -679,6 +685,9 @@ func validateFileSecretScope(i int, g types.GrantSpec) error {
 	}
 	if nameSinkReservedSecret(secretName) {
 		return fmt.Errorf("eligible_grants[%d]: file_secret references reserved secret name %q", i, secretName)
+	}
+	if _, herr := secretScopeHost(g.Scope); herr != nil {
+		return fmt.Errorf("eligible_grants[%d]: file_secret scope invalid: %w", i, herr)
 	}
 	if g.RequiresApproval {
 		return fmt.Errorf("eligible_grants[%d]: file_secret cannot require approval — it is resolved at dispatch, "+

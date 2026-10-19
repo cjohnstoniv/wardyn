@@ -651,8 +651,8 @@ What the check does and does not settle:
 | `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…","require_tls":false}` | `host` and `secret_name` are required; `header` and `format` default to `Authorization` and `Bearer %s`, `require_tls` refuses plain-HTTP requests to `host`, and injection is proxy-side only. See [`api_key`](#api_key). |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…","repos":[…],"access":"read","api":false,"forge":"generic"}` | `host` and `secret_name` are required; four optional axes (`repos`, `access`, `api`, `forge`) narrow the **run**, not the PAT. See [`git_pat`](#git_pat). |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` and `key_secret_ref` are required; `host` must be an SSH-over-443 provider Wardyn supports. A **documented exception** to the no-resident-secret rule. See [`ssh_key`](#ssh_key). |
-| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. See [`env_secret`](#env_secret). |
-| `file_secret` | `{"file":"token","secret_name":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
+| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…","host":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. The optional `host` is read only under `WARDYN_ENV_SECRET_PLACEHOLDERS`. See [`env_secret`](#env_secret). |
+| `file_secret` | `{"file":"token","secret_name":"…","host":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
 
 ### `ttl_seconds`
 
@@ -744,7 +744,11 @@ What the check does and does not settle:
 
 ### `env_secret`
 
-- Both required.
+- `name` and `secret_name` are required.
+- The optional `host` names the one bare host the value is sent to. It is read only when the operator turns on `WARDYN_ENV_SECRET_PLACEHOLDERS` (off by default in 0.10.0):
+  - the variable then holds a placeholder (`wardyn-placeholder:<id>`), and the run's proxy intercepts `host` and replaces the placeholder with the value wherever it appears in a request header;
+  - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret.placeholder` says which);
+  - only header bytes are filled: a placeholder inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
 - `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself);
@@ -759,7 +763,7 @@ What the check does and does not settle:
 
 ### `file_secret`
 
-- Both `file` and `secret_name` are required, and no other key is accepted.
+- Both `file` and `secret_name` are required; the only other key accepted is `host`, which `WARDYN_FILE_SECRET_PLACEHOLDERS` reads exactly as `env_secret`'s `host` under its switch: the file then holds the placeholder.
 - `file` is a file name, never a path: `[a-z0-9][a-z0-9_.-]{0,62}`.
   - Wardyn writes it under `/run/wardyn/secrets`, so no grant can address anywhere else.
 - It follows `env_secret`'s rules: resolved at dispatch, no mint, `requires_approval` refused, reserved secret names refused.

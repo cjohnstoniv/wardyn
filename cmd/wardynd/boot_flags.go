@@ -258,6 +258,10 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
+	// file secret's value at the proxy (off by default in 0.10.0).
+	envSecretPlaceholders  *bool
+	fileSecretPlaceholders *bool
 
 	// awsSSOEndpointOverride / allowTestEndpoints are the TEST hatch that makes
 	// "a member signs in on Kubernetes and their Bedrock run gets per-user
@@ -535,6 +539,8 @@ func parseBootFlags() *bootFlags {
 		// convenience of auto-adding what a scan finds, opts out here.
 		requireOpSetEgress:     flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
 		gitPATBroker:           flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
+		envSecretPlaceholders:  flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
+		fileSecretPlaceholders: flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		proxyResponseScrub:     flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused: flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 
