@@ -255,6 +255,8 @@ func TestManager_UnwrapOutageIsNotReportedAsACorruptWrap(t *testing.T) {
 		// The shapes the real KEKs emit: Transit's decrypt refusal also wraps ErrService.
 		"transit refused": {fmt.Errorf("transit KEK a: %w: %w: %w", kek.ErrService, kek.ErrRefused, errors.New("400 too old")), "does not unwrap"},
 		"wrap corrupt":    {fmt.Errorf("local KEK a: unwrap: %w: %w", kek.ErrCorrupt, errors.New("auth failed")), "does not unwrap"},
+		// A missing key or mount (Transit's 404) is the service's answer about the key, not about the wrap: outage wording.
+		"transit key missing": {fmt.Errorf("transit KEK a: %w: %w: vault POST transit/decrypt/k: 404 (no such mount or key)", kek.ErrService, kek.ErrKeyMissing), "could not unwrap"},
 	} {
 		m := subjectkeytest.Manager(pool, outageTransit{a, tc.cause})
 		_, err := m.Key(t.Context(), "in-a", subjectkey.PurposeCred, 1)
