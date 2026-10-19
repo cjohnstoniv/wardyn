@@ -409,16 +409,24 @@ func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) (types
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
 		return types.GovernanceAssignment{}, err
 	}
-	a, err := DeleteGovernanceAssignmentQ(ctx, tx, id)
+	a, err := scanGovernanceAssignment(tx.QueryRow(ctx, `DELETE FROM governance_assignments WHERE id = $1 RETURNING `+governanceAssignmentCols, id))
 	if err != nil {
 		return types.GovernanceAssignment{}, err
 	}
 	return a, tx.Commit(ctx)
 }
 
-// DeleteGovernanceAssignmentQ is DeleteGovernanceAssignment's statement on q.
-func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) (types.GovernanceAssignment, error) {
-	return scanGovernanceAssignment(q.QueryRow(ctx, `DELETE FROM governance_assignments WHERE id = $1 RETURNING `+governanceAssignmentCols, id))
+// DeleteGovernanceAssignmentQ is the held-change apply's delete on q: ErrNotFound when no row
+// matched, a statement failure as a plain error. It does not read the removed row back.
+func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete governance assignment: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // GetGovernanceAssignmentQ reads one assignment by id on q, ErrNotFound when none; forUpdate locks the

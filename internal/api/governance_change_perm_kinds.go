@@ -160,7 +160,7 @@ func applyGrantChange(s *Server, r *http.Request, q store.Querier, ch types.Gove
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if ch.Op == "delete" {
-		if _, err := store.DeleteCapabilityGrantQ(ctx, q, p.ID); err != nil {
+		if err := store.DeleteCapabilityGrantQ(ctx, q, p.ID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return govApplied{}, writeRefusal(http.StatusNotFound, reasonCapabilityGrantNotFound, "capability grant not found")
 			}

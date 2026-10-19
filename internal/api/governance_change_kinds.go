@@ -607,7 +607,7 @@ func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types
 		if st.hash() != ch.BaseHash {
 			return govApplied{}, store.ErrGovernanceChangeStale
 		}
-		if _, err := store.DeleteGovernanceAssignmentQ(ctx, q, p.ID); err != nil {
+		if err := store.DeleteGovernanceAssignmentQ(ctx, q, p.ID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceAssignmentNotFound, "governance assignment not found")
 			}
