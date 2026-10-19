@@ -169,7 +169,13 @@ func AWSSigV4Scope(host string) (service, region string, ok bool) {
 			return "", "", false // a wildcard or anything else that is not one exact bucket host
 		}
 	}
-	return cmp.Or(awsSigV4SigningNames[label], label), region, true
+	service = cmp.Or(awsSigV4SigningNames[label], label)
+	for guarded := range awsSigV4ActionGuards {
+		if strings.HasPrefix(label, guarded+"-") {
+			service = guarded // sts-fips, iam-fips: the family signs, and is guarded, as one service
+		}
+	}
+	return service, region, true
 }
 
 // isAWSSigV4Host reports whether host is one the run re-signs on.
@@ -186,6 +192,7 @@ func (p *Proxy) isAWSSigV4Host(host string) bool {
 type awsSigV4Plan struct {
 	payload string
 	signed  []string
+	service string // the service the sandbox signed for
 }
 
 // awsSigV4Refusal is a request the proxy will not re-sign.
@@ -251,28 +258,71 @@ func admitAWSSigV4(r *http.Request, scope awsSigV4HostScope) (awsSigV4Plan, *aws
 	case len(payload) != sha256.Size*2 || !isHex(payload):
 		return awsSigV4Plan{}, &awsSigV4Refusal{awsSigV4Payload, "its x-amz-content-sha256 header is not a payload hash Wardyn can sign"}
 	}
-	return awsSigV4Plan{payload: payload, signed: strings.Split(signedHeaders, ";")}, nil
+	return awsSigV4Plan{payload: payload, signed: strings.Split(signedHeaders, ";"), service: parts[3]}, nil
 }
 
-// awsSigV4STSActions are the STS actions re-signed. Every other STS action exists to hand out
-// credentials (AssumeRole and its kin), which would put role-derived keys in the sandbox.
-var awsSigV4STSActions = []string{"GetCallerIdentity"}
+// awsSigV4ActionGuard is how the proxy judges a query-protocol service's action before it
+// re-signs: STS re-signs only the actions in allow, since its others hand out credentials, and
+// IAM every action but those in deny, which create long-lived credentials or sign-ins. A token
+// API another service offers (ECR or CodeArtifact GetAuthorizationToken, say) is not guarded.
+type awsSigV4ActionGuard struct {
+	allow, deny []string
+	why         string
+}
 
-// stsAction is the action an STS request names, in X-Amz-Target (JSON protocol), the query or a
-// form body (query protocol); "" when it names none.
-func stsAction(r *http.Request, body []byte) string {
-	if t := r.Header.Get("X-Amz-Target"); t != "" {
-		return t[strings.LastIndex(t, ".")+1:]
+// awsSigV4ActionGuards are the guarded services, by signing name. Every host of either family
+// (FIPS included, see AWSSigV4Scope) signs under that name.
+var awsSigV4ActionGuards = map[string]awsSigV4ActionGuard{
+	"sts": {allow: []string{"GetCallerIdentity"},
+		why: "Wardyn re-signs only GetCallerIdentity on AWS STS; its other actions hand out credentials, which would put them in the sandbox"},
+	"iam": {deny: []string{"CreateAccessKey", "CreateLoginProfile", "CreateServiceSpecificCredential", "UpdateLoginProfile", "CreateVirtualMFADevice"},
+		why: "Wardyn does not re-sign the IAM actions that create long-lived credentials or sign-ins"},
+}
+
+// awsSigV4ActionRefusal judges a guarded request on what the service runs: the one Action its
+// query and plain form body name between them. A request the proxy cannot read that way is
+// refused: an action named in a header (X-Amz-Target, Smithy-Protocol), any Content-Encoding, a
+// chunked or streamed body, a body or content type that is not a form, a query or form that does
+// not parse, and no Action, more than one, or one the guard refuses. "" admits it.
+func awsSigV4ActionRefusal(r *http.Request, payload string, body []byte, g awsSigV4ActionGuard) string {
+	ct := r.Header.Get("Content-Type")
+	mt, _, err := mime.ParseMediaType(ct)
+	switch {
+	case len(r.Header.Values("X-Amz-Target")) > 0 || len(r.Header.Values("Smithy-Protocol")) > 0:
+		return "it names its action in a header, and Wardyn judges this service's action only from the Action parameter"
+	case len(r.Header.Values("Content-Encoding")) > 0 || len(r.TransferEncoding) > 0 || strings.HasPrefix(payload, "STREAMING-"):
+		return "its body is encoded, chunked or streamed, and Wardyn judges this service's action only from a plain form body"
+	case (ct != "" || len(body) > 0) && (err != nil || mt != "application/x-www-form-urlencoded"):
+		return "its body is not a form, and Wardyn judges this service's action only from a plain form body"
 	}
-	if a := r.URL.Query().Get("Action"); a != "" {
-		return a
-	}
-	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/x-www-form-urlencoded" && body != nil {
-		if q, err := url.ParseQuery(string(body)); err == nil {
-			return q.Get("Action")
-		}
+	inQuery, okQuery := awsQueryActions(r.URL.RawQuery)
+	inBody, okBody := awsQueryActions(string(body))
+	actions := slices.Concat(inQuery, inBody)
+	switch {
+	case !okQuery || !okBody:
+		return "its query or form body does not parse, so Wardyn cannot tell which action it runs"
+	case len(actions) != 1:
+		return fmt.Sprintf("it names %d actions between its query and its body, and Wardyn re-signs only a request that names exactly one", len(actions))
+	case (g.allow != nil && !slices.Contains(g.allow, actions[0])) || slices.Contains(g.deny, actions[0]):
+		return g.why
 	}
 	return ""
+}
+
+// awsQueryActions is every Action value a query string or form body names, under any case of
+// the name; false when it does not parse.
+func awsQueryActions(raw string) ([]string, bool) {
+	q, err := url.ParseQuery(raw)
+	if err != nil {
+		return nil, false
+	}
+	var out []string
+	for k, v := range q {
+		if strings.EqualFold(strings.TrimSpace(k), "Action") {
+			out = append(out, v...)
+		}
+	}
+	return out, true
 }
 
 // serveAWSSigV4 is the door: admit, hash, obtain the role credentials, forward re-signed.
@@ -283,8 +333,15 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 		p.refuseAWSSigV4(w, r, host, port, scope, ref.code, ref.why)
 		return
 	}
+	// A guarded service is judged on the body it runs, so its body is always read. The host's
+	// service and the one the sandbox signed for are the same here (admission refused any other);
+	// either one being guarded guards the request.
+	guard, guarded := awsSigV4ActionGuards[scope.service]
+	if g, ok := awsSigV4ActionGuards[plan.service]; ok {
+		guard, guarded = g, true
+	}
 	var body []byte
-	if plan.payload == "" && r.Body != nil && r.Body != http.NoBody {
+	if (plan.payload == "" || guarded) && r.Body != nil && r.Body != http.NoBody {
 		// Charged to the engine's retained-bytes budget for as long as the request holds it.
 		buf, release, err := p.scan.readBody(r.Context(), r.Body, r.ContentLength, awsSigV4MaxHashedBody)
 		defer release()
@@ -304,14 +361,14 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
 		r.Header.Del("Transfer-Encoding")
 	}
-	if scope.service == "sts" {
-		if a := stsAction(r, body); !slices.Contains(awsSigV4STSActions, a) {
-			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Action,
-				"Wardyn re-signs only GetCallerIdentity on AWS STS; its other actions hand out credentials, which would put them in the sandbox")
+	payload := plan.payload
+	if guarded {
+		if why := awsSigV4ActionRefusal(r, payload, body, guard); why != "" {
+			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Action, why)
 			return
 		}
+		payload = "" // signed over the body it was judged on
 	}
-	payload := plan.payload
 	if payload == "" {
 		sum := sha256.Sum256(body)
 		payload = hex.EncodeToString(sum[:])
@@ -328,7 +385,7 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 	}
 	rearmBodyDeadline(w) // the credential fetch may have taken a while
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourceAWSSigV4, denied: ruleSourceAWSSigV4Refused,
-		mintFailed: "aws re-signing", upstream: "aws",
+		mintFailed: "aws re-signing", upstream: "aws", stream: true,
 		sign: func(out *http.Request) error {
 			return awsSigV4Sign(p.sigv4.signer, out, plan.signed, payload, scope, creds, time.Now())
 		}})

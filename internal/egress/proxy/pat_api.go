@@ -194,6 +194,9 @@ type apiDoor struct {
 	// sign, when set, authorises the built upstream request itself in place of a credential
 	// header (aws_sigv4.go); credential is then nil.
 	sign func(out *http.Request) error
+	// stream relays the response a chunk at a time, flushing each (relayStreaming), for an
+	// upstream that streams its answer (Bedrock's response streams).
+	stream bool
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
@@ -298,6 +301,10 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
 	p.emitDialledAllow(allow, host)
+	if d.stream {
+		relayStreaming(w, resp)
+		return
+	}
 	relay(w, resp)
 }
 

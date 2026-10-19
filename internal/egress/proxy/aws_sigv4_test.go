@@ -6,11 +6,13 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -110,6 +112,10 @@ func TestAWSSigV4Scope(t *testing.T) {
 		"*.amazonaws.com":                                 "",
 		"sts.amazonaws.com":                               "sts us-east-1",
 		"iam.amazonaws.com":                               "iam us-east-1",
+		"iam-fips.amazonaws.com":                          "iam us-east-1",
+		"sts-fips.us-east-1.amazonaws.com":                "sts us-east-1",
+		"sts.us-east-1.api.aws":                           "",
+		"vpce-1a2b-c3d4.sts.us-east-1.vpce.amazonaws.com": "",
 		"dynamodb.ap-southeast-2.amazonaws.com":           "dynamodb ap-southeast-2",
 		"Logs.US-East-1.amazonaws.com.":                   "logs us-east-1",
 		"portal.sso.us-east-1.amazonaws.com":              "",
@@ -145,7 +151,13 @@ const (
 	sigv4Bedrock    = "bedrock-runtime.us-east-1.amazonaws.com"
 	sigv4S3         = "s3.us-east-1.amazonaws.com"
 	sigv4STS        = "sts.us-east-1.amazonaws.com"
+	sigv4STSLondon  = "sts.eu-west-2.amazonaws.com"
+	sigv4STSFIPS    = "sts-fips.us-east-1.amazonaws.com"
+	sigv4IAM        = "iam.amazonaws.com"
 )
+
+// sigv4Hosts are the hosts the harness's run re-signs on.
+var sigv4Hosts = []string{sigv4Bedrock, sigv4S3, sigv4STS, sigv4STSLondon, sigv4STSFIPS, sigv4IAM}
 
 // sigv4Arrival is one request as the fake AWS service read it.
 type sigv4Arrival struct {
@@ -226,7 +238,7 @@ func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
 	buf := &bytes.Buffer{}
 	h.p = newProxy(Options{
 		RunID:           uuid.New(),
-		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append([]string{sigv4Bedrock + ":443", sigv4S3 + ":443", sigv4STS + ":443"}, allowed...)}),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(sigv4HostPorts(), allowed...)}),
 		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
 		Injector:        &injector{byHost: map[string]*injEntry{}, base: cp.URL, token: newTokenSource("RUNTOK"), client: cp.Client()},
 		Resolver:        publicResolver{},
@@ -234,13 +246,21 @@ func newSigV4Harness(t *testing.T, allowed ...string) *sigv4Harness {
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
 		AWSSigV4: &AWSSigV4Config{GrantID: grant, PortalHost: sigv4Portal, AccountID: sigv4Account, RoleName: sigv4Role,
-			Hosts: []string{sigv4Bedrock, sigv4S3, sigv4STS}},
+			Hosts: sigv4Hosts},
 	})
 	h.log = func() string {
 		_ = h.p.sink.close(context.Background())
 		return buf.String()
 	}
 	return h
+}
+
+func sigv4HostPorts() []string {
+	out := make([]string, 0, len(sigv4Hosts))
+	for _, h := range sigv4Hosts {
+		out = append(out, h+":443")
+	}
+	return out
 }
 
 func (h *sigv4Harness) arrivals() []sigv4Arrival {
@@ -577,11 +597,156 @@ func TestAWSSigV4_ConfigValidation(t *testing.T) {
 		"duplicate host":   func(c *Config) { c.AWSSigV4.Hosts = []string{sigv4S3, sigv4S3} },
 		"injection on one": func(c *Config) { c.Injection = []InjectionConfig{{InjectionRule: egress.InjectionRule{Host: sigv4S3}}} },
 		"mitm entry":       func(c *Config) { c.MITMHosts = []string{sigv4Bedrock + ":443"} },
+		"vpce sts host":    func(c *Config) { c.AWSSigV4.Hosts = []string{"vpce-1a2b-c3d4.sts.us-east-1.vpce.amazonaws.com"} },
+		"dualstack sts":    func(c *Config) { c.AWSSigV4.Hosts = []string{"sts.us-east-1.api.aws"} },
 	} {
 		c := good()
 		mut(c)
 		if err := c.validateTerminatedGates(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// STS and IAM are judged on the one Action they run, read from the query and the plain form
+// body together, never from a header, an encoded body or one of several Actions.
+func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
+	form := map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
+	with := func(extra map[string]string) map[string]string {
+		m := maps.Clone(form)
+		maps.Copy(m, extra)
+		return m
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = io.WriteString(zw, "Action=AssumeRole&RoleArn=arn&RoleSessionName=s&Version=2011-06-15")
+	_ = zw.Close()
+	type req struct {
+		method, host, target, body string
+		hdr                        map[string]string
+		service, region            string
+		chunked                    bool
+		wireQuery                  string // the query as sent, when it differs from the signed (sorted) one
+	}
+	allowed := []struct {
+		name    string
+		r       req
+		service string
+	}{
+		{"sts GetCallerIdentity in the query", req{"GET", sigv4STS, "/?Action=GetCallerIdentity&Version=2011-06-15", "", nil, "sts", "us-east-1", false, ""}, "sts"},
+		{"sts GetCallerIdentity in the body", req{"POST", sigv4STSLondon, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "eu-west-2", false, ""}, "sts"},
+		{"sts-fips GetCallerIdentity", req{"POST", sigv4STSFIPS, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "us-east-1", false, ""}, "sts"},
+		{"iam ListUsers", req{"POST", sigv4IAM, "/", "Action=ListUsers&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+	}
+	for _, tc := range allowed {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSigV4Harness(t)
+			r := tc.r
+			h.mustReSign(t, h.send(t, sandboxRequest(t, r.method, r.host, r.target, r.body, r.hdr, "", r.service, r.region, ""), r.host), tc.service)
+		})
+	}
+	refused := []struct {
+		name, code string
+		r          req
+	}{
+		{"X-Amz-Target names GetCallerIdentity over an AssumeRole body", awsSigV4Action, req{"POST", sigv4STS, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s&Version=2011-06-15",
+			with(map[string]string{"X-Amz-Target": "AWSSecurityTokenServiceV20110615.GetCallerIdentity"}), "sts", "us-east-1", false, ""}},
+		{"X-Amz-Target alone", awsSigV4Action, req{"POST", sigv4STS, "/", "", map[string]string{"X-Amz-Target": "AWSSecurityTokenServiceV20110615.GetCallerIdentity"}, "sts", "us-east-1", false, ""}},
+		{"a duplicate Action in the query", awsSigV4Action, req{"GET", sigv4STS, "/?Action=GetCallerIdentity&Action=AssumeRole&Version=2011-06-15", "", nil, "sts", "us-east-1", false,
+			"Action=GetCallerIdentity&Action=AssumeRole&Version=2011-06-15"}},
+		{"the same Action twice", awsSigV4Action, req{"GET", sigv4STS, "/?Action=GetCallerIdentity&Action=GetCallerIdentity", "", nil, "sts", "us-east-1", false, ""}},
+		{"the query and the body disagree", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "us-east-1", false, ""}},
+		{"an Action under another case", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", "action=AssumeRole", form, "sts", "us-east-1", false, ""}},
+		{"a body that does not parse", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", "Action=AssumeRole;x", form, "sts", "us-east-1", false, ""}},
+		{"no Action", awsSigV4Action, req{"POST", sigv4STS, "/", "Version=2011-06-15", form, "sts", "us-east-1", false, ""}},
+		{"a gzip body", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", gz.String(), with(map[string]string{"Content-Encoding": "gzip"}), "sts", "us-east-1", false, ""}},
+		{"a chunked body", awsSigV4Action, req{"POST", sigv4STS, "/", "Action=GetCallerIdentity", form, "sts", "us-east-1", true, ""}},
+		{"a JSON body", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", `{"Action":"AssumeRole"}`, map[string]string{"Content-Type": "application/x-amz-json-1.1"}, "sts", "us-east-1", false, ""}},
+		{"a CBOR body", awsSigV4Action, req{"POST", sigv4STS, "/?Action=GetCallerIdentity", "\xa0", map[string]string{"Content-Type": "application/cbor", "Smithy-Protocol": "rpc-v2-cbor"}, "sts", "us-east-1", false, ""}},
+		{"a regional host carrying AssumeRole", awsSigV4Action, req{"POST", sigv4STSLondon, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "eu-west-2", false, ""}},
+		{"a FIPS host carrying AssumeRole", awsSigV4Action, req{"POST", sigv4STSFIPS, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "us-east-1", false, ""}},
+		{"iam CreateAccessKey", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=CreateAccessKey&UserName=u", form, "iam", "us-east-1", false, ""}},
+		{"iam CreateAccessKey in the query", awsSigV4Action, req{"GET", sigv4IAM, "/?Action=CreateAccessKey&UserName=u", "", nil, "iam", "us-east-1", false, ""}},
+		{"iam CreateLoginProfile behind a ListUsers target", awsSigV4Action, req{"POST", sigv4IAM, "/", "Action=CreateLoginProfile&UserName=u&Password=p",
+			with(map[string]string{"X-Amz-Target": "AWSIdentityManagementV20100508.ListUsers"}), "iam", "us-east-1", false, ""}},
+		{"an sts host signed for another service", awsSigV4Scope, req{"POST", sigv4STS, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "iam", "us-east-1", false, ""}},
+		{"another service's host signed for sts", awsSigV4Scope, req{"POST", sigv4Bedrock, "/", "Action=AssumeRole&RoleArn=arn&RoleSessionName=s", form, "sts", "us-east-1", false, ""}},
+	}
+	for _, action := range []string{"AssumeRole", "GetSessionToken", "GetFederationToken", "AssumeRoleWithWebIdentity"} {
+		refused = append(refused,
+			struct {
+				name, code string
+				r          req
+			}{"sts " + action + " in the query", awsSigV4Action, req{"GET", sigv4STS, "/?Action=" + action + "&Version=2011-06-15", "", nil, "sts", "us-east-1", false, ""}},
+			struct {
+				name, code string
+				r          req
+			}{"sts " + action + " in the body", awsSigV4Action, req{"POST", sigv4STS, "/", "Action=" + action + "&Version=2011-06-15", form, "sts", "us-east-1", false, ""}})
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSigV4Harness(t)
+			r := tc.r
+			in := sandboxRequest(t, r.method, r.host, r.target, r.body, r.hdr, "", r.service, r.region, "")
+			if r.chunked {
+				in.TransferEncoding, in.ContentLength = []string{"chunked"}, -1
+			}
+			if r.wireQuery != "" {
+				in.URL.RawQuery = r.wireQuery
+			}
+			rec := h.send(t, in, r.host)
+			if rec.Code != http.StatusForbidden || rec.Header().Get("X-Wardyn-Reason") != tc.code {
+				t.Fatalf("status %d reason %q body %s, want 403 %s", rec.Code, rec.Header().Get("X-Wardyn-Reason"), rec.Body, tc.code)
+			}
+			if seen := h.arrivals(); len(seen) != 0 {
+				t.Fatalf("AWS saw %d requests (body %q); a refused request must not leave", len(seen), seen[0].body)
+			}
+		})
+	}
+}
+
+// A streamed answer reaches the sandbox as it streams: over a real server and client, the first
+// event arrives while the upstream is still holding the rest back.
+func TestAWSSigV4_StreamedResponseIsFlushedPerChunk(t *testing.T) {
+	h := newSigV4Harness(t)
+	release := make(chan struct{})
+	h.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		_, _ = io.WriteString(w, "frame-one")
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, "frame-two")
+	}
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.p.serveMITMRequest(w, r, sigv4Bedrock, 443)
+	}))
+	defer front.Close()
+	defer close(release)
+	in := sandboxRequest(t, "POST", sigv4Bedrock, "/model/m/invoke-with-response-stream", `{"prompt":"hi"}`,
+		map[string]string{"Content-Type": "application/json"}, "", "bedrock", "us-east-1", "")
+	out, err := http.NewRequest(in.Method, front.URL+in.RequestURI, in.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Header, out.ContentLength = in.Header.Clone(), in.ContentLength
+	first := make(chan string, 1)
+	go func() { // headers and the first event, both while the upstream holds the rest back
+		resp, err := front.Client().Do(out)
+		if err != nil {
+			first <- err.Error()
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		buf := make([]byte, len("frame-one"))
+		n, _ := io.ReadFull(resp.Body, buf)
+		first <- string(buf[:n])
+	}()
+	select {
+	case got := <-first:
+		if got != "frame-one" {
+			t.Fatalf("first event %q, want frame-one", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first event did not arrive while the upstream was still streaming: the relay buffers")
 	}
 }

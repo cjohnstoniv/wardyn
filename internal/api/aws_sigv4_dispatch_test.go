@@ -98,6 +98,9 @@ func TestAWSSigV4Hosts(t *testing.T) {
 		{"wildcard", on, []string{"sts.amazonaws.com", "*.s3.us-east-1.amazonaws.com"}, nil},
 		{"another port", on, []string{"s3.us-east-1.amazonaws.com:8443"}, nil},
 		{"private endpoint", on, []string{"vpce-1.bedrock-runtime.us-east-1.vpce.amazonaws.com"}, nil},
+		{"sts private endpoint", on, []string{"sts.us-east-1.amazonaws.com", "vpce-1a2b-c3d4.sts.us-east-1.vpce.amazonaws.com"}, nil},
+		{"sts dual-stack", on, []string{"sts.us-east-1.api.aws"}, nil},
+		{"sts fips", on, []string{"sts-fips.us-east-1.amazonaws.com"}, []string{"sts-fips.us-east-1.amazonaws.com"}},
 		{"no hosts", on, nil, nil},
 	} {
 		s := &Server{cfg: tc.cfg}
