@@ -1276,7 +1276,7 @@ erases one person's retained records by explicit scope, in one audited act
   - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
   - A write that begins after the erase lands, so reconnecting works at once.
   - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
-  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the credential locks hold back a writer.
   - Migration `0156_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
   - The counter holds a number and a time, never a credential, and refuses nothing later.
   - After a person is erased, `secret_owner_generations` still holds their subject id, the counter and the time of its last change; Wardyn never deletes that row.
