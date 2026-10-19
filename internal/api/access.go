@@ -514,6 +514,18 @@ type accessPostureFlipBody struct {
 	After                   string `json:"after"`
 }
 
+// writeHeldAccessPostureFlip is writeAccessPostureFlip for the approval of a held change that did not
+// flip the outcome when it was proposed and does now: the approve route takes no acknowledgement, so
+// the change is proposed again with it.
+func writeHeldAccessPostureFlip(w http.ResponseWriter, before, after string) {
+	writeJSON(w, http.StatusBadRequest, accessPostureFlipBody{
+		Error: fmt.Sprintf("this change now moves every unmatched signed-in human from %q to %q, which it did not when it was proposed — "+
+			"reject it and propose it again with acknowledge_access_change=true", before, after),
+		RequiredAcknowledgement: true,
+		Before:                  before, After: after,
+	})
+}
+
 func writeAccessPostureFlip(w http.ResponseWriter, before, after string) {
 	writeJSON(w, http.StatusBadRequest, accessPostureFlipBody{
 		Error:                   fmt.Sprintf("this change moves every unmatched signed-in human from %q to %q — pass acknowledge_access_change=true to confirm", before, after),
@@ -603,7 +615,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// here: the guard is the APPLYING human's, so it runs on the approval.
 	g, refuse, err := s.gateRoleMappingUpsert(r, req, value, userTypes, func() ([]types.RoleMapping, error) {
 		return s.cfg.Store.ListRoleMappings(r.Context())
-	}, mode != govQueue)
+	}, mode != govQueue, false)
 	if err != nil {
 		writeServerError(w, r, "list role mappings", err)
 		return
@@ -725,7 +737,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// natural-key delete has no body) — ParseBool over a bare == "true"
 	// so "1"/"TRUE"/"T" also work, err (including absent) => false.
 	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
-	if refuse := s.gateRoleMappingEffect(r, acknowledge, existing, candidate, userTypes, mode != govQueue); refuse != nil {
+	if refuse := s.gateRoleMappingEffect(r, acknowledge, existing, candidate, userTypes, mode != govQueue, false); refuse != nil {
 		refuse(w)
 		return
 	}
