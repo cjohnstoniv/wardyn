@@ -26,6 +26,12 @@
 #   docker build -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local .
 
 # ── Stage 1: Go builder (wardyn-rec) ──────────────────────────────────────────
+# Module-cache seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (scripts/lib/image-build.sh does when WARDYN_BUILD_GOMODCACHE names a directory), so
+# a CI job's already-filled module cache feeds `go mod download` below instead of
+# the network. An ordinary and a release build leave it empty and download as before.
+FROM scratch AS gomodcache
+
 FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 WORKDIR /build
 
@@ -50,7 +56,14 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 
 COPY go.mod go.sum ./
-RUN go mod download
+# The seed's cache/download (zips + hashes) is copied in first; `go mod download`
+# then fetches only what it lacks, and go.sum verifies every module either way.
+RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
+    if [ -d /gomodcache-seed/cache/download ]; then \
+        mkdir -p "$(go env GOMODCACHE)/cache" && \
+        cp -a /gomodcache-seed/cache/download "$(go env GOMODCACHE)/cache/"; \
+    fi && \
+    go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/wardyn-rec ./cmd/wardyn-rec
 

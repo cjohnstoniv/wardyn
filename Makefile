@@ -705,6 +705,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-helm-schema.sh
 	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
+	./scripts/test-image-build-logs.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-follow-main.sh

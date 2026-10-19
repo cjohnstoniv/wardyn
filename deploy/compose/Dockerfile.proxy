@@ -3,6 +3,12 @@
 # internal network (L0 structural egress). Pure-Go static build.
 # Runs on the BUILDER's arch and cross-compiles to $TARGETARCH (pure Go,
 # CGO_ENABLED=0) — a linux/arm64 image needs no QEMU for the compile.
+# Module-cache seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (scripts/lib/image-build.sh does when WARDYN_BUILD_GOMODCACHE names a directory), so
+# a CI job's already-filled module cache feeds `go mod download` below instead of
+# the network. An ordinary and a release build leave it empty and download as before.
+FROM scratch AS gomodcache
+
 FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
 
 WORKDIR /build
@@ -43,7 +49,14 @@ RUN apk add --no-cache ca-certificates && \
     fi
 
 COPY go.mod go.sum ./
-RUN go mod download
+# The seed's cache/download (zips + hashes) is copied in first; `go mod download`
+# then fetches only what it lacks, and go.sum verifies every module either way.
+RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
+    if [ -d /gomodcache-seed/cache/download ]; then \
+        mkdir -p "$(go env GOMODCACHE)/cache" && \
+        cp -a /gomodcache-seed/cache/download "$(go env GOMODCACHE)/cache/"; \
+    fi && \
+    go mod download
 
 COPY . .
 # TARGETARCH is BuildKit's automatic per-target ARG; empty under the legacy

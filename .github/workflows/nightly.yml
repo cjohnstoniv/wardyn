@@ -139,6 +139,10 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: unit
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      - name: Fill the Go module cache
+        run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -158,6 +162,7 @@ jobs:
         shell: bash # pipefail — see the e2e-live job above
         run: |
           mkdir -p test/reports/e2e
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
           make test-e2e-live 2>&1 | tee test/reports/e2e/task-e2e.log
       - name: Upload e2e results
         if: always()
@@ -197,6 +202,10 @@ jobs:
       - uses: ./.github/actions/nightly-go-cache
         with:
           suite: conformance-docker
+      # The image builds below read Go modules from this job's cache (scripts/lib/image-build.sh),
+      # so a module fetch that fails fails HERE with its own error, not inside a docker build.
+      - name: Fill the Go module cache
+        run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -246,6 +255,7 @@ jobs:
         # removed here — nothing else on this runner is attached to it.
         run: |
           docker network rm wardyn-internal 2>/dev/null || true
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
           make test-e2e-live 2>&1 | tee test/reports/e2e/cc2-task-e2e.log
       - name: Upload CC2 results
         if: always()
