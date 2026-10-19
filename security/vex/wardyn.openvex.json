@@ -3,8 +3,8 @@
   "@id": "https://github.com/cjohnstoniv/wardyn/security/vex/wardyn.openvex.json",
   "author": "The Wardyn Authors",
   "role": "Project maintainers",
-  "timestamp": "2026-08-26T00:00:00Z",
-  "version": 1,
+  "timestamp": "2026-10-19T00:00:00Z",
+  "version": 2,
   "tooling": "hand-authored from govulncheck call-graph output; see threatmodel/THREAT-MODEL.md",
   "statements": [
     {
@@ -19,7 +19,11 @@
         { "@id": "pkg:oci/wardyn-proxy?repository_url=ghcr.io/cjohnstoniv" },
         { "@id": "pkg:oci/agent-base?repository_url=ghcr.io/cjohnstoniv" },
         { "@id": "pkg:oci/agent-codex-cli?repository_url=ghcr.io/cjohnstoniv" },
-        { "@id": "pkg:oci/agent-aws-sso?repository_url=ghcr.io/cjohnstoniv" }
+        { "@id": "pkg:oci/agent-aws-sso?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/wardynd-fips?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/wardyn-runnerd?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/agent-vscode?repository_url=ghcr.io/cjohnstoniv" },
+        { "@id": "pkg:oci/agent-novnc?repository_url=ghcr.io/cjohnstoniv" }
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_not_present",

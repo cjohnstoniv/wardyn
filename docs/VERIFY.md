@@ -176,7 +176,7 @@ cosign verify-blob \
 
 ## The continuous lane
 
-- Everything above is about **release** images — the five `vX.Y.Z`-tagged images `release.yml` publishes.
+- Everything above is about **release** images — the nine `vX.Y.Z`-tagged images `release.yml` publishes.
 - A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
 
 Those tags are **signed but not attested**, and their signature is under a different identity:

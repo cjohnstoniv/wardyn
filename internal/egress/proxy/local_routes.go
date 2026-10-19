@@ -41,7 +41,7 @@ const (
 	routeRecordings            = "/wardyn/v1/recordings/"
 	routeScanResults           = "/wardyn/v1/scan-results/"
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
-	// container-login run. Same brokered shape as the scan/verify result uploads.
+	// container-login run. Same brokered shape as the scan result upload.
 	routeSSOToken = "/wardyn/v1/sso-token/"
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
@@ -354,7 +354,7 @@ func (p *Proxy) handleBrokerRecording(w http.ResponseWriter, r *http.Request) {
 }
 
 // forwardBrokeredUpload is the shared PUT-upload path for the brokered
-// recording/scan-result/verify-result routes: validate the {runID} the caller
+// recording/scan-result routes: validate the {runID} the caller
 // took from the path, read the capped body, forward it to cpPath with the run
 // token injected, emit the decision, and pass the response through verbatim.
 // The sandbox query string is deliberately NOT forwarded — the run→workspace
