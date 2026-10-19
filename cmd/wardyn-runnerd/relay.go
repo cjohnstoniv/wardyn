@@ -19,6 +19,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
+// maxLocalRelays bounds the connections a local relay holds at once, well under the session's
+// runnerwire.MaxStreams, so a burst of local connections leaves streams for output and renewal.
+// relayFirstByteWait bounds how long a connection may stay silent before it opens a relay stream:
+// the proxy's TLS client speaks first, so a connection that does not is not a proxy.
+const maxLocalRelays = runnerwire.MaxStreams / 4
+
+var relayFirstByteWait = 10 * time.Second
+
 // localRelay is the runner's end of the internal hop (design 0.9 §4.2). A
 // local run's proxy dials its org's internal hostname, which the proxy's hosts
 // entry maps to the relay pair's target; this listener on the pair's bind
@@ -108,7 +116,7 @@ func (r *localRelay) serve(ln net.Listener) {
 func (r *localRelay) forward(c net.Conn) {
 	r.mu.Lock()
 	peer := r.peer
-	if peer == nil || r.closed {
+	if peer == nil || r.closed || len(r.conns) >= maxLocalRelays {
 		r.mu.Unlock()
 		_ = c.Close()
 		return
@@ -124,10 +132,21 @@ func (r *localRelay) forward(c net.Conn) {
 	relayCopy(r.ctx, peer, c)
 }
 
-// relayCopy copies c over one new relay stream on peer, with half-close both ways.
+// relayCopy copies c over one new relay stream on peer, with half-close both ways. The stream
+// opens only once c has sent a first byte, within relayFirstByteWait.
 func relayCopy(ctx context.Context, peer *runnerwire.Peer, c net.Conn) {
+	var first [1]byte
+	_ = c.SetReadDeadline(time.Now().Add(relayFirstByteWait))
+	if _, err := io.ReadFull(c, first[:]); err != nil {
+		return
+	}
+	_ = c.SetReadDeadline(time.Time{})
 	st, err := peer.Open(ctx, runnerwire.Open{Kind: runnerwire.KindRelay})
 	if err != nil {
+		return
+	}
+	if _, err := st.Write(first[:]); err != nil {
+		_ = st.Close()
 		return
 	}
 	sent := make(chan struct{})

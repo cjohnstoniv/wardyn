@@ -263,3 +263,61 @@ func TestRunnerRelayForwardsOverItsOwnStream(t *testing.T) {
 		t.Fatal("the relayed connection outlived its session")
 	}
 }
+
+// A connection that sends nothing opens no relay stream and is closed after the first-byte wait;
+// one past the cap is closed at once.
+func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
+	old := relayFirstByteWait
+	relayFirstByteWait = 100 * time.Millisecond
+	defer func() { relayFirstByteWait = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	opened := make(chan struct{}, 4)
+	orgConn, runConn := runnerwire.Loopback()
+	org := runnerwire.NewPeer(orgConn, runnerwire.PeerConfig{Org: true, OnOpen: func(*runnerwire.Stream, runnerwire.Open) error {
+		opened <- struct{}{}
+		return nil
+	}})
+	run := runnerwire.NewPeer(runConn, runnerwire.PeerConfig{})
+	go func() { _ = org.Run(ctx) }()
+	go func() { _ = run.Run(ctx) }()
+
+	r := &localRelay{ctx: ctx, pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	defer r.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.listeners[1] = ln
+	go r.serve(ln)
+	r.Online(run)
+
+	silent, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = silent.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := silent.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("a silent connection was not closed by the first-byte wait: %v", err)
+	}
+	select {
+	case <-opened:
+		t.Fatal("a silent connection opened a relay stream")
+	default:
+	}
+
+	for range maxLocalRelays {
+		a, b := net.Pipe()
+		defer a.Close()
+		defer b.Close()
+		r.conns[a] = run
+	}
+	extra, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = extra.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, err := extra.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("a connection past the cap was held open: %v", err)
+	}
+}
