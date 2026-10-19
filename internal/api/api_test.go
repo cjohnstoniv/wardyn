@@ -150,12 +150,13 @@ func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, byType types.Act
 	}
 	// The store contract approval.Decide relays: an unknown id is not found and a row that is no
 	// longer PENDING (decided, cancelled, expired) is refused, so a second decision cannot
-	// silently flip it.
+	// silently flip it. A seed that leaves State empty stands for PENDING (the store never holds
+	// an empty state), so tests that seed only the fields they read keep deciding.
 	ap, ok := f.byID[id]
 	if !ok {
 		return types.ApprovalRequest{}, store.ErrNotFound
 	}
-	if ap.State != types.ApprovalPending {
+	if ap.State != "" && ap.State != types.ApprovalPending {
 		return types.ApprovalRequest{}, approval.ErrAlreadyDecided
 	}
 	now := time.Now().UTC()
