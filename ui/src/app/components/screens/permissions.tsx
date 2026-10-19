@@ -607,16 +607,19 @@ function ConfirmEnforcement({
             {(turningOn ? PERM.ENFORCE_ON_TITLE : PERM.ENFORCE_OFF_TITLE)(state ? KIND[state.kind].label : "")}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {lockout
-              ? PERM.ENFORCE_ZERO_CONFIRM
-              : turningOn
+            {turningOn
               ? memberCount === null
                 ? PERM.ENFORCE_ON_BODY_UNKNOWN
                 : PERM.ENFORCE_ON_BODY(memberCount)
               : PERM.ENFORCE_OFF_BODY}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {lockout && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
+        {lockout && (
+          <Note tone="red">
+            <span className="block font-medium">{PERM.ENFORCE_ZERO_CONFIRM}</span>
+            <span className="block">{PERM.ENFORCE_ON_ZERO}</span>
+          </Note>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction

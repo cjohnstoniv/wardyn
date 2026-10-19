@@ -113,7 +113,10 @@ test.describe("Run cockpit terminal focus", () => {
     const pane = await openTerminal(page);
     const box = await wrapperBox(pane);
     expect(box).not.toBeNull();
-    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height - 2);
+    // The page's bottom bar (Focus, Edit layout) floats over the last 56px of a short viewport, so a click
+    // at the wrapper's very bottom edge would land on it; stay above it, still well below the last row.
+    const y = Math.min(box!.y + box!.height - 2, page.viewportSize()!.height - 80);
+    await page.mouse.click(box!.x + box!.width / 2, y);
     await expect.poll(() => focusInXterm(page)).toBe(true);
   });
 
