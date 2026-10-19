@@ -185,7 +185,7 @@ func pullCommits(ctx context.Context, w io.Writer, sy *syncer, c *ssh.Client, ru
 		return err
 	}
 	branch := "wardyn/sync-" + runID[:8]
-	if _, err := laptopGit(ctx, root, "-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", tmp.Name(), "+HEAD:refs/heads/"+branch); err != nil {
+	if _, err := laptopGit(ctx, root, pullCommitsFetch(tmp.Name(), branch)...); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "git: fetched %s commit(s) from the sandbox into the branch %s; review it with 'git log %s'. Your working tree is unchanged\n", syncShown(out), branch, branch)
@@ -234,4 +234,10 @@ func (sy *syncer) downloadFile(src, dst string) error {
 		err = fmt.Errorf("the bundle is over %d bytes (--max-pull-bytes, and 256 MiB for any one file)", limit)
 	}
 	return err
+}
+
+// pullCommitsFetch is the laptop fetch of a sandbox bundle into branch: every
+// object checked, no tags, and no submodule the bundle names fetched.
+func pullCommitsFetch(bundle, branch string) []string {
+	return []string{"-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", "--no-recurse-submodules", bundle, "+HEAD:refs/heads/" + branch}
 }

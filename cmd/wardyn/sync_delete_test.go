@@ -191,3 +191,26 @@ func TestSyncGateway_APassReportCountsLaptopDeletes(t *testing.T) {
 		t.Errorf("laptop_deletes_reported = %v, want 5", data["laptop_deletes_reported"])
 	}
 }
+
+func TestSyncGateway_ALaptopDeleteKeepsASandboxWriteAfterTheWalk(t *testing.T) {
+	g := newSyncRig(t)
+	box := g.mkSandboxDir(syncRemote)
+	sy, _, root := g.syncer(syncRemote, false)
+	putSyncFile(t, filepath.Join(root, "kept.txt"), "k", 0o644)
+	putSyncFile(t, filepath.Join(root, "notes.txt"), "laptop", 0o644)
+	mustPass(t, sy)
+	if err := os.Remove(filepath.Join(root, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	// The agent writes notes.txt after the walk read it, just before the delete.
+	g.rn.onStat = map[string]func(){"notes.txt": func() {
+		putSyncFile(t, filepath.Join(box, "notes.txt"), "the agent's late edit", 0o644)
+	}}
+	rep := mustPass(t, sy)
+	if len(rep.DeletedRemote) != 0 || !slices.Contains(rep.Conflicts, "notes.txt") {
+		t.Errorf("deleted %v, conflicts %v: a write after the walk must be kept as a conflict", rep.DeletedRemote, rep.Conflicts)
+	}
+	if got := getSyncFile(t, filepath.Join(box, "notes.txt")); got != "the agent's late edit" {
+		t.Errorf("sandbox notes.txt = %q", got)
+	}
+}

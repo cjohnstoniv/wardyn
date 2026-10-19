@@ -400,7 +400,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 - Laptop to sandbox; `--pull` is per run and is the audit row's `direction`.
 - Refuses symlinks both ways; a pulled file never gets an exec bit.
-- Every `.gitignore` and `.wardynignore` applies both ways, in git's syntax; a `.wardynignore` `!name` re-includes a git-ignored file.
+- Every `.gitignore` and `.wardynignore` applies both ways, in git's syntax; a `.wardynignore` `!name` re-includes a git-ignored file. Only the laptop's own apply: the sandbox never writes, replaces or deletes one there.
 - The organisation's [`WARDYN_SYNC_DENY`](ENV.md#wardyn_sync_deny) patterns apply above every ignore file, which cannot undo them. They bind `wardyn sync` only: `sftp` can still copy any file.
 - A laptop delete or rename reaches the sandbox only for a file this sync sent and the sandbox left unchanged. A sandbox edit is kept and listed as a conflict. An empty, unreadable or ignored laptop directory deletes nothing.
 - A sandbox delete removes a laptop file only under `--pull-deletes`, if the laptop copy is unchanged. Deletes are listed first, capped by `--max-pull-deletes` (20; over it, none), and moved into `~/.local/state/wardyn/sync/<run-id>-deleted/`.

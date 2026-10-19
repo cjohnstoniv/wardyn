@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,5 +114,12 @@ func TestSyncGitCheck_NeedsTheTopOfAWorkTree(t *testing.T) {
 	sy.o.remote = syncGitDir + "/x"
 	if err := syncGitCheck(context.Background(), sy, root); err == nil {
 		t.Error("a remote directory under the bundle directory was accepted")
+	}
+}
+
+func TestPullCommitsFetch_ChecksObjectsAndSkipsTagsAndSubmodules(t *testing.T) {
+	want := []string{"-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", "--no-recurse-submodules", "/tmp/b.bundle", "+HEAD:refs/heads/wardyn/sync-12345678"}
+	if got := pullCommitsFetch("/tmp/b.bundle", "wardyn/sync-12345678"); !slices.Equal(got, want) {
+		t.Errorf("fetch argv = %q, want %q", got, want)
 	}
 }

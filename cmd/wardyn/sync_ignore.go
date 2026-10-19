@@ -175,3 +175,17 @@ func (ig *syncIgnore) ignored(rel string, isDir bool) bool {
 		dir, rest = path.Join(dir, seg), tail
 	}
 }
+
+// syncIsIgnoreFile reports an ignore file at any depth, by any spelling a
+// case- or normalisation-insensitive laptop filesystem would open as one. The
+// rules that bind the laptop are the laptop's own: the sandbox never writes,
+// replaces or deletes one there.
+func syncIsIgnoreFile(rel string) bool {
+	base := syncFold(path.Base(rel))
+	for _, name := range syncIgnoreFiles {
+		if base == syncFold(name) {
+			return true
+		}
+	}
+	return false
+}

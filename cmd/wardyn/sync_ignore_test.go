@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSyncPattern_GitSyntax(t *testing.T) {
@@ -117,5 +118,52 @@ func TestSyncGateway_AnIgnoredFileIsNeverDeleted(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(box, "out/app.bin")); err != nil {
 		t.Errorf("the sandbox copy of an ignored file went: %v", err)
+	}
+}
+
+func TestSyncGateway_TheSandboxNeverWritesTheLaptopsRules(t *testing.T) {
+	g := newSyncRig(t)
+	box := g.mkSandboxDir(syncRemote)
+	sy, _, root := g.syncer(syncRemote, true)
+	sy.o.trash = t.TempDir()
+	putSyncFile(t, filepath.Join(root, ".gitignore"), ".env\n", 0o644)
+	putSyncFile(t, filepath.Join(root, ".env"), "SECRET=1", 0o644)
+	putSyncFile(t, filepath.Join(root, "main.go"), "package main", 0o644)
+	putSyncFile(t, filepath.Join(box, ".wardynignore"), "!.env\n", 0o644)
+	putSyncFile(t, filepath.Join(box, "sub/.WardynIgnore"), "!*\n", 0o644)
+	refusedIgnoreFile := func(rep *syncReport, rel string) bool {
+		return slices.Contains(rep.Refused, syncRefusal{Path: rel, Reason: "ignore file"})
+	}
+
+	rep := mustPass(t, sy)
+	if !refusedIgnoreFile(rep, ".wardynignore") || !refusedIgnoreFile(rep, "sub/.WardynIgnore") {
+		t.Errorf("the sandbox's ignore files were not refused: %+v", rep.Refused)
+	}
+	for _, p := range []string{".wardynignore", "sub"} {
+		if _, err := os.Stat(filepath.Join(root, p)); err == nil {
+			t.Errorf("%s was pulled to the laptop", p)
+		}
+	}
+	mustPass(t, sy)
+	if _, err := os.Stat(filepath.Join(box, ".env")); err == nil {
+		t.Fatal("a sandbox-written .wardynignore re-included the laptop's git-ignored .env")
+	}
+
+	// The sandbox rewrites the laptop's .gitignore, then deletes it under --pull-deletes.
+	putSyncFile(t, filepath.Join(box, ".gitignore"), "", 0o644)
+	later := time.Now().Add(time.Hour)
+	_ = os.Chtimes(filepath.Join(box, ".gitignore"), later, later)
+	if rep := mustPass(t, sy); !refusedIgnoreFile(rep, ".gitignore") || getSyncFile(t, filepath.Join(root, ".gitignore")) != ".env\n" {
+		t.Errorf("the sandbox replaced the laptop's .gitignore: refused %+v", rep.Refused)
+	}
+	if err := os.Remove(filepath.Join(box, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	sy.o.pullDeletes, sy.o.maxPullDeletes = true, 20
+	if rep := mustPass(t, sy); !refusedIgnoreFile(rep, ".gitignore") || len(rep.DeletedLocal) != 0 {
+		t.Errorf("a sandbox delete removed the laptop's .gitignore: deleted %v, refused %+v", rep.DeletedLocal, rep.Refused)
+	}
+	if _, err := os.Stat(filepath.Join(box, ".env")); err == nil {
+		t.Error(".env reached the sandbox")
 	}
 }

@@ -133,6 +133,9 @@ type syncRunner struct {
 	failMsg map[string]string
 	stderr  string
 	served  atomic.Int64
+	// onStat runs before the sandbox answers a stat or lstat of the path with
+	// that base name: an agent write landing between a walk and the next request.
+	onStat map[string]func()
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
@@ -337,6 +340,10 @@ func (h *rootedFS) Filelist(rq *sftp.Request) (sftp.ListerAt, error) {
 		}
 		return out, nil
 	case "Stat":
+		// pkg/sftp serves an lstat as a Stat here (rootedFS has no Lstat).
+		if f, ok := h.r.onStat[path.Base(rq.Filepath)]; ok {
+			f()
+		}
 		fi, err := os.Stat(p)
 		return fileLister{fi}, err
 	case "Lstat":

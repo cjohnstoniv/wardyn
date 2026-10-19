@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -243,5 +245,15 @@ func TestSFTPOpCounter_ReadsTheFraming(t *testing.T) {
 		if rm, mv := c.counts(); rm != 2 || mv != 2 {
 			t.Errorf("chunks of %d: removes %d renames %d, want 2 and 2", step, rm, mv)
 		}
+	}
+}
+
+func TestQueueLaunch_RefusesALocalFolderLikeCreate(t *testing.T) {
+	s, _, _, run, _ := localFolderFixture(t)
+	s.cfg.SSHListenAddr = "" // the deployment lost its SSH gateway while the run waited
+	st := &queuedStart{run: run, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), cw: newQueueRefusalCapture()}
+	end := s.queueLaunch(st, createRunRequest{Task: "fix it", LocalFolder: &types.RunLocalFolder{Name: "my-app"}}, governanceCeiling{})
+	if end == nil || !strings.Contains(end.hint, "no SSH gateway") {
+		t.Fatalf("end = %+v: a queued start must refuse a local folder the deployment cannot hold, as create does", end)
 	}
 }

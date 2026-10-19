@@ -373,6 +373,10 @@ func (sy *syncer) deleted(ctx context.Context, rel string, v *passView, rep *syn
 		}
 		return true, sy.removeRemote(ctx, rel, v, rep)
 	case hasL && !hasR && !lChanged && sy.o.pullDeletes && len(v.remote.seen) > 0 && v.remote.gone(rel):
+		if syncIsIgnoreFile(rel) {
+			rep.refuse(rel, "ignore file")
+			return true, nil
+		}
 		v.localGoing = append(v.localGoing, rel)
 		return true, nil
 	}
@@ -435,7 +439,18 @@ func (sy *syncer) renameRemote(ctx context.Context, from, to string, v *passView
 }
 
 func (sy *syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *syncReport) error {
-	if err := sy.c.Remove(path.Join(sy.o.remote, rel)); err != nil {
+	p := path.Join(sy.o.remote, rel)
+	// The agent may have written the file since the walk: only the copy the
+	// walk saw is deleted, and a changed one is kept as a conflict.
+	fi, err := sy.c.Lstat(p)
+	if err != nil {
+		return sy.pathFailed(ctx, rep, rel, "stat in the sandbox", err)
+	}
+	if !fi.Mode().IsRegular() || remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+		rep.Conflicts = append(rep.Conflicts, rel)
+		return nil
+	}
+	if err := sy.c.Remove(p); err != nil {
 		return sy.pathFailed(ctx, rep, rel, "delete in the sandbox", err)
 	}
 	delete(sy.st.Files, rel)
@@ -694,6 +709,10 @@ func (sy *syncer) push(ctx context.Context, rel string, l syncFile, rep *syncRep
 // bit. The bytes counted against the budget are the bytes read, not the size
 // the sandbox listed.
 func (sy *syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *syncFile, rep *syncReport, pulled *int64) error {
+	if syncIsIgnoreFile(rel) {
+		rep.refuse(rel, "ignore file")
+		return nil
+	}
 	if err := syncCheckLocal(sy.root, rel); err != nil {
 		rep.refuse(rel, err.Error())
 		return nil
