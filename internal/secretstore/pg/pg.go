@@ -385,6 +385,7 @@ func expiresAt(ctx context.Context) *time.Time {
 // k wraps the DEK bound to the same (owner, name).
 func seal(ctx context.Context, k kek.KEK, owner, name string, value []byte) (wrapped, ct []byte, err error) {
 	dek := make([]byte, kek.DEKSize)
+	defer clear(dek)
 	if _, err := rand.Read(dek); err != nil {
 		return nil, nil, fmt.Errorf("draw data key: %w", err)
 	}
