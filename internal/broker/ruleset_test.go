@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,9 @@ type rulesetFake struct {
 	rules     map[string]string
 	otherwise string
 	// page2 is a branch's second page of rules: its first page links to it.
-	page2    map[string]string
+	page2 map[string]string
+	// endless names branches whose every page links to a next one, so the list never ends.
+	endless  map[string]bool
 	rulesets map[int64]string
 	// blockRules makes every rules/branches read hang until the CLIENT gives up,
 	// so a caller deadline can be exercised without a sleep.
@@ -110,6 +113,10 @@ func newRulesetMinter(t *testing.T, f *rulesetFake) *githubMinter {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 				return
+			}
+			if f.endless[branch] {
+				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				w.Header().Set("Link", `<http://`+r.Host+r.URL.Path+`?page=`+strconv.Itoa(max(page, 1)+1)+`>; rel="next"`)
 			}
 			if next, paged := f.page2[branch]; paged {
 				if r.URL.Query().Get("page") == "2" {
@@ -314,6 +321,32 @@ func TestVerifyRefRuleset_ReadsEveryPageOfRules(t *testing.T) {
 	confined, detail, err := newRulesetMinter(t, f).VerifyRefRuleset(context.Background(), "acme/widgets")
 	if err != nil || !confined {
 		t.Errorf("confined = %v, %q, err %v; the deletion rule on page 2 must count", confined, detail, err)
+	}
+}
+
+// A rules list that never ends is cut off at maxRulePages and refused: the
+// pages read so far look confining, but a partial read must not grade confined.
+func TestVerifyRefRuleset_EndlessRulesListIsAnError(t *testing.T) {
+	f := &rulesetFake{
+		rules:    map[string]string{refProbeOutside: rulesConfining, refProbeOutsideTwo: rulesConfining, refProbeOutsideNested: rulesConfining, refProbeInside: rulesNone},
+		endless:  map[string]bool{refProbeOutside: true},
+		rulesets: neverBypass(),
+	}
+	confined, detail, err := newRulesetMinter(t, f).VerifyRefRuleset(context.Background(), "acme/widgets")
+	if err == nil || confined {
+		t.Fatalf("confined = %v, %q, err %v; an unending rules list must be an error, never confined", confined, detail, err)
+	}
+	if !strings.Contains(err.Error(), "run past") {
+		t.Errorf("err = %v; want the page-cap refusal", err)
+	}
+	reads := 0
+	for _, b := range f.askedBranches() {
+		if b == refProbeOutside {
+			reads++
+		}
+	}
+	if reads != maxRulePages {
+		t.Errorf("read %d pages of the endless list, want exactly maxRulePages (%d)", reads, maxRulePages)
 	}
 }
 
