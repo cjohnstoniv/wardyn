@@ -60,7 +60,7 @@ func seedGovernanceAssignment(t *testing.T, st store.PG, a types.GovernanceAssig
 	if err != nil {
 		t.Fatalf("seed assignment %+v: %v", a, err)
 	}
-	t.Cleanup(func() { _ = st.DeleteGovernanceAssignment(ctx, saved.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteGovernanceAssignment(ctx, saved.ID) })
 	return saved
 }
 
@@ -165,7 +165,7 @@ func TestPG_GovernanceProfile_DeleteRestrictedWhileAssigned(t *testing.T) {
 	}
 	// Unassign, then the same delete must succeed — the refusal is about the
 	// binding, not about the profile.
-	if err := st.DeleteGovernanceAssignment(ctx, a.ID); err != nil {
+	if _, err := st.DeleteGovernanceAssignment(ctx, a.ID); err != nil {
 		t.Fatalf("delete assignment: %v", err)
 	}
 	if err := st.DeleteGovernanceProfile(ctx, p.ID); err != nil {
@@ -237,7 +237,7 @@ func TestPG_GovernanceAssignment_NaturalKeyUpsert(t *testing.T) {
 	}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("assignment naming an unknown profile: err = %v, want ErrNotFound", err)
 	}
-	if err := st.DeleteGovernanceAssignment(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.DeleteGovernanceAssignment(ctx, uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown assignment id: err = %v, want ErrNotFound", err)
 	}
 }
@@ -424,7 +424,7 @@ func TestPG_HasGroupTierAssignments(t *testing.T) {
 	if !withGroup {
 		t.Error("HasGroupTierAssignments = false with a group-tier row present, want true")
 	}
-	if err := st.DeleteGovernanceAssignment(ctx, group.ID); err != nil {
+	if _, err := st.DeleteGovernanceAssignment(ctx, group.ID); err != nil {
 		t.Fatalf("delete group assignment: %v", err)
 	}
 	// The shared substrate may legitimately carry another test's group row, so

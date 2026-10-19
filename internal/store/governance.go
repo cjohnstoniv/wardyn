@@ -397,34 +397,28 @@ func UpsertGovernanceAssignmentQ(ctx context.Context, q Querier, a types.Governa
 	return out, nil
 }
 
-// DeleteGovernanceAssignment removes one assignment by id, ErrNotFound when
-// no row matched. Unassigning is the SUPPORTED way to widen someone back to
-// the deployment ceiling.
-func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error {
+// DeleteGovernanceAssignment removes one assignment by id and returns the row it
+// removed, ErrNotFound when no row matched. Unassigning is the SUPPORTED way to
+// widen someone back to the deployment ceiling.
+func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) (types.GovernanceAssignment, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return err
+		return types.GovernanceAssignment{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
 	if err := LockGovernanceGraph(ctx, tx); err != nil {
-		return err
+		return types.GovernanceAssignment{}, err
 	}
-	if err := DeleteGovernanceAssignmentQ(ctx, tx, id); err != nil {
-		return err
+	a, err := DeleteGovernanceAssignmentQ(ctx, tx, id)
+	if err != nil {
+		return types.GovernanceAssignment{}, err
 	}
-	return tx.Commit(ctx)
+	return a, tx.Commit(ctx)
 }
 
 // DeleteGovernanceAssignmentQ is DeleteGovernanceAssignment's statement on q.
-func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) error {
-	tag, err := q.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("store: delete governance assignment: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) (types.GovernanceAssignment, error) {
+	return scanGovernanceAssignment(q.QueryRow(ctx, `DELETE FROM governance_assignments WHERE id = $1 RETURNING `+governanceAssignmentCols, id))
 }
 
 // GetGovernanceAssignmentQ reads one assignment by id on q, ErrNotFound when none; forUpdate locks the
