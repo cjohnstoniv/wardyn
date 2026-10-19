@@ -201,7 +201,7 @@
 # API-5: docs/AUDIT-ACTIONS.md 48868 adds 17 over 48851 (the IdP back-channel logout source on session.revoke), measured after merging main.
 # docs/AUDIT-ACTIONS.md=48851 adds 43 (0.10 HYB-A): ssh.sync.transfer delete/rename counts, run.seed.hold and run.seed rows
 # docs/AUDIT-ACTIONS.md 49187 = ours 48988 + theirs 49050 - base 48851 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
-# docs/AUDIT-ACTIONS.md 49486 adds 299 over 49187, measured (0.10.0 GHPAT): github_pat.own.store, .delete and .use, and the credential.mint denial for a person's own GitHub token while the PAT broker is off.
+# docs/AUDIT-ACTIONS.md 49486 adds 299 over 49187, measured (0.10.0 GHPAT): github_pat.own.store, .delete and .resolve, and the credential.mint denial for a person's own GitHub token while the PAT broker is off.
 docs/AUDIT-ACTIONS.md=49486 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

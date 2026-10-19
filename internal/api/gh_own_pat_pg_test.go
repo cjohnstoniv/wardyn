@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,4 +98,54 @@ func TestPG_GitHubOwnToken_RunUsesTheOwnersToken(t *testing.T) {
 		}
 		refused(t, "alice", reasonGitHubOwnTokenUndeliverable)
 	})
+}
+
+// A run holds one GitHub credential: github.com repositories decided by two
+// own-token rows, or by an own-token row beside a shared one, are refused at
+// launch with the reason, the shared row's grant is never rewritten to a
+// person's token, and the mixed refusal names both rows (never a secret).
+func TestPG_GitHubOwnToken_RunRefusesMoreThanOneDeciderRow(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	ctx := context.Background()
+	other := ghOwnTestRow()
+	other.ID, other.BaseURLs = "gh-own-two", []string{"https://github.com/beta"}
+	shared := types.GitProvider{ID: "gh-shared", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/gamma"},
+		Lanes: []types.GitLane{types.GitLanePAT}}
+	policy := e.storePolicyFor(t, "gh-own", "github.com", "git-pat-github-com", false)
+	refusal := func(t *testing.T, rows ...types.GitProvider) string {
+		t.Helper()
+		if _, err := e.h.srv.cfg.Store.PutSiteConfig(ctx, adoSite(rows...)); err != nil {
+			t.Fatalf("PutSiteConfig: %v", err)
+		}
+		w := e.createRun(t, "alice", policy)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"reason":"`+reasonGitHubOwnTokenUndeliverable+`"`) {
+			t.Fatalf("create = %d %s, want 422 %s", w.Code, w.Body.String(), reasonGitHubOwnTokenUndeliverable)
+		}
+		return w.Body.String()
+	}
+	t.Run("two own-token rows: refused", func(t *testing.T) {
+		if body := refusal(t, ghOwnTestRow(), other); !strings.Contains(body, "two GitHub rows") {
+			t.Fatalf("body = %s, want the two-rows refusal", body)
+		}
+	})
+	t.Run("an own-token row beside a shared one: refused, naming both", func(t *testing.T) {
+		body := refusal(t, ghOwnTestRow(), shared)
+		if !strings.Contains(body, shared.ID) || !strings.Contains(body, ghOwnRowID) || strings.Contains(body, "github_pat_") {
+			t.Fatalf("body = %s, want both row names and no token", body)
+		}
+	})
+}
+
+// An own-token git_pat grant on a local placement (the person's own runner)
+// is refused at create: the token is not handed to a runner.
+func TestGitHubOwnPATRun_LocalPlacementRefused(t *testing.T) {
+	grant := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"github.com","secret_name":"git-pat-github-com"}`)}
+	s := &Server{cfg: Config{Now: time.Now}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	_, ok := s.ownGitHubTokenGrants(r.Context(), w, r, uuid.New(), []types.GrantSpec{grant}, adoSite(ghOwnTestRow()), nil, types.PlacementLocal)
+	if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), gitHubOwnTokenLocalRefusal) ||
+		!strings.Contains(w.Body.String(), `"reason":"`+reasonGitHubOwnTokenUndeliverable+`"`) {
+		t.Fatalf("local placement: ok=%v %d %s, want 422 %s", ok, w.Code, w.Body.String(), reasonGitHubOwnTokenUndeliverable)
+	}
 }

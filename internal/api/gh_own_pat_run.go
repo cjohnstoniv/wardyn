@@ -22,9 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +41,7 @@ const (
 	gitHubOwnTokenBrokerOff       = "This run would use your own GitHub token, and this deployment's git broker is off, so the token would be handed into the sandbox. Ask your admin."
 	gitHubOwnTokenLocalRefusal    = "Your own GitHub token can't be used on a run on your own runner yet. Run it on the organisation's runners."
 	gitHubOwnTokenTwoRows         = "This run's github.com repositories are on two GitHub rows that each take your own token, and one run can use one. Launch them separately."
+	gitHubOwnTokenMixedRefusal    = "github.com repositories in this run are admitted by both %s and %s (your own token); one run uses one GitHub credential. Pick repositories from one row."
 	gitHubOwnTokenResidentRefusal = "wardyn: this git_pat grant is a person's own GitHub token, and this deployment's git broker is off, so it would be handed into the sandbox. Nothing was minted."
 )
 
@@ -49,21 +52,32 @@ func (e *gitHubOwnTokenRefusal) Error() string { return e.body }
 
 // gitHubOwnTokenDecider is the own-token row that decides a git_pat grant for
 // host, or ok=false when none does. More than one is a refusal: a run holds
-// one git_pat grant per host, so it can carry one person's token there.
+// one git_pat grant per host, so it can carry one person's token there. So is
+// an own-token row beside a shared one: the grant is rewritten whole, which
+// would swap the shared row's credential for the person's token.
 func gitHubOwnTokenDecider(sc types.SiteConfig, host string, repos []string) (types.GitProvider, bool, error) {
 	if !hostEqual(host, "github.com") {
 		return types.GitProvider{}, false, nil
 	}
 	var own []types.GitProvider
+	var shared []string
 	for _, row := range laneRowsForGrantHost(sc, host, repos) {
-		if !row.Disabled && isGitHubOwnTokenRow(row) {
+		switch {
+		case row.Disabled:
+		case isGitHubOwnTokenRow(row):
 			own = append(own, row)
+		default:
+			shared = append(shared, row.ID)
 		}
 	}
 	switch len(own) {
 	case 0:
 		return types.GitProvider{}, false, nil
 	case 1:
+		if len(shared) > 0 {
+			return types.GitProvider{}, false, &gitHubOwnTokenRefusal{reasonGitHubOwnTokenUndeliverable,
+				fmt.Sprintf(gitHubOwnTokenMixedRefusal, strings.Join(shared, ", "), own[0].ID)}
+		}
 		return own[0], true, nil
 	}
 	return types.GitProvider{}, false, &gitHubOwnTokenRefusal{reasonGitHubOwnTokenUndeliverable, gitHubOwnTokenTwoRows}

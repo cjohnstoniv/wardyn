@@ -14,6 +14,7 @@ and `PUT /site-config` from the CLI or MDM. This says which one wins, and what e
 - A GitHub row can take each person's own token: `lanes: ["pat"]` with `credential_source: per_user`, every address on github.com.
   - Any other GitHub row with `per_user` is a 400, and none exists until an admin writes one.
   - A run's `git_pat` grant for github.com that such a row decides reads the run owner's own token, not the secret the grant names.
+  - A run cannot mix a shared GitHub row and a personal-token row for github.com: it is refused, naming both rows.
   - The person adds a fine-grained token (`PUT /api/v1/me/scm/github/token`, expiry at most 30 days) with `Contents` and `Metadata` permissions on the repositories their runs use; see [CREDENTIALS.md](../CREDENTIALS.md).
 
 - A deployment carries at most **one enabled** row that signs a person in on the `entra` lane (`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation.
