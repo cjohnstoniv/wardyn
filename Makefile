@@ -1714,7 +1714,7 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
 	@echo "  confirm CI is green before merging."
 
-candidate-preflight: ## Release-candidate preflight: lint, whole-tree guards, changed-package + Postgres tests, vitest, changed e2e specs x3 (BASE=<ref>)
+candidate-preflight: ## Release-candidate preflight: lint, whole-tree guards, changed-package + Postgres tests, vitest (BASE=<ref>)
 	./scripts/lane-preflight.sh --candidate
 
 ui: ## Build the embedded web UI
