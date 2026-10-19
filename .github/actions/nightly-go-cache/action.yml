@@ -6,7 +6,8 @@ description: >-
   whose build tags it shares and adds nothing of its own. The exact key never
   exists, so the restore-keys prefix does the work and takes the newest entry
   of that suite, whatever key scheme ci.yml saves it under. Place it after
-  setup-go.
+  setup-go. The path list is ci.yml's, byte for byte: a cache entry is found
+  only by a restore that names the same paths as its save.
 inputs:
   suite:
     description: The ci.yml Go suite whose cache to borrow (unit, docker, k8s, conformance-docker).
@@ -20,6 +21,7 @@ runs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
+          ~/.cache/golangci-lint
         key: go-${{ inputs.suite }}-nightly-restore-only
         restore-keys: |
           go-${{ inputs.suite }}-
