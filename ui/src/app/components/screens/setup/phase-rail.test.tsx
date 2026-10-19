@@ -192,9 +192,10 @@ describe("PhaseRail", () => {
       "title",
       "Prove network access first.",
     );
-    // Full rail: the reason is its own visible line under the badge (both
-    // refused steps render one — hence getAllByText, not getByText).
-    expect(fullRail.getAllByText("Prove network access first.").length).toBeGreaterThan(0);
+    // Full rail: a short fixed caption under the badge of each refused step
+    // (#2838), never the gate's full paragraph, which the footer carries.
+    expect(fullRail.getAllByText("Locked until Network is tested")).toHaveLength(2);
+    expect(fullRail.queryByText("Prove network access first.")).not.toBeInTheDocument();
     // Compact rail: no caption room — the reason is in the accessible name.
     expect(
       compactRail.getByRole("button", { name: /workspaces.*prove network access first\./i }),

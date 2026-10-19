@@ -111,6 +111,47 @@ func TestPlanGovernance_PruneNamesEveryDeleteAndMarksDestructive(t *testing.T) {
 	}
 }
 
+// TestGovernance_CanonicalSubjectIsUnchangedUnderPrune: the server stores
+// "alice@corp.com" for a document's "Alice@Corp.com" and "engineering" for
+// "Engineering ", so plan and apply must read both as unchanged (no create, no
+// prune delete, no write) rather than as a delete plus a create.
+func TestGovernance_CanonicalSubjectIsUnchangedUnderPrune(t *testing.T) {
+	pid := uuid.New()
+	current := client.GovernanceDocument{
+		Profiles: []client.GovernanceProfile{{ID: pid, Name: "p"}},
+		Assignments: []client.GovernanceAssignment{
+			{ID: uuid.New(), SubjectType: "user", Subject: "alice@corp.com", ProfileID: pid},
+			{ID: uuid.New(), SubjectType: "group", Subject: "engineering", ProfileID: pid},
+			{ID: uuid.New(), SubjectType: "all", ProfileID: pid},
+		},
+	}
+	doc := client.GovernanceDocument{
+		Profiles: []client.GovernanceProfile{{ID: pid, Name: "p"}},
+		Assignments: []client.GovernanceAssignment{
+			{SubjectType: "user", Subject: "Alice@Corp.com", ProfileID: pid},
+			{SubjectType: "group", Subject: "Engineering ", ProfileID: pid},
+			{SubjectType: "all", Subject: "stray", ProfileID: pid},
+		},
+	}
+
+	g, c := newGovServer(t, current)
+	plan, err := c.PlanGovernance(context.Background(), doc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("plan.Unchanged = %d", plan.Unchanged)
+	if len(plan.Steps) != 0 || plan.Destructive || plan.Unchanged != 4 {
+		t.Fatalf("plan = %+v, want no steps, not destructive, 4 unchanged (profile and 3 assignments)", plan)
+	}
+
+	if _, err := c.ApplyGovernanceResult(context.Background(), doc, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.writes) != 0 {
+		t.Fatalf("apply wrote %v, want none for an already-stored assignment", g.writes)
+	}
+}
+
 // TestPlanGovernance_AgreesWithApply holds the plan to the writes apply makes:
 // against the same state, each create and update step is one write of the
 // same method and kind, in the same order.

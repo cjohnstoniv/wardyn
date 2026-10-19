@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -1214,5 +1215,49 @@ func TestADORedeem_InvalidClientKeepsTheStoredSignIn(t *testing.T) {
 	}
 	if _, found := f.stored(t, subject); !found {
 		t.Error("an invalid_client refusal deleted the person's stored sign-in")
+	}
+}
+
+// Only invalid_grant retires a stored sign-in. The two codes that name the console's own
+// application stay an outage, whichever the authority sends.
+func TestClassifyADOEntraError_ApplicationRefusalsAreAnOutage(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want error
+	}{
+		{"invalid_client", ErrADOEntraUnavailable},
+		{"unauthorized_client", ErrADOEntraUnavailable},
+		{"invalid_grant", ErrADOEntraDeadCredential},
+	} {
+		if err := classifyADOEntraError(tc.code, ""); !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", tc.code, err, tc.want)
+		}
+	}
+}
+
+// The refusal of the console's own application is the operator's to fix, so the log names the code.
+func TestADORedeem_InvalidClientIsLogged(t *testing.T) {
+	var logs lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f := newADOFixture(t)
+	subject := f.fake.Subject()
+	if w := f.capture(t, subject); w.Code != http.StatusFound {
+		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+	}
+	f.fake.SetClientSecret("rotated-and-not-yet-deployed")
+	cfg := f.cfg
+	cfg.ClientSecret = "console-secret-never-logged"
+	_, _ = f.srv.RedeemADOEntraAccess(context.Background(), cfg, subject, cfg.Scopes)
+	got := logs.String()
+	if !strings.Contains(got, "oauth_error=invalid_client") {
+		t.Errorf("log = %q, want it to name oauth_error=invalid_client", got)
+	}
+	// The code and the AADSTS number only: never the secret, nor the authority's free text.
+	for _, leak := range []string{cfg.ClientSecret, "invalid client secret provided"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("log = %q, must not contain %q", got, leak)
+		}
 	}
 }

@@ -20,7 +20,7 @@ import type { Page } from "@playwright/test";
 //
 // The seeded backend creates 9 runs, one per RunState, with deterministic task
 // text "e2e fixture 0".."e2e fixture 8" mapped to states by creation order:
-//   fixture 0 -> PENDING                  (Running section, "Queued")
+//   fixture 0 -> PENDING                  (Running section, "Pending")
 //   fixture 1 -> STARTING                 (Running section, "Starting")
 //   fixture 2 -> RUNNING                  (Running section, "Running")
 //   fixture 3 -> WAITING_FOR_CONFIRMATION (Needs you)
@@ -35,7 +35,7 @@ import type { Page } from "@playwright/test";
 // then time, not by title, so there is no shared-title fixture here the way
 // the old title-grouped board needed one. State is asserted via the row's own
 // status WORD (runs/runs-model.ts's rowPresentation), never CSS classes:
-//   PENDING "Queued", STARTING "Starting", RUNNING "Running",
+//   PENDING "Pending", STARTING "Starting", RUNNING "Running",
 //   WAITING_FOR_CONFIRMATION "Needs your approval", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".
 // Barriers, the agent monogram and the Run ID moved to the run page — none of

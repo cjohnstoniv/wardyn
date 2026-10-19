@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -143,4 +144,48 @@ func reassertDroppedLanes(t *testing.T, audit *recRecorder) []string {
 	}
 	t.Fatal("no run.ceiling.reassert row: a profile applied and the row must say which walls the run stood inside")
 	return nil
+}
+
+// TestNarrowCeilingBedrockLane_KeepsWhatIsNotTheLanesOwn: withholding the Bedrock
+// lane removes its own hosts only. The AWS CLI row's portal entry and injection
+// share the same lists and the ceiling denied neither, while a captured-SSO lane's
+// own portal rule and entry go with the lane and are named as dropped.
+func TestNarrowCeilingBedrockLane_KeepsWhatIsNotTheLanesOwn(t *testing.T) {
+	const runtimeHost, controlHost = "bedrock-runtime.us-east-1.amazonaws.com", "bedrock.us-east-1.amazonaws.com"
+	const portal = "portal.sso.us-east-1.amazonaws.com"
+	rule := func(host string) runner.InjectionGrant {
+		return runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: host}}
+	}
+	deny := dispatchCeiling{deny: []string{runtimeHost, controlHost}}
+
+	t.Run("bearer lane beside an AWS CLI row", func(t *testing.T) {
+		llm := llmTransport{bedrockReady: true, injectBedrockBearer: true,
+			bedrock: bedrockAuth{egressHosts: []string{runtimeHost, controlHost}}}
+		mitm := []string{runtimeHost + ":443", portal + ":443"}
+		injections := []runner.InjectionGrant{rule(portal)}
+		lanes, dropped := narrowCeilingBedrockLane(deny, &llm, &mitm, &injections, map[string]string{})
+		if len(lanes) != 1 {
+			t.Fatalf("lanes = %v, want the bedrock lane withheld", lanes)
+		}
+		if !slices.Equal(mitm, []string{portal + ":443"}) {
+			t.Errorf("MITM hosts = %v, want the AWS CLI portal entry kept and the lane's runtime entry gone", mitm)
+		}
+		if len(injections) != 1 || len(dropped) != 0 {
+			t.Errorf("injections = %v dropped = %v, want the AWS CLI rule untouched", injections, dropped)
+		}
+	})
+
+	t.Run("captured SSO lane", func(t *testing.T) {
+		llm := llmTransport{bedrockReady: true, injectBedrockSSO: true,
+			bedrock: bedrockAuth{egressHosts: []string{runtimeHost, controlHost, portal}}}
+		mitm := []string{portal + ":443"}
+		injections := []runner.InjectionGrant{rule(portal)}
+		_, dropped := narrowCeilingBedrockLane(deny, &llm, &mitm, &injections, map[string]string{})
+		if len(mitm) != 0 || len(injections) != 0 {
+			t.Errorf("MITM hosts = %v injections = %v, want the withheld SSO lane's rule and entry gone", mitm, injections)
+		}
+		if !slices.Equal(dropped, []string{portal}) {
+			t.Errorf("dropped injection hosts = %v, want [%s]", dropped, portal)
+		}
+	})
 }

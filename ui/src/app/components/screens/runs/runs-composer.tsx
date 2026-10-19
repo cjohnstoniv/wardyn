@@ -49,6 +49,7 @@ export function RunsComposer() {
 
   return (
     <form
+      data-testid="runs-composer"
       aria-label={RUNS_COMPOSER.LABEL}
       onSubmit={submit}
       className="mt-3 rounded-xl border border-border-strong bg-card p-3"

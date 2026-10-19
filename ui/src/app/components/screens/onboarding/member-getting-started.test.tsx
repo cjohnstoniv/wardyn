@@ -18,6 +18,12 @@ vi.mock("../../../lib/api/setup", () => ({
 
 // The connect popup + poll (#386) — mocked so the chip's CONNECT_ADO tests
 // below drive the click without a real window.
+// GET /me/scm-access: every per-user row, where /setup/status carries only the first (#2146).
+const getMineMock = vi.fn();
+vi.mock("../../../lib/api/scm-access", () => ({
+  scmAccess: { getMine: (...a: unknown[]) => getMineMock(...a) },
+}));
+
 const adoConnectMock = vi.fn();
 let adoBlockedUrl: string | null = null;
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
@@ -160,6 +166,7 @@ describe("MemberGettingStarted", () => {
   beforeEach(() => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
+    getMineMock.mockReset().mockResolvedValue([]);
     listSecretsMineMock.mockReset().mockResolvedValue({ names: [], mine: [] });
     setSecretMock.mockReset().mockResolvedValue(undefined);
     deleteSecretMock.mockReset().mockResolvedValue(undefined);
@@ -229,6 +236,14 @@ describe("MemberGettingStarted", () => {
       ).toBeInTheDocument();
     }
     expect(screen.queryByText("Pick your barrier")).not.toBeInTheDocument();
+  });
+
+  it("never offers a member 'always' on an approval: the server refuses it for a non-admin (#2595)", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "Approvals you can decide" });
+    const hint = await screen.findByText(/You decide —/);
+    expect(hint.textContent).not.toMatch(/always/i);
+    expect(hint.textContent).toMatch(/stay with your admin/);
   });
 
   it("a redacted has_runs:true with an EMPTY own-runs list does NOT mark 'Your first run' done", async () => {
@@ -464,9 +479,9 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).not.toBeInTheDocument();
     });
 
-    // Every model credential is the person's own since 0.8 (#548), so the
-    // lede is CONNECTIONS.LEDE with or without a provider block.
-    it("the lede is CONNECTIONS.LEDE with a provider block and without one", async () => {
+    // Every model credential is the person's own since 0.8 (#548), so the lede is CONNECTIONS.LEDE for any
+    // provider block, and it is left out under the "Not set up by your admin" chip, which it would contradict (#2906).
+    it("the lede is CONNECTIONS.LEDE with a provider block, and absent when the chip says Not set up", async () => {
       const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
       getSetupStatusMock.mockResolvedValue(s);
       const { unmount } = renderPage(baseMe(), s);
@@ -474,7 +489,8 @@ describe("MemberGettingStarted", () => {
       unmount();
       getSetupStatusMock.mockResolvedValue(status());
       renderPage();
-      expect(await screen.findByText(CONNECTIONS.LEDE)).toBeInTheDocument();
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.LEDE)).not.toBeInTheDocument();
     });
   });
 
@@ -580,6 +596,32 @@ describe("MemberGettingStarted", () => {
         expect(screen.queryByRole("button", { name: ADO_PAT.OWN_REPLACE })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: ADO_PAT.OWN_ADD_CTA })).not.toBeInTheDocument();
         noConnect();
+      });
+
+      // #2146: one line per own-token organisation, each with its own button; one row keeps the page as it was.
+      it("several organisations: a line each, its own state and button; the first-row chip and line are gone", async () => {
+        const acme = { ...own, org: "https://dev.azure.com/acme", state: "live", expires_on: "2000-11-27" };
+        const beta = { ...own, org: "https://dev.azure.com/beta", state: "not_configured" };
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: acme }));
+        getMineMock.mockResolvedValue([acme, beta]);
+        renderPage();
+        const betaLine = await screen.findByTestId("ado-own-org-beta");
+        expect(within(betaLine).getByText(ADO_PAT.OWN_NO_TOKEN)).toBeInTheDocument();
+        await userEvent.click(within(betaLine).getByRole("button", { name: ADO_PAT.OWN_ADD_CTA }));
+        expect(await screen.findByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeInTheDocument();
+        const acmeLine = screen.getByTestId("ado-own-org-acme");
+        expect(within(acmeLine).getByText("Connected")).toBeInTheDocument();
+        expect(within(acmeLine).queryByRole("button")).not.toBeInTheDocument();
+        expect(screen.queryByText("Azure DevOps · Connected")).not.toBeInTheDocument();
+      });
+
+      it("one organisation: no list, the page as before", async () => {
+        const acme = { ...own, org: "https://dev.azure.com/acme", state: "live", expires_on: "2000-11-27" };
+        getSetupStatusMock.mockResolvedValue(status({ scm_access: acme }));
+        getMineMock.mockResolvedValue([acme]);
+        renderPage();
+        expect(await screen.findByText("Azure DevOps · Connected")).toBeInTheDocument();
+        expect(screen.queryByTestId("ado-own-token-orgs")).not.toBeInTheDocument();
       });
 
       it("expiring: a warning chip, the expiry line and Replace token, which opens the dialog", async () => {

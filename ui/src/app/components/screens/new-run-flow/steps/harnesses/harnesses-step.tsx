@@ -80,13 +80,14 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
       issues={stepIssues("harnesses", intent)}
     >
       {loaded.status === "error" && <p role="alert" className="text-sm text-danger">{loaded.message}</p>}
-      {ids.length === 0 && mode !== "autonomous" && (
+      {ids.length === 0 && mode === "optional" && (
         <div className="flex flex-col gap-1 rounded-lg border border-dashed border-border p-4 text-sm">
           <strong>{NR_HARNESSES.EMPTY_TITLE}</strong>
           <span className="text-muted-foreground">{NR_HARNESSES.EMPTY_BODY}</span>
         </div>
       )}
-      <div className="flex flex-col gap-3">
+      {/* empty:hidden: with no cards the wrapper would still take a slot (and a second gap) in the step's column. */}
+      <div className="flex flex-col gap-3 empty:hidden">
         {ids.map((id, index) => (
           <HarnessCard
             key={id}
@@ -109,24 +110,28 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           />
         ))}
       </div>
-      <div className="flex items-center gap-3">
-        <Button
-          id={ADD_ID}
-          type="button"
-          variant="outline"
-          disabled={comingSoon || !addable}
-          aria-describedby={blocked.length ? UNAVAILABLE_ID : undefined}
-          onClick={() => {
-            if (!addable) return;
-            focusNew.current = ids.length;
-            edit((i) => addHarness(i, addable.id));
-            announce(NR_HARNESSES.ADDED);
-          }}
-        >
-          {ids.length ? NR_HARNESSES.ADD_ANOTHER : NR_HARNESSES.ADD_HARNESS}
-        </Button>
-        {comingSoon && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
-      </div>
+      {loaded.status === "loading" ? (
+        <p role="status" className="text-sm text-muted-foreground">{NR_HARNESSES.LOADING}</p>
+      ) : (
+        <div className="flex items-center gap-3">
+          <Button
+            id={ADD_ID}
+            type="button"
+            variant="outline"
+            disabled={comingSoon || !addable}
+            aria-describedby={blocked.length ? UNAVAILABLE_ID : undefined}
+            onClick={() => {
+              if (!addable) return;
+              focusNew.current = ids.length;
+              edit((i) => addHarness(i, addable.id));
+              announce(NR_HARNESSES.ADDED);
+            }}
+          >
+            {ids.length ? NR_HARNESSES.ADD_ANOTHER : NR_HARNESSES.ADD_HARNESS}
+          </Button>
+          {comingSoon && <Chip>{NR_SHARED.COMING_SOON}</Chip>}
+        </div>
+      )}
       {blocked.length > 0 && (
         <ul id={UNAVAILABLE_ID} className="flex flex-col gap-1 text-sm">
           {blocked.map(({ row, why }) => (

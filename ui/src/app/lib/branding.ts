@@ -98,13 +98,20 @@ export function logoSizeText(bytes: number): string {
   return bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
 }
 
-/** The monogram a brand without a logo shows: the name's initials, at most two. */
+/**
+ * The monogram a brand without a logo shows: the name's initials, at most two.
+ * It takes the first code point of each word and upper-cases it only when that
+ * stays one code point, as the server's tab-icon tile does (Go's unicode.ToUpper).
+ */
 export function monogram(name: string): string {
   return name
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+    .map((w) => {
+      const first = Array.from(w)[0];
+      const upper = first.toUpperCase();
+      return Array.from(upper).length === 1 ? upper : first;
+    })
+    .join("");
 }

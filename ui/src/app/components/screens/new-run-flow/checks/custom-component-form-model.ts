@@ -258,6 +258,3 @@ export function refIndexForFact(factId: string, refs: readonly ComponentRef[]): 
   }
   return refs.findIndex((r) => r.id === factId);
 }
-
-/** Whether `c`, a saved row, is already attached to the run. */
-export const isAttached = (refs: readonly ComponentRef[], id: string): boolean => refs.some((r) => r.id === id);

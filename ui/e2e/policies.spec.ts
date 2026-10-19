@@ -141,7 +141,7 @@ test.beforeEach(async ({ page }) => {
 test("renders the Policies screen header, description and primary action", async ({ page }) => {
   await expect(
     page.getByText(
-      "Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created.",
+      "Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own.",
     ),
   ).toBeVisible();
   // The create action is always present. The search/Refresh toolbar is gated
@@ -372,7 +372,8 @@ test("picking a template chip fills the spec, and an edit to it is reflected on 
   await dialog.getByLabel("Name", { exact: true }).fill(name);
 
   // "CI baseline" replaces the textarea body wholesale with its template spec.
-  await dialog.getByRole("button", { name: "CI baseline" }).click();
+  await dialog.getByTestId("policy-template-menu").click();
+  await page.getByTestId("policy-template-ci").click();
   const specBox = dialog.getByLabel(SPEC_LABEL);
   await expect(specBox).toHaveValue(/min_confinement_class: CC1/);
 

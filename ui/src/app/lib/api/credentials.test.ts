@@ -37,6 +37,15 @@ describe("credentials.listAdminMintedTokens", () => {
     ]);
     await expect(credentials.listAdminMintedTokens()).resolves.toEqual([mine]);
   });
+  // #2540: an older daemon lists expired rows whatever the toggle says.
+  it("drops an expired row unless the toggle is on", async () => {
+    const live = { id: "t-1", principal: "p", name: "ci", minted_by: "a", created_at: aheadByHours(-300), expires_at: aheadByHours(24) };
+    const lapsed = { ...live, id: "t-2", expires_at: aheadByHours(-1) };
+    respond(200, [live, lapsed]);
+    await expect(credentials.listAdminMintedTokens()).resolves.toEqual([live]);
+    respond(200, [live, lapsed]);
+    await expect(credentials.listAdminMintedTokens(true)).resolves.toEqual([live, lapsed]);
+  });
   it("is an error on a non-2xx, never an empty list", async () => {
     respond(403, { error: "no" });
     await expect(credentials.listAdminMintedTokens()).rejects.toMatchObject({ status: 403 });

@@ -264,7 +264,7 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		fails int32
-	}{{"once", 1}, {"every try", pauseSettleTries}} {
+	}{{"once", 1}, {"every try", retryTries}} {
 		t.Run("the run cannot be read after the lock is taken again, "+tc.name+": B's pause is never thawed", func(t *testing.T) {
 			l := newPGPauseLeaders(t)
 			// A read the run unpaused; its lock goes and B pauses; the read under
@@ -278,7 +278,7 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 			if thaws != 0 || !paused || !frozen {
 				t.Fatalf("A thawed on a read it could not make: want thaws 0, paused and frozen")
 			}
-			if want := map[bool]int{true: 1, false: 0}[tc.fails == pauseSettleTries]; l.f.st.owing() != want {
+			if want := map[bool]int{true: 1, false: 0}[tc.fails == retryTries]; l.f.st.owing() != want {
 				t.Errorf("settles recorded after A = %d, want %d", l.f.st.owing(), want)
 			}
 			l.leaderSweeps(t)
@@ -293,7 +293,7 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		fails int32
-	}{{"once", 1}, {"every try", pauseSettleTries}} {
+	}{{"once", 1}, {"every try", retryTries}} {
 		t.Run("the freeze that puts B's pause back fails "+tc.name+": it is retried, else the sweep settles it", func(t *testing.T) {
 			l := newPGPauseLeaders(t)
 			// B freezes and marks before A's thaw lands; A's repair freeze then fails.
@@ -302,7 +302,7 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 			l.f.srv.pauseRun(l.ctxA, l.f.st, l.f.run, types.PauseWaiting, time.Hour)
 
 			paused, frozen, freezes, thaws := l.state()
-			persists := tc.fails == pauseSettleTries
+			persists := tc.fails == retryTries
 			t.Logf("after A: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
 			if !paused || frozen == persists {
 				t.Errorf("after A: paused=%t frozen=%t; want paused, frozen unless every try failed", paused, frozen)
@@ -321,7 +321,7 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 
 	t.Run("the run cannot be read before the thaw: nothing thaws, and the sweep thaws the unmarked freeze", func(t *testing.T) {
 		l := newPGPauseLeaders(t)
-		l.hook.failReads.Store(pauseSettleTries)
+		l.hook.failReads.Store(retryTries)
 
 		l.f.srv.pauseRun(l.ctxA, l.f.st, l.f.run, types.PauseWaiting, time.Hour)
 

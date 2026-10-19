@@ -493,7 +493,7 @@ that every product string rendered in the mock has a key somewhere.
 | `PERM.SUBJECT_USER` / `SUBJECT_GROUP` / `SUBJECT_ALL` | `permissions-copy.ts` | User / Group / Everyone signed in |
 | `PERM.HINT_USER` | `permissions-copy.ts` | An email address or the sign-in subject id. Either one matches the same person. |
 | `PERM.HINT_GROUP` | `permissions-copy.ts` | A group or app-role name exactly as your identity provider sends it in the token. |
-| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Super admins are exempt; a security admin is not. |
+| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Super admins are exempt, except for service_attach; a security admin is not. |
 | `PERM.REMOVE` | `permissions-copy.ts` | Remove |
 | `PEOPLE.CANCEL` | `people-access-copy.ts` | Cancel |
 | `PREVIEW.FIELD_CLAIMS` | `people-access-copy.ts` | Roles, groups, or email |
@@ -583,7 +583,7 @@ confirming happens through the API.
 | Key | String |
 |---|---|
 | `TITLE` | User drives |
-| `LEAD` | Persistent storage a run can mount at `/home/agent/drive`. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. |
+| `LEAD` | Persistent storage a run can mount. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it. A person's first drive mounts at `/home/agent/drive`; any others mount beside it, under `/home/agent/drives` or `/home/agent/shared`. |
 | `DRIVES_OFF_BANNER` | User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on. |
 | `DRIVES_TITLE` | Drives |
 | `DRIVES_LEAD` | A drive is one place storage comes from: a share your platform already mounts, or a volume Wardyn creates per person. |
@@ -632,6 +632,9 @@ confirming happens through the API.
 | `HOME_SUB_HINT` | The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person. |
 | `HOME_EMAIL_LOCAL` | Email, before the @ |
 | `HOME_EMAIL_LOCAL_HINT` | The part before the @, lowercased — the usual shape of a corporate home directory. |
+| `HOME_UNAVAILABLE_MANAGED` | Not available for a Wardyn-managed volume: the directory name would be printed by docker volume ls / kubectl get pvc. |
+| `HOME_UNAVAILABLE_SHARE` | Not available for a share: a derived id would name a directory nobody made. |
+| `HOME_UNAVAILABLE_CLAIM` | Not available for a pre-created claim: it would fold two people's claims onto one volume. |
 | `HOME_RULE` | A directory name is lowercase letters and digits, then any of `. _ -`, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed. |
 | `FIELD_SIZE` | Size (MiB) |
 | `SIZE_HINT` | The allocation shown to each person, and on Kubernetes the volume request. 0 shows no allocation. Override it per person below. |
@@ -676,7 +679,7 @@ With the switch off nothing else on the screen changes.
 | Key | String |
 |---|---|
 | `ALLOC_TITLE` | Allocations |
-| `ALLOC_LEAD` | Who gets a drive. A person's own row beats their group's; a group's beats everyone's. One drive per person. |
+| `ALLOC_LEAD` | Who gets a drive. A person's own row beats their group's; a group's beats everyone's. A person can be given more than one drive. |
 | `PRECEDENCE` | The most specific allocation wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the drive name. |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps what it mounted. |
 | `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so a group's allocation reaches them then — or, for an API token, when it is re-minted. |
@@ -815,7 +818,7 @@ it strands the allocated people's work if confirmed.
 | Key | String |
 |---|---|
 | `CARD_LEAD` | Persistent storage people can mount into a run — separate from any workspace. |
-| `CARD_EMPTY` | No drives yet. |
+| `CARD_EMPTY` | No drives yet |
 | `CARD_DRIVES(n)` | {n} drive / {n} drives |
 | `CARD_ALLOCATIONS(n)` | {n} allocation / {n} allocations |
 | `CARD_SUMMARY(drives, allocations)` | {drives} · {allocations} |

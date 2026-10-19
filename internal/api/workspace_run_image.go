@@ -200,6 +200,9 @@ type imageResolveResult struct {
 	Image          string
 	OK, Superseded bool
 	Record         *types.ImageBuild
+	// BaseErr is why wrapping the workspace's chosen base image failed; set on that failure only, so a
+	// caller that must not substitute the convention image can tell it from the lanes that may fall back.
+	BaseErr error
 }
 
 // resolveWorkspaceImageWith is resolveWorkspaceImage with opts, and the full answer.
@@ -268,7 +271,7 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink, opts.Refresh)
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
-			return fail
+			return imageResolveResult{BaseErr: berr}
 		}
 		in := types.ImageBuildInputs{Base: types.ImageBuildRef{Ref: b.Image, Digest: built.BaseDigest}}
 		rec := newImageBuild(types.ImageBuildLaneBYOI, byoiHash, runID, reason, in, built, s.cfg.Now())

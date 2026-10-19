@@ -15,10 +15,62 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// TestTeardown_LeavesAnotherRunsObjects: killing run A removes A's pods, Secret
+// and both NetworkPolicies and nothing of run B's. The pods are the point of the
+// NetworkPolicies: a survivor whose policies were swept is default-allow.
+func TestTeardown_LeavesAnotherRunsObjects(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
+
+	specA, specB := testSandboxSpec(), testSandboxSpec()
+	sbA, err := d.CreateSandbox(context.Background(), specA)
+	if err != nil {
+		t.Fatalf("CreateSandbox A: %v", err)
+	}
+	if _, err := d.CreateSandbox(context.Background(), specB); err != nil {
+		t.Fatalf("CreateSandbox B: %v", err)
+	}
+	before := runObjectCounts(t, cs, specB.RunID)
+	if before.pods != 2 || before.secrets != 1 || before.netpols != 2 {
+		t.Fatalf("run B before the kill = %+v, want 2 pods, 1 secret, 2 network policies", before)
+	}
+
+	if err := d.KillSandbox(context.Background(), sbA.Ref); err != nil {
+		t.Fatalf("KillSandbox A: %v", err)
+	}
+	assertRunObjectsGone(t, cs, specA.RunID)
+	if after := runObjectCounts(t, cs, specB.RunID); after != before {
+		t.Fatalf("killing run A changed run B's objects: %+v, want %+v", after, before)
+	}
+}
+
+type runObjects struct{ pods, secrets, netpols int }
+
+// runObjectCounts is how many pods, Secrets and NetworkPolicies carry runID's run label.
+func runObjectCounts(t *testing.T, cs *fake.Clientset, runID uuid.UUID) runObjects {
+	t.Helper()
+	opts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
+	pods, err := cs.CoreV1().Pods(testNamespace).List(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	secrets, err := cs.CoreV1().Secrets(testNamespace).List(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("list secrets: %v", err)
+	}
+	netpols, err := cs.NetworkingV1().NetworkPolicies(testNamespace).List(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("list network policies: %v", err)
+	}
+	return runObjects{len(pods.Items), len(secrets.Items), len(netpols.Items)}
+}
 
 func TestStatus_MapsPodPhase(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})

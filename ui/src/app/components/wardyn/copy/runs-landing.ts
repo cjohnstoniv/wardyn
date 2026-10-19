@@ -40,6 +40,9 @@ export const RUNS_AGED_WINDOW_LABEL: Record<string, string> = {
   all: "full history",
 };
 
+/** The list answered a full page and more matched: said under the sections so a missing row is never read as absent. */
+export const runsTruncatedNote = (limit: number): string => `Showing the newest ${limit} runs. Narrow the filters to see the rest.`;
+
 export const RUNS_SHOW_30 = "Show the last 30 days";
 export const RUNS_INCLUDE_KILLED = "Include killed";
 
@@ -59,11 +62,11 @@ export const RUNS_FILTERS = {
   SEARCH_PLACEHOLDER: "Search titles, workspaces, people",
   STATUS_LABEL: "Status",
   STATUS_ALL: "Status · All",
-  STATUS_NEEDS: "Needs you",
-  STATUS_ACTIVE: "Active",
-  STATUS_ENDED: "Ended",
-  STATUS_FAILED: "Failed",
-  STATUS_KILLED: "Killed",
+  STATUS_NEEDS: "Status · Needs you",
+  STATUS_ACTIVE: "Status · Active",
+  STATUS_ENDED: "Status · Ended",
+  STATUS_FAILED: "Status · Failed",
+  STATUS_KILLED: "Status · Killed",
   ENDED_WITHIN_LABEL: "Ended within",
   ENDED_24H: "Last 24 hours",
   ENDED_7D: "Last 7 days",
@@ -120,6 +123,8 @@ export const RUNS_ROW_WORD = {
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
   STARTING: "Starting",
+  /** PENDING, the word the run page's badge uses; QUEUED below is a separate state (waiting for a pool slot). */
+  PENDING: "Pending",
   QUEUED: "Queued",
   /** The queued row's place in line. The same sentence as NR_LAUNCH.IN_LINE (the Launched screen), kept here because that copy is lazy-only. */
   IN_LINE: (ordinal: string) => `${ordinal} in line`,

@@ -265,20 +265,24 @@ export const workspaces = {
   // Workspace (record_results[task].egress_promoted flips true + egress:<host>
   // requirement rows folded in server-side). `hosts` is the SUBSET the operator
   // approved in the confirm dialog: the server validates every entry against
-  // the recording's own promotable set and 422s anything else, so this can
-  // only ever narrow, never widen.
+  // the recording's own promotable set (a model provider row's host is skipped,
+  // not refused) and 422s any other host, so this can only ever narrow, never
+  // widen. The skipped hosts come back in X-Wardyn-Record-Skipped-Hosts and are
+  // returned as `skipped_hosts` (absent when none).
   //
   // No 404 fallback. The console ships baked into the server image, so a
   // backend without this endpoint is not a real deployment — and the fallback
   // that used to cover it PUT the full observed union onto approved_egress,
   // re-approving exactly the hosts the operator had just unchecked. A 404 is
   // now the error it is.
-  async promoteRecordEgress(id: string, task: string, hosts: string[]): Promise<Workspace> {
+  async promoteRecordEgress(id: string, task: string, hosts: string[]): Promise<Workspace & { skipped_hosts?: string[] }> {
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/record/${encodeURIComponent(task)}/promote-egress`,
       { method: "POST", asPerson: true, body: JSON.stringify({ hosts }) },
     );
-    return asJson<Workspace>(res);
+    const skipped = (res.headers.get("X-Wardyn-Record-Skipped-Hosts") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+    const ws = await asJson<Workspace>(res);
+    return skipped.length ? { ...ws, skipped_hosts: skipped } : ws;
   },
 
   // GET /api/v1/workspaces/{id}/env-as-code -> { emitted_files } (same key as

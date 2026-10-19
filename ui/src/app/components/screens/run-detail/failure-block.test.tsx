@@ -293,6 +293,11 @@ describe("RunFailureBlock", () => {
       expect(screen.getByText(ENV_SECRET_LINE)).toBeInTheDocument();
     });
 
+    it("a file secret gets its own rotation line", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "file_secret" }]));
+      expect(screen.getByText("Wardyn can't revoke a secret this run received as a file — rotate it where it was issued.")).toBeInTheDocument();
+    });
+
     it("no held credential of those kinds: no per-kind line at all", () => {
       withHeld("KILLED", kill("success"), held([]));
       expect(screen.queryByText(/stays valid until it expires|can't revoke|rotate/)).not.toBeInTheDocument();
@@ -339,10 +344,12 @@ describe("RunFailureBlock", () => {
     expect(screen.getByText(/read it before treating this run as contained/)).toBeInTheDocument();
   });
 
-  it("unknown: the audit link and nothing else — no invented cause, no generic advice", () => {
+  it("unknown: says there is no recorded cause, then the audit link — no invented cause, no generic advice", () => {
     renderBlock("FAILED", [ev("run.dispatch", "failure")]);
     expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "unknown");
-    expect(screen.queryByText("What happened")).not.toBeInTheDocument();
+    // #2919: the card is never a lone button; it states that nothing was recorded.
+    expect(screen.getByText("What happened")).toBeInTheDocument();
+    expect(screen.getByText(/no recorded cause for this failure/)).toBeInTheDocument();
     expect(screen.queryByText("What to do")).not.toBeInTheDocument();
     // Still actionable: the trail is one click away.
     expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();

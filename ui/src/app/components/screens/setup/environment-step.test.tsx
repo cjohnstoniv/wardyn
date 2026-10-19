@@ -54,6 +54,12 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
 
+  it("never claims the pick is saved: nothing persists it, New Run resolves its own default (#2574)", () => {
+    renderStep();
+    expect(screen.queryByText(/saved in this browser|save it in this browser/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/new runs default to the strongest barrier installed here/i)).toBeInTheDocument();
+  });
+
   it("(2a) selecting a column by click calls onSelect with its wire class", async () => {
     const { onSelect } = renderStep();
     await user.click(screen.getByRole("radio", { name: /Wall/ }));
@@ -175,6 +181,15 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(within(group).getByText("Fence")).toBeInTheDocument();
     expect(within(group).getByText("Wall")).toBeInTheDocument();
     expect(within(group).getByText("Vault")).toBeInTheDocument();
+  });
+
+  // #2875, #2877: the danger icon keeps its size in a narrow flex row, and both build flags read as commands.
+  it("(9b) no runner without a driver: the icon cannot shrink and both flags are mono", () => {
+    renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: [] } }) });
+    const card = screen.getByText(/No sandbox runner/).closest("div.rounded-xl") as HTMLElement;
+    expect(card.querySelector("svg")).toHaveClass("shrink-0");
+    expect(within(card).getByText("-runner docker")).toHaveClass("font-mono");
+    expect(within(card).getByText("-tags docker")).toHaveClass("font-mono");
   });
 
   it("(10) exactly one Recommended chip renders, tone=neutral (CONSOLE-RULES §2 — a recommendation is not an action)", () => {
@@ -307,6 +322,21 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     for (const radio of screen.getAllByRole("radio")) {
       expect(radio).toBeDisabled();
     }
+  });
+
+  // #2839/#2840: the read-only matrix is not dimmed to illegibility, shows no
+  // selection, and its scroller contains the sr-only labels (no sideways page).
+  it("(11b2) no runner: the matrix is readable, nothing looks selected, the scroller is positioned", () => {
+    const status = baseStatus({ runner: { driver: "none", confinement_classes: [] } });
+    renderStep({ status, selected: "CC1" });
+    const group = screen.getByRole("radiogroup", { name: "Barrier tier" });
+    expect(group.className).toContain("relative");
+    expect(group.className).not.toContain("opacity-60");
+    expect(group.className).not.toContain("pointer-events-none");
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toHaveAttribute("aria-checked", "false");
+    }
+    expect(group.querySelector(".border-primary")).toBeNull();
   });
 
   it("(11c) ArrowRight moves selection to the next selectable tier (Fence → Wall)", async () => {

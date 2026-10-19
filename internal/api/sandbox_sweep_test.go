@@ -566,3 +566,33 @@ func TestSweepTerminalSandboxesPage_FallsBackToUnboundedWithoutPager(t *testing.
 		t.Errorf("StopSandbox calls = %v, want exactly [sbx-fallback]", rr.stopped)
 	}
 }
+
+// The operator route and the periodic ticker (or two replicas' tickers) both sweep the
+// same aged runs; a second pass entering a run's teardown while another holds it
+// double-drives the runner and doubles its run.kill rows. A run another sweep holds is
+// skipped, and swept on the pass that finds it free.
+func TestSweepTerminalSandboxes_SkipsARunAnotherSweepHolds(t *testing.T) {
+	h := newHarness(t)
+	orphan := sweepRun(types.RunCompleted, "sbx-held")
+	fake := &sweepStore{runs: []types.AgentRun{orphan}}
+	rr := &sweepAliveRunner{fakeRunner: &fakeRunner{}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = rr
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	_, unlock, err := srv.lockRunOp(context.Background(), orphan.ID)
+	if err != nil {
+		t.Fatalf("take the run's lock: %v", err)
+	}
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil || swept != 0 || len(rr.stopped) != 0 {
+		t.Fatalf("sweep while the run's lock is held: swept=%d err=%v stopped=%v; want it skipped", swept, err, rr.stopped)
+	}
+	unlock()
+
+	swept, err = srv.SweepTerminalSandboxes(context.Background())
+	if err != nil || swept != 1 || len(rr.stopped) != 1 {
+		t.Fatalf("sweep once the lock is free: swept=%d err=%v stopped=%v; want the run swept", swept, err, rr.stopped)
+	}
+}

@@ -125,9 +125,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MODE_AUTONOMOUS` | mock | Autonomous |
 | `MODE_AUTONOMOUS_BODY` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
 | `TIMING_LABEL` | mock | When should it run? |
-| `TIMING_NOW` | mock | Run Now |
+| `TIMING_NOW` | mock | Run now |
 | `TIMING_NOW_BODY` | mock | Start as soon as you launch the run. |
-| `TIMING_LATER` | mock | Schedule For Later |
+| `TIMING_LATER` | mock | Schedule for later |
 | `TIMING_LATER_BODY` | mock | Choose a future date and time for this run to start. |
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
@@ -207,7 +207,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `FENCE_HOW` | mock | Shared-kernel container (runc) hardened with user namespaces, seccomp, AppArmor, and capability drop. |
 | `WALL_PROTECTS` | mock | Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed). |
 | `WALL_NOT_PROTECTS` | mock | A flaw in the sandbox software itself (rare); it's still not a fully separate machine. |
-| `WALL_HOW` | mock | gVisor userspace kernel intercepts syscalls — the default; needs a native Docker engine with its runsc runtime registered (a one-time setup step). |
+| `WALL_HOW` | mock | gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step). |
 | `VAULT_PROTECTS` | mock | Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside. |
 | `VAULT_NOT_PROTECTS` | mock | A flaw in the virtualization layer itself — a very rare hypervisor- or CPU-level escape. |
 | `VAULT_HOW` | mock | Kata microVM — hardware-virtualized, with its own guest kernel (requires /dev/kvm). |
@@ -248,6 +248,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LEDE_AUTONOMOUS` | deviation (DS-1 truthful copy) | An agent runs on its own, with no SSH or terminal. |
 | `EMPTY_TITLE` | mock | No harnesses added |
 | `EMPTY_BODY` | mock | This workload can continue without one. |
+| `LOADING` | deviation (lead wording 2026-10-18, #2861) | Loading harnesses… |
 | `EYEBROW(n)` | mock | Harness {n} |
 | `HARNESS_LABEL` | mock | Harness |
 | `AVAILABLE(name)` | mock | {name} is available in this environment. |
@@ -698,7 +699,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VALUE_ENVIRONMENT` | mock | Environment sandbox |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
-| `TIMING_NOW` | mock | Autonomous · Run Now |
+| `TIMING_NOW` | mock | Autonomous · Run now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
@@ -718,6 +719,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOOLS_NONE` | mock | Optional · none added |
 | `TOOLS_STARTS(name, provider)` | mock | {name} starts with the run · {provider} |
 | `TOOLS_NO_HARNESS` | mock | No harness |
+| `TOOLS_AUTO_ONE` | mock | 1 harness starts automatically |
 | `TOOLS_AUTO(n, total)` | mock | {n} of {total} harnesses start automatically |
 | `HARNESS_STARTS` | mock | Starts with run |
 | `HARNESS_AFTER` | mock | Available after start |
@@ -771,6 +773,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `EDIT_FORMAT(format)` | mock | Edit {format} |
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
+| `MORE` | deviation (approved 2026-10-18) | More |
+| `MORE_ARIA` | deviation (approved 2026-10-18) | More actions |
 | `LAUNCH_RUN` | mock | Launch run |
 | `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
 | `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
@@ -852,7 +856,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 |---|---|---|
 | `EYEBROW` | mock | Saved starting points |
 | `TITLE` | mock | Templates |
-| `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organisation's current policy and availability are checked again. A template never stores a run's title. |
+| `LEDE` | mock | Start a new run from a saved setup. Using a template opens New run at review, where your organization's current policy and availability are checked again. A template never stores a run's title. |
 | `NEW_FROM_SCRATCH` | mock | New run from scratch |
 | `SCOPE_FILTER_ARIA` | mock | Who it's available to |
 | `KIND_FILTER_ARIA` | mock | Kind |
@@ -862,11 +866,11 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SCOPE_ALL` | mock | All |
 | `SCOPE_ME` | mock | Only me |
 | `SCOPE_GROUPS` | mock | Groups |
-| `SCOPE_ORG` | mock | Organisation |
+| `SCOPE_ORG` | mock | Organization |
 | `KIND_ALL` | mock | All kinds |
 | `KIND_TEMPLATES` | mock | Templates |
 | `KIND_POLICIES` | mock | Policies |
-| `NOTE` | mock | Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organisation's defaults. |
+| `NOTE` | mock | Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organization's defaults. |
 | `COL_NAME` | mock | Name |
 | `COL_AVAILABLE` | mock | Available to |
 | `COL_INCLUDES` | mock | Includes |
@@ -875,7 +879,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BADGE` | mock | Policy |
 | `NEEDS_SETUP(label)` | mock | Needs setup: {label} |
 | `GROUP_LABEL(group)` | mock | {group} group |
-| `ORG_ADMINS` | mock | Organisation admins |
+| `ORG_ADMINS` | mock | Organization admins |
 | `TEMPLATE_MANAGERS` | pending (W-24) | Template managers |
 | `PART_RUN` | mock | Run |
 | `PART_WHERE` | mock | Where it runs |
@@ -895,7 +899,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `GROUPS_UNVERIFIED` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Wardyn could not check which groups you belong to, so templates shared with a group may be missing. Sign in again to see them. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |
-| `EMPTY_ACTION` | mock | Start a new run |
 | `NO_MATCH_TITLE` | mock | Nothing matches |
 | `NO_MATCH_BODY` | mock | Try another filter or search term. |
 | `CLEAR_FILTERS` | mock | Clear filters |

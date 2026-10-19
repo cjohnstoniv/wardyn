@@ -757,7 +757,7 @@ func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
 // kill.
 //
 // The failure it pins is specific. Past the KILLED CAS, a dead context cancels
-// KillSandbox, makes retryQuick bail before revoking, and fails the run.kill
+// KillSandbox, makes retrying bail before revoking, and fails the run.kill
 // write — leaving a row that says KILLED, a sandbox that is alive, an identity
 // that still mints, and NOTHING in the trail. Nothing revisits that state: the
 // idle reaper lists RUNNING and the next supersede selects non-terminal runs.

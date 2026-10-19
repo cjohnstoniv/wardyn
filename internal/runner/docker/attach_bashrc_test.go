@@ -4,11 +4,14 @@
 package docker
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // attachBashrcPath resolves deploy/images/common/attach-bashrc.sh relative to
@@ -24,7 +27,22 @@ const attachBashrcPath = "../../../deploy/images/common/attach-bashrc.sh"
 // shell, so only a shell can prove it.
 func runAttachShell(t *testing.T, home, binDir string, env ...string) int {
 	t.Helper()
-	cmd := exec.Command("bash", "-i", "-c", "true")
+	calls, _ := runAttachShellOut(t, home, binDir, 0, env...)
+	return len(calls)
+}
+
+// runAttachShellOut is runAttachShell returning what the fake agent recorded (its working
+// directory per start) and the shell's own output. A non-zero timeout kills a shell that is
+// still waiting, so a regression to a long wait fails in seconds instead of minutes.
+func runAttachShellOut(t *testing.T, home, binDir string, timeout time.Duration, env ...string) (calls []string, out string) {
+	t.Helper()
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, "bash", "-i", "-c", "true")
 	cmd.Env = append(os.Environ(),
 		append([]string{
 			"HOME=" + home,
@@ -34,19 +52,20 @@ func runAttachShell(t *testing.T, home, binDir string, env ...string) int {
 			"WARDYN_REPOS=",
 			"WARDYN_REPO_URL=",
 		}, env...)...)
-	out, err := cmd.CombinedOutput()
+	b, err := cmd.CombinedOutput()
+	out = string(b)
 	if err != nil {
 		// bash -i without a tty warns about job control on some hosts but still
 		// sources .bashrc; only a hard failure with no output is fatal.
-		if len(out) == 0 {
+		if len(b) == 0 {
 			t.Fatalf("interactive bash failed: %v", err)
 		}
 	}
-	b, readErr := os.ReadFile(filepath.Join(home, "calls.log"))
+	rec, readErr := os.ReadFile(filepath.Join(home, "calls.log"))
 	if readErr != nil {
-		return 0
+		return nil, out
 	}
-	return len(strings.Fields(strings.TrimSpace(string(b))))
+	return strings.Fields(strings.TrimSpace(string(rec))), out
 }
 
 // newAttachHome lays out a scratch $HOME carrying the real attach-bashrc.sh as
@@ -66,7 +85,7 @@ func newAttachHome(t *testing.T) (home, binDir string) {
 		t.Fatalf("write .bashrc: %v", err)
 	}
 	binDir = t.TempDir()
-	fake := "#!/bin/sh\necho ran >> \"$HOME/calls.log\"\n"
+	fake := "#!/bin/sh\necho \"$PWD\" >> \"$HOME/calls.log\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(fake), 0o755); err != nil {
 		t.Fatalf("write fake claude: %v", err)
 	}
@@ -102,5 +121,81 @@ func TestAttachBashrc_NoAgentWithoutRequest(t *testing.T) {
 	}
 	if got := runAttachShell(t, home, binDir, "WARDYN_INTERACTIVE_START=shell"); got != 0 {
 		t.Fatalf("attach shell with interactive_start=shell: agent CLI ran %d times, want 0", got)
+	}
+}
+
+// attachPrep lays out what agent-run --idle leaves for the attach shell: the resolved workspace
+// directory, then (LAST) the prep-done marker.
+func attachPrep(t *testing.T, home string) (workdir string, finish func()) {
+	t.Helper()
+	workdir = t.TempDir()
+	return workdir, func() {
+		_ = os.MkdirAll(filepath.Join(home, ".wardyn"), 0o755)
+		_ = os.WriteFile(filepath.Join(home, ".wardyn", "workdir"), []byte(workdir), 0o644)
+		_ = os.WriteFile(filepath.Join(home, ".wardyn", "prep-done"), nil, 0o644)
+	}
+}
+
+// liveIdle starts a process standing in for agent-run --idle (the attach shell asks whether it is
+// still running) and returns its pid.
+func liveIdle(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start idle stand-in: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return strconv.Itoa(cmd.Process.Pid)
+}
+
+// TestAttachBashrc_StartFolderRunWaitsForPrep pins the second path of the wait: a run with a
+// WARDYN_START_FOLDER and no repos has no WARDYN_REPOS to key on, so a first attach before prep wrote
+// ~/.wardyn/workdir skipped the wait and started the agent outside the chosen folder.
+func TestAttachBashrc_StartFolderRunWaitsForPrep(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	workdir, finish := attachPrep(t, home)
+	idle := liveIdle(t)
+	time.AfterFunc(1500*time.Millisecond, finish)
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_START_FOLDER=/work/sub", "WARDYN_IDLE_PID="+idle)
+	if len(calls) != 1 || calls[0] != workdir {
+		t.Fatalf("agent started in %v, want exactly once in the prepared workspace %s; output: %s", calls, workdir, out)
+	}
+}
+
+// TestAttachBashrc_PrepGoneDoesNotStartAgent pins the bound of the wait: it is the idle process still
+// running, not a clock. With that process gone and no prep-done (the clone never finished), the shell
+// says so at once and does not start the agent over a half-cloned tree; a 120 s cap used to do exactly
+// that on a slow clone.
+func TestAttachBashrc_PrepGoneDoesNotStartAgent(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatalf("run idle stand-in: %v", err)
+	}
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_REPOS=https://example.invalid/r.git", "WARDYN_IDLE_PID="+strconv.Itoa(dead.Process.Pid))
+	if len(calls) != 0 {
+		t.Fatalf("agent started %v although preparation never finished", calls)
+	}
+	if !strings.Contains(out, "ended without finishing") {
+		t.Fatalf("the shell did not say preparation ended without finishing; output: %s", out)
+	}
+}
+
+// TestAttachBashrc_SlowPrepStillStartsAgentInWorkspace is the counterweight: preparation that takes a
+// while but completes is waited for, and the agent starts in the workspace.
+func TestAttachBashrc_SlowPrepStillStartsAgentInWorkspace(t *testing.T) {
+	home, binDir := newAttachHome(t)
+	workdir, finish := attachPrep(t, home)
+	idle := liveIdle(t)
+	time.AfterFunc(2*time.Second, finish)
+
+	calls, out := runAttachShellOut(t, home, binDir, 30*time.Second,
+		"WARDYN_INTERACTIVE_START=agent", "WARDYN_REPOS=https://example.invalid/r.git", "WARDYN_IDLE_PID="+idle)
+	if len(calls) != 1 || calls[0] != workdir {
+		t.Fatalf("agent started in %v, want exactly once in %s; output: %s", calls, workdir, out)
 	}
 }

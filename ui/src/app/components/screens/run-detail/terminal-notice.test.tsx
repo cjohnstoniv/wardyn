@@ -5,12 +5,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { TerminalPane } from "./terminal-notice";
 
 vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
+vi.mock("../../../lib/api/runner-pools", () => ({
+  runnerPools: { list: () => Promise.resolve({ pools: [{ id: "pool-1", name: "CI jobs", slots: { max: 40 } }] }) },
+}));
 vi.mock("../../wardyn/terminal-player", () => ({ TerminalPlayer: () => <div data-testid="player" /> }));
 
 const LINK = "Open the Recording tab →";
@@ -52,6 +56,16 @@ describe("TerminalPane — the finished run's Recording link", () => {
   });
 });
 
+// #2910: the pane is near-black in both themes, so its header and body copy must
+// resolve their tokens from the dark block, not the light theme's.
+describe("TerminalPane — always-dark token scope", () => {
+  it("scopes the pane frame to the dark tokens", () => {
+    pane("ready", false);
+    const frame = screen.getByTestId("run-pane-frame");
+    expect(frame).toHaveClass("dark");
+  });
+});
+
 // 0.9 (M-RN-3 RS6): a live interactive run on a person's computer that is offline cannot be attached to, so
 // the pane says so by name; the captured replay is still offered, and the terminal stays when it is online.
 describe("TerminalPane — a run on an offline computer", () => {
@@ -89,5 +103,38 @@ describe("TerminalPane — a run on an offline computer", () => {
       expect(screen.queryByText(/can't be reached/)).toBeNull();
       unmount();
     }
+  });
+});
+
+// A QUEUED run's hero was an empty frame: it must say why the run waits, and where it stands in line.
+describe("TerminalPane — a QUEUED run", () => {
+  const queued = (reason: string) =>
+    makeRun({
+      id: "run-1",
+      state: "QUEUED",
+      created_by: "me",
+      interactive: true,
+      queue: { pool_id: "pool-1", queued_at: new Date(Date.now() - 5 * 60_000).toISOString(), deadline_at: new Date(Date.now() + 3 * 3600_000).toISOString(), position: 1, reason },
+    });
+  const renderPane = (run: ReturnType<typeof queued>) =>
+    render(
+      <OperatorProvider operator principal="me">
+        <TerminalPane run={run} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+
+  it("names the pool's limit, the place in line and when it gives up", async () => {
+    renderPane(queued(RUN_WAIT_REASON.AT_CAPACITY));
+    expect(await screen.findByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeInTheDocument();
+    // The approved mock: a Queued title, then ONE line of place, wait and give-up.
+    expect(screen.getByRole("heading", { name: "Queued" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-queued-wait-line")).toHaveTextContent(
+      /^You are 2nd in line · waiting since .+ · gives up in 3 hours$/,
+    );
+  });
+
+  it("gives the recording-store sentence without needing the pool", async () => {
+    renderPane(queued(RUN_WAIT_REASON.RECORDING_STORE_OFF));
+    expect(await screen.findByText(RUN_WAIT.RECORDING_STORE_OFF())).toBeInTheDocument();
   });
 });

@@ -66,6 +66,12 @@ func (s PG) ListRunnerLapsedRuns(ctx context.Context, runnerID, after uuid.UUID)
 // MarkRunnerRunLost uses the existing loss CAS, with authenticated ownership
 // checked in the same committing transaction. A fresh drop never claims loss.
 func (s PG) MarkRunnerRunLost(ctx context.Context, runnerID, runID uuid.UUID, expectedRef string, at time.Time) (bool, error) {
+	// Wait for the run row before the claim takes the runner's: runnerExecutionRun locks the runner row,
+	// then the run row, and a wait there on a held run row would hold every write to the runner (its
+	// reconnect's among them) behind that row's holder. The claim below still rechecks everything.
+	if _, err := s.Pool.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, runID); err != nil {
+		return false, err
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, err

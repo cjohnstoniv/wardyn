@@ -12,7 +12,7 @@
 // every other /admin/* screen).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { credentials as credentialsApi, type CredentialInventory, type CredentialRow } from "../../lib/api/credentials";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage, relativeTime, absoluteTime } from "../../lib/format";
@@ -188,7 +188,7 @@ export function CredentialsScreen() {
           {screenStatus === "loading" ? (
             <TableSkeleton rows={5} cols={5} />
           ) : screenStatus === "no_meta" ? (
-            <EmptyState icon={AlertTriangle} title="Something went wrong" description={errorMessage} />
+            <EmptyState icon={KeyRound} title={INVENTORY.NO_META_TITLE} description={errorMessage} />
           ) : screenStatus === "error" ? (
             <ErrorState onRetry={load} />
           ) : noProvidersConfigured ? (

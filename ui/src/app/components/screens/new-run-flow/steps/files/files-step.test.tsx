@@ -90,6 +90,9 @@ function Seed({ intent }: { intent: RunIntent }) {
 }
 const Drawn = () => <p data-testid="intent">{JSON.stringify(useNewRunDraft().intent)}</p>;
 const drawn = (): RunIntent => JSON.parse(screen.getByTestId("intent").textContent!);
+// The refs the person typed rather than picked (#2107): UI-only facts that never reach the intent.
+const TypedRefs = () => <p data-testid="typed-refs">{JSON.stringify(useNewRunDraft().guided.refText)}</p>;
+const typedRefs = (): Record<string, string> => JSON.parse(screen.getByTestId("typed-refs").textContent!);
 // An edit to the draft from outside the step (another screen, a document), as the reducer takes it.
 const external = { edit: (_apply: (i: RunIntent) => RunIntent) => {} };
 function External() {
@@ -105,6 +108,7 @@ function show(intent: RunIntent = INTERACTIVE, createUserDrive?: React.Component
         <Seed intent={intent} />
         <FilesStep location={{ screen: "step", step: "files" }} go={go} startFromScratch={() => {}} createUserDrive={createUserDrive} />
         <Drawn />
+        <TypedRefs />
         <External />
       </NewRunDraftProvider>
     </MemoryRouter>,
@@ -159,6 +163,7 @@ describe("the list and the Add dialog", () => {
     expect(within(dialog()).getByRole("textbox", { name: NR_FILES.STEP_MOUNT })).toHaveValue("/home/agent/work/payments");
     await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
     expect(drawn().workspaces).toEqual([{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments", ref: "dev" }] }]);
+    expect(typedRefs()).toEqual({});
     expect(drawn().start_folder).toEqual({ kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" });
     const c = card("payments");
     expect(within(c).getByText(NR_FILES.REPOSITORY_BADGE)).toBeInTheDocument();
@@ -182,6 +187,7 @@ describe("the list and the Add dialog", () => {
     await userEvent.click(dialogButton(/^Continue/));
     await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
     expect(drawn().workspaces?.[0].repos).toEqual([{ repo: "github.com/acme/payments", ref: "release/1.2" }]);
+    expect(typedRefs()).toEqual({ "ws-payments/github.com/acme/payments": "release/1.2" });
   });
 
   it("(R) offers a repository the person cannot launch disabled with the server's sentence, and one already added as added", async () => {
@@ -677,8 +683,11 @@ describe("choices and Continue", () => {
 
   it("'No extra files' writes the choice and says what is lost; adding something takes it back", async () => {
     show(BACKGROUND);
-    await userEvent.click(await screen.findByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    const radio = await screen.findByRole("radio", { name: NR_FILES.NO_EXTRA });
+    expect(radio).not.toBeChecked();
+    await userEvent.click(radio);
     expect(drawn().no_repositories_or_drives).toBe(true);
+    expect(radio).toBeChecked();
     expect(await screen.findByText(NR_FILES.NO_EXTRA_DELETED)).toBeInTheDocument();
     await add(NR_FILES.REPOSITORY_BADGE, "payments");
     expect(drawn().no_repositories_or_drives).toBeUndefined();

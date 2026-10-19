@@ -609,6 +609,13 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 			finished := t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now))
 			return t.MintedBy == "" || t.MintedBy == t.Principal || (finished && !withRevoked)
 		})
+		// Only the still-work view: include_revoked lists every row, finished or not, whoever owns it.
+		if !withRevoked {
+			if tokens, err = s.dropDeactivatedOwners(r.Context(), tokens); err != nil {
+				writeServerError(w, r, "list api tokens", err)
+				return
+			}
+		}
 		for i := range tokens {
 			tokens[i].Token = ""
 		}
@@ -618,6 +625,29 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
+}
+
+// dropDeactivatedOwners removes the tokens whose owner's identity is deactivated or purged: apiTokenAuth
+// refuses them, so the admin-minted inventory must not count them as tokens that still work. The answer is
+// the owner's, so each owner is asked once.
+func (s *Server) dropDeactivatedOwners(ctx context.Context, tokens []types.APIToken) ([]types.APIToken, error) {
+	if s.cfg.SessionRevocations == nil {
+		return tokens, nil
+	}
+	deactivated := map[string]bool{}
+	var err error
+	tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
+		key := t.Principal + "\x00" + t.Email
+		dead, asked := deactivated[key]
+		if !asked && err == nil {
+			var status oidc.SessionStatus
+			status, err = oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
+			dead = status == oidc.SessionDeactivated
+			deactivated[key] = dead
+		}
+		return dead
+	})
+	return tokens, err
 }
 
 // handleRevokeAPIToken is DELETE /api/v1/me/tokens/{id}: revoke one of the

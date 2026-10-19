@@ -36,6 +36,7 @@ import { FilesGroup } from "./kind-visuals";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
 import { MountMap } from "./mount-map";
 import { cleanSubfolder, StartingFolder, SUBFOLDER_ID } from "./starting-folder";
+import { withRefText } from "./typed-ref";
 
 const STEP_LABELS = {
   shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES, tools: NR_SHARED.STEP_TOOLS,
@@ -144,6 +145,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       const first = added?.canStart ? added : after.find((x) => x.canStart && x.workspaceId === added?.workspaceId);
       return first ? startIn(first, legacyId)(next) : next;
     });
+    // Whether the ref was typed rather than picked, for Review to say it is not checked until the run starts.
+    if (saved.ref) dispatch({ type: "guided", patch: { refText: withRefText(draft.guided.refText, saved.ref.key, saved.ref.typed) } });
     if (mode === "add") setExpanded((e) => [...e, saved.key]);
     const folderWs = folders.find((f) => f.key === saved.key)?.workspaceId;
     if (folderWs) setFoldersAdded((set) => new Set([...set, folderWs]));

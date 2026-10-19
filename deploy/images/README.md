@@ -67,6 +67,15 @@ printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
 - That limited static inspection found no affected call path; it is not a general reachability proof.
 - The shrinkwrap still records `shell-quote` 1.10.0.
 
+- Checked 2026-10-18 against the newest release, 4.141.0 (linux-amd64 only):
+
+| Artifact | Result |
+| --- | --- |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.0/code-server-4.141.0-linux-amd64.tar.gz) | `65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29` |
+| `devContainersSpecCLI.js` | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833`, identical to 4.139.1 |
+| `npm-shrinkwrap.json` | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7`, `shell-quote` 1.10.0 |
+| bundled `shell-quote` | 1.10.0 |
+
 - The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
 - Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
 
@@ -264,18 +273,11 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 
 ### Git credential flow
 
-1. `git clone https://github.com/...` triggers the system credential helper.
-2. `wardyn-git-helper get` is called; it reads `WARDYN_GITHUB_GRANT_ID` from
-   the sandbox env (set by the driver at dispatch — this is the UUID of the
-   run's `github_token` CredentialGrant, not a secret).
-3. The helper calls `POST /wardyn/v1/credentials/mint` via the proxy (origin-
-   form URL — the proxy serves it locally, injecting the run token toward
-   `wardynd`).
-4. `wardynd` verifies the run token, checks the approval gate, and mints a
-   short-lived GitHub installation token (via the GitHub App).
-5. The helper emits the token to git's stdout in the credential protocol format.
-6. git uses the token for the clone/fetch; the token is never stored to disk
-   (git credential store is not configured in the sandbox image).
+1. `git clone https://github.com/...` on a brokered run is rewritten to the proxy's `/wardyn/gh/<org>/<repo>` route.
+2. The proxy terminates that request, asks `wardynd` to mint a short-lived GitHub installation token through the GitHub App, and sets it on the outbound request.
+3. The token never reaches `git`, the environment, args or disk.
+4. On a brokered run the system credential helper `wardyn-git-helper` refuses GitHub hosts, so it never emits a GitHub token.
+5. The helper path applies only to a `git_pat` with `WARDYN_GIT_PAT_BROKER=off`: it reads the grant ids from the sandbox env, calls `POST /wardyn/v1/credentials/mint` via the proxy and emits the PAT to git's stdout in the credential protocol format.
 
 - The run token itself NEVER appears in the sandbox environment.
 - The proxy holds it and injects it only when forwarding internal API calls.

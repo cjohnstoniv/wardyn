@@ -890,9 +890,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 		t.Fatal("tlsCookiePostureCheck absent")
 	}
 
-	assertSetupCheckBlocking(t, scmProviderCheck(false, nil, setup.SCMPosture{}))
-	assertSetupCheckBlocking(t, scmProviderCheck(true, nil, setup.SCMPosture{}))
-	assertSetupCheckBlocking(t, scmProviderCheck(false, []string{"ssh-key-github-com"}, setup.SCMPosture{}))
+	assertSetupCheckBlocking(t, scmProviderCheck(false, nil, setup.SCMPosture{}, false))
+	assertSetupCheckBlocking(t, scmProviderCheck(true, nil, setup.SCMPosture{}, false))
+	assertSetupCheckBlocking(t, scmProviderCheck(false, []string{"ssh-key-github-com"}, setup.SCMPosture{}, false))
 
 	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, false))
 	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, true))

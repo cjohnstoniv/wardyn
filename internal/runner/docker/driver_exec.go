@@ -573,9 +573,15 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 	insp, err := d.cli.ExecInspectRaw(ctx, agentExecID)
 	if err != nil {
 		if isNotFound(err) {
-			// Only definitive when the container is also gone/stopped.
-			if cst, cerr := d.Status(ctx, ref); cerr == nil && cst.State == types.RunStopped {
+			// Only definitive when the container is also gone/stopped. One that exited non-zero or was
+			// OOM killed (a daemon restart or a host reboot stops it with 143) is as definitive, and its
+			// own status carries the exit code the run's end, and a reboot's keep, read.
+			cst, cerr := d.Status(ctx, ref)
+			if cerr == nil && cst.State == types.RunStopped {
 				return runner.Status{State: types.RunStopped, Message: "agent exec and container both gone"}, nil
+			}
+			if cerr == nil && cst.State == types.RunFailed {
+				return cst, nil
 			}
 			return runner.Status{}, fmt.Errorf("docker: agent exec %q not found but container still running (ambiguous; daemon restart under live-restore?)", agentExecID)
 		}

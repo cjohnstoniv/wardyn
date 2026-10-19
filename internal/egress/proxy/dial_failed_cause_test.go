@@ -4,8 +4,10 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/http2"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -204,3 +207,32 @@ func TestDenyDialFailed_SecretNeverReachesCause(t *testing.T) {
 type errStringWithSecret struct{ secret string }
 
 func (e errStringWithSecret) Error() string { return "dial failed, config said: " + e.secret }
+
+// TestDenyDialFailed_PeerTextNeverBecomesTheCause: an upstream that answers
+// with an unparseable status line, or an HTTP/2 GOAWAY carrying debug text,
+// wrote that text itself. The Cause names the class in fixed words, and any
+// Cause is bounded, so the row stays far under the decision post's body cap.
+func TestDenyDialFailed_PeerTextNeverBecomesTheCause(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
+	line := strings.Repeat("A", 2<<20)
+	_, malformed := http.ReadResponse(bufio.NewReader(strings.NewReader(line+"\r\n\r\n")), nil)
+	if malformed == nil {
+		t.Fatal("net/http parsed a status line with no space")
+	}
+	//lint:ignore SA1019 the type h2Fallback's transport returns on a GOAWAY
+	goAway := http2.GoAwayError{ErrCode: http2.ErrCodeProtocol, DebugData: "peer-chosen words"}
+	for name, c := range map[string]struct {
+		err   error
+		leaks string
+	}{
+		"malformed status line": {malformed, "AAAA"},
+		"x/net GOAWAY":          {goAway, "peer-chosen words"},
+		"net/http GOAWAY":       {errors.New(`http2: server sent GOAWAY and closed the connection; LastStreamID=1, ErrCode=NO_ERROR, debug="peer-chosen words"`), "peer-chosen words"},
+		"any long error":        {errors.New(strings.Repeat("z", 1<<20)), strings.Repeat("z", maxCauseBytes+1)},
+	} {
+		row := p.denyDialFailed("builtin:dial-failed", egress.Request{Host: "peer.example", Port: 80}, "peer.example", c.err, nil)
+		if strings.Contains(row.Cause, c.leaks) || len(row.Cause) > 64+maxCauseBytes {
+			t.Errorf("%s: cause (%d bytes) = %.120q, want fixed words under %d bytes", name, len(row.Cause), row.Cause, maxCauseBytes)
+		}
+	}
+}

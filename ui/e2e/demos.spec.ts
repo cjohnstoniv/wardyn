@@ -78,4 +78,21 @@ test.describe("Demo sandboxes", () => {
       await expect(page.getByTestId(`demo-start-${id}`)).toBeDisabled();
     });
   }
+
+  // A read that fails (a daemon restart, a dropped connection) says nothing about the sandbox: the card stays on the
+  // run and the resume entry survives, so a reload can still re-attach. Only a real 404 forgets it.
+  test("a failed run read keeps the tracked demo and its resume entry", async ({ page }) => {
+    const runId = "00000000-0000-4000-8000-00000000d3a0";
+    await page.addInitScript((id) => {
+      try {
+        localStorage.setItem("wardyn-demo-runs", JSON.stringify({ "sealed-box": id }));
+      } catch {
+        /* private mode — ignore */
+      }
+    }, runId);
+    await page.route(`**/api/v1/runs/${runId}`, (route) => route.abort("connectionreset"));
+    await page.goto("/setup?step=sealed-box");
+    await expect(page.getByTestId("demo-starting")).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("wardyn-demo-runs"))).toContain("00000000-0000-4000-8000-00000000d3a0");
+  });
 });

@@ -138,3 +138,44 @@ test("caught -> guided approve -> requirements PUT + confined re-POST -> clean c
   await expect(session.getByText("Replayed clean")).toBeVisible();
   await expect(page.getByTestId("record-last-clean-replay")).toContainText("Last clean confined replay: build & test");
 });
+
+// #2779: a bulk approve skips a model provider row's host (the console cannot tell a Bedrock or gateway host
+// from any other), and the server names what it skipped in X-Wardyn-Record-Skipped-Hosts, so the toast says so.
+test("bulk approve names the model-provider hosts the server skipped", async ({ page }) => {
+  const bedrock = "bedrock-runtime.us-east-1.amazonaws.com";
+  const state = initialWorkspace();
+  state.record_results = {
+    "build-test": {
+      ...state.record_results["build-test"],
+      observations: {
+        domains: [
+          { host: "api.stripe.com", methods: ["GET"], allow_count: 1, deny_count: 0, pending_count: 0 },
+          { host: bedrock, methods: ["POST"], allow_count: 3, deny_count: 0, pending_count: 0 },
+        ],
+        minted_grant_ids: [], exec_argv0s: [], file_writes: [], connects: [], anomalies: [],
+      },
+    },
+  } as unknown as typeof state.record_results;
+  const promoteBodies: unknown[] = [];
+
+  await page.route(WS_GLOB, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(state) }),
+  );
+  await page.route(`${WS_GLOB}/record/build-test/promote-egress`, async (route) => {
+    promoteBodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "X-Wardyn-Record-Skipped-Hosts": bedrock },
+      body: JSON.stringify(state),
+    });
+  });
+
+  await gotoConsole(page);
+  await navToRoute(page, `/workspaces/${WS_ID}`);
+  await page.getByRole("button", { name: /^approve 2 observed hosts$/i }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Approve 2 hosts" }).click();
+
+  await expect(page.getByText(`Approved 1 host. Skipped 1 model-provider host: ${bedrock}`)).toBeVisible();
+  expect(promoteBodies).toEqual([{ hosts: expect.arrayContaining(["api.stripe.com", bedrock]) }]);
+});

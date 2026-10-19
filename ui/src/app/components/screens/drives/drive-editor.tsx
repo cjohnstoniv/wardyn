@@ -87,6 +87,12 @@ const HOME_OPTIONS: { value: HomeTemplate; label: string; hint: string }[] = [
   { value: "email_local", label: DRIVES.HOME_EMAIL_LOCAL, hint: DRIVES.HOME_EMAIL_LOCAL_HINT },
 ];
 
+// The reason a Directory-name option is disabled, which depends only on the backend.
+function homeUnavailable(b: DriveBackend): string {
+  if (b === "host_path") return DRIVES.HOME_UNAVAILABLE_SHARE;
+  return b === "k8s_pvc_static" ? DRIVES.HOME_UNAVAILABLE_CLAIM : DRIVES.HOME_UNAVAILABLE_MANAGED;
+}
+
 const RECLAIM_OPTIONS: { value: DriveReclaim; label: string }[] = [
   { value: "retain", label: DRIVES.RECLAIM_RETAIN },
   { value: "delete", label: DRIVES.RECLAIM_DELETE },
@@ -281,7 +287,7 @@ export function DriveEditor({
                 disabled={disabled || homeDisabled(o.value)}
                 onClick={() => setHome(o.value)}
                 title={o.label}
-                hint={o.hint}
+                hint={homeDisabled(o.value) ? homeUnavailable(backend) : o.hint}
               />
             ))}
           </div>

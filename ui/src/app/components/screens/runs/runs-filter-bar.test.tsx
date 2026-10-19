@@ -16,6 +16,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { RunsFilterBar } from "./runs-filter-bar";
+import { RUNS_FILTERS } from "../../wardyn/copy/runs-landing";
 import { DEFAULT_RUNS_FILTERS, type RunsFilterState } from "./runs-filters";
 import { setField } from "../../../../test/set-field";
 
@@ -86,5 +87,13 @@ describe("RunsFilterBar search box", () => {
     // for "a" must still replace the draft.
     showQ(view, "a");
     expect(box()).toHaveValue("a");
+  });
+});
+// #2927: the trigger shows the chosen item's text, so every status item says which filter it is, as Workspace and Group do.
+describe("RunsFilterBar status options", () => {
+  it("prefixes every status with 'Status · ', not only All", () => {
+    const words = Object.entries(RUNS_FILTERS).filter(([k]) => /^STATUS_(ALL|NEEDS|ACTIVE|ENDED|FAILED|KILLED)$/.test(k));
+    expect(words).toHaveLength(6);
+    for (const [, text] of words) expect(text).toMatch(/^Status · \S/);
   });
 });

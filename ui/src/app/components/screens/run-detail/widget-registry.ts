@@ -99,6 +99,8 @@ export type WidgetContext = {
    *  COUNT comes from the live derivation every other surface already uses. */
   heldCount: number;
   audit: AuditEvent[];
+  /** The oldest and newest audit pages did not meet, so counts read off `audit` are a floor. */
+  auditGap?: boolean;
   onGoAudit: () => void;
   /** Opens the run page's Policy tab (the identity row's View link). */
   onGoPolicy: () => void;

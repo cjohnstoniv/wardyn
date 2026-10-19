@@ -33,7 +33,7 @@ ARG UI_STAGE=ui-build
 # stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
 # no emulated pnpm. Same reason applies to every other stage in this file that
 # carries the flag.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS ui-build
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -92,7 +92,7 @@ FROM ${UI_STAGE} AS ui
 # Stage 2: build the Go binaries. Runs on the BUILDER's arch and CROSS-COMPILES
 # to $TARGETARCH below — every binary here is pure Go (CGO_ENABLED=0), so a
 # linux/arm64 image needs no QEMU for the compile, only Go's own GOARCH.
-FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
 
 WORKDIR /build
 

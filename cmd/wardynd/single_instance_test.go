@@ -78,3 +78,23 @@ func TestWarnSmallPool_BelowFourAndNoRotatorBranch(t *testing.T) {
 		t.Errorf("warnSmallPool is not called ahead of the rotator branch (call at %d, branch at %d)", call, branch)
 	}
 }
+
+// `docker compose exec wardynd wardynd -print-groundtruth-token` runs beside the
+// live daemon by design; it mints a token and exits without serving, so it must not
+// take (and be refused) the single-instance lock, and must not claim WARDYN_HA.
+func TestClaimSingleInstanceFor_PrintGroundtruthTokenSkipsTheLock(t *testing.T) {
+	yes, no := true, false
+	buf := captureSlog(t)
+	// lazyPool never dials: reaching the lock would fail on the closed port.
+	release, err := claimSingleInstanceFor(context.Background(), lazyPool(t, 2), &bootFlags{ha: &no, printGroundtruthToken: &yes})
+	if err != nil {
+		t.Fatalf("claim for -print-groundtruth-token: %v", err)
+	}
+	release()
+	if strings.Contains(buf.String(), "WARDYN_HA is set") {
+		t.Errorf("the one-shot logged the WARDYN_HA line: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "-print-groundtruth-token") {
+		t.Errorf("the exemption logged nothing accurate: %s", buf.String())
+	}
+}

@@ -207,8 +207,10 @@ func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {
 // owner learns it happened.
 const myRunnerRevokedShown = 7 * 24 * time.Hour
 
-// handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners, and
-// any a different person revoked in the last week.
+// handleListMyRunners is GET /api/v1/me/runners?limit=&offset=: the caller's own unclaimed and claimed
+// runners, and any a different person revoked in the last week, newest first. The page is
+// defaultListLimit rows unless asked for more (at most maxListLimit); X-Wardyn-Truncated says another
+// page exists.
 func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
@@ -221,12 +223,21 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := rs.ListVisibleRunnersByOwner(r.Context(), owner, s.cfg.Now().UTC(), myRunnerRevokedShown)
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	rows, truncated, err := pagedItems(page, func(p store.Page) ([]types.Runner, error) {
+		return rs.ListVisibleRunnersByOwner(r.Context(), owner, s.cfg.Now().UTC(), myRunnerRevokedShown, p)
+	}, nil)
 	if err != nil {
 		writeServerError(w, r, "list my runners", err)
 		return
 	}
 	if views, ok := s.runnerViews(w, r, rs, rows, false); ok {
+		if truncated {
+			w.Header().Set("X-Wardyn-Truncated", "true")
+		}
 		writeJSON(w, http.StatusOK, views)
 	}
 }

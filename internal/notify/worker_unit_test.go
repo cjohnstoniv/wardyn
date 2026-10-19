@@ -88,13 +88,26 @@ func TestNewWorkerIndexesChannelsAndDefaultsTheClient(t *testing.T) {
 	}
 }
 
+// Rows that fail together must not retry together: a fixed backoff put a 429'd burst back on the same tick,
+// attempt after attempt, until the rows died.
+func TestFailedSpreadsRetriesSoABurstDoesNotRepeat(t *testing.T) {
+	w := &Worker{}
+	seen := map[time.Duration]bool{}
+	for range 200 {
+		seen[w.failed(claimed{attempts: 1}, result{class: "http_status:429", retryable: true}).wait] = true
+	}
+	if len(seen) < 20 {
+		t.Errorf("200 failures of one attempt produced %d distinct waits, want them spread", len(seen))
+	}
+}
+
 func TestFailedRetriesOnlyTheRetryableAndOnlyUntilTheFifthAttempt(t *testing.T) {
 	w := &Worker{}
 	retry := result{class: "http_status:503", retryable: true}
 	for attempts, wait := range retryBackoff {
 		got := w.failed(claimed{attempts: int16(attempts + 1)}, retry)
-		if got.state != types.NotifyPending || got.wait != wait || got.class != retry.class {
-			t.Errorf("attempt %d: %+v, want pending after %v", attempts+1, got, wait)
+		if got.state != types.NotifyPending || got.wait < wait*8/10 || got.wait > wait*12/10 || got.class != retry.class {
+			t.Errorf("attempt %d: %+v, want pending after %v +-20%%", attempts+1, got, wait)
 		}
 	}
 	if got := w.failed(claimed{attempts: maxAttempts}, retry); got.state != types.NotifyDead || got.class != retry.class || got.wait != 0 {

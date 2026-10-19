@@ -42,7 +42,7 @@ import {
   type UserDriveListItem,
   type UserDrivePreview,
 } from "../../../lib/api/drives";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { DRIVES, PEOPLE, PERM, PREVIEW } from "../../../lib/user-drives-copy";
 import type { CapabilitySubjectType } from "../../../lib/types";
@@ -197,7 +197,7 @@ export function AllocationsBlock({
                     <TableCell>
                       <Overrides grant={g} />
                     </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground" title={g.created_at}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(g.created_at)}>
                       {relativeTime(g.created_at)}
                     </TableCell>
                     <TableCell>

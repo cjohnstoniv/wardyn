@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -32,13 +34,22 @@ const AuditTargetTruncatedMarker = "…[truncated]"
 // returned BYTE-IDENTICAL: audit queries match this column exactly, so the cap
 // must be invisible to every row that is not abusive.
 func CapAuditTarget(target string) string {
+	// The column is UTF-8 text, so Postgres refuses (22021) a target with a bad
+	// byte, and a refused row is replayed from the spool and refused again.
+	// Valid text passes through untouched.
+	if !utf8.ValidString(target) {
+		target = strings.ToValidUTF8(target, "\uFFFD")
+	}
 	if len(target) <= MaxAuditTargetLen {
 		return target
 	}
-	// Byte slice, not runes: the column is bytes and the attacker chooses the
-	// encoding. A split multi-byte rune inside a truncated attacker-supplied
-	// path is not a correctness problem — the marker says the value is partial.
-	return target[:MaxAuditTargetLen] + AuditTargetTruncatedMarker
+	// Cut at a rune boundary: the length is in bytes, but a cut inside a
+	// multi-byte rune would leave exactly the bad byte the line above removes.
+	cut := MaxAuditTargetLen
+	for cut > 0 && !utf8.RuneStart(target[cut]) {
+		cut--
+	}
+	return target[:cut] + AuditTargetTruncatedMarker
 }
 
 // Compile-time assertion: Recorder implements audit.Recorder.

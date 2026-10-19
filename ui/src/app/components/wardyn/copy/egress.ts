@@ -9,12 +9,19 @@
 // seeded — has no write to make: the pair fired, nothing changed, and the row
 // came back with its old provenance.
 export const EGRESS = {
+  // The Allowed hosts card's subtitle. Rows come from approvals, recordings,
+  // scans and composed sources, so it claims none of those as the only origin.
+  ALLOWED_HOSTS_SUBTITLE: "Every run against this workspace may reach these. Each row says where it came from.",
   SCAN_SEEDED_REASON: "Detected by this workspace's scan, not approved here — the next scan puts it back.",
   // The other half of the same mismatch: an operator-authored requirement that
   // reaches this workspace through the EFFECTIVE fold rather than its own
   // overlay. The requirements PUT here replaces only the overlay, so clearing
   // it has to happen where it was written. Distinct from the scan sentence
   // above, which would contradict the row's own "required by this workspace".
+  // A bulk approve that skipped model-provider hosts (a provider row's host is plumbing,
+  // never promoted): the toast names them, because the click otherwise looks like it did it all.
+  PROMOTED_SKIPPED: (approved: number, skipped: string[]): string =>
+    `Approved ${approved} ${approved === 1 ? "host" : "hosts"}. Skipped ${skipped.length} model-provider ${skipped.length === 1 ? "host" : "hosts"}: ${skipped.join(", ")}`,
   INHERITED_REASON: "Required by a source this workspace composes, not by an approval here — clear it where it was written.",
 } as const;
 

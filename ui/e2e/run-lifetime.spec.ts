@@ -59,7 +59,7 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
     await expect(row.getByText("No end")).toBeVisible();
 
     await row.getByRole("button", { name: "Set an end…" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = page.getByRole("dialog", { name: "When this run ends" });
     await expect(dialog).toBeVisible();
     const input = dialog.locator('input[type="datetime-local"]');
     const target = new Date(Date.now() + 3 * 24 * 3600_000);
@@ -258,6 +258,8 @@ test.describe("Run lifetime — the ending-soon warning", () => {
 
     const banner = page.getByTestId("run-lifetime-warning");
     await expect(banner.getByText("This run ends in 10 minutes")).toBeVisible();
+    await expect(banner).toContainText("your admin sets how long");
+    await expect(banner).not.toContainText(/\d+ days/);
     await banner.getByRole("button", { name: "Dismiss" }).click();
     await expect(banner).toHaveCount(0);
   });

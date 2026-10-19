@@ -9,7 +9,7 @@ import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { QuestionBlock } from "./question-block";
 
-/** When an Autonomous run starts. Scheduling is Coming soon: no start time exists on the wire, so Run Now is the only choice. */
+/** When an Autonomous run starts. Scheduling is Coming soon: no start time exists on the wire, so Run now is the only choice. */
 export function TimingSection() {
   const labelId = React.useId();
   return (

@@ -225,3 +225,39 @@ test.describe("governance — the run limits round-trip through the editor (RL-1
     expect((await stored()).default_end_sec).toBe(86400);
   });
 });
+
+// #2505: taking a composed profile standalone folds what binds today (base plus narrowing) into its own policy and
+// limits, and says so; without it the save would send the starter ceiling and empty limits.
+test.describe("governance — a composed profile set to None folds in what binds", () => {
+  test("picking None on a profile with a base shows the folded note", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const suffix = randomUUID().slice(0, 8);
+    const baseName = `fold-base-${suffix}`;
+    const childName = `fold-child-${suffix}`;
+    const base = await page.request.post("/api/v1/governance/profiles", {
+      headers: auth,
+      data: { name: baseName, ceiling: YOLO_CEILING, limits: { max_concurrent_runs: 5 } },
+    });
+    expect(base.status(), await base.text()).toBe(201);
+    const baseId = (await base.json()).profile.id as string;
+    const child = await page.request.post("/api/v1/governance/profiles", {
+      headers: auth,
+      data: { name: childName, base_profile_id: baseId, overlay: { allowed_domains: ["api.anthropic.com"] }, overlay_limits: { max_concurrent_runs: 2 } },
+    });
+    expect(child.status(), await child.text()).toBe(201);
+    const childId = (await child.json()).profile.id as string;
+    try {
+      await gotoConsole(page, "admin");
+      await navTo(page, "Governance");
+      await profilesTable(page).getByRole("button", { name: `${GOV.EDIT} ${childName}` }).click();
+      const editor = page.getByTestId("governance-profile-editor");
+      await expect(editor.getByTestId("governance-limits-folded")).toHaveCount(0);
+      await page.locator("#governance-profile-base").click();
+      await page.getByRole("option", { name: GOV.BASE_NONE }).click();
+      await expect(editor.getByTestId("governance-limits-folded")).toHaveText(GOV.PROFILE_FOLDED);
+    } finally {
+      await page.request.delete(`/api/v1/governance/profiles/${childId}`, { headers: auth });
+      await page.request.delete(`/api/v1/governance/profiles/${baseId}`, { headers: auth });
+    }
+  });
+});

@@ -321,7 +321,9 @@ func (s *Server) handoffAttachLease(runID uuid.UUID, prev, promoted *attachHolde
 }
 
 // attachLeaseLost ends h, whose lease was taken over or lapsed: it loses the writer slot here
-// and its client is displaced with reason.
+// and its client is displaced with reason. The observers queued here behind it now wait on another
+// replica's lease, so they are marked waiting for it: the keeper and a remote release then promote
+// the oldest, as a lease that frees always does.
 func (s *Server) attachLeaseLost(runID uuid.UUID, h *attachHolder, reason string) {
 	if h.lease != nil {
 		h.lease.drop()
@@ -330,6 +332,14 @@ func (s *Server) attachLeaseLost(runID uuid.UUID, h *attachHolder, reason string
 	if prev == nil {
 		return
 	}
+	reg := s.attachRegistry()
+	reg.mu.Lock()
+	if ra := reg.attaches[runID]; ra != nil && ra.writer == nil {
+		for _, o := range ra.observers {
+			o.waitRemote.Store(true)
+		}
+	}
+	reg.mu.Unlock()
 	prev.displace(reason)
 }
 

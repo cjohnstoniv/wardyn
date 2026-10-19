@@ -335,14 +335,16 @@ stateDiagram-v2
 
 ## Security invariants (every contributor and subagent MUST preserve these)
 
-1. **Secrets never enter the sandbox — with named, bounded exceptions.**
+1. **Keep credentials out of the sandbox wherever Wardyn can broker them; name and bound every kind that enters.**
    - Late binding via the broker; third-party API credentials are injected
      proxy-side (`egress.InjectionRule`), so as a rule no secret sits in env,
      disk, or args —
-     - static API keys and OAuth subscription tokens never enter the
-       sandbox (env inside shows only an inert placeholder, the real value injected
-       on the wire),
-     - and broker-scoped credentials are minted and revoked per run.
+     - model-provider keys, `api_key` grants and a Claude sign-in's token never
+       enter the sandbox (env inside shows only a placeholder);
+     - a static key the operator delivers as an `env_secret` or `file_secret`
+       does enter,
+     - and minted credentials expire on their issuer's clock: Wardyn revokes
+       only Azure DevOps `minted_pat`, and otherwise stops further mints.
    - These residuals break
      that rule deliberately — each bounded and disclosed rather than hidden.
    - The
@@ -371,17 +373,24 @@ stateDiagram-v2
      - do not
        use it where recordings are viewer-exposed (see
        [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §4).
-   - *(Scope note: the BROKERED credential — the GitHub/API token — is what never
-     lands in env/disk/args; it reaches `git` stdout-only via `wardyn-git-helper`.
-     The helper's per-run caller-auth gate value is a separate, low-value
-     authentication nonce, deliberately a 0400 agent-owned file + descendant-scoped
-     env, that gates — and is not — the credential;*
+   - *(Scope note: the proxy sets a brokered GitHub App token, and a `git_pat` while
+     the PAT broker is on, on the outbound request; neither reaches `git`.*
+     - *Only with `WARDYN_GIT_PAT_BROKER=off` does a PAT reach `git`, through the
+       helper's stdout.*
+     - *The helper's per-run caller-auth gate value is a separate, low-value
+       authentication nonce, deliberately a 0400 agent-owned file + descendant-scoped
+       env, that gates — and is not — the credential;*
      - *see `cmd/wardyn-git-helper`.)*
 2. **Approval mints the credential.**
-   - `CredentialGrant` = eligible;
-     the mint happens only in the SAME Postgres transaction that verifies
-     `approvals.state = 'APPROVED'` for this run+scope, and writes
-     `approvals.minted_jti` back.
+   - `CredentialGrant` = eligible.
+   - For a grant with `requires_approval: true`, the mint happens only in the SAME
+     Postgres transaction that verifies `approvals.state = 'APPROVED'` for this
+     run+scope, and writes `approvals.minted_jti` back.
+   - A grant without `requires_approval` (the default) is auto-mintable: it creates
+     no approval row, is re-mintable by design, is capped at a 1h TTL and is audited
+     per mint.
+   - A `git_pat` approval with `decision_scope=run` is a per-run lease that covers
+     re-mints for the run's life.
    - Tested invariant: minted scope ==
      the scope the approver saw.
    - No widening, ever.
@@ -471,6 +480,7 @@ sequenceDiagram
   Op->>API: POST /approvals/{id}/approve
   API->>DB: approval state PENDING -> APPROVED (records the decision only)
   Sbx->>Br: MintForGrant(caller run identity, grantID)
+  Note over Br: a grant without requires_approval skips this sequence and mints directly (auto-mint, audited per mint)
   Br->>DB: BEGIN
   Br->>DB: read grant + approval (state must be APPROVED, minted_jti empty)
   alt not approved, or already minted
@@ -486,6 +496,7 @@ sequenceDiagram
   end
 ```
 
+- This describes a grant with `requires_approval: true`.
 - Approval records the human decision only; the credential is minted **later**,
   when the run's own proxy or git-helper requests it (`MintForGrant`) —
   - inside
@@ -494,8 +505,9 @@ sequenceDiagram
   - so the minted scope always equals
     the approved scope and a grant can never mint twice.
 - `api_key` grants are then
-  injected proxy-side (the agent never sees them); git tokens reach `git` via
-  `wardyn-git-helper` stdout only.
+  injected proxy-side (the agent never sees them); a GitHub App token and a `git_pat`
+  (broker on) are set at the proxy, and a PAT reaches `git` through
+  `wardyn-git-helper` stdout only with `WARDYN_GIT_PAT_BROKER=off`.
 
 > [!IMPORTANT]
 > **This sequence is credential-mint specific — it does not describe an `egress_domain` decision.**
@@ -521,7 +533,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 |---|---|---|
 | `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` ([`internal/egress/proxy/git_broker.go`](internal/egress/proxy/git_broker.go)) | proxy memory only; an un-brokered GitHub URL has no route **by name**, and `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out of the push-branch confinement; see [below](#github_token-credential). |
 | `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg; see [below](#git_pat-mechanism). | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a); not least-privilege either way; **not available for the SAME forge as a `github_token` grant**; see [below](#git_pat-credential). |
-| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1); **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
+| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after; an approval-gated grant is delivered once | resident file, wiped post-clone (documented exception, invariant 1); **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
 
 - **Azure DevOps is not a fourth grant kind.**
   - It has no `git_pat` or `ssh_key` lane:

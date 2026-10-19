@@ -14,11 +14,8 @@
 // shares the word).
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import type { AgentRun } from "../../../lib/types";
-import { relativeTime, getErrorMessage } from "../../../lib/format";
-import { runs as runsApi } from "../../../lib/api/runs";
-import { waitEnded } from "../../../lib/api/core";
+import { relativeTime } from "../../../lib/format";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
@@ -29,7 +26,8 @@ import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
-import { REVIVE, REVIVE_STILL_STARTING, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
+import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
+import { reviveWithToasts } from "./revive-run";
 import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 
 // Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
@@ -91,14 +89,7 @@ export function RunRow({ run }: { run: AgentRun }) {
     e.stopPropagation();
     setReviving(true);
     try {
-      // F12 (PR #1317 round-2 review): the run page's own revive already
-      // reports newly-blocked hosts (RL.revivePolicy) — the row's revive is
-      // the same call and owes the same toast, not a silent success.
-      const res = await runsApi.reviveRun(run.id);
-      if (res.denied_added.length > 0) toast.info(revivePolicy(res.denied_added.length));
-    } catch (err) {
-      if (waitEnded(err)) toast.info(REVIVE_STILL_STARTING);
-      else toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+      await reviveWithToasts(run.id, "Couldn't revive this run");
     } finally {
       setReviving(false);
     }

@@ -365,12 +365,6 @@ export function useSecurityOperator(): boolean {
   return React.useContext(MeIdentityContext).securityOperator;
 }
 
-// Whether the person in the User view is stamped a super admin — see
-// MeIdentity.userViewSuperAdmin above.
-export function useUserViewSuperAdmin(): boolean {
-  return React.useContext(MeIdentityContext).userViewSuperAdmin;
-}
-
 // The signed-in principal — see MeIdentity.principal above.
 export function usePrincipal(): string {
   return React.useContext(MeIdentityContext).principal;

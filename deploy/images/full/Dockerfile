@@ -20,8 +20,8 @@
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
 # `toolchain` line of the repos you build (this digest is go1.27.2; wardyn itself
 # pins toolchain go1.26.9). Bump the pin rather than relaxing GOTOOLCHAIN.
-FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS goroot
-FROM rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS rustroot
+FROM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS goroot
+FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
@@ -158,8 +158,12 @@ RUN chmod -R a+rwX /opt/rust
 # tool binaries under go/bin stay put) so a k8s run's fill lands on the volume
 # ephemeralScratchVolumes mounts there (internal/runner/k8s/naming.go) and
 # counts against disk_mib instead of the pod's unmetered writable layer.
-RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache/go-build \
-      /home/agent/.cache/gotmp /home/agent/.cache/go/mod /home/agent/.cache/npm
+# The parents are named so they get the owner too: `install -d` leaves the ones it
+# creates implicitly (.cache, .cache/go) root-owned, and the agent then cannot create
+# ~/.cache/ms-playwright, node-gyp's devdir or pip's cache.
+RUN install -d -o agent -g agent /home/agent/go /home/agent/.cache /home/agent/.cache/go \
+      /home/agent/.cache/go-build /home/agent/.cache/gotmp /home/agent/.cache/go/mod \
+      /home/agent/.cache/npm
 
 # Maven proxy: unlike npm/pip/cargo/go/git, Maven does NOT honor the sandbox's
 # HTTP(S)_PROXY env vars — it resolves Maven Central directly and fails

@@ -152,9 +152,9 @@ export function SecretsScreen() {
             placeholder="Search secrets by name…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="max-w-sm"
+            className="min-w-0 max-w-sm"
           />
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto whitespace-nowrap text-sm text-muted-foreground">
             {filtered.length} of {shown.length} secret{shown.length === 1 ? "" : "s"}
           </span>
           <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
@@ -568,7 +568,7 @@ export function AddSecretDialog({
                 .filter(Boolean)
                 .join(" ") || undefined
             }
-            variant={isOverwrite && confirmOverwrite ? "destructive" : "info"}
+            variant={isOverwrite && confirmOverwrite ? "destructive" : "default"}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : <Lock className="size-4" />}
             {isOverwrite ? (confirmOverwrite ? "Overwrite secret" : "Save (overwrites)") : "Save secret"}

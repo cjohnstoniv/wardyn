@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -118,7 +119,7 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		INSERT INTO workspaces (` + wsCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		RETURNING ` + wsCols
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
+	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
@@ -127,6 +128,10 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 		workspaceDeniedParam(ws.DeniedEgress), ws.OwnedBy, ws.EgressEditedAt,
 		workspaceImageBuildParam(ws.ImageBuild),
 	))
+	if isUniqueViolation(err) {
+		return types.Workspace{}, ErrConflict
+	}
+	return out, err
 }
 
 // GetWorkspace returns the workspace for id, or ErrNotFound.
@@ -147,6 +152,12 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 // permanent deny survives a composition edit, unlike ApprovedEgress. Callers
 // must round-trip the fetched row. Returns ErrNotFound for an unknown id.
 //
+// The write applies only while updated_at still equals the round-tripped
+// ws.UpdatedAt (a zero value skips the guard): every scoped writer of
+// active_run_id, record_results, llm_cred and the built image stamps it, so a
+// snapshot that predates one of them returns ErrWorkspaceStale instead of
+// reverting it. A UNIQUE(name) violation returns ErrConflict.
+//
 // egress_edited_at is passed through unless stampEgressEdit marks this write
 // as the operator action the column records: unconditional stamping would
 // suppress the boot heal for a decision nobody undid, while plain omission
@@ -163,15 +174,29 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 			attachments=$13, base_image_id=$14,
 			egress_edited_at=CASE WHEN $15::bool THEN now() ELSE $16::timestamptz END,
 			updated_at=now()
-		WHERE id=$17
+		WHERE id=$17 AND ($18::timestamptz IS NULL OR updated_at=$18)
 		RETURNING ` + wsCols
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
+	var seen *time.Time
+	if !ws.UpdatedAt.IsZero() {
+		seen = &ws.UpdatedAt
+	}
+	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), workspaceProfileParam(ws.RecordResults), workspaceLLMCredParam(ws.LLMCred),
-		workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID, stampEgressEdit, ws.EgressEditedAt, id,
+		workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID, stampEgressEdit, ws.EgressEditedAt, id, seen,
 	))
+	switch {
+	case errors.Is(err, ErrNotFound) && seen != nil:
+		// A guard miss and a missing row look the same to the UPDATE.
+		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
+			return types.Workspace{}, ErrWorkspaceStale
+		}
+	case isUniqueViolation(err):
+		return types.Workspace{}, ErrConflict
+	}
+	return out, err
 }
 
 // SetWorkspaceLLMCred replaces ONLY the model/harness cred binding column

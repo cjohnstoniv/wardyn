@@ -139,7 +139,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.dispatch": "dispatched the run",
   "run.interactive.start": "started the run idle for attach",
   "run.exec": "executed the agent task",
-  "run.complete": "completed",
+  // Not "completed": the same action records a run that ended in failure, whose row
+  // carries a red failure badge.
+  "run.complete": "the run ended",
   "run.kill": "killed the run",
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
@@ -199,6 +201,10 @@ const ACTION_VERB: Record<string, string> = {
   "integration.write": "stored an integration",
   "integration.delete": "deleted an integration",
   "workspace.requirement.write": "added a workspace requirement",
+  "workspace.create": "created a workspace",
+  "setup.onboarding.complete": "finished setup",
+  "authz.denied": "was refused access to",
+  "auth.fail": "failed to sign in to",
 };
 
 function capitalize(s: string): string {
@@ -342,7 +348,9 @@ export function AuditScreen() {
     // events, so an event list structurally cannot show them — a dead sensor
     // reads exactly like a quiet one. health() never rejects.
     void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
-    return api.listAudit(runFilter || undefined).then(setEvents);
+    // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
+    // investigating: ask for its newest page.
+    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(setEvents);
   }, [runFilter]);
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
@@ -517,14 +525,14 @@ export function AuditScreen() {
           </SelectContent>
         </Select>
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex flex-wrap items-center gap-3">
           <GroundTruthChip value={groundTruth} />
           {status === "ready" && !pollStale && (
             <Chip tone="success" dot pulse title="Polling for new events">
               Live · appending
             </Chip>
           )}
-          <span className="text-sm text-muted-foreground">
+          <span className="whitespace-nowrap text-sm text-muted-foreground">
             {status === "ready" && `${filtered.length} event${filtered.length === 1 ? "" : "s"}`}
           </span>
         </div>
@@ -554,7 +562,7 @@ export function AuditScreen() {
       {status === "ready" && (
         <TruncatedNote count={events.length} cap={LIST_LIMIT}>
           {runFilter
-            ? `Showing the first ${LIST_LIMIT} events for this run (truncated) — older events for this run may have rolled off.`
+            ? `Showing the newest ${LIST_LIMIT} events for this run (truncated) — its earliest events are not shown here.`
             : `Showing the first ${LIST_LIMIT} events (truncated) — older events may have rolled off this window. Filter by a run to see that run's own trail.`}
         </TruncatedNote>
       )}
@@ -776,21 +784,26 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
+  // Below sm the row is two lines: time, actor, icon and outcome, then the description with the run chip.
+  // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2/50">
+    <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">
       <span
         className="w-[84px] shrink-0 font-mono text-xs text-muted-foreground"
         title={absoluteTime(event.time)}
       >
         {clockTime(event.time)}
       </span>
-      <ActorTypeChip type={event.actor_type} />
+      {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
+      <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
+        <ActorTypeChip type={event.actor_type} />
+      </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (
-        <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
+        <AuditDecision event={event} className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:order-none sm:min-w-0" />
       ) : (
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="min-w-[10rem] flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+        <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
+          <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
             {describeEvent(event)}
           </span>
           <RuleSourceChip event={event} />
@@ -800,12 +813,13 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
       {event.run_id && (
         <button
           onClick={() => onDrill(event.run_id!)}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 font-mono text-meta text-muted-foreground hover:border-primary/40 hover:text-primary"
+          title={event.run_id}
+          className="order-3 inline-flex shrink-0 items-center gap-1 rounded-md border border-solid border-border bg-surface-2 px-1.5 py-0.5 sm:order-none font-mono text-meta text-muted-foreground hover:border-primary/40 hover:text-primary"
         >
-          {event.run_id.replace("run_", "")}
+          {event.run_id.replace("run_", "").slice(0, 8)}
         </button>
       )}
-      <div className="shrink-0">
+      <div data-testid="audit-outcome-cell" className="order-1 ml-auto w-[72px] shrink-0 sm:order-none sm:ml-0">
         <EventOutcome e={event} />
       </div>
     </div>

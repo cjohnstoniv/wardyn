@@ -174,6 +174,13 @@ describe("GovernanceScreen — states", () => {
     expect(screen.getByText(GOV.LEAD)).toBeInTheDocument();
   });
 
+  // #2896: at 390px the four tabs scroll inside the strip instead of widening the page.
+  it("the tab strip scrolls inside itself and starts at its left edge", async () => {
+    renderScreen();
+    await screen.findByRole("heading", { name: GOV.TITLE, level: 1 });
+    expect(await screen.findByRole("tablist")).toHaveClass("max-w-full", "justify-start", "overflow-x-auto");
+  });
+
   it("fetch_failed is distinct from empty, says enforcement is unaffected, and offers Retry", async () => {
     renderScreen(null);
     expect(await screen.findByText(GOV.FETCH_FAILED_TITLE)).toBeInTheDocument();

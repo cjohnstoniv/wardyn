@@ -31,7 +31,7 @@ type RunnerStore interface {
 	GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
 	ListRunners(ctx context.Context) ([]types.Runner, error)
 	ListRunnersByOwner(ctx context.Context, owner string) ([]types.Runner, error)
-	ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error)
+	ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p Page) ([]types.Runner, error)
 	ClaimRunner(ctx context.Context, id uuid.UUID, owner, fingerprint string, now time.Time) (types.Runner, error)
 	TouchRunner(ctx context.Context, id uuid.UUID, version string, now time.Time) error
 	RecordRunnerPosture(ctx context.Context, id uuid.UUID, p types.RunnerPosture, now time.Time) (changed bool, err error)
@@ -130,16 +130,16 @@ func (s PG) ListRunnersByOwner(ctx context.Context, owner string) ([]types.Runne
 // ListVisibleRunnersByOwner is owner's own list as the console shows it: ListRunnersByOwner without a
 // lapsed unclaimed runner (older than types.RunnerUnclaimedTTL at now), and without a revoked one unless
 // someone other than owner revoked it within revokedShown. The filter runs in the query, so the history
-// the list leaves out is never read.
-func (s PG) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error) {
-	const q = `SELECT ` + runnerCols + ` FROM runners
+// the list leaves out is never read. p windows the answer; a Limit of 0 or less is every row.
+func (s PG) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p Page) ([]types.Runner, error) {
+	const base = `SELECT ` + runnerCols + ` FROM runners
 		WHERE owner = $1
 		  AND NOT (state = 'unclaimed' AND created_at <= $2::timestamptz - $3 * interval '1 second')
 		  AND (state <> 'revoked' OR (revoked_at IS NOT NULL AND COALESCE(revoked_by, '') <> $1
 		       AND revoked_at >= $2::timestamptz - $4 * interval '1 second'))
 		ORDER BY created_at DESC, id`
-	return collect(ctx, s.Pool, "list", "runners", q,
-		[]any{owner, now, types.RunnerUnclaimedTTL.Seconds(), revokedShown.Seconds()}, scanRunner)
+	q, args := p.appendTo(base, []any{owner, now, types.RunnerUnclaimedTTL.Seconds(), revokedShown.Seconds()})
+	return collect(ctx, s.Pool, "list", "runners", q, args, scanRunner)
 }
 
 // ClaimRunner moves an unclaimed person's runner to claimed in one conditional UPDATE, only for its owner
@@ -243,6 +243,41 @@ func (s PG) TouchRunner(ctx context.Context, id uuid.UUID, version string, now t
 		return fmt.Errorf("store: touch runner: %w", err)
 	}
 	return nil
+}
+
+// RunnerCapsReport is what one session's caps event reports for the runner row. An empty Version,
+// MachineName or Arch keeps the one the row holds.
+type RunnerCapsReport struct {
+	Version, MachineName, Arch string
+	RetireCapable              bool
+}
+
+// RecordRunnerCaps stores session's caps report: last_seen_at and the version, the machine name and
+// architecture (a revoked runner keeps both) and the retire capability. It writes only while session
+// is the runner's current inventory session (BeginRunnerInventory), and says whether it was: a
+// superseded session's late caps write nothing over a newer one's. The runner row is locked first,
+// the order BeginRunnerInventory takes, so a fresh session's begin waits for this write and a write
+// after it sees that session.
+func (s PG) RecordRunnerCaps(ctx context.Context, id uuid.UUID, session string, r RunnerCapsReport, now time.Time) (bool, error) {
+	var current bool
+	err := s.inTx(ctx, func(q Querier) error {
+		if _, err := q.Exec(ctx, `SELECT 1 FROM runners WHERE id = $1 FOR NO KEY UPDATE`, id); err != nil {
+			return err
+		}
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+			id, session).Scan(&current); err != nil || !current {
+			return err
+		}
+		_, err := q.Exec(ctx, `UPDATE runners SET last_seen_at = $2, version = COALESCE(NULLIF($3::text, ''), version),
+			machine_name = CASE WHEN $4::text <> '' AND state <> 'revoked' THEN $4::text ELSE machine_name END,
+			arch = CASE WHEN $5::text <> '' AND state <> 'revoked' THEN $5::text ELSE arch END,
+			retire_capable = $6 WHERE id = $1`, id, now, r.Version, r.MachineName, r.Arch, r.RetireCapable)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: record runner caps: %w", err)
+	}
+	return current, nil
 }
 
 // RecordRunnerPosture stores a posture report from a claimed runner and says whether it differs from

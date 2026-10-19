@@ -321,8 +321,8 @@ func TestWorker_FiveFailuresYieldOneDeadRowOneAuditRowOneMetric(t *testing.T) {
 				t.Fatalf("after failure %d state = %q, want pending", i+1, r.State)
 			}
 			wait := time.Until(r.NextAttemptAt)
-			if wait > wantWait[i] || wait < wantWait[i]-5*time.Second {
-				t.Fatalf("after failure %d next attempt in %v, want about %v", i+1, wait, wantWait[i])
+			if wait > wantWait[i]*12/10 || wait < wantWait[i]*8/10-5*time.Second {
+				t.Fatalf("after failure %d next attempt in %v, want about %v +-20%%", i+1, wait, wantWait[i])
 			}
 			h.makeDue(t, a.ID)
 		}

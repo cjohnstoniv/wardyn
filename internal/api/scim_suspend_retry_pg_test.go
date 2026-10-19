@@ -19,11 +19,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// failDirectoryOnce fails the named directory read once, after skip calls of it succeed.
+// failDirectoryOnce fails the named directory read once (or times times in a row), after skip calls
+// of it succeed.
 type failDirectoryOnce struct {
 	store.PG
-	fail string
-	skip int
+	fail  string
+	skip  int
+	times int
 }
 
 func (s *failDirectoryOnce) failed(name string) error {
@@ -34,7 +36,9 @@ func (s *failDirectoryOnce) failed(name string) error {
 		s.skip--
 		return nil
 	}
-	s.fail = ""
+	if s.times--; s.times <= 0 {
+		s.fail = ""
+	}
 	return errors.New("directory read failed")
 }
 
@@ -55,16 +59,24 @@ func (s *failDirectoryOnce) HeldEmails(ctx context.Context, id uuid.UUID, bound,
 // A suspension whose email directory cannot be read deactivates the exact row and cuts its own binding,
 // leaves step 1 pending with the reason, and a retry once the read works runs the whole suspension.
 func TestSCIMSuspendWhileTheDirectoryIsUnreadableCutsTheExactRow(t *testing.T) {
-	// A PATCH reads the aliases twice before it suspends.
-	for read, skip := range map[string]int{"IdentityAliasValues": 2, "HeldEmails": 0} {
-		t.Run(read, func(t *testing.T) {
+	// A PATCH reads the aliases twice before it suspends; when its first read fails it suspends at
+	// once, and the suspension's own read fails too.
+	for name, tc := range map[string]struct {
+		read        string
+		skip, times int
+	}{
+		"IdentityAliasValues":            {"IdentityAliasValues", 2, 1},
+		"HeldEmails":                     {"HeldEmails", 0, 1},
+		"IdentityAliasValues first read": {"IdentityAliasValues", 0, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
 			const sub, email = "sub-leaver", "leaver@corp.example"
 			e := newSCIMEnv(t)
 			e.seedEntra(sub, email, oidPat)
 			own, _ := e.seedToken(sub, email)
 			other, otherRaw := e.seedToken("sub-other", email)
 			id := e.postUserID(e.a, oidPat, email, email)
-			n := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: read, skip: skip} })
+			n := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: tc.read, skip: tc.skip, times: tc.times} })
 
 			if w := e.patch(n, id, patchOf("false")); w.Code != http.StatusInternalServerError {
 				t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())

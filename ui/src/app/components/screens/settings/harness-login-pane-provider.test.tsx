@@ -82,6 +82,21 @@ describe("a provider door's pane", () => {
   });
 });
 
+describe("a refused auto-capture save (#2554)", () => {
+  it("shows the paste fallback and Cancel, and sends the refused token once", async () => {
+    captureSignIn.mockRejectedValue(new Error("the provider changed during sign-in"));
+    render(<HarnessLoginPane provider="anthropic" modelProvider="claude-sub" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.(`Your OAuth token: ${TOKEN}\r\n`));
+    await screen.findByText(/the provider changed during sign-in/);
+    expect(screen.queryByTestId("auto-capture-note")).toBeNull();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    // A redraw of the same terminal output must not re-send the doomed token.
+    await act(async () => lastAttachOutput?.("\r\n"));
+    expect(captureSignIn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a provider AWS sign-in's capture, proven by the row's source_run_id (#993)", () => {
   it("completes provider sign-in when capture audit is spooled", async () => {
     // The upload's audit row is best-effort and a spooled one is invisible to

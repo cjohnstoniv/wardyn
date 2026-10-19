@@ -129,6 +129,18 @@ describe("the people table", () => {
     expect(await screen.findByText("Nobody has signed in yet. People appear here after their first sign-in, or when you add them.")).toBeInTheDocument();
   });
 
+  // #2902: the title never repeats the PEOPLE section label, and a filter that
+  // matches nothing says so instead of showing a bare icon and "People".
+  it("names the empty state, and says nothing matched when a filter returns no one", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue({ people: [] });
+    renderScreen();
+    expect(await screen.findByText("No people yet")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deactivated" }));
+    expect(await screen.findByText("No one matches")).toBeInTheDocument();
+    expect(screen.getByText("Nothing matches this search or filter.")).toBeInTheDocument();
+  });
+
   it("searches (debounced) and filters by state through the server", async () => {
     const user = userEvent.setup();
     renderScreen();
@@ -283,8 +295,12 @@ describe("Add a person", () => {
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
-    setField(within(dialog).getByLabelText("Subject"), "sub-zed");
-    setField(within(dialog).getByLabelText("Email"), "zed@example.com");
+    // #2904: the required field says so and says what a subject is; the other says it is optional.
+    expect(within(dialog).getByLabelText("Sign-in subject")).toBeRequired();
+    expect(within(dialog).getByText("The subject (sub) your identity provider sends for this person, exactly as it sends it.")).toBeInTheDocument();
+    expect(within(dialog).getByText("*")).toBeInTheDocument();
+    setField(within(dialog).getByLabelText("Sign-in subject"), "sub-zed");
+    setField(within(dialog).getByLabelText("Email (optional)"), "zed@example.com");
     const before = listMock.mock.calls.length;
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     await waitFor(() => expect(createMock).toHaveBeenCalledWith("sub-zed", "zed@example.com"));
@@ -298,7 +314,7 @@ describe("Add a person", () => {
     await screen.findByText("ana@example.com");
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
-    setField(within(dialog).getByLabelText("Subject"), "sub-zed");
+    setField(within(dialog).getByLabelText("Sign-in subject"), "sub-zed");
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(/already known by this email/);
   });

@@ -7,7 +7,7 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
-import { AdoLaunchNote, AdoRunTokenLine, adoLaunchNoteKind } from "../../../../wardyn/ado-run-token-line";
+import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, ownTokenNoteOrgs } from "../../../../wardyn/ado-run-token-line";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
@@ -86,7 +86,7 @@ export interface AdoTokenFacts {
   onFallbackClick?: () => void;
 }
 
-export function Totals({ access, answered, names: harnessNames, providers, ado }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts }) {
+export function Totals({ access, answered, names: harnessNames, providers, ado, ownRows }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts; ownRows?: readonly SCMAccessPAT[] }) {
   const names = new Map((access?.rows ?? []).map((r) => [r.id, rowLabel(r, harnessNames)]));
   const rowName = new Map((access?.rows ?? []).map((r) => [r.id, r.name]));
   // Only a run that carries the Azure DevOps credential gets a token, so only its row says so.
@@ -135,6 +135,11 @@ export function Totals({ access, answered, names: harnessNames, providers, ado }
           {adoToken && adoLaunchNoteKind(adoToken.access) && (
             <li>
               <AdoLaunchNote access={adoToken.access} connecting={adoToken.connecting} onConnect={adoToken.onConnect} blockedUrl={adoToken.blockedUrl} onFallbackClick={adoToken.onFallbackClick} />
+            </li>
+          )}
+          {access?.credentials.some((c) => c.kind === ADO_SIGN_IN) && ownTokenNoteOrgs(ownRows).length > 0 && (
+            <li>
+              <AdoOwnTokenNote rows={ownRows} />
             </li>
           )}
           {answered && access?.credentials.length === 0 && <li className="text-sm text-muted-foreground">{NR_TOOLS.NO_CREDENTIALS}</li>}

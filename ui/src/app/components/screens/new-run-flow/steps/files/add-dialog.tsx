@@ -19,6 +19,7 @@ import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
+import { refTextKey } from "./typed-ref";
 import { driveChips, driveKind, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
 import { driveReason } from "./file-sources";
 import { KIND_INFO, KIND_LABEL, KindTile, PathText } from "./kind-visuals";
@@ -38,6 +39,8 @@ interface State {
   /** The ref sent for a repository; undefined follows the source's own. */
   branch?: string;
   branchText: string;
+  /** Whether the ref was typed (true) or picked (false) in this dialog; absent when it was not touched. */
+  refTyped?: boolean;
   path: string;
   readOnly: boolean;
   attempted: boolean;
@@ -91,7 +94,8 @@ export interface AddDialogProps {
   /** `previousKey`: the card an edit replaced, when it now names another source. */
   /** Workspaces the person added a folder from (removeItem keeps their folders). */
   foldersAdded?: ReadonlySet<string>;
-  onSave: (apply: (intent: RunIntent) => RunIntent, item: { name: string; key: string; previousKey?: string }, mode: "add" | "edit") => void;
+  /** `ref`: set only when the person typed or picked the repository's ref here; `typed` is the typed text, "" for a pick. */
+  onSave: (apply: (intent: RunIntent) => RunIntent, item: { name: string; key: string; previousKey?: string; ref?: { key: string; typed: string } }, mode: "add" | "edit") => void;
   /**
    * Seam for person-created drives: rendered under the user drives of the Choose step. `choose` selects a
    * drive by id once it is in the catalogue (`reload` re-reads it). Absent: nothing is offered.
@@ -167,7 +171,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
 
   const go = (step: Step) => setS((c) => ({ ...c, step, attempted: false }));
   const choose = (o: PickOption) =>
-    setS((c) => ({ ...c, sourceKey: o.key, branch: undefined, branchText: o.ref ?? "", path: o.defaultPath ?? "", readOnly: o.locked, attempted: false }));
+    setS((c) => ({ ...c, sourceKey: o.key, branch: undefined, branchText: o.ref ?? "", refTyped: undefined, path: o.defaultPath ?? "", readOnly: o.locked, attempted: false }));
   // A source chosen by id from outside the list (the create form's new drive) is taken as the list's own pick
   // once its option arrives; until then it carries nothing of the source chosen before it. "" clears the pick.
   const awaited = React.useRef<string | null>(null);
@@ -214,7 +218,10 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
       document.getElementById(DIALOG_PATH_ID)?.focus();
       return;
     }
-    onSave(saveChoice(choice, src, editing, foldersAdded), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice), previousKey: editing?.key }, editing ? "edit" : "add");
+    const ref = s.kind === "repo" && s.refTyped !== undefined && source?.workspaceId && source.repo
+      ? { key: refTextKey(source.workspaceId, source.repo), typed: s.refTyped ? s.branch ?? "" : "" }
+      : undefined;
+    onSave(saveChoice(choice, src, editing, foldersAdded), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice), previousKey: editing?.key, ref }, editing ? "edit" : "add");
   };
   const title = editing ? NR_FILES.EDIT_NAMED(editing.name) : s.kind && s.step > 1 ? ADD_TITLE[s.kind] : NR_FILES.DIALOG_TITLE;
   const taken = (key: string) => items.some((x) => x.key === key && x.key !== editing?.key);
@@ -344,8 +351,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
                 sourceRef={source.ref}
                 value={s.branch}
                 typed={s.branchText}
-                onPick={(ref) => setS((c) => ({ ...c, branch: ref }))}
-                onType={(text) => setS((c) => ({ ...c, branchText: text, branch: text.trim() || undefined }))}
+                onPick={(ref) => setS((c) => ({ ...c, branch: ref, refTyped: false }))}
+                onType={(text) => setS((c) => ({ ...c, branchText: text, branch: text.trim() || undefined, refTyped: true }))}
               />
             </div>
           )}

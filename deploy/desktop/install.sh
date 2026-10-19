@@ -107,18 +107,22 @@ if [ "${MODE}" = "uninstall" ]; then
   fi
 
   echo "==> Stopping the stack"
-  # The teardown's exit status is load-bearing on the --purge path and only
-  # there. wardyn-desktop.sh dies BEFORE it runs any `compose down` when no
+  # The teardown's exit status is load-bearing on the --purge path (a plain
+  # uninstall uses it only for the exit code). wardyn-desktop.sh dies BEFORE it runs any `compose down` when no
   # Docker daemon is reachable (its own socket refusal) — so a swallowed
   # failure here used to mean --purge deleted age.key, deleted the envelope,
   # printed "Purged." and left the stack running against a secret store nothing
-  # can decrypt again. A plain uninstall keeps everything, so best-effort is
-  # still right there.
+  # can decrypt again. A plain uninstall keeps everything, so it falls back to the
+  # project label below and only reports (non-zero) if nothing stopped the stack.
   TEARDOWN_OK=1
   if [ "${PURGE}" -eq 1 ]; then
     "${WARDYN_DESKTOP_SH}" down --purge || TEARDOWN_OK=0
-  else
-    "${WARDYN_DESKTOP_SH}" down || true
+  elif ! "${WARDYN_DESKTOP_SH}" down; then
+    # The launcher needs the envelope (MDM may already have removed it) and a daemon it can
+    # see; the compose project label needs neither. A stack that was never stopped restarts
+    # with the daemon (restart: unless-stopped), unmanaged and never updated.
+    echo "==> The launcher could not stop the stack; trying 'docker compose -p wardyn-desktop down'" >&2
+    docker compose -p wardyn-desktop down || TEARDOWN_OK=0
   fi
 
   if [ "${PURGE}" -eq 1 ]; then
@@ -140,6 +144,13 @@ if [ "${MODE}" = "uninstall" ]; then
     rm -rf /var/log/wardyn
     echo "==> Purged."
   else
+    if [ "${TEARDOWN_OK}" -ne 1 ]; then
+      echo "install.sh: the Wardyn stack may still be RUNNING: neither '${WARDYN_DESKTOP_SH} down' nor" >&2
+      echo "  'docker compose -p wardyn-desktop down' stopped it, and it restarts with Docker." >&2
+      echo "  Stop it once a Docker daemon is reachable: docker compose -p wardyn-desktop down" >&2
+      echo "  The converge job is already unregistered, so nothing will update it." >&2
+      exit 1
+    fi
     echo "==> Kept ${MANAGED_DIR} (age.key + the MDM envelope) and the Postgres volume."
     echo "    Re-running install.sh recovers this device. Use --purge to destroy them."
   fi

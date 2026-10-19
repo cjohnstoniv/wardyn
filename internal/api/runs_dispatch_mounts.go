@@ -43,16 +43,6 @@ import (
 // lives under no member root by construction, so stamping it would refuse the
 // very credential mounts a member-owned workspace's model run needs. The zero
 // posture (every operator run) stamps nothing.
-// driveTargetReserved reports whether a stored policy target IS the reserved
-// user-drive path or nests under it — the same question runner's own
-// targetReservedForDrive answers for ValidateAuthoredTarget, over the SAME
-// exported constant, because that constant is the thing that could move and the
-// prefix rule is not. FILED for the runner lane: export it there and delete
-// this, so one rule has one spelling.
-func driveTargetReserved(target string) bool {
-	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
-}
-
 func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
@@ -62,7 +52,7 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 		if wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget {
 			continue
 		}
-		// The reserved drive target, re-checked on the stored policy. Every
+		// The reserved drive targets (the drive and its two roots), re-checked on the stored policy. Every
 		// AUTHORING seam refuses /home/agent/drive (validatePolicySpec,
 		// validateWorkspaceSource, seedRequestWorkspace, wireWorkspaceSource) —
 		// and none of them ran on a policy row written BEFORE the reservation
@@ -86,8 +76,8 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 		// a policy row to fix and nothing else will tell them. The LOG is the
 		// audience — this seam has no run warnings channel, and the member has
 		// nothing to do about an operator's stored row.
-		if driveTargetReserved(wm.Target) {
-			slog.Warn("wardynd: stored policy binds the reserved user-drive target; dropping that mount",
+		if runner.AuthoredTargetReserved(wm.Target) {
+			slog.Warn("wardynd: stored policy binds a reserved drive target; dropping that mount",
 				slog.String("source", wm.Source), slog.String("target", wm.Target))
 			continue
 		}

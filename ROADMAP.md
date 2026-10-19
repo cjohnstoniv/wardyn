@@ -206,48 +206,20 @@
 
 ## Planned
 
-- Everything below is **planned, unbuilt, and undated**.
+- Everything below is **planned, unbuilt, and undated** unless it says it shipped.
 - Where a seam exists but no implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
 
-- v0.8 is the remaining path to alpha.
-- The cloud base and permissioning 0.6 owed are shipped, and so is 0.7's governance and desktop work (above, through `v0.7.12`), so what is left below is the alpha RC and beyond.
-
-- **v0.8.0 shipped as a pre-release on 2026-09-29, and the 0.8.1 patch shipped the same day; 0.8.2 is in progress.**
-- The plan — every lane, decision and open question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the remaining work is tracked on the `0.8.2` milestone, one issue per lane, and nothing starts before its issue carries the `approved` label ([CONTRIBUTING.md](CONTRIBUTING.md)).
-
-- **New for 0.8: posture-gated autonomy** —
-  - an org-defined rubric mapping a sandbox's containment posture (egress reach, secrets present, confinement class) to a permitted autonomy level,
-  - enforced both at the Wardyn boundary and, for agents that support managed settings, by generating that agent's enterprise policy file.
-- Researched during 0.7 and deliberately not built in it; the groundwork is that the posture inputs and the approval FSM it would ride already exist.
-
-- **Planned for 0.9: hybrid local + remote, as client-mode runners ([design](docs/design/0.9/PLAN.md)).**
-- Where this section still says laptops "enrol" into the org, 0.9 supersedes it: the laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer. 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
-- Today Wardyn has two tiers that do not know about each other —
-  - an org control plane on Kubernetes ([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop, MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A local daemon per laptop. No shared control plane, no cluster").
-- Hybrid is the deployment where they are one product:
-  - the org runs the control plane on the cluster, MDM installs Wardyn on the laptop in member mode,
-  - and the **same person under the same org-managed policy flexes a sandbox between local and remote hardware** —
-  - a quick edit on the laptop's own CPU, a long build on the cluster's —
-  - with one identity, one ceiling, one audit stream.
-- The disk half follows: a local directory synced into a remote sandbox (`wardyn sync`), with drive-as-source as the shortcut when storage is shared.
-- The groundwork exists —
-  - member mode (`m′`) already makes the developer a non-operator against an org IdP,
-  - 0.7.2's `SiteConfig.WorkspaceProviders` is already an org-authored provider policy MDM delivers as `/etc/wardyn/site-config.json`,
-  - and the SSH gateway already carries an sftp channel into a running sandbox.
-- What does not exist is enrolment of a desktop into a *remote* control plane, per-run placement, and any link between a laptop's filesystem and a cluster sandbox.
-- Researched in 0.7.2 and written up in [docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md).
-- **0.8 ships the seams, not the rollout:**
-  - device enrolment into an org control plane and the one audit stream (the laptop's audit rows federated to the org) have landed,
-  - and 0.8's authorization decisions serialize, with stable refusal codes, a versioned list of resource kinds, and a principal that carries its device and origin.
-- **The rollout is 0.9:**
-  - client-mode runners, with the org as the only decider and a runner offline starting nothing new,
-  - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
-- Tracked on milestone `0.9.0`.
+- **v0.8 and v0.9 have shipped** (the Shipped table above, through `v0.9.3`).
+- 0.9 delivered the hybrid local and remote runs described in [docs/design/0.9/PLAN.md](docs/design/0.9/PLAN.md):
+  - a laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer;
+  - 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
+- 0.9.4 is bug fixes and console UX only; it adds no feature.
+- What is still **planned** starts at 0.10, below.
 
 | Milestone | Scope |
 |---|---|
-| **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
+| **v0.8** | **Alpha RC.** Shipped as `v0.8.0` through `v0.8.9`; see the Shipped table. |
+| **v0.9** | **Hybrid local + remote.** Shipped as `v0.9.0` through `v0.9.3`; 0.9.4 is fixes only. See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
 | **v0.10** | The New Run items marked Coming soon; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |

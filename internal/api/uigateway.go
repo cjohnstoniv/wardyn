@@ -461,19 +461,19 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	// The same human is presence for the pause, and thaws a paused run.
 	_ = s.markPresent(ctx, runID, types.ActorHuman, sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	s.uiReverseProxy().ServeHTTP(uiInterimWriter{w}, r.WithContext(ctx))
+	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
-// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say).
-// ReverseProxy copies an interim response's headers straight onto the writer
-// and never runs ModifyResponse for it, so without this uiStripOutbound's
-// rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and
-// hijack reachable through http.ResponseController.
+// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say). ReverseProxy copies an interim
+// response's headers straight onto the writer and never runs ModifyResponse for it, so without this
+// uiStripOutbound's rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and hijack
+// reachable through http.ResponseController.
 type uiInterimWriter struct{ http.ResponseWriter }
 
 func (w uiInterimWriter) WriteHeader(code int) {
 	if code >= 100 && code < 200 {
 		uiFilterSetCookie(w.Header())
+		w.Header().Del("Clear-Site-Data")
 	} else {
 		// ReverseProxy clears the header map after each 1xx, which takes the
 		// gateway's own Referrer-Policy with it; put it back on the final response.
@@ -499,8 +499,10 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 			// pipe-backed conn shows up as a frozen UI.
 			FlushInterval: -1,
 			Transport: &http.Transport{
-				DialContext:     s.uiDial,
-				MaxIdleConns:    maxUIConnsPerRun * 4,
+				DialContext:  s.uiDial,
+				MaxIdleConns: maxUIConnsPerRun * 4,
+				// A host is one run's app (run:port); a request past the cap waits for a pooled conn (serveUIRelay).
+				MaxConnsPerHost: maxUIConnsPerRun, MaxIdleConnsPerHost: maxUIConnsPerRun,
 				IdleConnTimeout: uiIdleConnTimeout,
 				// No proxy, no TLS: the destination is a sandbox's own loopback
 				// reached over an exec, never a network address.
@@ -584,14 +586,14 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 	}
 }
 
-// uiStripOutbound is the browser-ward half: an app in the sandbox must not be
-// able to set, overwrite or delete a wardyn_* cookie in the operator's browser
-// (cookie tossing — a sandbox-set wardyn_ui_sess or console session cookie
-// would be an authentication attack, not a rendering quirk), nor set one that
-// escapes its own host (uiSetCookieAllowed), nor register a service worker
-// that controls more than its own app (uiConfineServiceWorker).
+// uiStripOutbound is the browser-ward half: an app in the sandbox must not be able to set, overwrite or
+// delete a wardyn_* cookie in the operator's browser (cookie tossing — a sandbox-set wardyn_ui_sess or
+// console session cookie would be an authentication attack, not a rendering quirk), nor set one that
+// escapes its own host (uiSetCookieAllowed), nor register a service worker that controls more than its
+// own app (uiConfineServiceWorker), nor clear site data.
 func (s *Server) uiStripOutbound(resp *http.Response) error {
 	uiFilterSetCookie(resp.Header)
+	resp.Header.Del("Clear-Site-Data")
 	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
 		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
 	} else {
@@ -735,6 +737,7 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 // loopback through the exec lane. addr is "<run-id>:<port>" — there is no IP
 // anywhere in this path.
 func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
+	uiConnWaitDone(ctx) // a dial means the transport gave this request a connection slot
 	sess, ok := uiSessionFromContext(ctx)
 	if !ok {
 		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this connection")
@@ -776,8 +779,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
-		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached,
-			fmt.Sprintf("too many open UI connections for this run (max %d) — close a tab and retry", maxUIConnsPerRun))
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
 	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
 		release()

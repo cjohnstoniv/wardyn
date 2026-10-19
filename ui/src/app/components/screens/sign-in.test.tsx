@@ -90,6 +90,20 @@ describe("SignIn — SSO entry point", () => {
     expect(link).toHaveAttribute("href", "/auth/login");
   });
 
+  // #2099: off the console root the SSO link names the page the person asked for, so the sign-in
+  // returns there; the server checks it again (internal/auth/oidc/return_to.go).
+  it("asks the sign-in to return to the page the person was on", async () => {
+    healthMock.mockResolvedValue({ sso: true });
+    window.history.pushState({}, "", "/runs/abc?tab=logs");
+    try {
+      renderSignIn();
+      const link = await screen.findByRole("link", { name: /sign in with sso/i });
+      expect(link).toHaveAttribute("href", "/auth/login?return_to=%2Fruns%2Fabc%3Ftab%3Dlogs");
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   // #457: SIGNIN.ROLE_SOURCE (the "comes from your SSO role assignment"
   // caveat) is REMOVED everywhere, not just conditionally hidden — no cell
   // renders it any more, combined deployment included.
@@ -339,6 +353,21 @@ describe("SignIn — the token field advertises no working credential or env var
   });
 });
 
+// #2854: the label's text was a bare text node plus a span, i.e. two flex items
+// that wrapped as two side-by-side columns.
+describe("SignIn — the Remember label reads as one sentence", () => {
+  it("is one text element beside the checkbox", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderSignIn();
+    const box = await screen.findByRole("checkbox", { name: "Remember on this device" });
+    const label = box.closest("label")!;
+    // The checkbox, then ONE text element (a bare text node beside a span wrapped as two columns).
+    expect(label.lastElementChild).toHaveTextContent(
+      "Remember on this device (keeps the token after the browser closes)",
+    );
+  });
+});
+
 // Every submitToken failure used to collapse to probeAuth's plain
 // boolean, so a daemon 5xx and an unreachable control plane both rendered the
 // SAME "That admin token was rejected" copy as an actually-bad token — and
@@ -500,6 +529,14 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () 
     healthMock.mockResolvedValue({});
     renderSignIn();
     expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.OIDC_TRANSIENT);
+  });
+
+  // #2125: the provider's own refusal (not assigned to the app, consent declined) lands here.
+  it("renders the oidc_refused message", async () => {
+    window.history.pushState({}, "", "/?auth_error=oidc_refused");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(SIGNIN.OIDC_REFUSED);
   });
 
   it("shows no error banner when the URL carries no auth_error", () => {

@@ -479,7 +479,8 @@ launch_wardynd
 # volume are NOT encrypted under it and stay readable. The old `docker compose down -v`
 # also destroyed all of that. TRUNCATE removes only the already-worthless secrets (any
 # imported PAT was encrypted under the lost key too, so it's gone
-# regardless), so this is a safe, announced auto-recovery — no volume wipe.
+# regardless) — but "lost" is only true when no other key is in play, so it asks first
+# (stale_secrets_wipe_consent) — no volume wipe.
 if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 2>/dev/null; then
   warn "Stale secret store from an earlier run (encrypted with a lost throwaway key)."
   kill "$WPID" 2>/dev/null || true; rm -f "$PIDFILE"
@@ -487,7 +488,9 @@ if ! $healthy && grep -q 'no identity matched any of the recipients' "$LOGFILE" 
   # only ms (unlike the old down -v), so an immediate relaunch could race the dying
   # process and fail to bind ("address already in use").
   for _ in $(seq 1 10); do kill -0 "$WPID" 2>/dev/null || break; sleep 1; done
-  if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
+  if ! stale_secrets_wipe_consent "$AGE_ENV"; then
+    warn "Skipped, and wardynd stays down. To clear them by hand: make stop-host && docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c 'TRUNCATE secrets;'"
+  elif docker compose -f deploy/compose/docker-compose.yaml exec -T postgres \
        psql -U wardyn -d wardyn -c 'TRUNCATE secrets;' >/dev/null 2>&1; then
     ok "Cleared the undecryptable secrets table (audit log, runs, and recordings preserved) — retrying once…"
     launch_wardynd

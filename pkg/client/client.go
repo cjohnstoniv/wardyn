@@ -31,7 +31,7 @@
 //     SetMySecret, DeleteMySecret
 //   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
 //     SetSharedSecret, DeleteSharedSecret
-//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
+//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult, PutSiteConfigClearing
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
 //     sign-in and credential doors are NOT wrapped
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
@@ -51,7 +51,7 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
-//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, ListMyRunnersPage, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeMyRunner, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled, MintOrgRunnerToken,
 //     ClaimOrgRunner, SetRunnerTrust
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):

@@ -76,9 +76,10 @@ func (s *Server) adoPATAccessFor(ctx context.Context, pr perUserADORow, subject 
 // handleADODisconnect is DELETE /scm/azure-devops/connection: the caller
 // disconnects their own Azure DevOps sign-in. It revokes every live run token
 // created in their name, forgets the stored sign-in, audits
-// ado_pat.disconnect and answers 204, also when nothing was stored. A
-// deployment with no per-user row, and a row the caller may not use, answer
-// the same 404 (D-6).
+// ado_pat.disconnect and answers 204, also when nothing was stored. With no
+// row the caller may use, it forgets what they stored under any Azure DevOps
+// row, disabled or withdrawn from them; when they hold nothing either, it
+// answers the same 404 as a deployment with no per-user row (D-6).
 //
 // A sign-in captured at console login (source "org") is captured again at the
 // person's next login (CaptureLoginGrant, ado_entra_login.go); disconnect
@@ -95,27 +96,41 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read the Azure DevOps sign-in configuration", err)
 		return
 	}
+	rowIDs := []string{rowID}
 	if !ok {
-		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
-		return
+		// A cleanup, not a use (the own-token door's rule, handleDeleteADOOwnPAT): a row the caller
+		// may no longer use still lets them remove the sign-in they stored under it.
+		if rowIDs, err = s.adoHeldSignInRows(ctx, subject); err != nil {
+			writeServerError(w, r, "read the Azure DevOps sign-in", err)
+			return
+		}
+		if len(rowIDs) == 0 {
+			writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
+			return
+		}
 	}
 	// Revoke first: revoking a token redeems the sign-in this then forgets.
 	// A token created while this runs revokes itself (adoSignInEnds).
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	removed, err := func() (bool, error) {
-		finish, berr := s.beginADOSignInEnd(ctx, subject, adoPATRevokeDisconnect)
-		if berr != nil {
-			return false, berr
-		}
+	finish, err := s.beginADOSignInEnd(ctx, subject, adoPATRevokeDisconnect)
+	if err == nil {
 		defer finish()
 		s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
-		return s.forgetADOSignIn(ctx, subject, rowID)
-	}()
-	data, outcome := map[string]any{"provider_row": rowID, "removed": removed}, "success"
-	if err != nil {
-		data["error"], outcome = err.Error(), "failure"
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, subject, adoPATAuditDisconnect, rowID, outcome, mustJSON(data)))
+	for _, rowID := range rowIDs {
+		removed := false
+		if err == nil {
+			removed, err = s.forgetADOSignIn(ctx, subject, rowID)
+		}
+		data, outcome := map[string]any{"provider_row": rowID, "removed": removed}, "success"
+		if err != nil {
+			data["error"], outcome = err.Error(), "failure"
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, subject, adoPATAuditDisconnect, rowID, outcome, mustJSON(data)))
+		if err != nil {
+			break // the rows after it were never tried, so they get no row; a retry reaches them
+		}
+	}
 	if db.LockRefused(err) {
 		writeLockRefused(w, r, err)
 		return
@@ -148,6 +163,29 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 		return "", false, nil
 	}
 	return rows[0].row.ID, true, nil
+}
+
+// adoHeldSignInRows is every Azure DevOps row, whatever its state, under which owner's OWN list
+// holds a stored sign-in. It never reads through For(owner).Get, which falls back to the operator's row.
+func (s *Server) adoHeldSignInRows(ctx context.Context, owner string) ([]string, error) {
+	if s.cfg.Store == nil || s.cfg.Secrets == nil {
+		return nil, nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	held, err := s.cfg.Secrets.For(owner).List(secretstore.WithPurpose(ctx, secretstore.PurposeStatus))
+	if err != nil {
+		return nil, err
+	}
+	var rows []string
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind == types.GitProviderAzureDevOps && adoEntraValidRowID(row.ID) && slices.Contains(held, adoEntraSecretName(row.ID)) {
+			rows = append(rows, row.ID)
+		}
+	}
+	return rows, nil
 }
 
 // forgetADOSignIn deletes owner's stored sign-in for rowID and drops any
@@ -311,9 +349,10 @@ type adoRunToken struct {
 	Scope     []string   `json:"scope"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	// RevokeReason is L2's revoke reason, as written: run_end, kill, pause,
-	// drift, disconnect, offboarding, upstream_401, sweep, or expired (the
-	// token reached valid_to; RevokedAt is then when its record was closed,
-	// not a revoke).
+	// drift, disconnect, offboarding, upstream_401, sweep, unrecorded or
+	// ends_unreadable (a token minted but never handed to the run), or
+	// expired (the token reached valid_to; RevokedAt is then when its record
+	// was closed, not a revoke).
 	RevokeReason string `json:"revoke_reason,omitempty"`
 	// RevokeFailed: the record was closed with a failed revoke on it, so the
 	// token lives to ValidTo on its own.

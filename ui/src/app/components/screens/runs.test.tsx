@@ -96,6 +96,20 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("Fix flaky auth tests");
   });
 
+  it("a full page with more behind it says so, and the User view's count carries a +", async () => {
+    listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: true, hiddenOlder: 0, hiddenKilled: 0 });
+    renderScreen("user");
+    expect(await screen.findByText("Showing the newest 1000 runs. Narrow the filters to see the rest.")).toBeInTheDocument();
+    expect(screen.getByText("Your runs · 1+")).toBeInTheDocument();
+  });
+
+  it("a page that is not truncated carries no such note", async () => {
+    listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+    renderScreen("user");
+    await screen.findByText("Fix flaky auth tests");
+    expect(screen.queryByText(/Showing the newest/)).not.toBeInTheDocument();
+  });
+
   it("first run, User view (member): the composer plus the member empty state", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
     renderScreen("user");

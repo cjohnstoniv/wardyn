@@ -115,6 +115,23 @@ describe("AppShell — the account chip shows who you are", () => {
     expect(within(menu).getAllByText("admin-token")).toHaveLength(1);
   });
 
+  // #2882: a bearer token is "admin token" only for an operator; a member's own token must not say it.
+  it("a member signed in with their own token is not told it is an admin token", async () => {
+    renderShellWithMe({ principal: "tok-member-1", method: "token", email: "member@e2e.wardyn.example", role: "user", operator: false, security_operator: false });
+    await waitFor(() => expect(trigger()).toHaveTextContent("member"));
+    const menu = await openMenu();
+    expect(within(menu).getByText("signed in with a token")).toBeInTheDocument();
+    expect(within(menu).queryByText("admin token")).toBeNull();
+  });
+
+  it("an operator on a token still reads admin token", async () => {
+    renderShellWithMe({ principal: "admin-token", method: "token", role: "admin", operator: true, security_operator: true });
+    await waitFor(() => expect(trigger()).toHaveTextContent("admin-token"));
+    const menu = await openMenu();
+    expect(within(menu).getByText("admin token")).toBeInTheDocument();
+    expect(within(menu).queryByText("signed in with a token")).toBeNull();
+  });
+
   it("local mode: unchanged", async () => {
     renderShellWithMe({ principal: "local:operator", method: "local" });
     await waitFor(() => expect(trigger()).toHaveTextContent("local:operator"));

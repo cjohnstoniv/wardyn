@@ -456,3 +456,42 @@ describe("sessionStage — record open → recorded → replaying confined → r
     expect(sessionStage(w, "s")).toBe("replayed");
   });
 });
+
+// The server refuses a whole promote request that names a host it never promotes (record.go's
+// promoteSkipHosts / promotableRecordHosts), so the review card must not offer those (#2580).
+describe("egressPromotionDiff — hosts the server never promotes are not approvable", () => {
+  const seen = (hosts: string[]): RecordResult => ({
+    run_id: "r1",
+    mode: "auto",
+    status: "recorded",
+    observations: {
+      domains: hosts.map((host) => ({ host, allow_count: 1, deny_count: 0, pending_count: 0 })),
+      minted_grant_ids: [],
+      exec_argv0s: [],
+      file_writes: [],
+      connects: [],
+      anomalies: [],
+    },
+  });
+
+  it("buckets broker, clone, denied and IP-literal hosts as plumbing and keeps real candidates", () => {
+    const w = ws({
+      record_results: {
+        code: seen([
+          "registry.npmjs.org",
+          "raw.githubusercontent.com",
+          "codeload.github.com",
+          "api.github.com",
+          "git.corp.example",
+          "blocked.example",
+          "93.184.216.34",
+        ]),
+      },
+      denied_egress: ["blocked.example"],
+      sources: [{ type: "repo", source: "https://git.corp.example/team/app.git" }],
+    });
+    const diff = egressPromotionDiff(w, "code");
+    expect(diff.approvable).toEqual(["registry.npmjs.org"]);
+    expect(diff.plumbing).toHaveLength(6);
+  });
+});

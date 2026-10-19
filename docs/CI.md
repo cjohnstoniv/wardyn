@@ -155,6 +155,7 @@ plane request itself (auth/client/server/network), independent of what the run i
   - **Complete `allowed_domains`** — list every host the task legitimately needs (package registries, your model provider). The sealed default (empty list) means the sandbox can reach nothing. GitHub is the exception: it is reached through the Wardyn git-broker (see below), not via `allowed_domains`.
   - **No `requires_approval: true` grants** — an approval-gated credential never mints without a human. Use `requires_approval: false` grants whose secret the CI principal already holds on the control plane.
   - **Bound the run** — `auto_stop_after_sec` (ci.json: 1 hour) is the reaper backstop behind `WARDYN_CI_TIMEOUT`.
+  - Against `WARDYN_URL`, `ci-run.sh` also kills the run on exit `124` and when the job is cancelled, once the CLI has printed the run id.
 
 > [!NOTE]
 > - Cloning a **GitHub** repo (`WARDYN_CI_REPO`) does **not** put `github.com` in `allowed_domains`. It is routed through the Wardyn git-broker: add a `github_token` grant and the run reaches only that repo (via `wardyn-proxy`, token minted proxy-side, never in the sandbox).
@@ -204,8 +205,8 @@ What synthesis does and does not derive:
 
 - Several jobs can run on one build host at the same time, under one trusted operator (e.g. a CI fleet on one service account).
 - [`scripts/ci-run.sh`](../scripts/ci-run.sh) already does most of this for you: it scopes every compose object to a unique project + namespace and binds the control plane's own host ports ephemerally —
-  - UI, Postgres, AND the devcontainer-build registry sidecar (`registry`, a `wardynd` dependency — `up -d postgres wardynd` always starts it too) —
-  - so parallel invocations don't collide on container names, the control-plane network, the recordings volume, or any of those three host ports,
+  - UI, Postgres, the devcontainer-build registry sidecar (`registry`, a `wardynd` dependency — `up -d postgres wardynd` always starts it too), AND `wardynd`'s own SSH and UI-sandbox relay ports —
+  - so parallel invocations don't collide on container names, the control-plane network, the recordings volume, or any of those five host ports,
   - and one job's `down --volumes` never tears down another's.
 - The default project name's suffix comes from `/dev/urandom`,
   - so it is unique even between jobs that cannot see each other's PIDs (the usual shape: every job in its own container, all of them driving one shared host Docker socket).
@@ -220,12 +221,13 @@ The variables that do it (see [docs/ENV.md](ENV.md#compose--scripts-shell-only--
 WARDYN_CI_PROJECT="$CI_JOB_ID" scripts/ci-run.sh
 #   -> COMPOSE_PROJECT_NAME=$CI_JOB_ID   (compose bookkeeping + unnamed volumes)
 #   -> WARDYN_NS=$CI_JOB_ID              (container names, network, recordings volume)
-#   -> WARDYN_UP_PORT=0, WARDYN_PG_PORT=0, WARDYN_REGISTRY_PORT=0 (OS-assigned ephemeral host ports)
+#   -> WARDYN_UP_PORT=0, WARDYN_PG_PORT=0, WARDYN_REGISTRY_PORT=0,
+#      WARDYN_SSH_PORT=0, WARDYN_UI_SANDBOX_PORT=0 (OS-assigned ephemeral host ports)
 
-# Driving compose directly (no ci-run.sh) needs the same, set by hand — five
+# Driving compose directly (no ci-run.sh) needs the same, set by hand — seven
 # variables if another job may run at the same time:
 COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
-  WARDYN_REGISTRY_PORT=0 \
+  WARDYN_REGISTRY_PORT=0 WARDYN_SSH_PORT=0 WARDYN_UI_SANDBOX_PORT=0 \
   docker compose -p job-a -f deploy/compose/docker-compose.yaml up -d
 ```
 
@@ -237,7 +239,7 @@ COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
   - that A survives B's `down --volumes`,
   - and that each tears down independently.
 - It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is a manual/pre-release check, not a CI job.
-- Its `compose_ns` helper scopes the same `WARDYN_UP_PORT`/`WARDYN_PG_PORT`/ `WARDYN_REGISTRY_PORT` trio as `ci-run.sh` above.
+- Its `compose_ns` helper scopes the same five ports as `ci-run.sh` above.
 
 > [!WARNING]
 > **Scope of this:** one trusted operator on one host. Concurrent jobs share the docker daemon, so this is job *isolation*, not a multi-tenant boundary — a job that can reach the daemon can reach everything on it.

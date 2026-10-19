@@ -13,11 +13,12 @@
 // Read-only against GET /api/v1/setup/status (the FROZEN SetupStatus contract in
 // lib/types.ts) and GET /site-config — every write (secrets, SiteConfig,
 // integrations) now happens inside the embedded Integrations step's own dialogs,
-// not here. NOT a gate: /setup is a route an operator chooses to visit (the
-// account menu's "Getting started" entry, or the Runs empty state's guided-tour
-// link) — nothing redirects here and no other route redirects away. `finish`
-// below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
-// is per-browser cosmetic state, not a lock on the rest of the console.
+// not here. The funnel IS the hard gate while the daemon marks a setup check
+// `blocking` (setupGateActive in setup-gate.ts, applied in App.tsx): every route
+// except /setup and /demos redirects here until the blocking checks clear. The
+// required walk is REQUIRED_STEPS (steps.ts): four steps, ending at Review.
+// `finish` below dismisses the funnel's own "seen it" flag (setup-gate.ts), which
+// is per-browser cosmetic state and does not lift the gate.
 import * as React from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -915,6 +916,7 @@ export function SetupScreen({
             lastCheckedAt={lastCheckedAt}
             onJump={selectStep}
             onSwitchToUser={() => void finishSwitchToUser()}
+            switchDisabled={!!finishGate}
           />
         )}
       </SetupLayout>

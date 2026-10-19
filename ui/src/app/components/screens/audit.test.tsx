@@ -97,7 +97,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const drill = await screen.findByRole("button", { name: /111/ });
     fireEvent.click(drill);
 
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
   });
 
   // ui-auditRec-2 regression: the drill banner's "Open run" used to link to the
@@ -188,6 +188,32 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(getRunMock).toHaveBeenCalledTimes(2);
   });
 
+  // #2849: below sm the row wraps so the description keeps its own line, and the run chip is the short id with the full id on hover.
+  it("wraps a row on a phone and prints a short run id with the full id in its title", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "w1", run_id: "run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab", action: "run.create", target: "t" }),
+    ]);
+    renderScreen();
+    const chip = await screen.findByTitle("run_3f2a91c0-aaaa-bbbb-cccc-1234567890ab");
+    expect(chip).toHaveTextContent(/^3f2a91c0$/);
+    const row = chip.parentElement!;
+    expect(row).toHaveClass("flex-wrap", "sm:flex-nowrap");
+    expect(screen.getByText(/^Created the run/)).toHaveClass("sm:min-w-[10rem]");
+    // Two lines on a phone: the outcome is lifted onto the first, the description and chip share the second.
+    expect(chip).toHaveClass("order-3", "sm:order-none");
+    expect(chip.parentElement!.querySelector(":scope > div.order-1")).not.toBeNull();
+    expect(screen.getByText(/^Created the run/).parentElement).toHaveClass("order-2", "sm:order-none");
+  });
+
+  // #2850: the toolbar counter drops to its own line whole instead of wrapping inside itself.
+  it("keeps the event counter on one line inside a wrapping toolbar group", async () => {
+    listAuditMock.mockResolvedValue([ev({ id: "c1", action: "run.create" })]);
+    renderScreen();
+    const counter = await screen.findByText(/^1 event$/);
+    expect(counter).toHaveClass("whitespace-nowrap");
+    expect(counter.parentElement).toHaveClass("flex-wrap");
+  });
+
   it("preserves the server append order (does not re-sort by wall-clock time)", async () => {
     // Server returns seq order e1 then e2, but e2 has an EARLIER timestamp.
     // A buggy client re-sort by time would flip them; we must keep e1 first.
@@ -201,6 +227,24 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     const second = await screen.findByText("second.action");
     // first.action must appear before second.action in DOM order.
     expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // #2852: chips differ in width (HUMAN vs SYSTEM, success vs failure); the cells that hold them do not.
+  it("holds the actor chip and the outcome in fixed-width cells", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", actor_type: "human", action: "cell.one", outcome: "denied" }),
+      ev({ id: "e2", actor_type: "system", action: "cell.two", outcome: "failure", run_id: "run_333" }),
+    ]);
+    renderScreen();
+    await screen.findByText("cell.one");
+    const actors = screen.getAllByTestId("audit-actor-cell");
+    const outcomes = screen.getAllByTestId("audit-outcome-cell");
+    expect(actors).toHaveLength(2);
+    expect(outcomes).toHaveLength(2);
+    for (const cell of actors) expect(cell.className).toContain("w-[88px]");
+    for (const cell of outcomes) expect(cell.className).toContain("w-[72px]");
+    expect(actors[0]).toHaveTextContent(/human/i);
+    expect(actors[1]).toHaveTextContent(/system/i);
   });
 
   it("shows a truncation indicator when the global window is capped at 1000", async () => {
@@ -248,10 +292,12 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     fireEvent.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await waitFor(() => expect(screen.getByText(/truncated/i)).toBeInTheDocument());
-    expect(screen.getByText(/first 1000 events for this run/i)).toBeInTheDocument();
+    // The cut is at the START of a long run's trail, and the note says so.
+    expect(screen.getByText(/newest 1000 events for this run/i)).toBeInTheDocument();
+    expect(screen.queryByText(/older events for this run may have rolled off/i)).not.toBeInTheDocument();
   });
 
   it("does not show the truncation indicator for a run-filtered view below 1000", async () => {
@@ -262,7 +308,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith(undefined));
 
     fireEvent.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     await screen.findByText(/1 event/);
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
@@ -285,6 +331,26 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText(/Deleted an integration — corp-anthropic/)).toBeInTheDocument();
     expect(screen.getByText(/Added a workspace requirement — ws-1/)).toBeInTheDocument();
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
+  });
+
+  // #2851: four backend actions printed as raw keys beside plain-English rows,
+  // and a run that ended in failure read "Completed" next to a failure badge.
+  it("renders prose for workspace.create, setup, authz and auth rows, and run.complete does not claim success", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "p1", action: "workspace.create", target: "ws-1" }),
+      ev({ id: "p2", action: "setup.onboarding.complete", target: "site_config" }),
+      ev({ id: "p3", action: "authz.denied", target: "/api/v1/drives" }),
+      ev({ id: "p4", action: "auth.fail", target: "/api/v1/runs" }),
+      ev({ id: "p5", action: "run.complete", target: "run-1", outcome: "failure" }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Created a workspace — ws-1")).toBeInTheDocument();
+    expect(screen.getByText("Finished setup — site_config")).toBeInTheDocument();
+    expect(screen.getByText("Was refused access to — /api/v1/drives")).toBeInTheDocument();
+    expect(screen.getByText("Failed to sign in to — /api/v1/runs")).toBeInTheDocument();
+    expect(screen.getByText("The run ended — run-1")).toBeInTheDocument();
+    expect(screen.queryByText(/^Completed/)).not.toBeInTheDocument();
   });
 
   // credential.revoke ends a run's own credentials and touches no stored
@@ -510,7 +576,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     // Egress facet item disappears from the Select entirely.
     listAuditMock.mockResolvedValueOnce([ev({ id: "e3", run_id: "run_111", action: "run.create" })]);
     await user.click(await screen.findByRole("button", { name: /111/ }));
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111", { newest: true }));
 
     // The facet must fall back to "all" — not strand the operator on a
     // filter whose item no longer exists in the Select's own list, hiding
@@ -628,7 +694,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-9"));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-9", { newest: true }));
     expect(await screen.findByText(/run-9/)).toBeInTheDocument();
   });
 
@@ -754,7 +820,9 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       }),
     ]);
     renderScreen();
-    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("min-w-[10rem]");
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("sm:min-w-[10rem]");
+    // Below sm the wrapper's own minimum keeps the sentence from collapsing and wraps the row instead.
+    expect(screen.getByText("Failed egress to flaky.example.com:443").parentElement).toHaveClass("min-w-[12rem]");
   });
 });
 

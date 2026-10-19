@@ -127,12 +127,28 @@ func ValidateAuthoredTarget(tgt string) error {
 		// the string — with backticks the wire bytes and the canon couldn't match.
 		return fmt.Errorf("target %s is reserved for the user drive", DriveTarget)
 	}
-	for _, root := range []string{DrivesRoot, SharedRoot} {
-		if tgt == root || strings.HasPrefix(tgt, root+"/") {
-			return fmt.Errorf("target %s is reserved for drives", root)
-		}
+	if root := reservedDrivesRoot(tgt); root != "" {
+		return fmt.Errorf("target %s is reserved for drives", root)
 	}
 	return nil
+}
+
+// reservedDrivesRoot names the drive root (DrivesRoot or SharedRoot) tgt IS or
+// nests under, or "" when it is under neither.
+func reservedDrivesRoot(tgt string) string {
+	for _, root := range []string{DrivesRoot, SharedRoot} {
+		if tgt == root || strings.HasPrefix(tgt, root+"/") {
+			return root
+		}
+	}
+	return ""
+}
+
+// AuthoredTargetReserved reports whether tgt is a place ValidateAuthoredTarget
+// reserves for the drives (the drive itself or either drive root), for a caller
+// that drops such a mount instead of refusing it.
+func AuthoredTargetReserved(tgt string) bool {
+	return targetReservedForDrive(tgt) || reservedDrivesRoot(tgt) != ""
 }
 
 // targetReservedForDrive reports whether tgt IS the reserved drive target or

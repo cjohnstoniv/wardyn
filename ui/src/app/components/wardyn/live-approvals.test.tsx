@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "../../lib/types";
 import { makeApproval } from "../../../test/factories";
@@ -251,6 +251,24 @@ describe("LiveApprovals", () => {
     expect(denyMock).not.toHaveBeenCalled();
     expect(screen.queryByText(DENY_RUN_SCOPE_SENTENCE)).not.toBeInTheDocument();
   });
+
+  // The strip empties under an open confirmation (the request was decided elsewhere): the dialog goes with it, and
+  // must not come back for that vanished request when the next row arrives.
+  it("a deny confirmation does not reopen for a vanished request when a later row arrives", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    await screen.findByRole("alertdialog");
+
+    listApprovalsMock.mockResolvedValue([]);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(), { timeout: 4000 });
+
+    listApprovalsMock.mockResolvedValue([pending({ id: "b1", requested_scope: { host: "other.example" } })]);
+    expect(await screen.findByText(/other\.example/, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  }, 15_000);
 
   it("confirming the Deny dialog calls the API exactly once", async () => {
     listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);

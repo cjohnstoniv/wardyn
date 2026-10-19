@@ -93,6 +93,8 @@ describe("ProvidersCard", () => {
     getWorkspaceProvidersMock.mockResolvedValue(snap([]));
     renderCard();
     expect(await screen.findByText(PROVIDERS.CARD_EMPTY)).toBeInTheDocument();
+    // #2883: a collapsed card summary ends without a full stop, like its siblings.
+    expect(PROVIDERS.CARD_EMPTY).not.toMatch(/\.$/);
     expect(screen.getByText(PROVIDERS.CARD_OPEN)).toBeInTheDocument();
   });
 

@@ -57,11 +57,32 @@ func (c *Client) GetRunner(ctx context.Context, id uuid.UUID) (RunnerView, error
 	return out, err
 }
 
-// ListMyRunners lists the caller's own runners; an unclaimed one's fingerprint is abbreviated.
+// myRunnersPage is how many rows ListMyRunners asks for at a time: the server's largest page.
+const myRunnersPage = 1000
+
+// ListMyRunners lists every one of the caller's own runners, reading page after page until the server
+// says none is left, so the answer is never a partial list. An unclaimed one's fingerprint is
+// abbreviated. ListMyRunnersPage reads one page.
 func (c *Client) ListMyRunners(ctx context.Context) ([]RunnerView, error) {
-	var out []RunnerView
-	err := c.do(ctx, http.MethodGet, "/api/v1/me/runners", nil, &out)
-	return out, err
+	all := []RunnerView{}
+	for {
+		rows, more, err := c.ListMyRunnersPage(ctx, ListOpts{Limit: myRunnersPage, Offset: len(all)})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rows...)
+		if !more || len(rows) == 0 {
+			return all, nil
+		}
+	}
+}
+
+// ListMyRunnersPage is ListMyRunners for one page plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists. With no opts the window is the server's default page.
+func (c *Client) ListMyRunnersPage(ctx context.Context, opts ...ListOpts) (rows []RunnerView, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/me/runners", opts), nil, &rows, &hdr)
+	return rows, hdr.Get("X-Wardyn-Truncated") == "true", err
 }
 
 // GetMyRunner reads one of the caller's own runners; another person's answers as an absent id.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -299,5 +300,64 @@ func TestRunnerAdmissionPG_RunnersOffEndsSessionsAndRefusesDispatch(t *testing.T
 	}
 	if f.srv.RunnerOnline(f.rn.ID) {
 		t.Fatal("a runner reads online after runners were switched off")
+	}
+}
+
+// The offline sweep's loss claim waits for a held run row before it takes the runner row, so a write
+// to the runner (a reconnect's TouchRunner) never queues behind the run row's holder, and the claim
+// still lands once the row is free.
+func TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun(t *testing.T) {
+	f := newAdmissionFixture(t)
+	if _, err := f.pool.Exec(f.ctx, `UPDATE agent_runs SET token_renewed_at=now()-interval '2 hours' WHERE id=$1`, f.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // released below; a no-op then
+	if _, err := tx.Exec(f.ctx, `SELECT 1 FROM agent_runs WHERE id=$1 FOR NO KEY UPDATE`, f.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	type claim struct {
+		applied bool
+		err     error
+	}
+	claimed := make(chan claim, 1)
+	go func() {
+		applied, err := f.st.MarkRunnerRunLost(f.ctx, f.rn.ID, f.run.ID, f.run.SandboxRef, time.Now())
+		claimed <- claim{applied, err}
+	}()
+	// A second client, off the pool this goroutine already holds a connection of: the observer and
+	// the runner's writer. The claim is waiting once a backend waits on a row lock.
+	other, err := pgx.ConnectConfig(f.ctx, f.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close(context.Background()) //nolint:errcheck // test teardown
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		var waiting bool
+		if err := other.QueryRow(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+			AND wait_event_type = 'Lock' AND query LIKE '%agent_runs%FOR UPDATE%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the loss claim never waited on the held run row")
+		}
+	}
+	if _, err := other.Exec(f.ctx, `SET lock_timeout = '2s'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Exec(f.ctx, `UPDATE runners SET last_seen_at = now() WHERE id = $1`, f.rn.ID); err != nil {
+		t.Errorf("a write to the runner waited behind the loss claim's wait on the run row: %v", err)
+	}
+	if err := tx.Rollback(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c := <-claimed; c.err != nil || !c.applied {
+		t.Fatalf("the loss claim after the row was freed = %v, %v; want applied", c.applied, c.err)
 	}
 }

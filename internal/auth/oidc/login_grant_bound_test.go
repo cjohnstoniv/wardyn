@@ -256,8 +256,9 @@ func TestAnUnwidenedLoginStartExpiresAStaleSecureMarker(t *testing.T) {
 	}
 }
 
-// TestAnUnretriedRefusalIsLogged is F2: a refusal outside the retry set still
-// answers as it always has, but its code and description reach the log.
+// TestAnUnretriedRefusalIsLogged is F2: a refusal outside the retry set reaches the log with its code
+// and description, and (#2125) sends the browser back to the sign-in screen with a stable auth_error
+// code instead of a bare 400.
 func TestAnUnretriedRefusalIsLogged(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -279,8 +280,8 @@ func TestAnUnretriedRefusalIsLogged(t *testing.T) {
 	}
 	out := httptest.NewRecorder()
 	e.auth.CallbackHandler(out, cb)
-	if out.Code != http.StatusBadRequest {
-		t.Fatalf("status %d; the response to an unretried refusal must be unchanged (400)", out.Code)
+	if loc := out.Header().Get("Location"); out.Code != http.StatusFound || !strings.HasSuffix(loc, "/?auth_error=oidc_transient") {
+		t.Fatalf("status %d, Location %q; an unretried refusal redirects to the sign-in screen with its code", out.Code, loc)
 	}
 	logged := buf.String()
 	if !strings.Contains(logged, "temporarily_unavailable") || !strings.Contains(logged, "AADSTS90033") {

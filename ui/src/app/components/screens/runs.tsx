@@ -17,6 +17,7 @@ import { FilterX, Hexagon } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { setup as setupApi } from "../../lib/api/setup";
 import { usePoll } from "../../lib/use-poll";
 import { deriveReadiness } from "../../lib/readiness";
@@ -53,6 +54,7 @@ import {
   RUNS_NO_MATCH_BODY,
   RUNS_SECTION,
   RUNS_SHOW_30,
+  runsTruncatedNote,
   runsAgedNote,
   runsViewSaved,
 } from "../wardyn/copy/runs-landing";
@@ -76,6 +78,7 @@ export function RunsScreen() {
   const [runsList, setRunsList] = React.useState<AgentRun[]>([]);
   const [hiddenOlder, setHiddenOlder] = React.useState(0);
   const [hiddenKilled, setHiddenKilled] = React.useState(0);
+  const [truncated, setTruncated] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // whether ANY fetch has ever landed. Only the very first load
   // shows the full-page skeleton (design.md §2.1's "Loading" state); every
@@ -115,6 +118,7 @@ export function RunsScreen() {
           setRunsList(res.runs);
           setHiddenOlder(res.hiddenOlder);
           setHiddenKilled(res.hiddenKilled);
+          setTruncated(res.truncated);
           setStatus("ready");
           setLoadedOnce(true);
         },
@@ -217,7 +221,7 @@ export function RunsScreen() {
   // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}`;
+    : `Your runs · ${runsList.length + hiddenOlder + hiddenKilled}${truncated ? "+" : ""}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
@@ -326,6 +330,7 @@ export function RunsScreen() {
                 onShow30={() => setFilters({ ...filters, endedWithin: "30d" })}
                 onIncludeKilled={() => setFilters({ ...filters, includeKilled: true })}
               />
+              {truncated && <p className="text-meta text-muted-foreground">{runsTruncatedNote(LIST_LIMIT)}</p>}
             </div>
           )}
         </>

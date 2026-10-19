@@ -1,10 +1,12 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # deploy/compose/README.md 2277 adds 14: the demo/default policy switch names the idle auto-stop difference.
-deploy/compose/README.md=2277 share=35
+# 0.9.4 L12 +36: empty WARDYN_OIDC_EMAIL_DOMAINS clears the default; the Dex recipe also sets WARDYN_LOCAL_MODE=false (#2152, #2345).
+deploy/compose/README.md=2313 share=35
 # deploy/images/README.md 4625 adds 146: the multi-CLI harnesses image (local build only) and its set launcher.
 # deploy/images/README.md 4654 measured after DS1-S4.
 # deploy/images/README.md 4704 adds 50 over 4654 (the Azure CLI component): measured at merge.
-deploy/images/README.md=4704 share=35
+# deploy/images/README.md 4730 adds 26 over 4704 (0.9.4 L9, #1904): the code-server 4.141.0 re-check, measured.
+deploy/images/README.md=4730 share=35
 # docs/operations/build-images.md 1298 adds 93 over 1205 (0.9 DS1-S1b): the image a run's harnesses start from, and the run_harnesses grant.
 # docs/operations/build-images.md 1418 adds 120 over 1298 (0.9 DS1-S4): offering two harnesses in one run.
 # docs/operations/build-images.md 1451 adds 33 over 1418 (0.9 F-1516 B7): pinned inputs and a pointer to the refresh.

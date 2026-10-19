@@ -454,6 +454,24 @@ describe("DrivesScreen — the editor offers only this runner's backends", () =>
     expect(within(editor).getByText(DRIVES.HOME_EMAIL_LOCAL).closest("button")).toBeDisabled();
   });
 
+  // #2829: a greyed-out Directory-name option names its reason, as the backend card does.
+  it("a disabled Directory-name option says why, per backend", async () => {
+    renderScreen(snapshot({ runner_target: "docker", host_roots_configured: true }));
+    const editor = await openNew();
+    const hint = (label: string) => within(editor).getByText(label).closest("button")!.textContent;
+    expect(hint(DRIVES.HOME_SUB)).toContain(DRIVES.HOME_UNAVAILABLE_MANAGED);
+    expect(hint(DRIVES.HOME_EMAIL_LOCAL)).toContain(DRIVES.HOME_UNAVAILABLE_MANAGED);
+    // The enabled option keeps its own description.
+    expect(hint(DRIVES.HOME_HASH)).toContain(DRIVES.HOME_HASH_HINT);
+
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_HOST_PATH));
+    expect(hint(DRIVES.HOME_HASH)).toContain(DRIVES.HOME_UNAVAILABLE_SHARE);
+    expect(hint(DRIVES.HOME_SUB)).toContain(DRIVES.HOME_SUB_HINT);
+
+    await userEvent.click(within(editor).getByText(DRIVES.BACKEND_DOCKER_VOLUME));
+    expect(hint(DRIVES.HOME_SUB)).toContain(DRIVES.HOME_UNAVAILABLE_MANAGED);
+  });
+
   it("Docker with no WARDYN_USER_DRIVE_HOST_ROOTS disables host_path WITH ITS REASON, never offers-and-refuses", async () => {
     renderScreen(snapshot({ runner_target: "docker", host_roots_configured: false }));
     const editor = await openNew();

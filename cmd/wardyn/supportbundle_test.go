@@ -536,6 +536,17 @@ func TestRedactSecrets_KeyNamesAndNestedValues(t *testing.T) {
 		},
 		// (3) flag-style argv entry
 		{"--flag=value argv", `      - --admin-token=real-flag-token`, "real-flag-token"},
+		// (4) a url-only approval channel: the webhook URL is the credential.
+		{
+			"slack approval channel",
+			`      WARDYN_APPROVAL_NOTIFY: '{"channels":[{"id":"ops","type":"slack","url":"https://hooks.slack.com/services/T0/B0/XXXXSECRET"}]}'`,
+			"XXXXSECRET",
+		},
+		{
+			"teams approval channel, list form",
+			`        - WARDYN_APPROVAL_NOTIFY={"channels":[{"id":"t","type":"teams","url":"https://example.webhook.office.com/x?sig=TEAMSSIG"}]}`,
+			"TEAMSSIG",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -248,21 +248,3 @@ func unclassifiedIn(name string, t reflect.Type) []string {
 	}
 	return out
 }
-
-// pathExists reports whether a dotted path of field names resolves under t.
-func pathExists(t reflect.Type, path string) bool {
-	for _, seg := range strings.Split(path, ".") {
-		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
-			t = t.Elem()
-		}
-		if t.Kind() != reflect.Struct {
-			return false
-		}
-		f, ok := t.FieldByName(seg)
-		if !ok {
-			return false
-		}
-		t = f.Type
-	}
-	return true
-}

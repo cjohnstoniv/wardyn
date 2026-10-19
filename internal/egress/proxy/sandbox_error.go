@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -32,9 +33,10 @@ import (
 // scoped to operator-configured addresses (sandbox-named hosts survive); the
 // IP-literal pass is BLANKET, since once an address is inside an error string
 // the proxy can't tell vetted from internal, so it fails closed. The operator
-// keeps the full masked text on the sidecar's own log.
+// keeps the masked text, cut at maxLoggedErrBytes (4096), on the sidecar's own
+// log.
 func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int) {
-	masked := string(maskDecisionBytes([]byte(err.Error())))
+	masked := truncateText(string(maskDecisionBytes([]byte(err.Error()))), maxLoggedErrBytes)
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", code, "err", masked)
 	http.Error(w, msg+": "+p.redactErr(err), code)
 }
@@ -44,7 +46,13 @@ func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int
 // lists the gateway's own names (redacted for a configured gateway only, since
 // its Host says which); an unknown-authority hint and a name-constraint
 // refusal carry no Host, so their CA and constraint names go for every host.
+//
+// An error whose text the upstream wrote (peerTextClass) is a fixed phrase
+// instead, and every answer is cut to maxCauseBytes.
 func (p *Proxy) redactErr(err error) string {
+	if phrase, ok := peerTextClass(err); ok {
+		return phrase
+	}
 	s := err.Error()
 	var mismatch x509.HostnameError
 	if errors.As(err, &mismatch) && mismatch.Certificate != nil {
@@ -60,7 +68,25 @@ func (p *Proxy) redactErr(err error) string {
 	}
 	// An error flattened to text (no %w chain) carries the same detail; blank it by its prefix.
 	s = constraintDetailRe.ReplaceAllString(s, `${1}`+redactedEndpoint)
-	return p.redactTopology(string(maskDecisionBytes([]byte(s))))
+	return truncateText(p.redactTopology(string(maskDecisionBytes([]byte(s)))), maxCauseBytes)
+}
+
+// maxCauseBytes bounds redactErr's sentence, which is a decision row's Cause
+// and the sandbox's error body; maxLoggedErrBytes bounds the operator's log line.
+const (
+	maxCauseBytes     = 512
+	maxLoggedErrBytes = 4096
+)
+
+// truncateText cuts s to at most n bytes on a rune boundary, marking the cut.
+func truncateText(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + " [truncated]"
 }
 
 // constraintDetailRe matches x509.CertificateInvalidError's text for a name-constraint refusal up to the end

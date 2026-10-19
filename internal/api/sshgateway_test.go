@@ -1327,8 +1327,8 @@ func sshSessionRefusedBy(t *testing.T, client *ssh.Client, start func(*ssh.Sessi
 	return start(sess) != nil
 }
 
-// TestSSHGateway_MaxConnectionsEnforced pins the total concurrent-connection
-// cap (maxSSHConnections): a connection accepted over the cap is closed
+// TestSSHGateway_MaxConnectionsEnforced pins the concurrent-handshake cap
+// (maxSSHHandshakes): a connection accepted over the cap is closed
 // immediately, before any handshake byte is exchanged — checked at the raw
 // TCP level (no auth needed to observe it; the cap bites before
 // NewServerConn is even called).
@@ -1341,7 +1341,7 @@ func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := 0; i < maxSSHConnections; i++ {
+	for i := 0; i < maxSSHHandshakes; i++ {
 		c, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
 		if err != nil {
 			t.Fatalf("conn %d: %v", i, err)
@@ -1358,7 +1358,46 @@ func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
 	buf := make([]byte, 1)
 	n, rerr := over.Read(buf)
 	if n > 0 || rerr == nil {
-		t.Errorf("connection over maxSSHConnections got a byte / no error (n=%d, err=%v), want the server to close it immediately", n, rerr)
+		t.Errorf("connection over maxSSHHandshakes got a byte / no error (n=%d, err=%v), want the server to close it immediately", n, rerr)
+	}
+}
+
+// TestSSHGateway_EstablishedSessionsLeaveTheHandshakeBound: an authenticated
+// connection is counted against maxSSHConnections, not maxSSHHandshakes, so
+// with one session open every handshake slot is still free: the last of
+// maxSSHHandshakes raw connections still gets the server's version banner.
+func TestSSHGateway_EstablishedSessionsLeaveTheHandshakeBound(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
+	priv, pub := mustSSHKeypair(t)
+	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	h := newSSHTestHarness(t, st, &sshFakeRunner{})
+
+	client, err := sshDial(t, h, runID.String(), priv)
+	if err != nil {
+		t.Fatalf("owner's session: %v", err)
+	}
+	defer client.Close()
+
+	var conns []net.Conn
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < maxSSHHandshakes; i++ {
+		c, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+		if err != nil {
+			t.Fatalf("conn %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+	last := conns[len(conns)-1]
+	_ = last.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4)
+	if n, err := io.ReadFull(last, buf); n != 4 || string(buf) != "SSH-" {
+		t.Fatalf("handshake %d beside one open session got %q (err %v), want the version banner", maxSSHHandshakes, buf[:n], err)
 	}
 }
 

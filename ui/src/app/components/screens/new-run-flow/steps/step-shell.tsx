@@ -36,6 +36,8 @@ export interface StepShellPrimary {
   describedBy?: string;
   /** Make's trailing arrow, shown to sight only. On unless set false (Review's Launch run has none). */
   arrow?: boolean;
+  /** Extra classes on the button, for the one caller whose footer lays it out differently (Review's phone bar). */
+  className?: string;
 }
 
 interface StepShellBase {
@@ -53,6 +55,11 @@ interface StepShellBase {
   headingAsideAlign?: "center" | "end";
   /** Pins the footer to the bottom of the view while the step scrolls (Tools and access's bar). */
   stickyFooter?: boolean;
+  /**
+   * Below sm only: the footer becomes a sticky two-row bar, `footerExtras.end` (then the primary) on the grid and
+   * `footerExtras.start` hidden, for the caller to put behind its own menu. From sm up nothing changes (Review).
+   */
+  phoneBar?: boolean;
   children?: React.ReactNode;
 }
 
@@ -67,7 +74,7 @@ export type StepShellProps = StepShellBase &
     | { back?: never; footerExtras?: { start?: React.ReactNode; end?: React.ReactNode } }
   );
 
-export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, headingAsideAlign = "center", footerExtras, stickyFooter, children }: StepShellProps) {
+export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, headingAsideAlign = "center", footerExtras, stickyFooter, phoneBar, children }: StepShellProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const announce = useAnnounce();
   React.useEffect(() => {
@@ -117,14 +124,14 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     </header>
   );
   const primaryButton = primary && (
-    <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
+    <Button type="button" className={primary.className} disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
       {primary.label}
       {primary.arrow !== false && <span aria-hidden="true">→</span>}
     </Button>
   );
 
   return (
-    <section className="flex flex-col gap-6">
+    <section className={cn("flex flex-col gap-6", phoneBar && "max-sm:pb-4")}>
       {progress && <div className="mb-[26px] max-[520px]:mb-2"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
       {headingAside ? (
         <div className={cn("flex justify-between gap-6 max-[760px]:flex-col max-[760px]:items-start", headingAsideAlign === "end" ? "items-end" : "items-center")}>
@@ -133,11 +140,18 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
         </div>
       ) : header}
       {children}
-      <footer className={cn("mt-1 flex items-center justify-between gap-3 border-t border-border", stickyFooter ? "sticky bottom-0 z-10 bg-background py-3" : "pt-[18px]")}>
+      <footer
+        data-testid={phoneBar ? "step-footer" : undefined}
+        className={cn(
+          "mt-1 flex items-center justify-between gap-3 border-t border-border",
+          stickyFooter ? "sticky bottom-0 z-10 bg-background py-3" : "pt-[18px]",
+          phoneBar && "max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-2 max-sm:bg-card max-sm:py-3",
+        )}
+      >
         {/* With extras the footer keeps one shape, so the primary is never remounted as an extra comes and goes. */}
-        {footerExtras ? <div className="flex flex-wrap gap-2">{footerExtras.start}</div>
+        {footerExtras ? <div className={cn("flex flex-wrap gap-2", phoneBar && "max-sm:hidden")}>{footerExtras.start}</div>
           : back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
-        {footerExtras ? <div className="flex flex-wrap gap-2">{footerExtras.end}{primaryButton}</div> : primaryButton}
+        {footerExtras ? <div className={cn("flex flex-wrap gap-2", phoneBar && "max-sm:contents")}>{footerExtras.end}{primaryButton}</div> : primaryButton}
       </footer>
     </section>
   );

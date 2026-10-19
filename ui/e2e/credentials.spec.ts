@@ -158,6 +158,8 @@ test.describe("Stored credentials (Admin view)", () => {
     await card.getByRole("button", { name: "Assign a domain" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel("Domain").locator("option")).toHaveText(["default"]);
+    // #2888: the radios take the primary accent, not the browser's default blue.
+    await expect(dialog.getByRole("radio", { name: "Everyone" })).not.toHaveCSS("accent-color", "auto");
     await dialog.getByRole("radio", { name: "Everyone" }).check();
     await dialog.getByRole("button", { name: "Assign a domain" }).click();
     await expect(dialog).toHaveCount(0);

@@ -357,7 +357,12 @@ const EXPORT_DEADLINE_MS = 600_000;
 
 export type PartitionExportForm = "readable" | "raw";
 
-export type AuditListFilter = { action?: string; actionPrefix?: string };
+export type AuditListFilter = {
+  action?: string;
+  actionPrefix?: string;
+  /** A run's newest page instead of its oldest (`order=desc`), handed back oldest-first like any other read. */
+  newest?: boolean;
+};
 
 export const audit = {
   // GET /api/v1/audit?run_id=&action=|action_prefix=   (all optional;
@@ -375,9 +380,11 @@ export const audit = {
     if (runId) params.set("run_id", runId);
     if (filter?.action) params.set("action", filter.action);
     if (filter?.actionPrefix) params.set("action_prefix", filter.actionPrefix);
+    if (filter?.newest && runId) params.set("order", "desc");
     const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
-    return unwrapList<AuditEvent>(await asJson<unknown>(res));
+    const rows = unwrapList<AuditEvent>(await asJson<unknown>(res));
+    return filter?.newest && runId ? rows.reverse() : rows;
   },
   // GET /api/v1/audit/retention (security tier): the policy, the cutover, the
   // partitions with the server's own eligibility, and the months ahead.

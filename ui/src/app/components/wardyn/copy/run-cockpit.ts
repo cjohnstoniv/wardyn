@@ -80,8 +80,10 @@ export const RUN_COCKPIT = {
   // --- Evidence widgets ---
   // Same eligibility framing as the full Credential grants card, tightened for
   // a 400px rail. Grants are what the run MAY request — never live credentials.
+  // It names no single delivery: an ssh_key or resident git_pat is readable in
+  // the sandbox, so a "minted, never seen" line would be false for those grants.
   credentialsEligibility:
-    "Eligibility — what this run may request. The broker mints a short-lived, scoped token; the agent never sees your real keys.",
+    "Eligibility — what this run may request, not credentials it holds. Most credentials are added at the proxy; the grant's kind says whether one enters the sandbox.",
   // A metric the sandbox did not report. gVisor (Vault) presents a synthetic
   // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
   // honest answer; rendering 0 would claim the sandbox is using no memory.
@@ -111,7 +113,7 @@ export const RUN_COCKPIT = {
       ? `No git repository at ${path} — there's no diff to show.`
       : "This workspace isn't a git repository — there's no diff to show.",
   // The substrate has no exec channel, so neither evidence read can run.
-  execUnsupported: "This runner can't be inspected while it's running.",
+  execUnsupported: "This runner doesn't let Wardyn look inside its sandbox.",
   // Empty/degraded states shared by the two POLLING evidence widgets. They live
   // here rather than as per-file consts because both widgets need the same two
   // sentences — a duplicated literal in each file is exactly the drift this
@@ -162,6 +164,8 @@ export const RUN_COCKPIT = {
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,
+  // The terminal tile's edit handle on an autonomous run, where the pane is headed Output (terminal-notice.tsx).
+  outputPane: "Output",
 
   // --- Focus mode (design board 2c) ---
   enterFocus: "Focus",
@@ -185,6 +189,16 @@ export const RUN_COCKPIT = {
   // event with outcome "success" is a real issued credential.
   eligible: (n: number) => `${n} eligible`,
   brokered: (n: number) => `${n} brokered`,
+  /** A QUEUED run's hero (the owner-approved mock): the title, then one line of place, wait and give-up. */
+  queuedTitle: "Queued",
+  queuedLine: (place: string, since: string, givesUp: string) => `You are ${place} · ${since} · ${givesUp}`,
+  queuedSince: (time: string) => `waiting since ${time}`,
+  queuedJustJoined: "just joined the line",
+  queuedGivesUpIn: (wait: string) => `gives up in ${wait}`,
+  queuedGivesUpAt: (time: string) => `gives up at ${time}`,
+  /** The strip's counts when a very long trail's oldest and newest pages leave a gap between them. */
+  countsFloor: "at least",
+  countsFloorTitle: "This run's audit trail is longer than one page, so the counts cover its oldest and newest events only.",
   // Only the shortcuts this file actually binds. ⌘K (no command palette
   // exists), ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) and ⇧⌘F
   // (AttachTerminal ships a fullscreen BUTTON, not a key binding) are on the

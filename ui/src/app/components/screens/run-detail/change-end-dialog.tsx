@@ -79,7 +79,7 @@ export function ChangeEndDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>{RL.ENDS_CHANGE}</DialogTitle>
+          <DialogTitle>{RL.ENDS_DIALOG_TITLE}</DialogTitle>
           <DialogDescription>{maxDays ? RL.endsHint(maxDays) : "Pick a date, or turn this run's end off."}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">

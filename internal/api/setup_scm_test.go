@@ -31,7 +31,7 @@ func TestScmProviderCheck_Grading(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk := scmProviderCheck(tc.githubApp, tc.secrets, tc.posture)
+			chk := scmProviderCheck(tc.githubApp, tc.secrets, tc.posture, false)
 			if chk.ID != "scm_provider" {
 				t.Fatalf("ID = %q", chk.ID)
 			}
@@ -94,5 +94,22 @@ func TestHostProxyCheck_FoundIsPostureIndependent(t *testing.T) {
 	}
 	if !strings.Contains(onHost.Detail, "Detected") {
 		t.Errorf("detail = %q, want it to report the detection", onHost.Detail)
+	}
+}
+
+// With the PAT broker off the PAT is minted into the sandbox, so the row must not call it never-resident.
+func TestScmProviderCheck_PATResidencyFollowsBroker(t *testing.T) {
+	secrets := []string{"git-pat-github-com"}
+	on := scmProviderCheck(false, secrets, setup.SCMPosture{}, false)
+	if !strings.Contains(on.Detail, "never resident") {
+		t.Errorf("broker on: detail %q should say the PAT is never resident", on.Detail)
+	}
+	off := scmProviderCheck(false, secrets, setup.SCMPosture{}, true)
+	if strings.Contains(off.Detail, "never resident") || !strings.Contains(off.Detail, "WARDYN_GIT_PAT_BROKER") {
+		t.Errorf("broker off: detail %q must name the resident lane and the switch", off.Detail)
+	}
+	sshAlso := scmProviderCheck(false, append(secrets, "ssh-key-github-com"), setup.SCMPosture{}, true)
+	if strings.Contains(sshAlso.Detail, "never resident") {
+		t.Errorf("broker off with an SSH key: detail %q still says never resident", sshAlso.Detail)
 	}
 }

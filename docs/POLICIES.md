@@ -331,7 +331,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
 - Every mechanism keys on the same forge, and that non-GitHub lane is what `git_pat` is for.
 - (An `ssh_key` grant for an Azure DevOps host is dropped at dispatch with a warning, and a stored git token for one is read from the run owner's own row only.)
-- There the old shape still applies for `ssh_key`: the key is resident for the clone only.
+- There the old shape still applies for `ssh_key`: the key file is written for the clone and wiped after, and an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases).
 - `agent-run` mints it, writes it `0400`, clones, then removes it (`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
 - It is a real narrowing and not a confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`).
 - An auto-mintable grant is re-mintable by design (`MintForGrant` — only `requires_approval: true` makes it single-use).
@@ -526,7 +526,7 @@ What the check does and does not settle:
 - The legacy `approved_egress` list is not read-only.
 - The hold-approval write-back and Promote no longer write here.
 - Both now land on the requirements contract instead, one destination for what used to be two.
-- But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces.go`](../internal/api/workspaces.go)) directly and appends the new host.
+- But the record pane's own per-host **Approve** button, on a blocked or pending-approval host under "Off-policy attempts caught," still calls `PUT /workspaces/{id}/approved-egress` (`handleSetApprovedEgress`, [`internal/api/workspaces_egress.go`](../internal/api/workspaces_egress.go)) directly and appends the new host.
 - That is a live write path this migration left untouched.
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
 - An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
@@ -738,7 +738,7 @@ What the check does and does not settle:
 
 - `host` + `key_secret_ref` required; reserved secret names refused for either ref.
 - `host` must be an SSH-over-443 provider Wardyn supports (`github.com`, `dev.azure.com`); a `dev.azure.com` grant is accepted but dropped at dispatch with a warning (Azure DevOps has no SSH lane from 0.8.2).
-- A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after —
+- A **documented exception** to the no-resident-secret rule: the key lands as a 0400 file for the clone and is wiped right after; an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases) —
   - except for the same forge as a co-declared `github_token` grant, which this kind may not be combined with (see "The `ssh_key` and `git_pat` lanes are closed too").
 
 ### `env_secret`

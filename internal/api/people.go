@@ -366,8 +366,12 @@ func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
 }
 
 // attachIgnored writes the denied person.attach for a sign-in that matched an
-// object-id person but kept its own, already-known sub.
+// object-id person but kept its own, already-known sub, once per process.
 func (k peopleKeying) attachIgnored(ctx context.Context, subj oidc.Subject, principal string) {
+	// Every later sign-in lands here again; one row and one WARN say it.
+	if _, seen := k.s.attachIgnoredSeen.LoadOrStore(subj.Sub+"\x00"+principal, struct{}{}); seen {
+		return
+	}
 	slog.WarnContext(ctx, "api: an Entra sign-in matched a person set up by object id, but its sub already names someone here; it keeps its sub",
 		"sub", subj.Sub, "person", principal)
 	k.s.recordAudit(ctx, k.s.auditEvent(nil, types.ActorHuman, subj.Sub, "person.attach", principal, "denied",

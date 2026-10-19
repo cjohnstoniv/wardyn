@@ -15,6 +15,8 @@ import { MEMBER_GETTING_STARTED } from "./getting-started";
 // authz breach to the human reading it — and a failed sign-out must not
 // silently console.error with nobody seeing it.
 export const SHELL = {
+  // The account menu's line for a bearer token that is not an operator's: a member's own token (#2882).
+  SIGNED_IN_WITH_TOKEN: "signed in with a token",
   // B1: settled, but /me never answered. Rendered instead of a guessed nav, so
   // it has to say that the emptiness is ignorance and not a denial.
   UNKNOWN_BODY:
@@ -34,6 +36,10 @@ export const SHELL = {
   // second sign-out has nothing to end. Signing in again and out ends every
   // browser session of the person.
   SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Sign in again, then sign out, to end it in every browser.",
+  // #2100: signing out ends the Wardyn session only; the identity provider's own session stays live, so
+  // on a shared computer the next person could press "Sign in with SSO" and arrive as this one.
+  SIGN_OUT_SSO_TITLE: "You signed out of Wardyn.",
+  SIGN_OUT_SSO_BODY: "On a shared computer, also sign out of your identity provider.",
 } as const;
 
 // #217 — the console's one dirty-navigation guard (lib/use-unsaved-guard.tsx),

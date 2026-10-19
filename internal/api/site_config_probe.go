@@ -359,11 +359,11 @@ func redirectProbeTo(red types.EgressRedirect, toHost, fromHost string) (toURL, 
 var curlExitDetail = map[int]string{
 	6:  "DNS resolution failed",
 	7:  "connection refused (or the host is unreachable)",
-	22: "the endpoint answered with an HTTP error (4xx/5xx) -- this is what wardyn-proxy's own policy deny looks like, but a mirror's own 401/500 reads identically here; check the mirror directly if the cause matters",
+	22: "the endpoint answered with an HTTP error (4xx/5xx) -- a mirror's own 401/500, or wardyn-proxy's policy deny of a plain-http target; check the mirror directly if the cause matters",
 	28: "connection timed out",
 	35: "TLS handshake failed",
 	52: "empty reply from the server",
-	56: "connection reset while receiving data",
+	56: "the connection was reset, or wardyn-proxy (or the proxy it chains to) refused the HTTPS tunnel with an HTTP 4xx at CONNECT -- the usual cause is a policy deny, such as a private address with no internal_hosts entry or a host the governance ceiling denies",
 	60: "TLS certificate verification failed — the host answered, but this client does not trust the CA that signed its certificate; on a TLS-intercepting corporate network point WARDYN_TRUSTED_CA_FILE at the middlebox CA bundle",
 }
 

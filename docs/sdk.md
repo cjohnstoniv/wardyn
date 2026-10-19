@@ -610,7 +610,7 @@ start.
 | `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
 | `node_record_invalid` | `POST /runs/{id}/node-record`, `400`: `attestation` is not `node_powered_off` or `no_prior_holder`, `source` is not `provider_console`, `management_controller` or `other`, `source_id` is missing, longer than 256 characters or holds control characters, or `tuple` is missing. |
 | `node_record_refused` | `POST /runs/{id}/node-record`, `409`: the run is not held as containment pending, the runner's record (`tuple`) changed since the form was loaded, `no_prior_holder` was sent after a recorded name reuse or for a run with a causal node association, or another stop for the run already waits for its runner. A held record whose run moved before its approval is refused at the approval the same way. |
-| `node_record_human_only` | `POST /runs/{id}/node-record`, `403`: the admin token made it, or approved a held one, or the record needs two people and the server runs in local mode, which cannot show who they are. |
+| `node_record_human_only` | `POST /runs/{id}/node-record`, `403`: the admin token or an API token made it, or approved a held one (a node record is made and approved from a signed-in session), or the record needs two people and the server runs in local mode, which cannot show who they are. |
 | `runner_limits_required` | `422`: a registration that declares no limits, or limits that are not a valid set. Register with this release's `wardyn-runnerd`. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
@@ -712,6 +712,8 @@ start.
 | `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
+| `workspace_name_taken` | `POST /workspaces`, `PUT /workspaces/{id}`: another workspace already has this name (names are unique across the deployment). Pick another. |
+| `workspace_update_conflict` | `PUT /workspaces/{id}`: the workspace changed (a run claimed it, a recording or a build landed) between the read and the save, so nothing was written. Reload it and apply the edit again. |
 | `branch_list_rate_limited` | `GET /workspaces/{id}/branches`: the person passed `30` lists a minute (burst `10`, per wardynd replica), answered `429` before anything is read. Not audited; the admin token is exempt. |
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `egress_baseline_invalid` / `egress_baseline_stale` | `PUT /governance/egress-baseline`: a host or suffix is invalid, or `If-Match` is stale. |
@@ -941,7 +943,7 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 | Reason | Meaning |
 |---|---|
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). On `/runs/preflight` this 422 also carries `setup_items`: the checklist rows resolved before the refusal, model access aside. |
-| `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
+| `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. The body may also carry `cause` (additive, optional): `token_expired`, `ended`, `consent_needed`, `blocked`, `permissions_missing` or `ado_pat_needs_console_app`; absent means not connected. |
 
 ## Pending approval (governance writes)
 
@@ -1113,6 +1115,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   response is ordered live runs first, then ended runs by end time, and two headers
   — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
   `ended_within` window and the killed-run default hid.
+- `POST /api/v1/workspaces/{id}/record/{task}/promote-egress`
+  skips, rather than refuses, a requested host that is a model provider row's own host. It names them in the additive
+  `X-Wardyn-Record-Skipped-Hosts` header (comma list, absent when none) and as `skipped` in the
+  `workspace.egress.approve` audit row.
 - `GET /api/v1/approvals`
   accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
   approvals for every caller.
@@ -1149,7 +1155,7 @@ Beyond `run_id`, the audit query accepts server-side predicates:
 
 - `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
   `actor` and `target` (exact; under `WARDYN_AUDIT_SEAL=full` each also matches the subject a sealed row stores for that person),
-- `actor_type` (`human|agent|system`), `outcome`
+- `actor_type` (`human|agent|system|service`), `outcome`
   (`success|denied|failure`),
 - and `origin` (`device|organisation`: the rows an
   enrolled laptop forwarded, each carrying a top-level `device_id`, or the
@@ -1163,6 +1169,8 @@ or use `action_prefix` (`--action-prefix`).
 - The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
   trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
   reach the terminal `run.complete`.
+  Add `order=desc` to read the newest window first instead (newest event first;
+  `limit` and `offset` then count from the newest event).
 - `wardyn audit <run-id> --limit=N --offset=N`
   mirrors this on the CLI, and prints a `warning: audit trail truncated ...`
   line on stderr (never stdout, so `--json` stays a plain array) naming the next

@@ -386,6 +386,10 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 			if second == nil || !check(second) {
 				t.Fatalf("second sign-in: session %v, want still pairwise-a with what it owns", second)
 			}
+			e.signIn("pairwise-a", entraTenant, entraObject)
+			if _, third := e.callback(t); third == nil {
+				t.Fatal("third sign-in refused")
+			}
 			rows := e.auditRows("person.attach")
 			if len(rows) != 1 || rows[0].Outcome != "denied" || rows[0].Actor != "pairwise-a" || rows[0].Target != entraPerson ||
 				!strings.Contains(string(rows[0].Data), `"reason":"sub_known"`) {

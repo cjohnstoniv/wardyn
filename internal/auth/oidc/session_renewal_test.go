@@ -78,6 +78,24 @@ func TestSessionExpiresHeader(t *testing.T) {
 	}
 }
 
+// With a role-stamp deadline sooner than the cookie's expiry, the header names the deadline Middleware
+// enforces (the one /me reads), not the raw cookie expiry, so the console warns before the refusal.
+func TestSessionExpiresHeaderFollowsRoleStampDeadline(t *testing.T) {
+	_, auth := lifeAuth(t, func(c *writoidc.Config) {
+		c.SessionRenewCap = 8 * time.Hour
+		c.RoleStampTTL = 4 * time.Hour
+	})
+	cookie := lifeCookie(t, auth, 10*time.Minute, 7*time.Hour+50*time.Minute, 0)
+	held, err := writoidc.DecodeSessionForTest(auth, cookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := held.IssuedAt.Add(4 * time.Hour).UTC().Format(time.RFC3339)
+	if w, _, _ := lifeRequest(auth, cookie, http.MethodGet, ""); w.Header().Get(expiresHeader) != want {
+		t.Errorf("header named %q, want the role-stamp deadline %s", w.Header().Get(expiresHeader), want)
+	}
+}
+
 // A renewed cookie is the session it renewed: signing out with the original ends the renewed copy.
 // And a session Middleware refuses is never re-minted, so no amount of activity turns an ended
 // session (cut, expired, idle or role-stale) back into a live cookie.

@@ -418,7 +418,7 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if err := d.removeProxy(ctx, id); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}
-	if _, err := d.startProxy(ctx, id, wardynLabels(id, componentProxy, agentLabels),
+	if _, err := d.startProxy(ctx, id, d.labels(id, componentProxy, agentLabels),
 		proxyEnvFromJSON(id, cp.ControlPlaneURL), cfgJSON, ip); err != nil {
 		return fmt.Errorf("%w: %w", runner.ErrProxyReplaceFailed, err)
 	}

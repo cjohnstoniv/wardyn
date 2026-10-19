@@ -320,7 +320,7 @@ func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour)
+	got, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour, store.Page{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +331,13 @@ func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
 	if len(ids) != 3 || !slices.Contains(ids, fresh.ID) || !slices.Contains(ids, bySomeone.ID) || !slices.Contains(ids, oldClaimed.ID) {
 		t.Errorf("visible = %v, want only the fresh runner %s, the one someone else revoked %s and the old claimed %s (not lapsed %s, owner-revoked %s, stale %s, other's %s)",
 			ids, fresh.ID, bySomeone.ID, oldClaimed.ID, lapsed.ID, byOwner.ID, stale.ID, other.ID)
+	}
+	// A page windows the same list: the middle row alone, and an offset past the end is empty.
+	if page, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour, store.Page{Limit: 1, Offset: 1}); err != nil || len(page) != 1 || page[0].ID != got[1].ID {
+		t.Errorf("page {Limit 1, Offset 1} = %v, %v; want only %s", page, err, got[1].ID)
+	}
+	if page, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour, store.Page{Limit: 5, Offset: 3}); err != nil || len(page) != 0 {
+		t.Errorf("page past the end = %v, %v; want none", page, err)
 	}
 }
 

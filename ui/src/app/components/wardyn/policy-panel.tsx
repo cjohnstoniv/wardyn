@@ -30,8 +30,9 @@
 // by new-run-screen.tsx's "Policy" SectionCard.
 import * as React from "react";
 import { Globe, Plus, ShieldCheck, Timer } from "lucide-react";
+import type { OrgCeiling } from "../../lib/ado-ceilings";
 import type { PolicySourceEditResult } from "../../lib/policy-document";
-import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../lib/types";
+import type { RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
 import { templateProviders } from "./policy-template-providers";
 import { Button } from "../ui/button";
@@ -48,6 +49,7 @@ import { GitPATSection } from "./policy-git-pat";
 import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 import { egressSummary, lifecycleSummary } from "./policy-document/policy-facts";
 import { PolicyEditor } from "./policy-document/policy-editor";
+import { PolicyTemplateMenu } from "./policy-document/policy-template-menu";
 import {
   applySpecChange,
   parseSpec,
@@ -226,19 +228,6 @@ const HIDDEN_ON_RUN: readonly (keyof RunPolicySpec)[] = ["workspace_mounts"];
 export { egressSummary, lifecycleSummary, toolRulesSummary, type ChipTone } from "./policy-document/policy-facts";
 export { parseSpec, type ParsedSpec };
 
-// C5's one real trap, named: a parse that succeeds but whose
-// min_confinement_class names no real barrier class silently sets no floor —
-// the caller's own barrier control is what actually launches, and nothing
-// said so. Returns the unparseable value (for the caller's hint) or null —
-// null for an omitted field too (a policy that authors no floor on purpose is
-// not a trap).
-export function unparseableFloorClass(parsed: ParsedSpec): string | null {
-  if (!parsed.ok) return null;
-  const raw = (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class;
-  const known: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-  return typeof raw === "string" && raw.length > 0 && !known.includes(raw as ConfinementClass) ? raw : null;
-}
-
 /* ---------- the panel ---------- */
 
 export interface PolicyPanelProps {
@@ -272,6 +261,9 @@ export interface PolicyPanelProps {
   /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
    *  capabilities off it render locked. Undefined = unknown, nothing locked. */
   adoCeiling?: readonly string[];
+  /** Each of the person's Azure DevOps organisations' ceilings, when there are several (#2146): a capability only
+   *  some allow stays open and is hinted with the ones that refuse it. */
+  adoOrgCeilings?: readonly OrgCeiling[];
   /** The editor's last save refusal; one naming an axis of a git_pat grant is
    *  shown on that field (policy-git-pat.tsx). */
   serverError?: string | null;
@@ -306,6 +298,7 @@ export function PolicyPanel({
   preflightDisabled,
   interactive,
   adoCeiling,
+  adoOrgCeilings,
   modelProviders,
   serverError,
   policyMode,
@@ -405,29 +398,12 @@ export function PolicyPanel({
               </>
             )
           }
+          toolbarLead={<PolicyTemplateMenu templates={templates} onPick={(t) => setSource(templateText(t, fmt))} />}
+          toolbarNote={
+            providerNames.length > 0 ? <p className="text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p> : undefined
+          }
           structured={
             <>
-              <div>
-                <SectionLabel className="mb-1.5">{C.START}</SectionLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {templates.map((t) => (
-                    <Button
-                      key={t.id}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      title={t.hint}
-                      onClick={() => setSource(templateText(t, fmt))}
-                    >
-                      {t.label}
-                    </Button>
-                  ))}
-                </div>
-                {providerNames.length > 0 && (
-                  <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
-                )}
-              </div>
-
               {/* The four sections below edit a LIST or a closed set that is easy
                   to get wrong by hand (a duplicate tool, a typo'd effect, a wire
                   word the server refuses). Each needs a parsed spec to edit, so
@@ -439,7 +415,7 @@ export function PolicyPanel({
                 </div>
               )}
               {parsed.ok && <PushRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
-              {parsed.ok && <ADOCapabilitiesSection spec={parsed.spec} ceiling={adoCeiling} onSpecChange={onSpecChange} />}
+              {parsed.ok && <ADOCapabilitiesSection spec={parsed.spec} ceiling={adoCeiling} orgCeilings={adoOrgCeilings} onSpecChange={onSpecChange} />}
               {/* git_pat narrowing (repos, access, api, forge): one block per
                   stored-token grant, with the honesty lines packet M7 fixes. */}
               {parsed.ok && <GitPATSection spec={parsed.spec} serverError={serverError} onSpecChange={onSpecChange} />}

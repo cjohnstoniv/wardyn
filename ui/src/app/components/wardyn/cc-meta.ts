@@ -61,7 +61,7 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
   CC2: {
     label: "Wall",
     short: "Stronger",
-    tagline: "Default · needs one-time setup",
+    tagline: "Stronger · needs one-time setup",
     protects:
       "Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed).",
     doesntProtect:
@@ -69,7 +69,7 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
     metaphor:
       "A wall closes the holes — gVisor handles every system call, so nothing the agent does touches your kernel. But it's still software, not a separate machine, so a flaw in the wall is the way over or under.",
     mechanism:
-      "gVisor userspace kernel intercepts syscalls — the default; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
+      "gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
   },
   CC3: {
     label: "Vault",

@@ -69,15 +69,16 @@ func (s PG) QueueRunnerContainmentRecovery(ctx context.Context, runnerID, runID 
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	// A runner that refused this exact proof once answers it the same way again.
+	// A runner that refused this exact proof once answers it the same way again. Order is queue_seq, the
+	// delivery order: queued_at is each queuing transaction's start, which ties and can invert.
 	var evidenced bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c
 		WHERE c.id = $1 AND c.run_id = $2 AND c.runner_id = $3 AND c.kind = $4 AND c.binding_version = 1 AND c.subject = 'run'
 		AND c.applied_at IS NOT NULL AND c.execution_generation IS NOT DISTINCT FROM $5
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
-			AND r.outcome = 'success' AND r.queued_at > c.queued_at)
+			AND r.outcome = 'success' AND r.queue_seq > c.queue_seq)
 		AND EXISTS (SELECT 1 FROM runner_pending_actions w WHERE w.run_id = c.run_id AND w.kind = c.kind
-			AND w.outcome = 'success' AND w.queued_at >= c.queued_at)
+			AND w.outcome = 'success' AND w.queue_seq >= c.queue_seq)
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions f WHERE f.run_id = c.run_id AND f.kind = 'recover_containment'
 			AND f.outcome = 'refused' AND f.proof = $6::jsonb))`,
 		marker.ID, runID, runnerID, marker.Operation, generationArg, proof).Scan(&evidenced); err != nil {

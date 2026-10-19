@@ -136,6 +136,7 @@ export function ReviewStep({
   // step-bodies.test.tsx cases — which render this step without ever
   // touching Finish — need not pass it.
   onSwitchToUser = () => {},
+  switchDisabled = false,
 }: {
   status: SetupStatus;
   readiness: Readiness;
@@ -144,6 +145,8 @@ export function ReviewStep({
   lastCheckedAt: Date | null;
   onJump: (id: SetupStepId) => void;
   onSwitchToUser?: () => void;
+  /** Finish is gated (#214): the switch completes onboarding too, so it waits on the same gate. */
+  switchDisabled?: boolean;
 }) {
   // Actionable checks (exclude permanent platform facts — those are reference).
   const actionable = status.checks.filter((c) => !c.platform);
@@ -190,7 +193,7 @@ export function ReviewStep({
           the footer's "Finish setup" is this surface's one affirmative
           action. */}
       <SectionCard title={SETUP.FINISH_TITLE}>
-        <Button variant="outline" size="sm" onClick={onSwitchToUser}>
+        <Button variant="outline" size="sm" onClick={onSwitchToUser} disabled={switchDisabled}>
           {SETUP.FINISH_SWITCH}
         </Button>
       </SectionCard>

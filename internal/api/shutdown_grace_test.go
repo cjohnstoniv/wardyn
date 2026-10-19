@@ -18,6 +18,16 @@ import (
 // timeout — derived, not a second hard-coded copy of that number.
 const shutdownSinkMargin = sinks.WebhookTimeout
 
+// TestShutdownSinkMarginCoversSyslogClose: Fanout.Close closes the sinks
+// concurrently, so the margin has to cover the slowest, and the syslog sink's
+// Close is bounded by its own constant rather than by an HTTP client timeout.
+func TestShutdownSinkMarginCoversSyslogClose(t *testing.T) {
+	if sinks.SyslogCloseTimeout > shutdownSinkMargin {
+		t.Errorf("sinks.SyslogCloseTimeout = %s exceeds the sink margin %s that the shutdown grace is sized on",
+			sinks.SyslogCloseTimeout, shutdownSinkMargin)
+	}
+}
+
 // TestShutdownGraceCoversTheBudget: wardynd's orderly stop is
 // http.Server.Shutdown (HTTPShutdownTimeout), then WaitBackground
 // (backgroundShutdownBudget), then the audit sinks. A platform grace period

@@ -7,9 +7,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -67,6 +75,11 @@ func governReq(ctx context.Context) *http.Request {
 	return httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 }
 
+// governActiveStore answers the one read personAllowance makes: the caller's active-run count.
+type governActiveStore struct{ *capStore }
+
+func (governActiveStore) CountActiveRunsBy(context.Context, string) (int, error) { return 2, nil }
+
 // governSite is one swap site: build makes its server, and governed reports
 // whether the caller got the MEMBER outcome there.
 type governSite struct {
@@ -90,6 +103,9 @@ func governSites() []governSite {
 	plain := func(*testing.T) *Server { return New(Config{Audit: &recRecorder{}}) }
 	admitSrv := func(*testing.T) *Server {
 		return New(Config{Store: &admitSourcesStore{siteConfig: admitSite()}, Audit: &recRecorder{}})
+	}
+	activeSrv := func(*testing.T) *Server {
+		return New(Config{Store: governActiveStore{&capStore{}}, Audit: &recRecorder{}})
 	}
 	driveProfile := &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Limits: types.GovernanceLimits{DenyUserDrive: true}}
 	ownerLaunch := func(s *Server, ctx context.Context) bool {
@@ -229,6 +245,220 @@ func governSites() []governSite {
 				p := types.LaunchPreset{Name: "other", UserTypes: []string{"some-other-type"}}
 				return !s.presetLaunchOpenTo(governReq(ctx), p)
 			}},
+		// The governed outcome is a clamp: the built-in's write access is lowered by a read-only
+		// ceiling, so the grant is refused rather than issued with less than was asked.
+		{"components_builtin.go builtinGitHubGrant", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				ceiling := governanceCeiling{Spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{
+					Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":[],"permissions":{"contents":"read"}}`)}}}}
+				_, ok := s.builtinGitHubGrant(governReq(ctx), ceiling, []string{"acme/api"}, "write")
+				return !ok
+			}},
+		// Governance joins the folded sources only for a caller whose runs it governs.
+		{"run_limit_sources.go limitSources", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				sources, refusal, err := s.limitSources(ctx, types.RunnerPoolRunBackground, nil,
+					walled(types.GovernanceLimits{MaxConcurrentRuns: 1}), types.ResourceLimits{}, nil)
+				if refusal != nil || err != nil {
+					t.Fatalf("limitSources = %v, %v", refusal, err)
+				}
+				return slices.ContainsFunc(sources, func(l runnerpool.SourceLimits) bool { return l.Source == types.LimitSourceGovernance })
+			}},
+		{"runner_pools_catalogue.go personAllowance", activeSrv,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				allowance, refusal := s.personAllowance(governReq(ctx), walled(types.GovernanceLimits{MaxConcurrentRuns: 3}))
+				if refusal != nil {
+					t.Fatalf("personAllowance refused: %+v", refusal)
+				}
+				return allowance != nil
+			}},
+		{"run_policy_overlay.go applyPolicyOverlay", boundSrv,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				ceiling, err := s.effectiveCeiling(ctx)
+				if err != nil {
+					t.Fatalf("effectiveCeiling: %v", err)
+				}
+				req := &createRunRequest{Agent: "claude-code", PolicyOverlay: json.RawMessage(`{"allowed_domains":["api.anthropic.com","evil.example"]}`)}
+				// A valid base: the merged spec is validated, and an empty one is refused for every caller.
+				base := types.RunPolicySpec{MinConfinementClass: types.CC1}
+				spec, _, refusal := s.applyPolicyOverlay(ctx, governReq(ctx), base, req, ceiling, true, &policySourceRecord{})
+				if refusal != nil {
+					t.Fatalf("applyPolicyOverlay refused: status %d %+v", refusal.status, refusal.body)
+				}
+				return !slices.Contains(spec.AllowedDomains, "evil.example")
+			}},
+		{"run_end_create.go resolveCreateEnd", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				asked := 7200
+				end, refusal := s.resolveCreateEnd(governReq(ctx), createRunRequest{EndsAfterSec: &asked},
+					walled(types.GovernanceLimits{RunLimits: types.RunLimits{MaxEndAheadSec: 3600}}), nil)
+				return refusal == nil && end.capped
+			}},
+		{"member_drives.go memberDriveDoorRefusal", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.memberDriveDoorRefusal(governReq(ctx), walled(types.GovernanceLimits{DenyMemberDrives: true})) != nil
+			}},
+		// repoAdmissionRefusal changes the status only, never the decision.
+		{"run_workspace_authorization.go repoAdmissionRefusal", admitSrv,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				refusal := s.repoAdmissionRefusal(governReq(ctx), admitOffRow)
+				if refusal == nil {
+					t.Fatal("the repository was admitted: the decision must not change")
+				}
+				return refusal.status == http.StatusForbidden
+			}},
+		{"run_workspace_authorization.go workspaceProvidersRefusal", capSrv(&capStore{site: capProviderSite(), enf: capProviderEnforced()}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.workspaceProvidersRefusal(governReq(ctx), "runs.workspace_provider", capProviderRepo) != nil
+			}},
+		{"run_request_governance.go runRequestGovernance", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				_, refusal := s.runRequestGovernance(governReq(ctx), createRunRequest{DevcontainerRepo: "acme/devcontainer"})
+				return refusal != nil
+			}},
+	}
+}
+
+// governSiteElsewhere names how each runUngoverned caller that no governSites row is named after is
+// covered: "row: <name>" a governSites row that reaches it through its caller, "test: <file>" a
+// file of switch-on tests that asserts it, or "none: <why>" a site no test pins yet. TestGovernAdminRuns_
+// EverySiteIsListed holds the table to the call sites, so a new site is a failure until it is here or
+// has a row, and an entry whose function no longer asks runUngoverned is a failure too.
+var governSiteElsewhere = map[string]string{
+	"resolveRunPolicyFacts":   "row: inline_policy.go resolveRunPolicy inline clamp",
+	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
+	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
+	"deniedPlacements":        "test: run_placement_capabilities_test.go",
+	"handleRecordGoverned":    "test: record_govern_admin_test.go",
+	"markGovernanceExempt":    "test: govern_admin_doors_test.go",
+	"meGovernanceContact":     "none: /me display read, no switch-on test",
+	"refuseNoTicketAttach":    "none: attach entry door, no switch-on test",
+	"unionDirectGitHubEgress": "none: direct GitHub egress union, no switch-on test",
+}
+
+// runUngovernedCallers is every function in dir's non-test sources that calls
+// runUngoverned, found by walking the syntax so a call spelled any way is counted.
+func runUngovernedCallers(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+		for _, d := range file.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Name.Name == "runUngoverned" {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "runUngoverned" {
+						seen[fd.Name.Name] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// governSiteGaps is every way callers (the functions that ask runUngoverned) and the coverage
+// (rowNames: the governSites rows; elsewhere: governSiteElsewhere) disagree.
+func governSiteGaps(callers, rowNames []string, elsewhere map[string]string) []string {
+	rows := map[string]bool{}
+	for _, n := range rowNames {
+		rows[n] = true
+	}
+	joined := strings.Join(rowNames, "\n")
+	isCaller := map[string]bool{}
+	var gaps []string
+	for _, fn := range callers {
+		isCaller[fn] = true
+		how, ok := elsewhere[fn]
+		if !ok {
+			if !regexp.MustCompile(`\b` + regexp.QuoteMeta(fn) + `\b`).MatchString(joined) {
+				gaps = append(gaps, fn+" asks runUngoverned, but no governSites row is named for it and governSiteElsewhere does not cover it: "+
+					"add a row to governSites (the table TestGovernAdminRuns_EverySwapSite runs), or an entry in governSiteElsewhere")
+			}
+			continue
+		}
+		kind, ref, _ := strings.Cut(how, ": ")
+		switch kind {
+		case "row":
+			if !rows[ref] {
+				gaps = append(gaps, fn+": governSiteElsewhere names row "+ref+", which is not in governSites")
+			}
+		case "test":
+			src, err := os.ReadFile(ref)
+			if err != nil || !strings.Contains(string(src), "GovernAdminRuns") {
+				gaps = append(gaps, fn+": governSiteElsewhere names "+ref+", which is missing or never turns the switch on")
+			}
+		case "none":
+		default:
+			gaps = append(gaps, fn+": governSiteElsewhere entry "+how+" is not row:, test: or none:")
+		}
+	}
+	for fn := range elsewhere {
+		if !isCaller[fn] {
+			gaps = append(gaps, "governSiteElsewhere lists "+fn+", which no longer asks runUngoverned: remove the entry")
+		}
+	}
+	sort.Strings(gaps)
+	return gaps
+}
+
+// TestGovernAdminRuns_EverySiteIsListed is what makes the table above a proof of every site: a
+// function that asks runUngoverned must be named by a governSites row, or be in governSiteElsewhere
+// with the row or test that reaches it.
+func TestGovernAdminRuns_EverySiteIsListed(t *testing.T) {
+	var names []string
+	for _, site := range governSites() {
+		names = append(names, site.name)
+	}
+	callers := runUngovernedCallers(t, ".")
+	if len(callers) < 25 {
+		t.Fatalf("found only %d runUngoverned callers: the walk stopped seeing the call sites", len(callers))
+	}
+	for _, gap := range governSiteGaps(callers, names, governSiteElsewhere) {
+		t.Error(gap)
+	}
+}
+
+// TestGovernAdminRuns_ANewSiteFailsTheListing is the guard's counterfactual: a new function that asks
+// runUngoverned, found in a scratch source dir, is a gap until a row or an entry covers it.
+func TestGovernAdminRuns_ANewSiteFailsTheListing(t *testing.T) {
+	dir := t.TempDir()
+	const src = `package api
+
+func (s *Server) brandNewGovernedDoor(ctx context.Context) bool { return !s.runUngoverned(ctx) }
+`
+	if err := os.WriteFile(filepath.Join(dir, "new_door.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	callers := runUngovernedCallers(t, dir)
+	if !slices.Equal(callers, []string{"brandNewGovernedDoor"}) {
+		t.Fatalf("callers = %v, want the new door found", callers)
+	}
+	if gaps := governSiteGaps(callers, []string{"x.go someOtherSite"}, nil); len(gaps) != 1 || !strings.Contains(gaps[0], "brandNewGovernedDoor") {
+		t.Errorf("gaps = %v, want the unlisted new door flagged", gaps)
+	}
+	if gaps := governSiteGaps(callers, []string{"new_door.go brandNewGovernedDoor"}, nil); len(gaps) != 0 {
+		t.Errorf("a row named for the door still reports %v", gaps)
 	}
 }
 

@@ -46,6 +46,8 @@ import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect, scmOwnTokenAction } from "../../../lib/scm-access-display";
 import { AdoOwnTokenDialog } from "../settings/ado-own-token-dialog";
+import { OwnTokenOrgList } from "./own-token-org-list";
+import { useOwnTokenRows } from "../../../lib/hooks/use-own-token-rows";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { TierPicker, allowedFromFloor, visibleTiers } from "../../wardyn/tier-picker";
@@ -248,6 +250,9 @@ export function MemberGettingStarted() {
   // A person's own token: its line and button are Settings' own-token card's,
   // and the button opens the same add-token dialog, not a sign-in.
   const ownToken = status?.scm_access ? scmOwnTokenAction(status.scm_access) : null;
+  // Own-token rows for more than one organisation (#2146) get a line each; with one, the page is as it was.
+  const ownRows = useOwnTokenRows(status);
+  const multiOwn = ownRows.length >= 2;
   const [tokenDialog, setTokenDialog] = React.useState(false);
   const { connecting: adoConnecting, connect: adoConnect, connectFallback: adoConnectFallback, blockedUrl: adoBlockedUrl } = useAdoConnect();
   const handleAdoConnect = async () => {
@@ -361,7 +366,7 @@ export function MemberGettingStarted() {
                 {/* #386: one more chip from the six states, a second subject
                     (§6.2 — "In the common case that is the whole of it: no
                     action line, no button"). */}
-                {scmChip && <Chip tone={scmChip.tone}>{scmChip.label}</Chip>}
+                {scmChip && !multiOwn && <Chip tone={scmChip.tone}>{scmChip.label}</Chip>}
                 {status?.auth.mode === "sso" && (
                   <Chip tone="info">{T.SIGNIN_SSO_CHIP}</Chip>
                 )}
@@ -381,7 +386,7 @@ export function MemberGettingStarted() {
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
                   common case spending nothing (§0.1). */}
-              {!ownToken && scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
+              {!multiOwn && !ownToken && scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
                 <>
                   <p className="mt-2 text-sm text-warning">{scmAccessCause(status.scm_access.cause)}</p>
                   {/* A blocked organisation, a missing client secret and an expired own
@@ -416,7 +421,8 @@ export function MemberGettingStarted() {
                   )}
                 </>
               )}
-              {ownToken && status?.scm_access && (
+              {multiOwn && <OwnTokenOrgList rows={ownRows} onStored={() => setRetryTick((n) => n + 1)} />}
+              {!multiOwn && ownToken && status?.scm_access && (
                 <>
                   {ownToken.line && (
                     <p className={`mt-2 text-sm ${scmChip?.tone === "danger" ? "text-danger" : "text-warning"}`}>{ownToken.line}</p>
@@ -437,11 +443,14 @@ export function MemberGettingStarted() {
               {status?.scm_access?.state === "shared_expired" && (
                 <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
               )}
-              <p className="mt-3 text-sm text-muted-foreground">
-                {/* Since 0.8 (#548) every model credential is the person's own —
-                    no install has a shared one to inherit. */}
-                {CONNECTIONS.LEDE}
-              </p>
+              {/* Not under "Not set up by your admin": the chip above already says there is nothing to connect. */}
+              {connectionsChip?.label !== CONNECTIONS.SUMMARY_NOT_SET_UP && (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  {/* Since 0.8 (#548) every model credential is the person's own —
+                      no install has a shared one to inherit. */}
+                  {CONNECTIONS.LEDE}
+                </p>
+              )}
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
               {governanceProfile && (

@@ -189,12 +189,37 @@ class ImageRecipes(unittest.TestCase):
                 self.assertIn("requires an exact", result.stderr)
                 self.assertEqual(self.events, [])
 
+    @staticmethod
+    def elf(machine):
+        # 18 header bytes, then e_machine: all the recipe's guard reads.
+        return b"\x7fELF" + bytes(14) + bytes([machine, 0]) + b" staged native"
+
     def test_claude_staged_channel(self):
-        (self.root / "claude-stage/claude-bin").write_bytes(b"staged native")
+        (self.root / "claude-stage/claude-bin").write_bytes(self.elf(0x3e))
         result = self.run_recipe("claude-code", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / "claude").read_bytes(), b"staged native")
+        self.assertEqual((self.root / "claude").read_bytes(), self.elf(0x3e))
         self.assertEqual(self.events, [])
+
+    def test_claude_staged_arch_matches_target(self):
+        for target, machine in [("amd64", 0xb7), ("arm64", 0x3e)]:
+            with self.subTest(target=target):
+                (self.root / "claude-stage/claude-bin").write_bytes(self.elf(machine))
+                result = self.run_recipe("claude-code", TARGETARCH=target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"builds for {target}", result.stderr)
+                self.assertIn(f"--arch {target}", result.stderr)
+                self.assertFalse((self.root / "claude").exists())
+        (self.root / "claude-stage/claude-bin").write_bytes(self.elf(0xb7))
+        result = self.run_recipe("claude-code", TARGETARCH="arm64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_claude_staged_not_elf_installs(self):
+        # Only a recognised ELF machine type for the other arch is refused; 0.9.3 installed anything else.
+        (self.root / "claude-stage/claude-bin").write_bytes(b"staged native")
+        result = self.run_recipe("claude-code")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "claude").read_bytes(), b"staged native")
 
     def test_claude_npm_channel(self):
         result = self.run_recipe("claude-code", CLAUDE_INSTALL="npm", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="")
@@ -290,6 +315,26 @@ class TestHarnessesRecipe(unittest.TestCase):
         self.assertIn("deploy/images/common/agent-run-set /usr/local/bin/agent-run", dockerfile)
         for harness in ["claude-code", "codex-cli"]:
             self.assertIn(f"deploy/images/{harness}/agent-run /usr/local/lib/wardyn/harness/{harness}/agent-run", dockerfile)
+
+
+class FullImageHomeOwnership(unittest.TestCase):
+    """`install -d -o agent` owns only the directories it names: a parent it creates on the way stays root:root 0755."""
+
+    def test_install_d_names_every_parent_under_home(self):
+        text = (ROOT / "deploy/images/full/Dockerfile").read_text().replace("\\\n", " ")
+        checked = 0
+        for line in text.splitlines():
+            m = re.match(r"RUN install -d -o agent -g agent ([^&]+?)(?:&&|$)", line.strip())
+            if not m:
+                continue
+            named = set(m.group(1).split())
+            for path in sorted(named):
+                parent = str(Path(path).parent)
+                while parent.startswith("/home/agent/"):
+                    checked += 1
+                    self.assertIn(parent, named, f"{path}: install -d would leave {parent} root-owned; name it")
+                    parent = str(Path(parent).parent)
+        self.assertGreater(checked, 0)
 
 
 if __name__ == "__main__":

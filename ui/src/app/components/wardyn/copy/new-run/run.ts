@@ -24,9 +24,9 @@ export const NR_RUN = {
   MODE_AUTONOMOUS: "Autonomous",
   MODE_AUTONOMOUS_BODY: "An agent runs on its own, with no SSH or terminal.",
   TIMING_LABEL: "When should it run?",
-  TIMING_NOW: "Run Now",
+  TIMING_NOW: "Run now",
   TIMING_NOW_BODY: "Start as soon as you launch the run.",
-  TIMING_LATER: "Schedule For Later",
+  TIMING_LATER: "Schedule for later",
   TIMING_LATER_BODY: "Choose a future date and time for this run to start.",
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
@@ -131,7 +131,7 @@ export const NR_RUN = {
     "Everything Fence does, plus most kernel exploits — a software kernel (gVisor) handles the agent's system calls so it never touches your real kernel (the holes are closed).",
   WALL_NOT_PROTECTS: "A flaw in the sandbox software itself (rare); it's still not a fully separate machine.",
   WALL_HOW:
-    "gVisor userspace kernel intercepts syscalls — the default; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
+    "gVisor userspace kernel intercepts syscalls; needs a native Docker engine with its runsc runtime registered (a one-time setup step).",
   VAULT_PROTECTS:
     "Everything Wall does, plus a full break-in staying trapped — its own hardware-walled VM with its own kernel; even total takeover inside stays inside.",
   VAULT_NOT_PROTECTS:

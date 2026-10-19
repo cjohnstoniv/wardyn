@@ -55,8 +55,10 @@ test.describe("Settings — Host card", () => {
     // scripts/e2e-backend.sh boots -runner none with no ImageBuilder wired,
     // and WARDYN_AGE_KEY set (a durable recording store).
     await expect(hostCard.getByText("Image builder")).toBeVisible();
+    // The console's sentence, split at its dash: the word is the tile's status, the rest sits under it.
+    await expect(hostCard.getByText("Off", { exact: true })).toBeVisible();
     await expect(
-      hostCard.getByText("Off — devcontainer builds and --image wraps are unavailable"),
+      hostCard.getByText("devcontainer builds and --image wraps are unavailable", { exact: true }),
     ).toBeVisible();
     await expect(hostCard.getByText("Recording store")).toBeVisible();
     await expect(hostCard.getByText("Enabled", { exact: true })).toBeVisible();

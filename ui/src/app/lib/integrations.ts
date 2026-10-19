@@ -51,6 +51,8 @@ export const T = {
     "The URL sandboxes chain through. http:// only — https is not supported (the hop to your proxy is a plaintext CONNECT and can't be TLS-wrapped). Stored as plain configuration — it's topology, not a credential — unless it carries a username and password.",
   CRED_URL_NOTE:
     "This URL has a username and password in it. Wardyn will store it as a secret so it isn't displayed or logged; the sandbox never holds it either way.",
+  CRED_PASSWORD_MASKED:
+    "No password yet. A detected password is masked on this screen, so type it after the username (user:password@host) before saving.",
   SECRET_INSTEAD_HINT:
     "For a URL already in the store, or when policy requires it. The store is write-only — the value can't be read back here.",
   EGRESS_DESC:

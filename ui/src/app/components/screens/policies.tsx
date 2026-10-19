@@ -22,7 +22,7 @@ import {
 import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
 import { LIST_LIMIT } from "../../lib/api/core";
-import { getErrorMessage, relativeTime } from "../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -64,6 +64,7 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
+import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 import { useOperator } from "../wardyn/operator-context";
 import {
   AvailabilityControl,
@@ -75,6 +76,8 @@ import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { ADOAccessSummary } from "../wardyn/ado-access-summary";
 import { setup as setupApi } from "../../lib/api/setup";
+import { scmAccess as scmAccessApi } from "../../lib/api/scm-access";
+import { orgCeilings, unionCeiling, type OrgCeiling } from "../../lib/ado-ceilings";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
 // template — one const, no hand-maintained twin to drift.
@@ -122,7 +125,7 @@ export function PoliciesScreen() {
     <div className="mx-auto max-w-[1400px] px-6 py-6">
       <PageHeader
         title="Policies"
-        description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle — referenced by ID (or supplied inline) when a run is created."
+        description="Policies set a run's barrier, egress allowlist, credential grants, and lifecycle. A run names a stored policy or carries its own."
         actions={
           <>
             {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
@@ -142,13 +145,13 @@ export function PoliciesScreen() {
         <details className="group mb-4 rounded-lg border border-border">
           <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
             <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-            Default (ceiling) policy — applied to runs with no policy_id, and to every member's inline policy
+            Default (ceiling) policy — applied to runs that name no policy, and to every member's inline policy
           </summary>
           <PolicyDocumentView className="m-3 mt-1" spec={defaultPolicy} />
         </details>
       ) : (
         <p className="mb-4 text-xs text-muted-foreground">
-          A run created without a policy_id falls back to the control plane's configured default.
+          A run that names no policy falls back to the control plane's configured default.
         </p>
       )}
 
@@ -198,7 +201,7 @@ export function PoliciesScreen() {
                   Clear filters
                 </Button>
               ) : (
-                <Button onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
+                <Button variant="outline" onClick={() => setEditor({ mode: "create" })} disabled={!operator}>
                   <Plus className="size-4" /> Create your first policy
                 </Button>
               )
@@ -280,7 +283,7 @@ export function PoliciesScreen() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm text-muted-foreground" title={p.updated_at}>
+                      <span className="text-sm text-muted-foreground" title={absoluteTime(p.updated_at)}>
                         {relativeTime(p.updated_at)}
                       </span>
                     </TableCell>
@@ -508,15 +511,19 @@ function PolicyEditor({
   // The Azure DevOps row's ceiling, so the editor locks what a run could never
   // be granted. Unknown (no row, unreachable) locks nothing.
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>();
+  // With several organisations (#2146) each carries its own ceiling: a capability locks only when none allows it.
+  const [adoOrgCeilings, setAdoOrgCeilings] = React.useState<OrgCeiling[] | undefined>();
   const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>();
   React.useEffect(() => {
     if (!editor) return;
     let alive = true;
+    let severalOrgs = false;
     void setupApi
       .getSetupStatus()
       .then((st) => {
         if (!alive) return;
-        setAdoCeiling(st.scm_access?.capability_ceiling);
+        // The first row's ceiling, unless the person's several rows (below) already answered.
+        if (!severalOrgs) setAdoCeiling(st.scm_access?.capability_ceiling);
         const providers = st.unreachable ? undefined : st.model_providers;
         setModelProviders(providers);
         // A new, untouched policy re-opens on the starter that follows the providers.
@@ -526,6 +533,17 @@ function PolicyEditor({
           setSpecText((prev) => (prev === was ? seeded : prev));
           initial.current = { ...initial.current, specText: seeded };
         }
+      })
+      .catch(() => {});
+    // With several organisations (#2146) every row names its own ceiling; unreadable leaves the first row's.
+    void scmAccessApi
+      .getMine()
+      .then((rows) => {
+        const perOrg = orgCeilings(Array.isArray(rows) ? rows : []);
+        if (!alive || perOrg.length < 2) return;
+        severalOrgs = true;
+        setAdoCeiling(unionCeiling(perOrg));
+        setAdoOrgCeilings(perOrg);
       })
       .catch(() => {});
     return () => {
@@ -588,10 +606,7 @@ function PolicyEditor({
       >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
-          <DialogDescription>
-            Policies are admin-gated config. The spec is validated server-side before it is saved —
-            an invalid spec is rejected and shown here.
-          </DialogDescription>
+          <DialogDescription>{POLICY_DIALOG.LEDE}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
@@ -621,6 +636,7 @@ function PolicyEditor({
             format={format}
             onFormatChange={setFormat}
             adoCeiling={adoCeiling}
+            adoOrgCeilings={adoOrgCeilings}
             modelProviders={modelProviders}
             serverError={error}
           />

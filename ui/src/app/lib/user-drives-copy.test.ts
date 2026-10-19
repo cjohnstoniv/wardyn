@@ -14,7 +14,7 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 147
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 150
 // keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
 // row or a deleted one all fail here rather than shipping.
 //
@@ -74,8 +74,8 @@ const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
 const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 147 frozen keys in the doc", () => {
-    expect(doc.size).toBe(147);
+  it("finds all 150 frozen keys in the doc", () => {
+    expect(doc.size).toBe(150);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -651,5 +651,20 @@ describe("user-drives-prompt §2.4 — the home-template rule's mirror direction
 
   it("drive-editor.tsx's homeDisabled still gates both directions, through the shared predicate", () => {
     expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*homeTemplateDisabled\(backend, t\)/);
+  });
+});
+
+// A person can reach several drives (0.9): only the first mounts at the legacy
+// path, the rest beside it. The admin copy must not claim a single drive.
+describe("user-drives-copy — the multi-drive model (0.9)", () => {
+  it("LEAD names where the first and the further drives mount", () => {
+    expect(DRIVES.LEAD).toContain("/home/agent/drive;");
+    expect(DRIVES.LEAD).toContain("/home/agent/drives");
+    expect(DRIVES.LEAD).toContain("/home/agent/shared");
+  });
+
+  it("ALLOC_LEAD does not claim one drive per person", () => {
+    expect(DRIVES.ALLOC_LEAD).not.toMatch(/one drive per person/i);
+    expect(DRIVES.ALLOC_LEAD).toContain("more than one drive");
   });
 });

@@ -143,7 +143,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_POLICY_PREVIEW_RATE_PER_MIN` | int | `60` | independent per-person `POST /api/v1/runs/policy-preview` rate, burst 15; excess calls answer `429 policy_preview_rate_limited`. `0` disables the limit; the admin token is exempt (flag `-policy-preview-rate-per-min`). [Details](#wardyn_policy_preview_rate_per_min) |
 | `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB` | int | `0` | refuse every run launch with 503 `host_capacity_refused` while `/proc/meminfo` `MemAvailable` is below this many MiB; `0` (the default) disables it (flag `-host-min-mem-available-mib`). [Details](#wardyn_host_min_mem_available_mib) |
 | `WARDYN_MAX_CONCURRENT_RUNS` | int | `0` | cap on non-terminal runs across the whole deployment: a create past it is refused 422 `run_quota` at every door that creates a run; `0` (the default) is unlimited (flag `-max-concurrent-runs`; chart `maxConcurrentRuns`). [Details](#wardyn_max_concurrent_runs) |
-| `WARDYN_HOST_MAX_LOAD1` | int | `0` | the same refusal while the 1-minute load average (`/proc/loadavg` field 1) is above this; same host-not-cgroup reading and fail-open rule as `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`. `0` (the default) disables it (flag `-host-max-load1`) |
+| `WARDYN_HOST_MAX_LOAD1` | int | `0` | the same refusal while the 1-minute load average (`/proc/loadavg` field 1) is above this; same host-not-cgroup reading and fail-open rule as `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`. `0` (the default) disables it (flag `-host-max-load1`). A workspace image build is refused the same way. |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds, `k8s` in `-tags k8s` builds — both may be registered in a `-tags docker,k8s` build; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
 | `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine |
@@ -238,13 +238,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | Client secret of that dedicated app registration (flag `-directory-client-secret`); `WARDYN_DIRECTORY_PROVIDER=entra` is refused at boot when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set. [Details](#wardyn_directory_client_secret) |
-| `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
+| `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire; `0` or negative turns the sweeper off (boot warning). It then expires nothing: a pending approval stays pending past its run's wait budget unless the client that raised it withdraws it (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
 | `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
-| `WARDYN_SCAN_AI_ADVISOR` | bool | `false` | opt-in advisory AI workspace-scan fallback (flag `-scan-ai-advisor`) |
+| `WARDYN_SCAN_AI_ADVISOR` | bool | `false` | opt-in advisory AI workspace-scan fallback (flag `-scan-ai-advisor`); the resident `claude` CLI runs with no tools or MCP servers, so it must accept `--tools` and `--strict-mcp-config` |
 | `WARDYN_REQUIRE_OPERATOR_SET_EGRESS` | bool | `true` (**on since 0.7**) | Gate an `egress:<host>` workspace requirement the same way a `secret:<name>` one is gated: only `operator_set` provenance is auto-added at launch (flag `-require-operator-set-egress`). [Details](#wardyn_require_operator_set_egress) |
 | `WARDYN_GIT_PAT_BROKER` | string | `on` | Never-resident `git_pat` lane: `on` (default since 0.7) mints a non-GitHub forge's PAT proxy-side, so the credential never enters the sandbox; only the literal `off` disables it (flag `-git-pat-broker`). [Details](#wardyn_git_pat_broker) |
 | `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` | bool | `false` (**off**) | Opt in to the Bitbucket Server forge API door; with it off, a policy or governance write that sets it answers `400`. A garbage value exits 2 at boot. [Details](#wardyn_git_pat_api_bitbucket_server) |
@@ -630,6 +630,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`
 
 - Refuse every run launch (new run, record, harness sign-in, source scan, site-config probe) with 503 `host_capacity_refused`, a `reason` and `Retry-After`, while `/proc/meminfo` `MemAvailable` is below this many MiB; checked before any run row or identity exists.
+- A workspace image build (`POST /workspaces/{id}/build`) is refused the same way.
 - `0` (the default) disables it.
 - Read from the kernel wardynd runs on, never its own cgroup's `memory.max`: runs are sibling containers or pods, not children of wardynd's cgroup, so that limit says nothing about room for another run.
 - In a container this is the host (on WSL2, the whole VM); on Kubernetes it is the node the wardynd pod runs on, not the nodes run pods are scheduled to.
@@ -781,7 +782,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And boot refuses an unknown channel or kind, bad tiers, or `run_owner` on a redacting channel.
 - `hmac_secret` and `bearer_token` are optional and, like a URL carrying userinfo or a query, require `https://`.
 - And a `teams` or `slack` URL must always be `https://`.
-- An `smtp` channel takes `host`, `port`, `from`, optional `to` and optional `username` with `password`.
+- An `smtp` channel takes `host`, `port`, `from`, optional `to`, optional `helo` and optional `username` with `password`.
 - It sends plain text only over verified STARTTLS (no plaintext fallback, no skip-verify, trust from the system roots plus `WARDYN_TRUSTED_CA_FILE`), and refuses boot on a CR or LF in any field.
 - Its password has the same custody as the `WARDYN_AUDIT_SINKS` bearer token.
 - Any bad value refuses boot with an error naming the channel `id` and the rule, never the value.
@@ -1366,7 +1367,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A component's `env` or `file` delivery is not governed by it: that is a person's own secret, under the `custom_component` feature ([POLICIES.md](POLICIES.md#custom-components)).
 - On EVERY route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default) and whatever the caller's governance assignment.
 - Because the rule is a role check plus this switch rather than a ceiling check.
-- Every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` reaches git through the helper, `ssh_key` is wiped after the clone).
+- Every other member-reusable kind is bounded after delivery:
+  - `api_key` never leaves the broker;
+  - `git_pat` is set at the proxy (or, with the broker off, reaches git through the helper);
+  - `ssh_key` is wiped after the clone, and an approval-gated grant is delivered once.
+  - [CREDENTIALS.md](CREDENTIALS.md) says which kinds enter.
 - While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
@@ -1743,6 +1748,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - It becomes every proxy's `trusted_ca_pem` (create and revive, on stdin) and is written to `<state dir>/trusted-ca.pem`, which every sandbox mounts read-only at `/etc/wardyn-trusted-ca.pem`.
 - Over 64 KiB refuses startup: with nothing staged, the sandbox trusts it only through `WARDYN_MITM_CA_PEM`.
 - Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
+- A CA trust variable the organisation staged for the run keeps its value on every runner substrate, Docker and Kubernetes alike; the runner sets only the ones left unset.
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
 - `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
 
@@ -1892,7 +1898,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LLM_SCAN` | enum | (unset = per policy) | per-proxy kill-switch for outbound content inspection; `off`/`0`/`false`/`no`/`disable`/`disabled`/`none` disable, `on`/`1`/`true`/`yes`/`enable`/`enabled` (or unset) leave as policy, garbage exits 2 |
 | `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` | enum, optionally scoped | (unset = **App on, PAT off**) | push branch-namespace confinement on BOTH brokered git lanes: a `git-receive-pack` may update only refs under `refs/heads/wardyn/<run-id>/` (403 otherwise). A bare value sets the App lane only; mixed or unrecognized values fail CLOSED. [Details](#wardyn_git_broker_enforce_branch_ns) |
 | `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` | duration | `600s` | how long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it. Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default. [Details](#wardyn_credential_reauth_timeout) |
-| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | overrides how long the proxy's git broker blocks polling a `wait_for_review` git-mint approval before failing (`waitForGitApproval`). Unparseable or non-positive values are silently ignored and the 120s default is kept. |
+| `WARDYN_GIT_APPROVAL_TIMEOUT` | duration | `120s` | how long the proxy's git broker waits on a `wait_for_review` git-mint approval before failing; an unparseable or non-positive value keeps the default. Set it on wardynd: both container runners forward it to every proxy sidecar. |
 
 ### `WARDYN_PROXY_CONFIG_STDIN`
 
@@ -1929,7 +1935,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A brokered repo has no `git_pat` path beside its App lane in any case: policy-write refuses the two grants for the same forge.
 - **Opting either lane's posture is visible, not inferred:** the proxy logs a one-shot `slog` WARN at boot when the App lane is OFF, and INFO when the PAT lane is ON
 - The two postures are announced in opposite directions since they start from opposite defaults.
-- Both container runners forward this ONE var (and `WARDYN_LLM_SCAN`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
+- Both container runners forward this var (with `WARDYN_LLM_SCAN`, `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` and `WARDYN_GIT_APPROVAL_TIMEOUT`) from wardynd's environment to every proxy sidecar — docker as an `Env` entry, Kubernetes on the proxy pod; host-run proxies read their own env.
 - **This variable is WHERE-only:** a run's `push_rules` (`deny_paths`, `max_inspect_pack_mib`) is WHAT a push may touch, enforced on both brokered lanes independently of either scope here
 - Opting either lane out never opts a push out of its content rules.
 - See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
@@ -2309,7 +2315,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VERSION` | string | (unset = newest release) | `install.sh` only: which release the one-line installer resolves, e.g. `v0.6.6`. Unset asks the GitHub releases API |
 | `WARDYN_HOME` | string (path) | `~/.wardyn` (`~/.<WARDYN_NS>`) | `install.sh` only: where the one-line install puts `.env`, the compose file and the data. Re-running the installer at a newer version reads the same directory — that is the upgrade path ([OPERATIONS.md](OPERATIONS.md#upgrading-a-one-line-install)) |
 | `WARDYN_PORT` | int | `8080` | `install.sh` only: the loopback host port the one-line install publishes the console on. It is written once, as `WARDYN_UP_PORT` in `.env`; an upgrade re-run deliberately does **not** rewrite the ports, so change the port in `.env` rather than here |
-| `WARDYN_DEFAULT_POLICY_AUTO` | bool | (unset) | **not operator-settable — an internal marker, not a knob.** [`scripts/up.sh`](../scripts/up.sh) writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen. [Details](#wardyn_default_policy_auto) |
+| `WARDYN_DEFAULT_POLICY_AUTO` | string | (unset) | **not operator-settable — an internal marker, not a knob.** [`scripts/up.sh`](../scripts/up.sh) writes the policy path it auto-picked into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY`; `0` once an explicit override or a hand edit is seen. [Details](#wardyn_default_policy_auto) |
 | `WARDYN_INSTALL_IMAGE` | string | `ghcr.io/cjohnstoniv/wardynd:latest` | [`deploy/desktop/install.sh`](../deploy/desktop/install.sh) only: the `wardynd` image it runs `-gen-age-key` against to mint a new device's `age.key`. Set it to a pinned digest or a corporate mirror ref. [Details](#wardyn_install_image) |
 
 ### `WARDYN_KATA_VERSION`
@@ -2321,8 +2327,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_DEFAULT_POLICY_AUTO`
 
 - **Not operator-settable — an internal marker, not a knob.**
-- [`scripts/up.sh`](../scripts/up.sh) writes `1` into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY` whenever it auto-picked that value itself; `0` once an explicit `WARDYN_DEFAULT_POLICY` override is seen.
+- [`scripts/up.sh`](../scripts/up.sh) writes the policy path it auto-picked into `deploy/compose/.env` next to `WARDYN_DEFAULT_POLICY`; `0` once an explicit `WARDYN_DEFAULT_POLICY` override or a hand edit is seen.
 - Lets `up` safely re-run the auto-pick on a later invocation without ever clobbering a value the operator set by hand.
+- It re-picks only while the value still equals the recorded path, so editing the line keeps your value.
+- A `1` written by an older release counts as ours only while the value is one of the three paths `up` can pick.
 - Including a model path `host_llm_key_present` cannot see in THIS process's env at all (a credential connected through the UI).
 - `up` asks the running daemon's own `/setup/status` `llm_ready` for that, not just its own env.
 
@@ -2344,6 +2352,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Variable | Type | Default | Notes |
 |---|---|---|---|
+| `WARDYN_AGENT_ARCH` | string | (unset = `uname -m`) | [`scripts/stage-agent-binary.sh`](../scripts/stage-agent-binary.sh) only, build-time: the architecture to stage, `amd64` or `arm64`. `--arch` beats it. |
 | `WARDYN_AWS_SSO_LOGIN_COMMAND` | string | fixed literal | the `aws-sso` image's chained login+upload command ([`deploy/images/aws-sso/login-hint.sh`](../deploy/images/aws-sso/login-hint.sh)), exported into `signin-pane.sh`'s self-run pane and printed on both the hint and the failure path. Not operator-settable — a constant, not a knob |
 | `WARDYN_AWS_SSO_SELFRUN_BANNER`, `WARDYN_AWS_SSO_SELFRUN_DONE`, `WARDYN_AWS_SSO_SELFRUN_FAILED`, `WARDYN_AWS_SSO_SELFRUN_PREP_STUCK` | string | fixed literal | the aws-sso self-run pane's own status lines (`login-hint.sh` → `signin-pane.sh`), one per phase of the device-code flow. Not operator-settable — message constants, not knobs |
 | `WARDYN_AWS_SSO_SELFRAN` | internal (bash flag var, `tmux set-environment`) | unset | `signin-pane.sh` sets it to `1` (session-scoped via tmux, not exported to child processes) once the self-run login has started, so `login-hint.sh` prints the "run it yourself" hint only when nothing already tried to |

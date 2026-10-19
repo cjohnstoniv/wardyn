@@ -89,6 +89,8 @@ type runnerAdmissionKey struct{}
 type runnerAdmission struct {
 	peer    string
 	release func()
+	// refuse closes the socket with a reason the runner can read in its connection error.
+	refuse func(reason string)
 }
 
 var errRunnerStreamRateLimited = errors.New("runner stream connection rate exceeded")
@@ -147,7 +149,8 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	// until nonce, stored key, route id and the admitted Substrate all agree.
 	// A refused authentication (a lapsed, swept or rebound registration reads as one) is logged with its
 	// cause: the runner is told nothing but a close, so this line is the only place an operator sees why.
-	if err := hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, runnerAdmission{peer: peer, release: release}), runnerwire.NewWebSocket(conn), id); errors.Is(err, runnerwire.ErrAuth) {
+	admission := runnerAdmission{peer: peer, release: release, refuse: func(reason string) { _ = conn.Close(websocket.StatusTryAgainLater, reason) }}
+	if err := hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, admission), runnerwire.NewWebSocket(conn), id); errors.Is(err, runnerwire.ErrAuth) {
 		slog.WarnContext(r.Context(), "wardynd: runner authentication refused", slog.String("runner", id.String()), slog.Any("cause", err))
 	}
 }
@@ -224,8 +227,12 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
 			if !s.runnerStreams.runners.allow(id.String(), s.cfg.Now()) {
-				// The runner sees only a closed socket; this line names the cause.
 				slog.WarnContext(ctx, "wardynd: runner stream reconnect refused by the per-runner rate limit", slog.String("runner_id", id.String()))
+				// A WebSocket close status, not a runnerwire frame: a GOAWAY would make every runner clear its
+				// session, and a new frame type would be unknown to an older runner.
+				if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok && a.refuse != nil {
+					a.refuse(reasonRunnerStreamRateLimited + ": this runner reconnected too often; it retries on its own")
+				}
 				return errRunnerStreamRateLimited
 			}
 			if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok {

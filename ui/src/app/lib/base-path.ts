@@ -37,3 +37,10 @@ export function routerPath(pathname: string = window.location.pathname): string 
   if (!base || (pathname !== base && !pathname.startsWith(`${base}/`))) return pathname;
   return pathname.slice(base.length) || "/";
 }
+
+/** The SSO sign-in link. Off the console root it carries the page the person is on (return_to), so the
+ *  server brings them back to it; the server accepts only a console path and falls back to the root. */
+export function signInURL(): string {
+  const here = routerPath() + window.location.search;
+  return appURL("/auth/login") + (routerPath() === "/" ? "" : `?return_to=${encodeURIComponent(here)}`);
+}

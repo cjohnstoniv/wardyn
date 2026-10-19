@@ -603,7 +603,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 ## Control-plane to proxy TLS
 
 - Every run's proxy resolves credential values from wardynd, so that hop is TLS.
-- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.cluster.local:<service.internalPort>` and passes `-internal-listen=:<service.internalPort>` (default 8443).
+- The chart renders `WARDYN_CONTROL_PLANE_URL` as `https://<release>.<namespace>.svc.<k8s.clusterDomain>:<service.internalPort>` (`k8s.clusterDomain` defaults to `cluster.local`) and passes `-internal-listen=:<service.internalPort>` (default 8443).
 - The certificate comes from wardynd's **own** internal CA, minted on first boot into its secret store (age-encrypted in Postgres, beside the signing key) and kept across restarts and upgrades —
   - so there is no CA Secret, no cert-manager dependency and nothing to rotate by hand, and a GitOps render (`helm template`, Argo CD, Flux) cannot churn it the way a chart-generated certificate would.
 - Each proxy gets the CA certificate in its sealed per-run Secret and trusts it alone.
@@ -1062,6 +1062,7 @@ spec:
 - `ha.enabled`: **high availability.**
   - Runs two or more replicas so that one node failing does not stop the control plane.
   - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
+  - The PodDisruptionBudget renders only at two or more replicas, since one pod would block every node drain.
   - Default `false`.
   - It replaces `allowMultiReplica`, a documented clean break: a values file that still sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the `-allow-multi-instance` flag with a pointer to `WARDYN_HA`.
   - The chart refuses to render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and `extraEnv`;

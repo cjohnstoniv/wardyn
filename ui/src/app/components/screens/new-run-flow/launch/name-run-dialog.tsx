@@ -12,7 +12,7 @@
 import * as React from "react";
 import { Check, Loader2 } from "lucide-react";
 import { HttpError } from "../../../../lib/api/core";
-import { isCredentialRefusal } from "../../../../lib/api/runs";
+import { isCredentialRefusal, isGitCredentialRefusal } from "../../../../lib/api/runs";
 import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import type { SCMAccessPAT } from "../../../../lib/types/ado-pat";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
@@ -24,7 +24,8 @@ import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { AdoLaunchNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
+import { AdoLaunchNote, AdoOwnTokenNote, adoLaunchNoteKind } from "../../../wardyn/ado-run-token-line";
+import { useOwnTokenRows } from "../../../../lib/hooks/use-own-token-rows";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
@@ -115,9 +116,13 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
     wasAdoBusy.current = adoBusy;
   }, [adoBusy, check]);
   const { status } = useShellSetupStatus();
+  const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
 
+  // The last refused launch was an Azure DevOps credential one: only then is a missing own token its likely cause.
+  const [gitCredentialRefused, setGitCredentialRefused] = React.useState(false);
   const refused = (e: unknown) => {
+    setGitCredentialRefused(isGitCredentialRefusal(e));
     adoDoor.notifyLaunchError(e);
     if (!isCredentialRefusal(e)) return;
     // The door of the provider the refusal names, never the one on screen.
@@ -209,6 +214,8 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
             {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1 block" />}
           </p>
         )}
+        {/* Several organisations each take their own token: say which ones an Azure DevOps credential refusal is missing one for. */}
+        {create.refusal && gitCredentialRefused && !adoNote && <AdoOwnTokenNote rows={ownRows} />}
         {/* A launch the run's Azure DevOps token refused: the organisation blocks it, or the person connects again. */}
         {adoNote && (
           <div id={refusalIsAdoNote ? "name-run-sentence" : undefined} className={refusalIsAdoNote ? "text-danger" : undefined}>

@@ -258,7 +258,7 @@ export function LimitsDialog({
   const field = (id: FieldId, label: string, reported?: number) => <Num id={id} label={label} vals={vals} errs={errs} reported={reported} onChange={change} />;
   return (
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
-      <DialogContent className="scroll-thin max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-[560px]">
+      <DialogContent className="sm:max-w-[560px]">
         <form onSubmit={submit} noValidate className="space-y-3">
           <DialogHeader>
             <DialogTitle>{setup ? LIMITS_DIALOG.TITLE_SETUP(t.name) : LIMITS_DIALOG.TITLE(t.name)}</DialogTitle>

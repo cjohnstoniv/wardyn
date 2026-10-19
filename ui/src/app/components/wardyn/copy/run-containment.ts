@@ -9,6 +9,9 @@
 // name reused") are kept word for word, in sentence case; the sentences under them say the same plainly.
 
 export const CONTAINMENT = {
+  LOAD_FAILED: "Couldn't read this run's containment status, so a hold on it may not be shown.",
+  STALE: "Couldn't refresh this run's containment status; what is shown may be out of date.",
+  RETRY: "Retry",
   pendingTitle: (until: string) => `Containment pending; egress bounded until ${until}`,
   PENDING_BODY:
     "The runner deleted this run's pods but has no proof yet that they stopped. Its proxy can no longer renew its token, so its network access ends by then at the latest.",

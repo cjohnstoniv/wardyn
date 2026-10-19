@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -97,10 +100,14 @@ func siteConfigGetCmd(client clientFn) *cobra.Command {
 }
 
 func siteConfigSetCmd(client clientFn) *cobra.Command {
-	return &cobra.Command{
+	var clearFields []string
+	cmd := &cobra.Command{
 		Use:   "set [file]",
 		Short: "Replace the site config from a JSON file (or stdin with '-')",
-		Args:  cobra.MaximumNArgs(1),
+		Long: "Replace the site config from a JSON file (or stdin with '-').\n\n" +
+			"A list or text field that is empty in the file (\"internal_hosts\": [], \"sign_in_help_text\": \"\") is not sent, so the stored value stays. " +
+			"To clear one, name it with --clear (upstream_proxy_no_proxy, internal_hosts, sign_in_help_text, sign_in_help_url).",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := "-"
 			if len(args) == 1 {
@@ -144,14 +151,20 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			// 0.6.6) is left as the server already has it, not cleared — the same
 			// carry-forward that protects integrations above, generalized to every
 			// key an older `get` could not have written. Computed against the
-			// FILE's own bytes (raw), not the decoded struct — a present-but-empty
-			// value ({} or []) MENTIONS the key and must stay silent, only an
-			// absent one is this carry-forward's business.
+			// FILE's own bytes (raw), not the decoded struct. A present-but-empty list
+			// or string is dropped by omitempty on the way out, so it is reported
+			// separately (emptyUnsentFields) and cleared only through --clear.
 			omitted, err := omittedPostV066Fields(raw)
 			if err != nil {
 				return fmt.Errorf("parse site config JSON: %w", err)
 			}
-			res, err := client().PutSiteConfigResult(cmd.Context(), cfg)
+			unsent, err := emptyUnsentFields(raw, clearFields)
+			if err != nil {
+				return err
+			}
+			// A cleared field is named on the wire, so it is not left as-is.
+			omitted = slices.DeleteFunc(omitted, func(f string) bool { return slices.Contains(clearFields, f) })
+			res, err := client().PutSiteConfigClearing(cmd.Context(), cfg, clearFields)
 			if err != nil {
 				return err
 			}
@@ -159,6 +172,9 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			// Printed only after a successful apply — an operator debugging a
 			// rejected file doesn't need a note about fields that were never
 			// reached.
+			if len(unsent) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: this file has %s empty — an empty value is not sent, so the stored one is kept; pass --clear <field> to clear it\n", strings.Join(unsent, ", "))
+			}
 			if len(omitted) > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: this file omits %s — left as the server already has it, not cleared; pass it explicitly to change it\n", strings.Join(omitted, ", "))
 			}
@@ -190,4 +206,32 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			return emitJSON(cmd.OutOrStdout(), out)
 		},
 	}
+	cmd.Flags().StringSliceVar(&clearFields, "clear", nil, "clear a field the file cannot (upstream_proxy_no_proxy, internal_hosts, sign_in_help_text, sign_in_help_url); repeatable")
+	return cmd
+}
+
+// emptyUnsentFields returns the clearable fields raw sets to their empty form
+// and clearFields does not name. It refuses a --clear for a field the file
+// also gives a value, since the two disagree about the intended result.
+func emptyUnsentFields(raw []byte, clearFields []string) ([]string, error) {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &present); err != nil {
+		return nil, fmt.Errorf("parse site config JSON: %w", err)
+	}
+	for _, f := range clearFields {
+		empty, ok := sdk.SiteConfigClearForms[f]
+		if !ok {
+			return nil, fmt.Errorf("--clear %q: not a clearable field (upstream_proxy_no_proxy, internal_hosts, sign_in_help_text, sign_in_help_url)", f)
+		}
+		if v, ok := present[f]; ok && string(bytes.TrimSpace(v)) != empty && string(bytes.TrimSpace(v)) != "null" {
+			return nil, fmt.Errorf("--clear %s conflicts with the value this file gives it; drop one", f)
+		}
+	}
+	var unsent []string
+	for _, f := range slices.Sorted(maps.Keys(sdk.SiteConfigClearForms)) {
+		if v, ok := present[f]; ok && string(bytes.TrimSpace(v)) == sdk.SiteConfigClearForms[f] && !slices.Contains(clearFields, f) {
+			unsent = append(unsent, f)
+		}
+	}
+	return unsent, nil
 }

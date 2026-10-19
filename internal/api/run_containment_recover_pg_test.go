@@ -97,6 +97,39 @@ func TestPG_RunnerLease_ReviveContinuesADeferredRecovery(t *testing.T) {
 	}
 }
 
+// Containment and its recovery are ordered by delivery (queue_seq, migration 0150), never by queued_at,
+// each queuing transaction's start, which ties and can invert. A recovery delivered before the run's
+// containment but stamped after it has not released that containment: the run is held, and a revive
+// queues its recovery.
+func TestPG_RunnerLease_ContainmentFollowsDeliveryOrder(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.heldRun(t)
+	tx, err := f.st.Pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.WithoutCancel(f.ctx)) //nolint:errcheck // a no-op after Commit
+	// A test-only forgery of the inverted stamp: the row triggers forbid writing one.
+	if _, err := tx.Exec(f.ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	early := uuid.New()
+	if _, err := tx.Exec(f.ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, queued_at, applied_at, outcome,
+			observed_at, binding_version, owner, execution_generation, proof, subject, obligation_id, queue_seq) OVERRIDING SYSTEM VALUE
+		SELECT $2, runner_id, run_id, 'recover_containment', ref, queued_at + interval '1 second', applied_at, 'success',
+			observed_at, 1, owner, execution_generation, '{}'::jsonb, 'run', $2, -1
+		FROM runner_pending_actions WHERE run_id = $1 AND kind = 'stop_proxy'`, run.ID, early); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.held(t, run) {
+		t.Fatal("a recovery delivered before the containment released it")
+	}
+	f.reviveRecovering(t, run)
+}
+
 // reviveRecovering revives the held run and wants the revive to queue (or find) its recovery.
 func (f *runnerLeaseFixture) reviveRecovering(t *testing.T, run types.AgentRun) {
 	t.Helper()

@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { PendingChangeError } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
+import { usePoll } from "../../../lib/use-poll";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import type {
   NodeRecordAttestation,
@@ -30,43 +31,75 @@ import { RunLifetimeBanner } from "./run-lifetime-banner";
 const SELECT_CLASS =
   "h-9 w-full max-w-[260px] rounded-md border border-border-strong bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
 
-/** Reads the run's containment; null until read, or when the run is not on a registered runner. */
-export function useRunContainment(run: RunDetail): [RunContainment | null, () => void] {
+// How often a held run's containment is re-read: the egress bound passes with the clock and a
+// security operator's record is answered on the server, neither of which moves the run's updated_at.
+const CONTAINMENT_POLL_MS = 5000;
+
+/**
+ * Reads the run's containment; null until read, or when the run is not on a registered runner.
+ * A failed read keeps the last good answer and reports `failed`, so the panel says it may be out of date
+ * (and offers a retry) instead of vanishing. While the run is held it is re-read on a timer.
+ */
+export function useRunContainment(run: RunDetail): [RunContainment | null, () => void, boolean] {
   const [state, setState] = React.useState<RunContainment | null>(null);
+  const [failed, setFailed] = React.useState(false);
   const [tick, setTick] = React.useState(0);
   const local = run.placement === "local";
+  const live = React.useRef(true);
+  React.useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, [run.id]);
+  const read = React.useCallback(
+    () =>
+      runnersApi
+        .runContainment(run.id)
+        .then((c) => {
+          if (!live.current) return;
+          setState(c);
+          setFailed(false);
+        })
+        .catch(() => {
+          if (live.current) setFailed(true);
+        }),
+    [run.id],
+  );
   React.useEffect(() => {
     if (!local) return;
-    let live = true;
-    runnersApi
-      .runContainment(run.id)
-      .then((c) => live && setState(c))
-      .catch(() => live && setState(null));
-    return () => {
-      live = false;
-    };
-  }, [local, run.id, run.updated_at, tick]);
-  return [local ? state : null, () => setTick((t) => t + 1)];
+    void read();
+  }, [local, read, run.updated_at, tick]);
+  usePoll(read, CONTAINMENT_POLL_MS, !local || !state?.pending);
+  return [local ? state : null, () => setTick((t) => t + 1), local && failed];
 }
 
 /** The lifetime banner, told whether the run is held as containment pending, and the containment panel under it. */
 export function RunLifetimeWithContainment({ run, pending, onChanged }: { run: RunDetail; pending: ApprovalRequest[]; onChanged: () => void }) {
-  const [containment, reload] = useRunContainment(run);
+  const [containment, reload, failed] = useRunContainment(run);
   return (
     <>
       <RunLifetimeBanner run={run} pending={pending} onChanged={onChanged} containmentPending={!!containment?.pending} />
-      <ContainmentPending runId={run.id} containment={containment} onChanged={reload} />
+      <ContainmentPending runId={run.id} containment={containment} onChanged={reload} failed={failed} />
     </>
   );
 }
 
-export function ContainmentPending({ runId, containment, onChanged }: { runId: string; containment: RunContainment | null; onChanged: () => void }) {
+export function ContainmentPending({ runId, containment, onChanged, failed = false }: { runId: string; containment: RunContainment | null; onChanged: () => void; failed?: boolean }) {
   const securityOperator = useSecurityOperator();
   const pending = containment?.pending;
   const records = containment?.records ?? [];
-  if (!pending && records.length === 0) return null;
+  if (!pending && records.length === 0 && !failed) return null;
   return (
     <div data-testid="run-containment" className="mx-4 mt-2 shrink-0 rounded-md border border-danger/40 bg-danger-subtle px-3 py-2.5 text-xs">
+      {failed && (
+        <p data-testid="run-containment-stale" className="mb-1.5 flex flex-wrap items-center gap-2 text-muted-foreground">
+          <span>{pending || records.length > 0 ? C.STALE : C.LOAD_FAILED}</span>
+          <Button variant="outline" size="sm" onClick={onChanged}>
+            {C.RETRY}
+          </Button>
+        </p>
+      )}
       {pending && (
         <>
           <h3 data-testid="run-containment-line" className="text-sm font-medium text-foreground">

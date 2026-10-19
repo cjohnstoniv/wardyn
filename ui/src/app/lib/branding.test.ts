@@ -58,5 +58,9 @@ describe("branding helpers (#1125)", () => {
     expect(logoSizeText(3_560_000)).toBe("3.6 MB");
     expect(monogram("Example Corp")).toBe("EC");
     expect(monogram("acme")).toBe("A");
+    // The first code point, not the first UTF-16 unit; ß stays one rune like the server's tile.
+    expect(monogram("\u{1F680} Rocket Labs")).toBe("\u{1F680}R");
+    expect(monogram("\u{1D400}cme Corp")).toBe("\u{1D400}C");
+    expect(monogram("ßeta")).toBe("ß");
   });
 });

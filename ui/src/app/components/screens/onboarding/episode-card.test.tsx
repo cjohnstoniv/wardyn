@@ -90,6 +90,13 @@ describe("EpisodeRow", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("a play icon marks only an episode that can be played", () => {
+    const { container, rerender } = render(<EpisodeRow episode={reserved} />);
+    expect(container.querySelector("svg.lucide-play")).toBeNull();
+    rerender(<EpisodeRow episode={shipped} />);
+    expect(container.querySelector("svg.lucide-play")).not.toBeNull();
+  });
+
   it("U-04: an unrecorded episode never shows a projected minutes estimate, even when the catalog carries one", () => {
     render(<EpisodeRow episode={reservedWithMinutes} />);
     expect(screen.getByText("Not recorded yet")).toBeInTheDocument();

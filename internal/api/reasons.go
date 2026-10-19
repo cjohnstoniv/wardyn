@@ -239,6 +239,8 @@ const (
 	reasonWorkspaceSSHSourcesNotReady = "workspace_ssh_sources_not_ready" // an SSH-remote source names a secret that has not been stored yet
 	reasonWorkspaceSourcesNotAllowed  = "workspace_sources_not_allowed"   // the caller's own local_dir sources fail the member-safe mount gate
 	reasonWorkspaceDeleteActiveRun    = "workspace_delete_active_run"     // the workspace is in use by a still-active run
+	reasonWorkspaceNameTaken          = "workspace_name_taken"            // another workspace already has this name
+	reasonWorkspaceUpdateConflict     = "workspace_update_conflict"       // the workspace changed while the edit was being prepared
 
 	// #656 slice 2 — site-config, governance and the user-drive doors share this
 	// one: the caller's group-membership snapshot is missing or was truncated at
@@ -547,5 +549,5 @@ const (
 	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
 	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
 	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
-	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )

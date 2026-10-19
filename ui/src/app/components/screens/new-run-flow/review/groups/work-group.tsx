@@ -12,6 +12,7 @@ import { mainDriveMiB } from "../../lenses/files-lens";
 import { sizeWords } from "../../steps/files/size-words";
 import { readMainDrive, type FilesPreflight } from "../../steps/files/files-seams";
 import { summaryText } from "../../steps/files/files-summary";
+import { isTypedRef } from "../../steps/files/typed-ref";
 import { lifecycleOf, lifecycleText } from "../../steps/files/main-drive-section";
 import { ReviewGroup } from "../review-group";
 import { sourceOf } from "../provenance";
@@ -25,16 +26,23 @@ const ENFORCEMENT: Record<MainDriveEnforcement, string | undefined> = {
 
 const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
 
-export function AttachmentRow({ a }: { a: RunAttachment }) {
+export function AttachmentRow({ a, refNotChecked }: { a: RunAttachment; /** The ref was typed, not picked from a listed response (#2107). */ refNotChecked?: boolean }) {
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(110px,1fr)_minmax(140px,1.2fr)_auto] items-center gap-2 text-sm max-[520px]:grid-cols-1 max-[520px]:items-start">
-      <strong className="font-medium">{a.name}</strong>
-      <code className="font-mono text-xs break-all text-muted-foreground">{a.target}</code>
-      <span className="flex flex-wrap justify-end gap-1.5 max-[520px]:justify-start">
-        {a.ref && <Chip>{a.ref}</Chip>}
-        <Chip>{a.read_only ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</Chip>
-        {a.starts_here && <Chip>{NR_FILES.STARTS_HERE}</Chip>}
-      </span>
+    <div>
+      <div className="grid min-w-0 grid-cols-[minmax(110px,1fr)_minmax(140px,1.2fr)_auto] items-center gap-2 text-sm max-[520px]:grid-cols-1 max-[520px]:items-start">
+        <strong className="font-medium">{a.name}</strong>
+        <code className="font-mono text-xs break-all text-muted-foreground">{a.target}</code>
+        <span className="flex flex-wrap justify-end gap-1.5 max-[520px]:justify-start">
+          {a.ref && <Chip>{a.ref}</Chip>}
+          <Chip>{a.read_only ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</Chip>
+          {a.starts_here && <Chip>{NR_FILES.STARTS_HERE}</Chip>}
+        </span>
+      </div>
+      {refNotChecked && (
+        <p className="mt-0.5 text-xs text-muted-foreground" data-testid="attachment-ref-not-checked">
+          {NR_FILES.REF_NOT_CHECKED}
+        </p>
+      )}
     </div>
   );
 }
@@ -82,7 +90,13 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
       )}
       {attachments.length > 0 && (
         <div className="my-1.5 grid gap-1.5">
-          {attachments.map((a) => <AttachmentRow key={`${a.kind}:${a.workspace_id ?? a.drive_id ?? a.name}:${a.repo ?? ""}`} a={a} />)}
+          {attachments.map((a) => (
+            <AttachmentRow
+              key={`${a.kind}:${a.workspace_id ?? a.drive_id ?? a.name}:${a.repo ?? ""}`}
+              a={a}
+              refNotChecked={a.kind === "repository" && isTypedRef(draft.guided, intent, a.workspace_id, a.repo)}
+            />
+          ))}
         </div>
       )}
     </ReviewGroup>

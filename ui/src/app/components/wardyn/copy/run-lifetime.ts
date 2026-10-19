@@ -47,6 +47,8 @@ export function endsExtendAsFarAsAllowed(days: number): string {
   return `As far as allowed (${days} day${days === 1 ? "" : "s"})`;
 }
 export const ENDS_CHANGE = "Change…";
+// The dialog's heading names the thing being set; a button label ("Change…", "Set an end…") says nothing as one.
+export const ENDS_DIALOG_TITLE = "When this run ends";
 export const ENDS_SET_AN_END = "Set an end…";
 export const ENDS_NO_END_OPTION = "No end";
 // M2 (packet:246): the "No end" state's own hint, shown only where allow_no_end
@@ -96,7 +98,7 @@ export function warnTitle(stage: EndsWarningStage): string {
   return `This run ends in ${WARNING_REL_TEXT[stage]}`;
 }
 export function warnBody(dateText: string): string {
-  return `At ${dateText} the run stops. Its files are kept for 7 days; push or save anything you need before then.`;
+  return `At ${dateText} the run stops. Its files are kept for a while after that (your admin sets how long); push or save anything you need before then.`;
 }
 export const WARN_EXTEND_1_DAY = "Extend 1 day";
 export const WARN_CHANGE_END = "Change end…";
@@ -141,7 +143,7 @@ export const LOST_OUTAGE =
 export const LOST_K8S = "The node it ran on restarted. Files on your drive are kept; the rest is gone.";
 export const REVIVE = "Revive";
 export const REVIVING = "Reviving… (about a minute)";
-export const REVIVE_STILL_STARTING = "The runner is still starting this run. Check back in a minute.";
+export const REVIVE_RESULT_UNKNOWN = "No answer from the runner yet, so the revive may still be starting. Check the run's state before you try again.";
 export function revivePolicy(hostsBlocked: number): string {
   return `Policy updated at revive: ${hostsBlocked} host${hostsBlocked === 1 ? "" : "s"} now blocked.`;
 }
@@ -164,8 +166,21 @@ export const WAIT_LABEL = "If this run waits for a decision";
 export function waitValueHours(hours: number): string {
   return `Keep it for up to ${hours} hour${hours === 1 ? "" : "s"}`;
 }
-export function waitLocked(hours: number): string {
-  return `Kept for up to ${hours} hour${hours === 1 ? "" : "s"}. Your admin sets this.`;
+// A profile sets the budget in seconds, so it can be under an hour or not a
+// whole number of hours: say minutes rather than round to the nearest hour.
+function waitSpan(sec: number): string {
+  const mins = Math.max(1, Math.round(sec / 60));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const hours = `${h} hour${h === 1 ? "" : "s"}`;
+  const minutes = `${m} minute${m === 1 ? "" : "s"}`;
+  return h === 0 ? minutes : m === 0 ? hours : `${hours} ${minutes}`;
+}
+export function waitValueSec(sec: number): string {
+  return `Keep it for up to ${waitSpan(sec)}`;
+}
+export function waitLocked(sec: number): string {
+  return `Kept for up to ${waitSpan(sec)}. Your admin sets this.`;
 }
 
 // F14 (PR #1317 review, run_pause.go's pauseDelayFloor): the server never

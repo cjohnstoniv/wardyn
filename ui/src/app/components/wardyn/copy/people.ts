@@ -38,8 +38,14 @@ export const PEOPLE_PAGE = {
     ].filter(Boolean);
     return parts.length ? parts.join(" · ") : "—";
   },
+  EMPTY_TITLE: "No people yet",
+  EMPTY_FILTERED_TITLE: "No one matches",
+  EMPTY_FILTERED: "Nothing matches this search or filter.",
   EMPTY: "Nobody has signed in yet. People appear here after their first sign-in, or when you add them.",
   ADD: "Add a person",
+  ADD_SUBJECT: "Sign-in subject",
+  ADD_SUBJECT_HINT: "The subject (sub) your identity provider sends for this person, exactly as it sends it.",
+  ADD_EMAIL: "Email (optional)",
   ADD_HINT: "Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.",
   SESSIONS: "Sessions",
   SESSIONS_ACTIVE: (n: number) => `${n} active`,

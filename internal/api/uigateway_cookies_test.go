@@ -146,10 +146,15 @@ func TestUIGateway_OutboundSetCookieRules(t *testing.T) {
 				for _, sc := range upstream {
 					w.Header().Add("Set-Cookie", sc)
 				}
+				w.Header().Set("Clear-Site-Data", `"cookies", "storage"`)
 				_, _ = io.WriteString(w, "ok")
 			}))
-			if got := h.relayIn(mode, "").Header().Values("Set-Cookie"); !slices.Equal(got, want) {
-				t.Fatalf("Set-Cookie reaching the browser = %q, want %q", got, want)
+			got := h.relayIn(mode, "").Header()
+			if sc := got.Values("Set-Cookie"); !slices.Equal(sc, want) {
+				t.Fatalf("Set-Cookie reaching the browser = %q, want %q", sc, want)
+			}
+			if csd := got.Values("Clear-Site-Data"); len(csd) != 0 {
+				t.Fatalf("Clear-Site-Data reached the browser: %q", csd)
 			}
 		})
 	}
@@ -157,14 +162,16 @@ func TestUIGateway_OutboundSetCookieRules(t *testing.T) {
 
 // TestUIGateway_InterimResponseSetCookieRules: ReverseProxy copies a 1xx's
 // headers straight to the browser without running ModifyResponse, so a 103
-// Early Hints was a Set-Cookie channel none of the rules above saw. The same
-// rules apply to it; the rest of the 1xx (its Link) is untouched.
+// Early Hints was a Set-Cookie (and Clear-Site-Data) channel none of the rules
+// above saw. The same rules apply to it; the rest of the 1xx (its Link) is
+// untouched.
 func TestUIGateway_InterimResponseSetCookieRules(t *testing.T) {
 	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		for _, sc := range []string{"wardyn_ui_sess=forged; Path=/", "wide=1; Domain=example.com", "=wardyn_ui_sess=x", "app_hint=1"} {
 			w.Header().Add("Set-Cookie", sc)
 		}
 		w.Header().Set("Link", "</x.js>; rel=preload; as=script")
+		w.Header().Set("Clear-Site-Data", `"cookies"`)
 		w.WriteHeader(http.StatusEarlyHints)
 		w.Header().Del("Set-Cookie")
 		_, _ = io.WriteString(w, "ok")
@@ -199,6 +206,9 @@ func TestUIGateway_InterimResponseSetCookieRules(t *testing.T) {
 	}
 	if hints[0].Get("Link") == "" {
 		t.Fatal("103 lost its Link header")
+	}
+	if got := hints[0]["Clear-Site-Data"]; len(got) != 0 {
+		t.Fatalf("103 Clear-Site-Data = %q, want none", got)
 	}
 	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
 		t.Fatalf("final response after a 103: Referrer-Policy = %q, want no-referrer", got)

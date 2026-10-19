@@ -83,6 +83,7 @@ because #457 touches its neighbors).
 | `SIGNIN.USER_TYPE_AMBIGUOUS` | New | `auth_error=user_type_ambiguous` | Your account matches two user types with the same priority, so Wardyn won't pick one. Ask your Wardyn admin to give one of them a higher priority. |
 | `SIGNIN.USER_TYPE_UNKNOWN` | New | `auth_error=user_type_unknown` | Your account maps to a user type that doesn't exist. Ask your Wardyn admin to create it or change the mapping. |
 | `SIGNIN.OIDC_CONFIG` | Changed | `auth_error=oidc_config` | Sign-in with your identity provider failed. Try again; if it keeps happening, ask your Wardyn admin to check the sign-in configuration. |
+| `SIGNIN.OIDC_REFUSED` | New | `auth_error=oidc_refused` | Your identity provider didn't complete the sign-in. If you declined a prompt, try again; otherwise ask your Wardyn admin whether you are assigned to Wardyn in your identity provider. |
 | `SIGNIN.OIDC_TRANSIENT` | Reused | `auth_error=oidc_transient` | Your identity provider didn't respond in time. This is usually temporary — try signing in again. |
 | `SIGNIN.AUTH_FAILED` | Changed | `auth_error=<unrecognized>` (default arm) | Sign-in failed. Try again, or ask your Wardyn admin. |
 | — | Reused (inline JSX, not a copy-module key) | admin-token label | Admin token |

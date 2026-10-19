@@ -165,8 +165,23 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// A run its lease ended is KEPT with its agent stopped on purpose: that
 		// stop is what ended this Wait, and finalizing here would tear down the
 		// files the run is kept for. The end marks the run before it stops the
-		// agent, so this read always sees it.
-		if cur, gerr := s.cfg.Store.GetRun(base, runID); gerr == nil && runIsKept(cur) {
+		// agent, so this read always sees it. A read that fails twice leaves the run RUNNING: this
+		// watcher's lease then lapses, and the stale-watcher sweep (sweepRunWatchers) re-derives it
+		// through reconcileFinalize, which reads whether it is kept. Never a finalize that could not tell.
+		cur, gerr := s.cfg.Store.GetRun(base, runID)
+		if gerr != nil {
+			select {
+			case <-time.After(completionWatcherReadRetryDelay):
+			case <-base.Done():
+			}
+			cur, gerr = s.cfg.Store.GetRun(base, runID)
+		}
+		if gerr != nil {
+			slog.WarnContext(base, "wardynd: completion watcher could not read its run at the agent's exit; leaving it RUNNING for the stale-watcher sweep to re-derive",
+				slog.String("run_id", runID.String()), slog.Int("exit_code", exitCode), slog.Any("err", gerr))
+			return
+		}
+		if runIsKept(cur) {
 			return
 		}
 
@@ -467,14 +482,10 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 	if len(held) == 0 && len(persisted) == 0 {
 		return 0, s.sweepCommittedMasks(lctx, lead, nil)
 	}
-	runs, err := s.cfg.Store.ListRuns(ctx)
+	byID, err := s.runsByID(ctx, slices.Concat(held, persisted))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
 		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
-	}
-	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
-	for _, run := range runs {
-		byID[run.ID] = run
 	}
 	cutoff := time.Now().UTC().Add(-RunSecretGrace)
 	cold := func(id uuid.UUID) bool {
@@ -803,7 +814,7 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // does, and has to: once a kill has been claimed this must finish even if the
 // caller's own context dies, or a half-applied kill strands exactly what a
 // kill exists to remove — past the CAS the row reads KILLED while KillSandbox
-// is cancelled, retryQuick bails on ctx.Done() without revoking the identity,
+// is cancelled, retrying bails on ctx.Done() without revoking the identity,
 // and the run.kill row itself fails to write. Nothing on the ordinary paths
 // revisits that state: the idle reaper lists RUNNING and the next supersede
 // selects non-terminal runs only. What does come back to it is
@@ -850,13 +861,13 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// provider must not panic mid-cascade (after the KILLED CAS + KillSandbox but
 	// before the audit) — the revoke step is simply skipped.
 	if s.cfg.Identity != nil {
-		if rerr := retryQuick(ctx, func() error { return s.cfg.Identity.RevokeRun(ctx, id) }); rerr != nil {
+		if rerr := retrying(ctx, func() error { return s.cfg.Identity.RevokeRun(ctx, id) }); rerr != nil {
 			killData["identity_error"] = rerr.Error()
 		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {
-		if berr := retryQuick(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
+		if berr := retrying(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
 	}
@@ -903,27 +914,6 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 // revocations are a handful of store/runner calls; 30s is the generous bound the
 // kill route has always applied, kept as one name now that two callers share it.
 const killCascadeTimeout = 30 * time.Second
-
-// retryQuick runs fn up to 3 times with a short linear backoff, returning the
-// last error. It stops early if ctx is done. Used by the kill-switch revocation
-// steps so a transient store error does not leave a token valid while the kill is
-// reported as success.
-func retryQuick(ctx context.Context, fn func() error) error {
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return err
-			case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
-			}
-		}
-		if err = fn(); err == nil {
-			return nil
-		}
-	}
-	return err
-}
 
 // handleSweepSandboxes is the operator-triggered counterpart to the boot pass
 // and to cmd/wardynd's periodic ticker (runTerminalSandboxSweeper, #710),

@@ -63,6 +63,26 @@ SITE_CONFIG="${MANAGED_DIR}/site-config.json"
 [ -f "${ENV_FILE}" ] || die "wardyn-desktop.sh: ${ENV_FILE} not found — MDM has not delivered the envelope yet (docs/DESKTOP.md)"
 [ -f "${AGE_FILE}" ] || die "wardyn-desktop.sh: ${AGE_FILE} not found — run install.sh first (it mints the per-device key; MDM must never supply this one)"
 
+# The MDM-shipped envelope files decide what this root process runs: the
+# images and socket in wardyn.env, the run ceiling in policy.json, the network
+# facts site-config.json applies as admin. docs/DESKTOP.md's MDM file table
+# ships them root-owned 0644; one another account can write is refused, the
+# same owner and write rule secret.env gets below (readable is fine for these).
+refuse_shared_write() { # FILE
+  local st perm
+  st="$(stat -L -c '%a %u' "$1" 2>/dev/null || stat -L -f '%OLp %u' "$1" 2>/dev/null || true)"
+  [ -n "${st}" ] || die "wardyn-desktop.sh: cannot stat $1 — refusing to use a file whose mode and owner are unknown"
+  perm=$(( 8#${st%% *} ))
+  if [ "${st##* }" != "$(id -u)" ] || [ $(( perm & 0022 )) -ne 0 ]; then
+    die "wardyn-desktop.sh: $1 is owned by uid ${st##* } and/or group/world-writable (mode ${st%% *}) — this root process acts on it, so it must be writable by root alone. Ship it from MDM as root-owned 0644 (docs/DESKTOP.md 'The MDM file table'), then re-run."
+  fi
+}
+refuse_shared_write "${ENV_FILE}"
+for _f in "${MANAGED_DIR}/policy.json" "${SITE_CONFIG}"; do
+  if [ -f "${_f}" ]; then refuse_shared_write "${_f}"; fi
+done
+unset _f
+
 # The per-device secret-store key: a VALUE in WARDYN_AGE_KEY, not a path (no
 # WARDYN_AGE_KEY_FILE exists) — see docs/DESKTOP.md "A note on the mechanism".
 WARDYN_AGE_KEY="$(cat "${AGE_FILE}")"
@@ -151,7 +171,10 @@ fi
 # per-user. docs/DESKTOP.md "Which Docker socket" has the matrix.
 _env_sock="$(env_get "${ENV_FILE}" WARDYN_DOCKER_SOCK)"
 if [ -n "${_env_sock}" ]; then
-  export WARDYN_DOCKER_SOCK="${_env_sock}"
+  # WARDYN_DOCKER_SOCK is left to wardyn_pick_docker_host (below), which derives it from
+  # DOCKER_HOST: a Colima/Rancher host-side socket is not bind-mountable, so the mount
+  # must be the in-VM /var/run/docker.sock. Exporting the envelope value verbatim skipped that.
+  unset WARDYN_DOCKER_SOCK
   export DOCKER_HOST="unix://${_env_sock}"
 fi
 unset _env_sock

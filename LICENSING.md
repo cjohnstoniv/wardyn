@@ -50,7 +50,7 @@ Wardyn is distributed through four channels:
 |---|---|
 | **Source** | this git repository |
 | **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
-| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
+| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release with `wardyn-licenses.tar.gz`, the licence texts and notices for them and for the `wardyn-runnerd-*` binaries |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
 `agent-vscode` and `agent-novnc` — the UI-sandbox relay's two apps — publish
@@ -125,8 +125,9 @@ OFL-1.1, ISC and 0BSD only.
 
 The complete component inventory is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with verbatim licence texts in
-`licenses/texts/`. Both are generated, CI-verified against drift, and shipped
-inside every image at `/usr/share/doc/wardyn/`.
+`licenses/texts/`. Both are generated and CI-verified against drift. The images
+carry the notices at `/usr/share/doc/wardyn/` and the texts at
+`/usr/share/doc/wardyn/licenses/`.
 
 ## Components invoked as separate processes
 
