@@ -97,26 +97,53 @@ type PostureRequirement struct {
 }
 
 // PostureUnmet names the first field of req that p does not meet; "" when p
-// meets it. A runner that never reported posture meets no requirement, and an
-// os_min names every OS a runner may run: an unlisted OS does not meet it.
+// meets it.
 func PostureUnmet(req *PostureRequirement, p *types.RunnerPosture) string {
-	switch {
-	case req == nil:
-		return ""
-	case p == nil:
-		return "posture"
-	case req.MDMManaged && !p.MDMManaged:
-		return "mdm_managed"
-	case req.DiskEncrypted && !p.DiskEncrypted:
-		return "disk_encrypted"
-	}
-	if len(req.OSMin) == 0 {
-		return ""
-	}
-	if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
-		return "os_min"
+	if unmet := PostureUnmetAll(req, p); len(unmet) > 0 {
+		return unmet[0]
 	}
 	return ""
+}
+
+// PostureUnmetAll names every field of req that p does not meet, in a fixed
+// order; nil when p meets it. A runner that never reported posture meets no
+// requirement ("posture"), and an os_min names every OS a runner may run: an
+// unlisted OS does not meet it.
+func PostureUnmetAll(req *PostureRequirement, p *types.RunnerPosture) []string {
+	switch {
+	case req == nil:
+		return nil
+	case p == nil:
+		return []string{"posture"}
+	}
+	var out []string
+	if req.MDMManaged && !p.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted && !p.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	if len(req.OSMin) > 0 {
+		if min, ok := req.OSMin[p.OS]; !ok || !versionAtLeast(p.OSVersion, min) {
+			out = append(out, "os_min")
+		}
+	}
+	return out
+}
+
+// requires lists req's fields, as a refusal names the requirement.
+func (req *PostureRequirement) requires() string {
+	var out []string
+	if req.MDMManaged {
+		out = append(out, "mdm_managed")
+	}
+	if req.DiskEncrypted {
+		out = append(out, "disk_encrypted")
+	}
+	for _, name := range slices.Sorted(maps.Keys(req.OSMin)) {
+		out = append(out, "os_min "+name+" "+req.OSMin[name])
+	}
+	return strings.Join(out, ", ")
 }
 
 // versionAtLeast compares dot-separated numeric versions; a part that is not a

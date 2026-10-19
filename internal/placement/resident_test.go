@@ -56,6 +56,25 @@ func TestLocalEligibility_ResidentNeedsPolicyAndPosture(t *testing.T) {
 			}
 		})
 	}
+	// The detail names every unmet field and the requirement; a posture never judged says why.
+	const requires = " (requires mdm_managed, disk_encrypted, os_min darwin 15.1)"
+	for _, tc := range []struct {
+		name    string
+		posture *types.RunnerPosture
+		want    string
+	}{
+		{"two fields", &types.RunnerPosture{OS: "darwin", OSVersion: "15.2"},
+			"mdm_managed, disk_encrypted: the runner's reported posture does not meet env_secret's requirement" + requires},
+		{"every field", &types.RunnerPosture{OS: "linux", OSVersion: "24.04"},
+			"mdm_managed, disk_encrypted, os_min: the runner's reported posture does not meet env_secret's requirement" + requires},
+		{"never reported", nil,
+			"posture: no runner is chosen at launch, so no posture can be judged yet; a delivery policy with require_posture refuses every launch" + requires},
+	} {
+		_, r := LocalEligibility(residentPlan(ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req}, tc.posture))
+		if r == nil || r.Reason != ReasonRunnerPostureUnmet || r.Detail != tc.want {
+			t.Errorf("%s: %+v\n want %q", tc.name, r, tc.want)
+		}
+	}
 }
 
 // Q7: for a runner_resident credential a runner-asserted CC3 never satisfies
