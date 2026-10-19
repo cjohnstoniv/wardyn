@@ -5,7 +5,7 @@
 
 // Package vm is the Linux VM sandbox conformance suite: the real Docker driver boots the reference
 // guest image under QEMU/KVM in its unprivileged container. It builds nothing: set
-// WARDYN_TEST_VM_QEMU_IMAGE (deploy/images/vm-qemu) and WARDYN_TEST_VM_GUEST_IMAGE
+// WARDYN_TEST_VM_QEMU_IMAGE (deploy/runner/vm-qemu) and WARDYN_TEST_VM_GUEST_IMAGE
 // (deploy/images/vm-linux), on a host with /dev/kvm and a local Docker engine.
 package vm
 

@@ -10,5 +10,5 @@ FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee
 RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
     apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils virtiofsd e2fsprogs libarchive13t64 tar; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
-COPY deploy/images/vm-qemu/wardyn-vm-image /usr/local/bin/wardyn-vm-image
+COPY deploy/runner/vm-qemu/wardyn-vm-image /usr/local/bin/wardyn-vm-image
 USER 65532:65532

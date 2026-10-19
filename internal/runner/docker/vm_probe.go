@@ -57,7 +57,7 @@ func (d *Driver) ProbeVM(ctx context.Context, c VMConfig) (VMConfig, error) {
 		c.UID, c.GID = fallbackVMUID, fallbackVMUID
 	}
 	if c.QEMUImage == "" {
-		return c, errors.New("no QEMU image: set WARDYN_RUNNER_VM_QEMU_IMAGE to an image built from deploy/images/vm-qemu")
+		return c, errors.New("no QEMU image: set WARDYN_RUNNER_VM_QEMU_IMAGE to an image built from deploy/runner/vm-qemu")
 	}
 	if c.CPUModel == "" || strings.ContainsAny(c.CPUModel, ", =") {
 		return c, fmt.Errorf("the CPU model %q is not one named QEMU model: fix WARDYN_RUNNER_VM_CPU_MODEL", c.CPUModel)
@@ -132,15 +132,34 @@ func (d *Driver) probeQEMU(ctx context.Context, c VMConfig, dir string) (qemu.Pr
 	q, err := qemu.NewQMP(pctx, conn)
 	if err != nil {
 		_ = conn.Close()
-		return qemu.Probed{}, fmt.Errorf("the VM probe's QMP: %w", err)
+		return qemu.Probed{}, d.probeExited(ctx, created.ID, fmt.Errorf("the VM probe's QMP: %w", err))
 	}
 	defer q.Close()
 	p, err := q.Probe(pctx)
 	if err != nil {
-		return qemu.Probed{}, err
+		return qemu.Probed{}, d.probeExited(ctx, created.ID, err)
 	}
 	_ = q.Execute(pctx, "quit", nil, nil)
 	return p, nil
+}
+
+// probeExited is a QMP failure of a probe VM that opened its socket and then exited (QEMU creates
+// its sockets before it checks the CPU model and KVM): its log names the cause, err otherwise.
+func (d *Driver) probeExited(ctx context.Context, id string, err error) error {
+	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	wait := d.cli.ContainerWait(wctx, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	select {
+	case <-wait.Result:
+	case <-wait.Error:
+		return err
+	case <-wctx.Done():
+		return err
+	}
+	if log := d.proxyExitLogTail(ctx, id); log != "" {
+		return probeFailure(log)
+	}
+	return err
 }
 
 // probeFailure names the fix for a probe VM that never opened its QMP socket, from its log.

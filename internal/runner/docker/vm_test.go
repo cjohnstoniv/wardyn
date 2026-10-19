@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -506,5 +508,23 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met in 10s")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A probe VM that opened its QMP socket and then exited (QEMU checks the CPU model after it creates
+// its sockets) is reported with the fix its log names, not as a bare QMP read error.
+func TestVMProbeQMPFailureNamesTheFixFromQEMUsLog(t *testing.T) {
+	f := newFakeDocker()
+	d := newTestDriver(f)
+	created, err := f.ContainerCreate(context.Background(), client.ContainerCreateOptions{Name: "wardyn-vmprobe-x", Config: &container.Config{Image: "q"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.logs = map[string][]byte{created.ID: muxFrame(2, "qemu-system-x86_64: Host doesn't support requested features: CPUID.07H:EDX.spec-ctrl [bit 26]\nqemu-system-x86_64: host doesn't support requested feature")}
+	f.mu.Unlock()
+	qmpErr := errors.New("qemu: QMP qmp_capabilities: read: connection reset by peer")
+	if err := d.probeExited(context.Background(), created.ID, qmpErr); err == nil || !strings.Contains(err.Error(), "WARDYN_RUNNER_VM_CPU_MODEL") {
+		t.Fatalf("probe error = %v, want the CPU model fix", err)
 	}
 }

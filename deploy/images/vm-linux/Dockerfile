@@ -22,11 +22,14 @@ RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
     apt-get install -y --no-install-recommends linux-image-amd64 initramfs-tools systemd systemd-sysv udev \
       qemu-guest-agent util-linux-extra ca-certificates bash procps; \
     apt-get clean; rm -rf /var/lib/apt/lists/*; \
-    useradd -m -u 1000 -U -s /bin/bash agent; \
     printf 'qemu_fw_cfg\n' > /etc/modules-load.d/wardyn.conf; \
     systemctl mask getty@.service serial-getty@.service systemd-networkd-wait-online.service
 COPY --from=builder /out/wardyn-guest-agent /usr/local/bin/wardyn-guest-agent
 COPY deploy/images/vm-linux/wardyn-guest-agent.service deploy/images/vm-linux/wardyn-ca.service /etc/systemd/system/
 COPY deploy/images/vm-linux/wardyn-ca /usr/local/sbin/wardyn-ca
 COPY deploy/images/vm-linux/10-wardyn-link.network /etc/systemd/network/10-wardyn-link.network
+# The agent user, as an agent image has it; the drive root exists for a later managed drive.
+RUN useradd -m -u 1000 -U -s /bin/bash agent \
+ && mkdir -p /home/agent/work /home/agent/drive \
+ && chown -R agent:agent /home/agent
 RUN systemctl enable wardyn-guest-agent.service wardyn-ca.service systemd-networkd.service

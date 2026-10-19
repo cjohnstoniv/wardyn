@@ -28,7 +28,7 @@
 | Docker engine | A local engine that shares the runner's filesystem. Docker Desktop and a remote `DOCKER_HOST` are refused by the probe |
 | `/dev/kvm` access | Its group is not `root`, or it is open to all (mode `0666`). The QEMU container gets that group, never root's |
 | Runner user | Any user. A runner that runs as root starts its VM containers as uid 65532 |
-| The QEMU image | Built from [`deploy/images/vm-qemu`](../../deploy/images/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
+| The QEMU image | Built from [`deploy/runner/vm-qemu`](../../deploy/runner/vm-qemu/Dockerfile) and named in `WARDYN_RUNNER_VM_QEMU_IMAGE` |
 
 ## Turn it on
 
@@ -37,7 +37,7 @@
    echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-wardyn-kvm.rules
    sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
    ```
-2. Build the QEMU image on the runner's engine: `docker build -f deploy/images/vm-qemu/Dockerfile -t wardyn/vm-qemu:local .`
+2. Build the QEMU image on the runner's engine: `docker build -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:local .`
 3. Set `WARDYN_RUNNER_LINUX_VM=1` and `WARDYN_RUNNER_VM_QEMU_IMAGE=wardyn/vm-qemu:local` in the runner's environment.
 4. Restart the runner. It logs `Linux VM sandboxes are on` with the machine type, CPU model and QEMU version, or `Linux VM sandboxes are off on this runner` with the reason and its fix.
 

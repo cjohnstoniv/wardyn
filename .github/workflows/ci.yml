@@ -1445,7 +1445,7 @@ jobs:
           ls -l /dev/kvm
       - name: Build the QEMU image and the reference guest image (local only)
         run: |
-          docker build -q -f deploy/images/vm-qemu/Dockerfile -t wardyn/vm-qemu:ci .
+          docker build -q -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:ci .
           docker build -q -f deploy/images/vm-linux/Dockerfile -t wardyn/vm-linux:ci .
       - name: Linux VM conformance
         env:
