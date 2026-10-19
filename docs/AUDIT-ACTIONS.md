@@ -592,7 +592,7 @@ the same test checks every row of those tables.
 #### `brokered:ado-git:upstream-no-access`
 
 - The broker's Entra lane: Azure DevOps answered 403 or 404 with `X-VSS-UserData`.
-- git gets a sentence saying the account lacks access to the repository (`refuseADOGitUpstream`).
+- git gets a sentence saying the account lacks access to the repository, or for a 404 that Azure DevOps could not find it (`refuseADOGitUpstream`).
 - Written AFTER the lane's own forwarding row, for the same request, as an ALLOW: Wardyn forwarded it and nothing in its policy refused it, so it never moves `wardyn_egress_denies_total`.
   The class comes from Azure DevOps' answer (F-LIVE-7), recorded by `noteADOUpstream` ([`internal/egress/proxy/ado_refusal.go#adoUpstreamClass.ruleSource`](../internal/egress/proxy/ado_refusal.go)).
 
