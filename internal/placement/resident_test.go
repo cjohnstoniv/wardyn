@@ -56,21 +56,28 @@ func TestLocalEligibility_ResidentNeedsPolicyAndPosture(t *testing.T) {
 			}
 		})
 	}
-	// The detail names every unmet field and the requirement; a posture never judged says why.
+	// The detail names every unmet field and the requirement; a posture never judged says why, at launch
+	// and on a runner chosen at dispatch or revive that has not reported its posture.
 	const requires = " (requires mdm_managed, disk_encrypted, os_min darwin 15.1)"
+	const unreported = "posture: no reported posture to judge. At launch no runner is chosen yet, and a runner that has not reported its posture meets no requirement, so a delivery policy with require_posture refuses"
 	for _, tc := range []struct {
 		name    string
 		posture *types.RunnerPosture
+		trust   types.RunnerTrustClass
 		want    string
 	}{
-		{"two fields", &types.RunnerPosture{OS: "darwin", OSVersion: "15.2"},
+		{"two fields", &types.RunnerPosture{OS: "darwin", OSVersion: "15.2"}, "",
 			"mdm_managed, disk_encrypted: the runner's reported posture does not meet env_secret's requirement" + requires},
-		{"every field", &types.RunnerPosture{OS: "linux", OSVersion: "24.04"},
+		{"every field", &types.RunnerPosture{OS: "linux", OSVersion: "24.04"}, "",
 			"mdm_managed, disk_encrypted, os_min: the runner's reported posture does not meet env_secret's requirement" + requires},
-		{"never reported", nil,
-			"posture: no runner is chosen at launch, so no posture can be judged yet; a delivery policy with require_posture refuses every launch" + requires},
+		{"never reported", nil, "", unreported + requires},
+		{"chosen managed runner never reported", nil, types.RunnerTrustManagedDevice, unreported + requires},
 	} {
-		_, r := LocalEligibility(residentPlan(ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req}, tc.posture))
+		p := residentPlan(ClassPolicy{Mode: ModeRunnerResident, RequirePosture: req}, tc.posture)
+		if tc.trust != "" {
+			p.Trust = tc.trust
+		}
+		_, r := LocalEligibility(p)
 		if r == nil || r.Reason != ReasonRunnerPostureUnmet || r.Detail != tc.want {
 			t.Errorf("%s: %+v\n want %q", tc.name, r, tc.want)
 		}
