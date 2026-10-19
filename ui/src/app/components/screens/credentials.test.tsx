@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// CredentialsScreen — the admin "Stored credentials" inventory (design F-1/
+// CredentialsScreen — the admin "Credentials" inventory (design F-1/
 // F-2, packet F §4) and its erase flow (F-5/F-6, packet F §5). Every
 // assertion reads its expected string from the copy modules (INVENTORY/ERASE,
 // wardyn/copy/credentials.ts).
@@ -89,7 +89,7 @@ describe("the inventory", () => {
   it("lists a person's row with their email and the provider's name (design F-2)", async () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     renderScreen();
-    expect(await screen.findByText("Stored credentials")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Credentials" })).toBeInTheDocument();
     const row = (await screen.findByText("alice@corp.example")).closest("tr")!;
     expect(within(row).getByText("sub-alice")).toBeInTheDocument();
     expect(within(row).getByText("Corp gateway")).toBeInTheDocument();
@@ -458,7 +458,7 @@ describe("the admin-minted tokens list waits for the screen to be allowed", () =
   it("is not requested while the inventory is still loading", async () => {
     listInventoryMock.mockReturnValue(new Promise(() => {}));
     renderScreen();
-    await screen.findByText("Stored credentials");
+    await screen.findByRole("heading", { name: "Credentials" });
     expect(listMintedMock).not.toHaveBeenCalled();
   });
 });

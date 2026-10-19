@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// E2E coverage for the admin "Stored credentials" page (design F-1/F-2,
+// E2E coverage for the admin "Credentials" page (design F-1/F-2,
 // packet F §4) and its erase flow (F-5/F-6, packet F §5) —
 // src/app/components/screens/credentials.tsx.
 //
@@ -49,12 +49,12 @@ function seedPerson(): { auth: { Authorization: string }; subject: string; email
 async function openCredentials(page: Page): Promise<void> {
   await gotoConsole(page, "admin");
   await navTo(page, "Credentials");
-  await expect(page.getByRole("heading", { name: "Stored credentials", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Credentials", exact: true })).toBeVisible();
 }
 
 test.describe.configure({ mode: "serial" });
 
-test.describe("Stored credentials (Admin view)", () => {
+test.describe("Credentials (Admin view)", () => {
   test.beforeEach(async ({ page }) => {
     // Reset the model-providers block so this spec's fixture is the only
     // provider on it, whatever an earlier spec file left behind.
