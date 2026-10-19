@@ -255,6 +255,29 @@ if [ -f "$RELEASE_WF" ] && [ -f "$GPL_OFFER" ]; then
   fi
 fi
 
+# A "(not yet published)" section is true only until the image ships. Once the
+# previous release's publish matrix names the image, the section is a false
+# statement to every recipient of that image (#2192). Skipped when no release tag
+# is reachable (a shallow clone), like the other tag-history guards.
+if [ -f "$GPL_OFFER" ]; then
+  # The newest final tag by version, not the nearest ancestor: a patch tagged on a
+  # release branch is not an ancestor of main, and git describe would name the one
+  # before it. Falls back to a pre-release tag only when no final exists.
+  tags=$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null || true)
+  prev_tag=$(printf '%s\n' "$tags" | grep -v -- '-' | head -1 || true)
+  [ -n "$prev_tag" ] || prev_tag=$(printf '%s\n' "$tags" | head -1)
+  if [ -n "$prev_tag" ] && prev_wf=$(git show "$prev_tag:.github/workflows/release.yml" 2>/dev/null); then
+    prev_published=$(printf '%s\n' "$prev_wf" | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u)
+    stale=$({ grep -oE '^## `ghcr\.io/cjohnstoniv/[a-z0-9-]+` \(not yet published\)' "$GPL_OFFER" || true; } \
+            | sed -E 's|^## `ghcr\.io/cjohnstoniv/([a-z0-9-]+)`.*|\1|' | sort -u | comm -12 - <(printf '%s\n' "$prev_published"))
+    if [ -n "$stale" ]; then
+      echo "FAIL: $GPL_OFFER says '(not yet published)' for image(s) that $prev_tag already published. Regenerate it from $prev_tag's digests (scripts/gpl-source-offer.sh header; RELEASING.md):" >&2
+      printf '  %s\n' $stale >&2
+      fail=1
+    fi
+  fi
+fi
+
 # ── the GPL offer's hand-listed websockify entry matches the Dockerfile pin ─
 #
 # scripts/gpl-source-offer.sh's MANUAL_ENTRIES hand-lists websockify (syft

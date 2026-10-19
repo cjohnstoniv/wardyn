@@ -16,4 +16,5 @@ docs/operations/build-images.md=1820 share=35
 # docs/ENVBUILD.md 3190 adds 1122 over 2068 (0.9 F-1516 B7): the build record, rebuild and refresh sections.
 # docs/ENVBUILD.md 3220 adds 30 over 3190 (0.9.3 FIN-B), measured: one bullet saying a base that exists only on this host cannot be refreshed.
 # docs/ENVBUILD.md 3249 adds 29: the swap-lost-at-launch bullet (0.9.3 FIN-B2).
-docs/ENVBUILD.md=3249 share=35
+# docs/ENVBUILD.md 3300 adds 51 over 3249 (#2289): the per-build registry tag delete and the registry garbage-collect command.
+docs/ENVBUILD.md=3300 share=35

@@ -99,8 +99,7 @@ export function AdminSshKeysCard() {
             icon={KeyRound}
             title={ADMIN_SSH_KEYS.EMPTY_TITLE}
             description={ADMIN_SSH_KEYS.EMPTY_BODY}
-            as="h4"
-            className="py-8"
+            size="compact"
             tileClassName={KEY_TILE}
           />
         ) : (

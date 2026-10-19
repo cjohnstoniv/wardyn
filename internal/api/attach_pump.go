@@ -332,6 +332,7 @@ func (p *attachPumpState) resizeWorker() {
 				continue
 			}
 			p.s.fanoutWriterResize(p.ctx, p.runID, p.holder, m.Cols, m.Rows)
+			p.holder.recordResize(m.Cols, m.Rows)
 		case <-p.ctx.Done():
 			return
 		}

@@ -748,4 +748,15 @@ describe("My runner card: the start command and the claim into a pool", () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("mbp-ben is in Desk but isn't your default pool yet. Set it from My pools. Defaults could not be saved."));
     expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("isn't in Desk"));
   });
+
+  it("a defaults read that fails after the runner joined the pool says the same as a failed write", async () => {
+    vi.mocked(toast.error).mockClear();
+    pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", true, () => pools.myDefaults.mockRejectedValueOnce(new HttpError(500, "Defaults could not be read.", "internal")));
+    await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("mbp-ben is in Desk but isn't your default pool yet. Set it from My pools. Defaults could not be read."));
+    expect(pools.setMyDefaults).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("isn't in Desk"));
+  });
 });

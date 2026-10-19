@@ -73,6 +73,16 @@ describe("SshKeysPane — empty state", () => {
 });
 
 describe("SshKeysPane — Your account card", () => {
+  it("the collapsed card says No keys, in the same words as the other account cards", async () => {
+    listKeysMock.mockResolvedValue([]);
+    render(
+      <MemoryRouter>
+        <SshKeysPane heading="h3" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("No keys")).toBeInTheDocument();
+  });
+
   // #2855: the empty state's own button is the ONE Add key.
   it("empty: one Add key; with a key: the card-level Add key is back", async () => {
     listKeysMock.mockResolvedValue([]);

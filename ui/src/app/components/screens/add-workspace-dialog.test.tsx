@@ -187,7 +187,9 @@ describe("AddWorkspaceDialog — one honest Auto image choice", () => {
   it("offers exactly Auto and Pinned image ref — no separate devcontainer/standard choices", async () => {
     renderDialog(true, null);
     await openImagePicker();
-    const group = screen.getByRole("radiogroup", { name: /container image/i });
+    // The cards are aria-pressed toggle buttons, so the set is a group: a radiogroup must own role=radio items.
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    const group = screen.getByRole("group", { name: /container image/i });
     expect(within(group).getAllByRole("button")).toHaveLength(2);
     expect(
       within(group).getByRole("button", {

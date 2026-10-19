@@ -93,7 +93,9 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	if s.admitHostCapacity(ctx, e.Owner, "runs", false) != nil {
 		return store.QueueVerdict{Stop: true}, nil
 	}
-	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false).refusal != "" {
+	// The launch keeps no model-provider choice, so an Azure-gated run is asked about with the default
+	// proxy envelope here; its create was asked with the Azure one, and the quota's admission decides.
+	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false, false).refusal != "" {
 		return store.QueueVerdict{}, nil
 	}
 	return store.QueueVerdict{Admit: true, Runners: room.runners, Remotes: room.remotes, Needs: room.needs}, nil

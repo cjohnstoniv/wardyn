@@ -6,8 +6,10 @@ ado_grants
 ado_grants.capabilities
 ado_grants.hosts
 ado_grants.organization
+allowed_peers
 attribution
 attribution.email
+attribution.layer
 attribution.name
 attribution.overridden
 attribution.owner

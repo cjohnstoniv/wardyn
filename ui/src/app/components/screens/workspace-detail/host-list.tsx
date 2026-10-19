@@ -4,6 +4,7 @@
  */
 
 // The one removable-host row both egress cards (allowed, denied) render.
+import * as React from "react";
 import { X } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
@@ -30,6 +31,9 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
   removing: string | null;
   onRemove: (host: string) => void;
 }) {
+  // Per list: the allowed and denied cards can both hold a host.
+  const listId = React.useId();
+  const reasonId = (host: string) => `${listId}-reason-${host}`;
   if (rows.length === 0) return <p className="text-xs text-muted-foreground">{emptyText}</p>;
   return (
     <ul className="space-y-2">
@@ -37,6 +41,12 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
         <li key={r.host} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
           <Mono className="flex-1 text-foreground">{r.host}</Mono>
           <span className="text-meta text-muted-foreground">{r.provenance}</span>
+          {/* A disabled control says why in visible text beside it, never in a title alone (CONSOLE-RULES). */}
+          {r.removable && r.removeBlockedReason && (
+            <span id={reasonId(r.host)} className="max-w-[32ch] text-meta text-muted-foreground">
+              {r.removeBlockedReason}
+            </span>
+          )}
           {r.removable ? (
             <Button
               size="icon"
@@ -45,7 +55,7 @@ export function HostList({ rows, emptyText, canRemove, removing, onRemove }: {
               disabled={!canRemove || !!r.removeBlockedReason || removing !== null}
               onClick={() => onRemove(r.host)}
               aria-label={`Remove ${r.host}`}
-              title={r.removeBlockedReason}
+              aria-describedby={r.removeBlockedReason ? reasonId(r.host) : undefined}
             >
               <X className="size-3.5" />
             </Button>

@@ -427,6 +427,9 @@ test.describe("New Run, Review: what the summaries say the server will do (defau
     await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [accepting] } } as never });
     await openReviewWith(page, ENV);
     await expect(page.locator("[data-policy-row=tools]")).toContainText(NR_REVIEW.POLICY_ACCEPTS_EDITS);
+    // #2428: scoped to tools no rule names; named allow and deny rules still apply.
+    await expect(page.locator("[data-policy-row=tools]")).toContainText("Named rules still apply.");
+    await expect(page.locator("[data-policy-row=tools]")).not.toContainText("Every other tool asks first");
   });
 });
 

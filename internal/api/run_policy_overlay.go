@@ -122,6 +122,9 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 		}
 	}
 	spec, warns := merged, []string(nil)
+	// The keys the overlay laid on are the person's; what the bound below then
+	// narrowed in them is the ceiling's.
+	src.knobs.setBy(ceiling.ownProvenance(), base, merged)
 	if !s.runUngoverned(ctx) {
 		bounded, mergedWarns, drops, refusal := s.boundRunUserSpecDrops(ctx, r, merged, ceiling, "invalid policy_overlay: ")
 		if refusal != nil {
@@ -129,6 +132,7 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 		}
 		_, baseWarns, _, _ := s.boundRunUserSpecDrops(ctx, r, base, ceiling, "invalid policy: ")
 		spec = withPolicyKeys(base, bounded, keys)
+		src.knobs.setBy(ceiling.provenance(), merged, spec)
 		warns = slices.DeleteFunc(mergedWarns, func(w string) bool { return slices.Contains(baseWarns, w) })
 		if !dryRun {
 			s.auditPolicyDrops(ctx, r, "runs.policy_overlay", slices.DeleteFunc(drops, func(d capDrop) bool { return !slices.Contains(keys, capDropField(d)) }))

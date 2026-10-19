@@ -40,7 +40,7 @@ var sentenceConstNotSentences = map[string]string{
 }
 
 // sentenceConstFiles are the ONLY files this guard scans — every non-test
-// internal/api file with a top-level string const #585 (or its F2 fix round)
+// internal/api file with a top-level string const #585 (or its F2 fix round, or #2662)
 // capitalised. Each surviving const is either a complete, stand-alone
 // sentence a person (not only a sidecar) can end up reading verbatim — which
 // must start with a capital letter, the wire never puts an article in front
@@ -61,6 +61,7 @@ var sentenceConstFiles = []string{
 	"injection_ado_signin.go", "injection_awssso.go", "runs_dispatch_llm_mechanism.go",
 	"injection_provider_key.go", "provider_subscription.go", "approvals_push.go",
 	"ado_entra.go", "injection_ado_capability.go",
+	"auth_status.go", "harnesscred_paste.go", "harnesscred_supersede.go",
 }
 
 // TestRefusalSentenceConstsStartCapitalized is #585's guard, scoped to

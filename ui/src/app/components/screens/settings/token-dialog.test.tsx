@@ -51,6 +51,14 @@ function mount(over: Partial<TokenDialogProps> = {}) {
   return { props, ...view };
 }
 
+// The lifetime picker is the shared Select: open it, read the offered words, close it again.
+async function lifetimeOptions(): Promise<string[]> {
+  await user.click(screen.getByRole("combobox", { name: T.EXPIRES_LABEL }));
+  const words = (await screen.findAllByRole("option")).map((o) => o.textContent);
+  await user.keyboard("{Escape}");
+  return words as string[];
+}
+
 const claim = () => user.click(screen.getByRole("button", { name: T.CLAIM_SUBMIT }));
 
 describe("TokenDialog form", () => {
@@ -61,9 +69,8 @@ describe("TokenDialog form", () => {
     expect(screen.getByText(/Claiming also revokes/)).toHaveTextContent("Claiming also revokes ci-old-key. Anything still using it stops working now.");
     expect(screen.getByText(T.CLAIM_HINT_LIMITED("30 days"))).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText(new RegExp(T.NAME_LABEL))).toHaveFocus());
-    const ttl = screen.getByLabelText(T.EXPIRES_LABEL) as HTMLSelectElement;
-    expect([...ttl.options].map((o) => o.text)).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS]);
-    expect(ttl.value).toBe(String(30 * 86400));
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS]);
+    expect(screen.getByRole("combobox", { name: T.EXPIRES_LABEL })).toHaveTextContent(T.OPT_30_DAYS);
     await claim();
     expect(props.submit).toHaveBeenCalledWith({ name: "ci-laptop", ttl_seconds: 30 * 86400 });
   });
@@ -71,10 +78,10 @@ describe("TokenDialog form", () => {
   it("offers the longest the server allows when an invitation sets no limit, and omits the lifetime for it", async () => {
     const { props } = mount();
     expect(screen.getByText(T.CLAIM_HINT_OPEN)).toBeInTheDocument();
-    const ttl = screen.getByLabelText(T.EXPIRES_LABEL) as HTMLSelectElement;
-    expect([...ttl.options].map((o) => o.text)).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS, T.OPT_1_YEAR, T.OPT_LONGEST]);
-    expect(ttl.value).toBe(String(90 * 86400));
-    await user.selectOptions(ttl, T.OPT_LONGEST);
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS, T.OPT_1_YEAR, T.OPT_LONGEST]);
+    expect(screen.getByRole("combobox", { name: T.EXPIRES_LABEL })).toHaveTextContent(T.OPT_90_DAYS);
+    await user.click(screen.getByRole("combobox", { name: T.EXPIRES_LABEL }));
+    await user.click(await screen.findByRole("option", { name: T.OPT_LONGEST }));
     await claim();
     expect(props.submit).toHaveBeenCalledWith({ name: "ci-laptop" });
   });
@@ -85,8 +92,7 @@ describe("TokenDialog form", () => {
     expect(screen.getByText(T.MINT_LEDE("ci-nightly"))).toBeInTheDocument();
     expect(screen.getByText(T.MINT_WARNING("ci-nightly"))).toBeInTheDocument();
     expect(screen.getByText(T.MINT_HINT)).toBeInTheDocument();
-    const ttl = screen.getByLabelText(T.EXPIRES_LABEL) as HTMLSelectElement;
-    expect([...ttl.options].map((o) => o.text)).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS]);
+    expect(await lifetimeOptions()).toEqual([T.OPT_7_DAYS, T.OPT_30_DAYS, T.OPT_90_DAYS]);
     setField(screen.getByLabelText(new RegExp(T.NAME_LABEL)), "deploy");
     await user.keyboard("{Enter}");
     expect(props.submit).toHaveBeenCalledWith({ name: "deploy", ttl_seconds: 90 * 86400 });

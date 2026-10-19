@@ -85,7 +85,12 @@ export function ComponentsScreen() {
 
   const toggleWho = (id: string) => setOpenId((cur) => (cur === id ? null : id));
 
+  // Two clicks in one tick must delete once: the second would meet a 404 and toast "Delete failed" over a
+  // component that is gone.
+  const inFlight = React.useRef(false);
   const remove = async (c: Component) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     try {
       await api.remove(c.id);
@@ -97,6 +102,7 @@ export function ComponentsScreen() {
       setToDelete(null);
       toast.error(T.DELETE_FAILED, { description: getErrorMessage(e) });
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -208,16 +214,17 @@ export function ComponentsScreen() {
         />
       )}
 
-      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
+      <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && !busy && setToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{T.DELETE_TITLE(toDelete?.name ?? "")}</AlertDialogTitle>
             <AlertDialogDescription>{T.DELETE_BODY}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{T.CANCEL}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{T.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-danger text-danger-foreground hover:bg-danger/90"
+              disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toDelete) void remove(toDelete);

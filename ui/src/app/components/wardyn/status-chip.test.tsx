@@ -25,6 +25,15 @@ describe("StatusChip AT-accessible reason", () => {
     expect(screen.queryByText("No KVM device on this host")).not.toBeInTheDocument();
   });
 
+  // aria-label on a role-less span is not announced in browse mode; the role makes the name reachable.
+  it("exposes the chip as a named image so the reason is announced, and leaves a reasonless chip role-less", () => {
+    const { unmount } = render(<StatusChip status="unavailable" reason="No KVM device on this host" />);
+    expect(screen.getByRole("img", { name: "Unavailable here: No KVM device on this host" })).toBeInTheDocument();
+    unmount();
+    render(<StatusChip status="unavailable" />);
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
   it("announces the reason on the 'optional' variant too", () => {
     render(<StatusChip status="optional" reason="Only needed for private repos" />);
     expect(screen.getByText("Optional")).toHaveAttribute(

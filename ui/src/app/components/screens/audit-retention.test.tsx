@@ -8,7 +8,7 @@
 // expected string is the packet's, spelled out here rather than read back from
 // the copy module, so a drifted string fails.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditRetentionStatus } from "../../lib/types";
@@ -295,6 +295,21 @@ describe("Audit → Retention", () => {
       await userEvent.type(within(dialog).getByLabelText("Digest from the archive's footer"), "ab");
       await userEvent.click(within(dialog).getByRole("button", { name: "Drop partition" }));
       expect(await within(dialog).findByRole("alert")).toHaveTextContent("no such audit partition");
+    });
+
+    // #2499: the drop is irreversible; dismissing mid-request hid its row-count confirmation and left a stale Drop.
+    it("stays open through Escape while the drop runs, then shows the result", async () => {
+      let finish!: (v: unknown) => void;
+      dropMock.mockReturnValue(new Promise((r) => (finish = r)));
+      const dialog = await openDrop();
+      await userEvent.type(within(dialog).getByLabelText("Digest from the archive's footer"), "ab");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Drop partition" }));
+      await userEvent.keyboard("{Escape}");
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      await act(async () =>
+        finish({ partition: "audit_events_legacy", rows: 2104331, seq_lo: 1, seq_hi: 2104331, digest: "ab", event_seq: 2104332 }),
+      );
+      expect(await within(dialog).findByText("Dropped 2,104,331 events.")).toBeInTheDocument();
     });
 
     it("a drop shows the result lines, and Close reloads the table", async () => {

@@ -453,7 +453,7 @@ function PolicyDetail({
 function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-meta uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="label-eyebrow">{label}</div>
       <div className="mt-0.5">{value}</div>
     </div>
   );

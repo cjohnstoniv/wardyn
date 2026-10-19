@@ -25,6 +25,24 @@ func validateSSHProxyCommand(v string) error {
 // one sandbox and a run holding more than that is a leak, not a workflow.
 const maxSSHSessionsPerRunLimit = 64
 
+// validatePositiveBounds refuses a connection bound set below 1; a flag left
+// unregistered (a test's partial bootFlags) is skipped.
+func validatePositiveBounds(f *bootFlags) error {
+	for _, b := range []struct {
+		env string
+		n   *int
+	}{
+		{"WARDYN_SSH_MAX_CONNECTIONS", f.sshMaxConns},
+		{"WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", f.sshPerSource},
+		{"WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS", f.runnerPerAddr},
+	} {
+		if b.n != nil && *b.n < 1 {
+			return fmt.Errorf("refusing to start: %s is %d; want an integer of at least 1", b.env, *b.n)
+		}
+	}
+	return nil
+}
+
 func validateSSHMaxSessionsPerRun(n int) error {
 	if n < 1 || n > maxSSHSessionsPerRunLimit {
 		return fmt.Errorf("refusing to start: WARDYN_SSH_MAX_SESSIONS_PER_RUN is %d; want an integer from 1 to %d", n, maxSSHSessionsPerRunLimit)

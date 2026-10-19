@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -84,6 +85,26 @@ func TestCastWriter_HeaderAndEvents(t *testing.T) {
 // json.Marshal silently replaces each invalid fragment with U+FFFD, so
 // without buffering the reassembled output would read "hello ��!"
 // instead of "hello 世!".
+// A resize is an asciicast v2 "r" event placed between the output written
+// before it and after it, so a replay redraws at the new size from there.
+func TestCastWriter_ResizeIsAnREvent(t *testing.T) {
+	var buf bytes.Buffer
+	start := time.Unix(1700000000, 0)
+	cw := NewCastWriter(&buf, 80, 24, start)
+	cw.now = func() time.Time { return start.Add(1500 * time.Millisecond) }
+	_, _ = cw.Write([]byte("before"))
+	if err := cw.Resize(132, 43); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	_ = cw.Resize(0, 43) // no size: not recorded
+	_, _ = cw.Write([]byte("after"))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	want := []string{`[1.5,"o","before"]`, `[1.5,"r","132x43"]`, `[1.5,"o","after"]`}
+	if len(lines) != 4 || !slices.Equal(lines[1:], want) {
+		t.Fatalf("events = %q, want %q", lines[1:], want)
+	}
+}
+
 func TestCastWriter_SplitRuneAcrossWrites(t *testing.T) {
 	var buf bytes.Buffer
 	cw := NewCastWriter(&buf, 80, 24, time.Now())

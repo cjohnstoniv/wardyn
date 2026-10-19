@@ -722,7 +722,7 @@ GET    /api/v1/key-domains
 The console shows the same under Admin, Credentials.
 
 - A Key domains card lists each declared domain, where its key is and whether boot proved it, with Assign a domain and Remove.
-- A Key domain column in the Stored credentials table says where each person's next key is made and why.
+- A Key domain column in the Credentials page's table says where each person's next key is made and why.
 - A write answered `202` (held for a second person) shows as submitted for approval, and changes nothing until it is approved.
 
 `/setup/status` carries four rows for key custody, and a fifth while a problem needs it:

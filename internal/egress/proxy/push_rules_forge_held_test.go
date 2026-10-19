@@ -53,6 +53,13 @@ func newForgeRun(t *testing.T, seed map[string]string, cloneArgs []string, deny 
 func newForgeRunVia(t *testing.T, patHost string, seed map[string]string, cloneArgs []string,
 	deny ...string) *forgeRun {
 	t.Helper()
+	return newForgeRunSpec(t, patHost, contentRulesSpec(deny...), seed, cloneArgs)
+}
+
+// newForgeRunSpec is newForgeRunVia under a whole run policy spec.
+func newForgeRunSpec(t *testing.T, patHost string, spec types.RunPolicySpec, seed map[string]string,
+	cloneArgs []string) *forgeRun {
+	t.Helper()
 	forge := newGitForge(t)
 	bare := filepath.Join(forge.root, "octocat", "hello-world.git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
@@ -71,9 +78,9 @@ func newForgeRunVia(t *testing.T, patHost string, seed map[string]string, cloneA
 	repoPath := "/wardyn/gh/octocat/hello-world"
 	if patHost == "" {
 		p, decisions = newGitBrokerProxyWithSpec(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()},
-			upstreamAddr(forge.srv), contentRulesSpec(deny...))
+			upstreamAddr(forge.srv), spec)
 	} else {
-		p, decisions = newPATBrokerProxySpec(t, contentRulesSpec(deny...),
+		p, decisions = newPATBrokerProxySpec(t, spec,
 			map[string]PATGrant{patHost: {GrantID: uuid.New(), Username: "x-access-token"}},
 			upstreamAddr(forge.srv))
 		repoPath = "/wardyn/git/" + patHost + "/octocat/hello-world.git"
@@ -368,7 +375,7 @@ func TestPushRulesRefuseEveryPushWhenAPatternCannotBeRead(t *testing.T) {
 
 // TestPushRulesTakeTheInspectionSlot: a push is a small body the agent chooses
 // that inflates to whatever gitpack's ceilings allow, and the sidecar has a
-// hard 256 MiB cap. Inspection therefore takes the process's one inspection
+// hard 256 MiB cap. Inspection therefore takes the engine's one inspection
 // slot — the one LLM request scanning takes — and a push that cannot get it in
 // time is refused, never forwarded unread.
 func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
@@ -378,13 +385,13 @@ func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
 		contentRulesSpec(".github/workflows/**"))
 	body := recordedPush(t, BranchNSPrefix(p.runID)+"work", map[string]string{"src/app.go": "package main\n"})
 
-	scanSlots <- struct{}{} // another inspection is in progress
+	p.scan.init().slots <- struct{}{} // another inspection is in progress
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, "/wardyn/gh/octocat/hello-world/git-receive-pack",
 		strings.NewReader(string(body))).WithContext(ctx))
 	cancel()
-	<-scanSlots
+	<-p.scan.slots
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status with the slot held = %d, want 503", rec.Code)
@@ -401,7 +408,7 @@ func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
 	if rec := postPush(t, p, string(body)); rec.Code != http.StatusOK {
 		t.Fatalf("status with the slot free = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if !retainedBudgetEmpty() {
+	if !retainedBudgetEmpty(p) {
 		t.Error("bytes still charged to the retained-bytes budget after the push completed")
 	}
 }

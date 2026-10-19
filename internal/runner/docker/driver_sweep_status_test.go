@@ -64,10 +64,10 @@ func TestSweepOrphanedSandboxes_TearsDownOnlyOrphansPastMinAge(t *testing.T) {
 	}
 	old := time.Now().Add(-time.Hour).Unix()
 	f.listItems = []container.Summary{
-		{ID: agentContainerName(orphan), Created: old, Labels: map[string]string{labelRun: orphan.String()}},
-		{ID: agentContainerName(live), Created: old, Labels: map[string]string{labelRun: live.String()}},
-		{ID: agentContainerName(young), Created: time.Now().Unix(), Labels: map[string]string{labelRun: young.String()}},
-		{ID: "not-ours", Created: old, Labels: map[string]string{labelRun: "not-a-uuid"}},
+		{ID: agentContainerName(orphan), Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: orphan.String()}},
+		{ID: agentContainerName(live), Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: live.String()}},
+		{ID: agentContainerName(young), Created: time.Now().Unix(), Labels: map[string]string{labelComponent: componentAgent, labelRun: young.String()}},
+		{ID: "not-ours", Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: "not-a-uuid"}},
 	}
 
 	d := newTestDriver(f)
@@ -81,12 +81,12 @@ func TestSweepOrphanedSandboxes_TearsDownOnlyOrphansPastMinAge(t *testing.T) {
 	}
 
 	// A crashed sandbox's agent may be EXITED, not running, so the scan must be
-	// All:true and label-scoped to the agent component.
+	// All:true and label-scoped to Wardyn's sandbox components.
 	if !f.lastListAll {
 		t.Error("the orphan scan must list ALL containers — a crashed agent is exited, not running")
 	}
-	if !f.lastListFilters["label"][labelComponent+"="+componentAgent] {
-		t.Errorf("the orphan scan must filter on the agent component label, got %v", f.lastListFilters)
+	if !f.lastListFilters["label"][labelComponent] {
+		t.Errorf("the orphan scan must filter on the component label, got %v", f.lastListFilters)
 	}
 
 	removed := func(name string) bool {
@@ -195,6 +195,43 @@ func TestAgentStatus_ExecGoneOnAFailedContainerIsDefinitive(t *testing.T) {
 // one): an aged sandbox another deployment labelled is never this one's orphan, whatever this
 // one's database says. This deployment's own, and an unlabelled one from before the label, are
 // swept as before; a create labels every object with this deployment.
+// A create that failed after the proxy started and before the agent existed, with the rollback's
+// proxy removal refused, leaves a proxy (holding the run's config) and the per-run network and no agent:
+// the sweep reaps them from the proxy. A run whose agent and proxy are both listed is torn down once,
+// and a container of another component (a drive seed's own pass aside) keys nothing.
+func TestSweepOrphanedSandboxes_ReapsAProxyWithNoAgent(t *testing.T) {
+	alone, both, other := uuid.New(), uuid.New(), uuid.New()
+	f := newFakeDocker()
+	seedSandbox(f, both)
+	seedSandbox(f, other)
+	f.mu.Lock()
+	f.containers[proxyContainerName(alone)] = &createdContainer{name: proxyContainerName(alone)}
+	f.networks[internalNetName(alone)] = client.NetworkCreateOptions{Internal: true}
+	f.mu.Unlock()
+	old := time.Now().Add(-time.Hour).Unix()
+	f.listItems = []container.Summary{
+		{ID: proxyContainerName(alone), Created: old, Labels: wardynLabels(alone, componentProxy, nil)},
+		{ID: agentContainerName(both), Created: old, Labels: wardynLabels(both, componentAgent, nil)},
+		{ID: proxyContainerName(both), Created: old, Labels: wardynLabels(both, componentProxy, nil)},
+		{ID: "other", Created: old, Labels: wardynLabels(other, "network", nil)},
+	}
+	swept, err := newTestDriver(f).SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })
+	if err != nil || swept != 2 {
+		t.Fatalf("SweepOrphanedSandboxes = %d, %v; want 2 (the lone proxy's run and the whole sandbox, once)", swept, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c := f.containers[proxyContainerName(alone)]; !c.removed {
+		t.Error("the proxy with no agent survived; it holds the run's config")
+	}
+	if _, ok := f.networks[internalNetName(alone)]; ok {
+		t.Error("the lone proxy's per-run network survived")
+	}
+	if f.containers[agentContainerName(other)].removed {
+		t.Error("a container of another component keyed a teardown")
+	}
+}
+
 func TestSweepOrphanedSandboxes_KeepsToItsOwnDeployment(t *testing.T) {
 	ours := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
 	theirs := uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000002")
@@ -205,9 +242,9 @@ func TestSweepOrphanedSandboxes_KeepsToItsOwnDeployment(t *testing.T) {
 	}
 	old := time.Now().Add(-time.Hour).Unix()
 	f.listItems = []container.Summary{
-		{ID: agentContainerName(ours), Created: old, Labels: map[string]string{labelRun: ours.String(), labelDeployment: "wardyn-internal"}},
-		{ID: agentContainerName(theirs), Created: old, Labels: map[string]string{labelRun: theirs.String(), labelDeployment: "ci-job-b-internal"}},
-		{ID: agentContainerName(unlabelled), Created: old, Labels: map[string]string{labelRun: unlabelled.String()}},
+		{ID: agentContainerName(ours), Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: ours.String(), labelDeployment: "wardyn-internal"}},
+		{ID: agentContainerName(theirs), Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: theirs.String(), labelDeployment: "ci-job-b-internal"}},
+		{ID: agentContainerName(unlabelled), Created: old, Labels: map[string]string{labelComponent: componentAgent, labelRun: unlabelled.String()}},
 	}
 	d := newTestDriver(f)
 	swept, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })

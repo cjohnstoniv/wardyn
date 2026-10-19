@@ -73,7 +73,9 @@ func TestEgressBaselineGradesEgressAtBothDoors(t *testing.T) {
 		{"nothing declared: the internal host is beyond baseline", types.SiteConfig{}, "open", types.AutonomyL1, composer.RiskMedium},
 		{"an internal host not marked changes nothing", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example"}}}, "open", types.AutonomyL1, composer.RiskMedium},
 		{"declared exact host", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{host}}}, "sealed", types.AutonomyL3, composer.RiskLow},
-		{"marked internal host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, "sealed", types.AutonomyL3, composer.RiskLow},
+		{"marked internal host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: host, Baseline: true}}}, "sealed", types.AutonomyL3, composer.RiskLow},
+		// #2824: a mark covers its own host only, not the hosts under it.
+		{"a marked parent does not cover the host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, "open", types.AutonomyL1, composer.RiskMedium},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, autonomyCapStore(profile))

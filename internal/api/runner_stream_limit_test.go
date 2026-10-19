@@ -174,14 +174,17 @@ func TestRunnerStreamAddressLimitPrecedesSiteConfigRead(t *testing.T) {
 	}
 }
 
-// Connections held open without AUTH never finish their handler, so the address
-// bucket must be charged when each one arrives, not when it ends.
+// Connections held open without AUTH are bounded per address by the in-flight
+// cap, not the rate bucket: past the cap a new one is refused before any store
+// read.
 func TestRunnerStreamBoundsUnauthenticatedConnectionsHeldOpenFromOneAddress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	h := newStreamLimitHarness(t, ctx, 1)
+	const perAddress = 4
+	h.srv.runnerStreams.maxPerAddress = perAddress
 	for id := range h.keys {
-		for i := range int(enrolBurst) + 5 {
+		for i := range perAddress + 5 {
 			conn, resp, err := websocket.Dial(ctx, h.url+"/api/v1/runners/"+id.String()+"/stream", nil)
 			if err == nil {
 				defer conn.CloseNow()
@@ -190,16 +193,50 @@ func TestRunnerStreamBoundsUnauthenticatedConnectionsHeldOpenFromOneAddress(t *t
 			if resp != nil {
 				status = resp.StatusCode
 			}
-			past := i >= int(enrolBurst)
+			past := i >= perAddress
 			if past && status != http.StatusTooManyRequests {
-				t.Fatalf("held connection %d past the burst: status %d; want 429", i, status)
+				t.Fatalf("held connection %d past the per-address cap: status %d; want 429", i, status)
 			}
 			if !past && err != nil {
-				t.Fatalf("held connection %d within the burst: %v", i, err)
+				t.Fatalf("held connection %d within the cap: %v", i, err)
 			}
 		}
 	}
-	if reads := h.configReads.Load(); reads > int32(enrolBurst) {
-		t.Fatalf("site-config reads %d, want at most %d", reads, int(enrolBurst))
+	if reads := h.configReads.Load(); reads > perAddress {
+		t.Fatalf("site-config reads %d, want at most %d", reads, perAddress)
+	}
+}
+
+// Handshakes still in progress spend no rate token: a runner behind an address
+// that holds a full burst of unfinished handshakes still connects, and the
+// address bucket is charged only once those handshakes end unproved.
+func TestRunnerStreamHeldHandshakesSpendNoAddressToken(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	h := newStreamLimitHarness(t, ctx, 1)
+	for id, key := range h.keys {
+		var held []*websocket.Conn
+		for i := range int(enrolBurst) {
+			conn, _, err := websocket.Dial(ctx, h.url+"/api/v1/runners/"+id.String()+"/stream", nil)
+			if err != nil {
+				t.Fatalf("held handshake %d: %v", i, err)
+			}
+			defer conn.CloseNow()
+			held = append(held, conn)
+		}
+		if status, err := h.dial(t, ctx, id, key); status != http.StatusSwitchingProtocols || err != nil {
+			t.Fatalf("runner beside %d unfinished handshakes: status %d, err %v; want it connected", len(held), status, err)
+		}
+		for _, conn := range held {
+			conn.CloseNow()
+			select {
+			case <-h.handled:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+		if status, _ := h.dial(t, ctx, id, key); status != http.StatusTooManyRequests {
+			t.Fatalf("after %d abandoned handshakes: status %d, want 429", len(held), status)
+		}
 	}
 }

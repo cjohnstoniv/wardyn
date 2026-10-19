@@ -58,6 +58,7 @@ import {
 } from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
+import { clockTime } from "../../lib/format";
 import { ADO_CAP_COPY } from "../../lib/workspace-providers-copy";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -147,7 +148,7 @@ function boldFirstWord(sentence: string): React.ReactNode {
 // the honest middle ground available from an ISO timestamp alone.
 function relativeAbsolute(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return Number.isNaN(d.getTime()) ? iso : clockTime(iso);
 }
 
 // The run this card needs to know about — created_by (who it acts as / owns

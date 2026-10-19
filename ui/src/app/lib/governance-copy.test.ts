@@ -195,6 +195,10 @@ const rendered: Record<string, string> = {
 
   // ---- §7.11 ----
   "LIMITS_CHIP.AUTONOMY(label)": LIMITS_CHIP.AUTONOMY("{label}"),
+  "LIMITS_CHIP.UI_APPS": LIMITS_CHIP.UI_APPS,
+  "LIMITS_CHIP.PLACEMENT(placement)": LIMITS_CHIP.PLACEMENT("{placement}"),
+  "LIMITS_CHIP.CPU": LIMITS_CHIP.CPU,
+  "LIMITS_CHIP.MEMORY": LIMITS_CHIP.MEMORY,
 
   // ---- §7.12 ----
   "AUTONOMY_RAIL.HEADING": AUTONOMY_RAIL.HEADING,
@@ -213,8 +217,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 142 frozen keys in the doc", () => {
-    expect(doc.size).toBe(142);
+  it("finds all 146 frozen keys in the doc", () => {
+    expect(doc.size).toBe(146);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

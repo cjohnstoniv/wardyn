@@ -9,7 +9,7 @@ import type { ConfinementClass, UIApp } from "./runs";
 // git_pat = a stored Personal Access Token brokered to git for a non-GitHub host
 // (Azure DevOps / GitLab / ...). Unlike api_key (proxy-injected, value never
 // returned) the PAT value reaches git via the credential helper as a password.
-// ssh_key = a resident private key written to disk for git's SSH transport
+// ssh_key = a private key the proxy holds, signing git's SSH sign-in as its agent
 // (internal/types/types.go's GrantKind carries all seven — this union must not
 // omit the one lane approvals.tsx already has a dedicated banner for).
 // env_secret = a stored secret injected as a sandbox env var (admin-gated).

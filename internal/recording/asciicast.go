@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -109,6 +110,24 @@ func (w *CastWriter) Write(p []byte) (int, error) {
 	}
 	w.hadOutput = true
 	return n, nil
+}
+
+// Resize appends an asciicast v2 resize event ["t","r","COLSxROWS"], so a replay redraws at the
+// new size from that point on. It lands after every output event already written; a split rune
+// still held back is emitted after it. A size with a non-positive side is not recorded.
+func (w *CastWriter) Resize(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	elapsed := max(w.now().Sub(w.start).Seconds(), 0)
+	b, err := json.Marshal([]any{elapsed, "r", strconv.Itoa(cols) + "x" + strconv.Itoa(rows)})
+	if err != nil {
+		return err
+	}
+	_, err = w.dst.Write(append(b, '\n'))
+	return err
 }
 
 // incompleteTailLen reports how many trailing bytes of p are an incomplete (truncated)

@@ -669,8 +669,8 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 // SCM credential at all. Grading:
 //   - GitHub App configured        -> ok   (brokered ≤1h scoped tokens; the only
 //     rung Wardyn itself can expire — nothing safer to recommend)
-//   - any ssh-key-<host> secret    -> warn (a STANDING resident-lane key Wardyn
-//     can neither scope nor expire; auto-used by every future SSH clone)
+//   - any ssh-key-<host> secret    -> warn (a STANDING key, held by the run's proxy,
+//     that Wardyn can neither scope nor expire; auto-used by every future SSH clone)
 //   - git-pat-<host> only          -> info (could already be a fine-grained
 //     rung-2 token — server-side we cannot tell it from a classic one, so no
 //     warn; the detail carries the upgrade hint instead)
@@ -716,7 +716,7 @@ func scmProviderCheck(githubApp bool, secretNames []string, posture setup.SCMPos
 			Detail: detail,
 		}
 	case len(sshKeys) > 0:
-		detail := "SSH key secret(s) configured (" + strings.Join(sshKeys, ", ") + "): a STANDING credential, resident in the sandbox for each clone, that Wardyn can neither scope nor expire. It works — a safer rung exists."
+		detail := "SSH key secret(s) configured (" + strings.Join(sshKeys, ", ") + "): a STANDING credential, held by the run's proxy for each clone, that Wardyn can neither scope nor expire. It works — a safer rung exists."
 		if len(pats) > 0 {
 			detail += " PAT secret(s) also present (" + strings.Join(pats, ", ") + "): those are " + patResidencyNote(patBrokerOff)
 		}

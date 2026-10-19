@@ -356,7 +356,7 @@ export async function addRepository(page: Page, repo: string): Promise<void> {
  */
 export async function chooseFiles(page: Page, repos: readonly string[] = []): Promise<void> {
   if (repos.length === 0) {
-    await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+    await page.getByRole("checkbox", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
   } else {
     for (const repo of repos) await addRepository(page, repo);
   }
