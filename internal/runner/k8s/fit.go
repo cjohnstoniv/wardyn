@@ -40,10 +40,10 @@ type podDemand struct {
 }
 
 // runPods is the run's two pods as the quota and the scheduler see them: the agent pod (its
-// requests and limits, the ratio applied) and the proxy pod. Counting the agent alone would
-// under-count every run by the proxy's envelope.
+// requests and limits, the ratio applied) and the proxy pod, sized as CreateSandbox sizes it. Counting
+// the agent alone would under-count every run by the proxy's envelope.
 func (d *Driver) runPods(res runner.Resources) []podDemand {
-	agent, proxy := resourceRequirements(res), proxyResources(false)
+	agent, proxy := resourceRequirements(res), proxyResources(res.ProxyAzure)
 	pc, term := d.placement.PriorityClassName, activeDeadline(res.LifetimeCap) != nil
 	return []podDemand{
 		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc, terminating: term, secrets: 1, networkPolicies: 2},

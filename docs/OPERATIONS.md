@@ -2956,6 +2956,23 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 > [!WARNING]
 > Residual: a run whose teardown failed after it reached a terminal state is not counted, though its pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
 
+### Docker host: one subnet per run
+
+- Every Docker sandbox gets its own internal network, and each network holds one subnet from the daemon's `default-address-pools`.
+- The daemon's defaults hold about 30 networks, shared with `docker0`, the Wardyn control-plane network and every compose stack on the host.
+- So a host with the default `daemon.json` starts failing new sandboxes near 28 concurrent runs.
+- `WARDYN_MAX_CONCURRENT_RUNS` defaults to unlimited, so nothing in Wardyn stops a run before the daemon does.
+- A create that finds no subnet fails with a sentence naming this remedy, then the daemon's own error.
+
+| Setting in `/etc/docker/daemon.json` | Networks it holds |
+|---|---|
+| none (the daemon's defaults) | about 30 |
+| `"default-address-pools": [{"base": "10.200.0.0/16", "size": 28}]` | 4096 |
+
+1. Pick a base range the host does not route anywhere else (not a corporate or VPN range).
+2. Add the `default-address-pools` line to `daemon.json` and restart the daemon; networks that already exist keep their subnets.
+3. Optionally set `WARDYN_MAX_CONCURRENT_RUNS` below what the pool holds.
+
 ### The start deadlines
 
 The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:

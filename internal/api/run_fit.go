@@ -38,8 +38,8 @@ type runFitVerdict struct {
 //
 // A run that waits for a slot (waits) is refused only when a quota could never hold it, whatever is
 // left: it may fit once other runs finish. Promotion asks again with the room left at that time.
-func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, lifetimeCap time.Duration, waits bool) (warnings []string, refused bool) {
-	v := s.runFit(r.Context(), spec, lifetimeCap, waits)
+func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, lifetimeCap time.Duration, proxyAzure, waits bool) (warnings []string, refused bool) {
+	v := s.runFit(r.Context(), spec, lifetimeCap, proxyAzure, waits)
 	if v.refusal != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonNamespaceQuotaExceeded, v.refusal)
 		return nil, true
@@ -59,14 +59,15 @@ func (s *Server) runFitSpec(spec types.RunPolicySpec, md mainDrive) types.RunPol
 // fit to check (docker, or no runner) has nothing to say. A check that errors is reported as an
 // unreadable quota: the quota is enforced when the run starts either way. lifetimeCap is the run's
 // own cap (zero for none): a run with a cap carries a pod deadline, which selects the Terminating
-// quota scope, so the fit answers for the scope the pods will land in.
-func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration, waits bool) runFitVerdict {
+// quota scope, so the fit answers for the scope the pods will land in. proxyAzure is a run whose proxy
+// carries an Azure route gate (runProxyAzure), which the drivers give more memory.
+func (s *Server) runFit(ctx context.Context, spec types.RunPolicySpec, lifetimeCap time.Duration, proxyAzure, waits bool) runFitVerdict {
 	fc, ok := s.cfg.Runner.(runner.FitChecker)
 	if !ok {
 		return runFitVerdict{}
 	}
 	res := resourceLimitsToRunner(spec.Resources)
-	res.LifetimeCap = lifetimeCap
+	res.LifetimeCap, res.ProxyAzure = lifetimeCap, proxyAzure
 	fit, err := fc.CheckFit(ctx, res)
 	if errors.Is(err, runner.ErrFitUnsupported) {
 		return runFitVerdict{}

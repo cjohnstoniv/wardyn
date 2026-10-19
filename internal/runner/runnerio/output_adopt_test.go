@@ -313,3 +313,116 @@ func TestOutputAdoption_OpenAheadOfCatchUp(t *testing.T) {
 		t.Fatalf("adopted %d bytes, end %v; want %d bytes, end nil", capture.Len(), capture.err, len(want))
 	}
 }
+
+// The recovery resumes at the first retained part's start, and a part is evicted only once its end
+// is at or below Ack, so Ack can sit inside a retained part, above the resume point. The runner's
+// OPEN from that Ack, sent as the recovery begins writing, is held like one at a part boundary
+// (HandleOpen compares byte offsets, not parts): the bytes from the resume point arrive once, after
+// one gap, and the adopted sink never ends with a forward gap.
+func TestOutputAdoption_OpenFromAnAckInsideARetainedPart(t *testing.T) {
+	server, err := New(runnertest.NewFake(), "laptop", lateWriterDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	local := "local-" + id.String()
+	w, err := server.Output(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.BindOutput(id, local); err != nil {
+		t.Fatal(err)
+	}
+	end := runner.BeginOutputDrain(w)
+	p1 := bytes.Repeat([]byte("a"), 2<<20) // 32 parts of outputChunk
+	p2 := []byte("written while no org was listening\n")
+	p3 := []byte("written after the adoption\n")
+	if _, err = w.Write(p1); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	b := server.outputs[id]
+	server.mu.Unlock()
+	if err = b.ack(1<<20 + 100); err != nil { // 100 bytes into the 17th part
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	for before := int64(-1); before != b.start(); {
+		before = b.start()
+		if err = b.evict(false); err != nil {
+			break
+		}
+	}
+	start, ack := b.start(), b.state.Ack
+	b.mu.Unlock()
+	if err != nil || start != 1<<20 || ack != start+100 {
+		t.Fatalf("evict: start %d ack %d, %v; want the Ack 100 bytes inside the first retained part", start, ack, err)
+	}
+	if _, err = w.Write(p2); err != nil {
+		t.Fatal(err)
+	}
+	all := slices.Concat(p1, p2, p3)
+	want := all[start:]
+	capture := &slowCapture{adoptCapture: adoptCapture{outputCapture: outputCapture{done: make(chan struct{})}, heldLen: len(want) - len(p3), held: make(chan struct{})}, perWrite: 5 * time.Millisecond}
+
+	link := &remote.Link{}
+	sub := remote.New("laptop", link, remote.Options{})
+	watch := &openResults{sub: sub, opens: make(chan error, 64)}
+	link.SetHandler(watch)
+	caps, _ := json.Marshal(runnerwire.Caps{Support: runnertest.NewFake().Support})
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	org, run := runnerwire.Loopback()
+	op := link.Attach(t.Context(), org)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: func(ctx context.Context, cid uint32, method string, raw json.RawMessage) (any, error) {
+		return server.Call(ctx, rp, cid, method, raw)
+	}})
+	capture.onFirst = func() { server.sendOutput(rp, id, b) }
+	go rp.Run(t.Context())
+	server.Online(rp)
+	t.Cleanup(func() { rp.Close(); op.Close(); server.Offline(rp) })
+	select {
+	case err := <-watch.opens:
+		if err == nil {
+			t.Fatal("an org with no sink accepted the connect OPEN")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the connect OPEN never reached the org")
+	}
+
+	ctx, cancel := context.WithTimeout(runner.WithOutputRun(t.Context(), id), 40*time.Second)
+	defer cancel()
+	recovered := make(chan error, 1)
+	go func() { recovered <- sub.RecoverOutput(ctx, placement.RunnerRefPrefix("laptop")+local, capture) }()
+	select {
+	case <-capture.held:
+	case err := <-recovered:
+		t.Fatalf("adoption ended before the retained bytes: %v (got %d bytes)", err, capture.Len())
+	case <-ctx.Done():
+		t.Fatal("the retained bytes never arrived")
+	}
+	var first error
+	select {
+	case first = <-watch.opens:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the runner's OPEN from inside the retained part never reached the org")
+	}
+	for err := first; ; err = <-watch.opens {
+		if err != nil && !errors.Is(err, runnerwire.ErrOpenCapacity) {
+			t.Fatalf("the OPEN from inside the retained part was answered %v; want a capacity reset or an accept", err)
+		}
+		if len(watch.opens) == 0 {
+			break
+		}
+	}
+	if _, err = w.Write(p3); err != nil {
+		t.Fatal(err)
+	}
+	end(nil)
+	if err = waitFor(t, "recovery", recovered); err != nil {
+		t.Fatalf("RecoverOutput = %v (got %d bytes)", err, capture.Len())
+	}
+	if !bytes.Equal(capture.Bytes(), want) || !slices.Equal(capture.skipped, []int64{start}) || capture.err != nil {
+		t.Fatalf("adopted %d bytes, gaps %v, end %v; want %d bytes from %d, gaps [%d], end nil", capture.Len(), capture.skipped, capture.err, len(want), start, start)
+	}
+}
