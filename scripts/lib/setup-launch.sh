@@ -77,3 +77,15 @@ stale_secrets_wipe_consent() {
   warn "Nothing was cleared. To clear them: run make setup in a terminal and answer y, or set WARDYN_FORCE_RESET=1 and run make setup again."
   return 1
 }
+
+# workspaces_root_too_broad DIR — true when DIR is the home directory, a folder above it, or /:
+# the daemon would then see ~/.ssh, ~/.aws and the rest of home (docs/ENV.md: never your home
+# directory). DIR is resolved first (trailing slash, .., symlinks), so ~/ and /home are caught as
+# well as an exact $HOME. A DIR that does not exist is not judged here; setup.sh refuses it itself.
+workspaces_root_too_broad() {
+  local root home
+  root=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  home=$(cd "${HOME}" 2>/dev/null && pwd -P) || home=${HOME}
+  case "${home%/}/" in "${root%/}/"*) return 0 ;; esac
+  return 1
+}

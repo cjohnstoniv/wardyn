@@ -214,8 +214,8 @@ case "${WARDYN_SETUP_MODE:-container}" in
       # ~ expansion for a typed path; a pasted absolute path passes through.
       case "${_root}" in "~"|"~/"*) _root="${HOME}${_root#\~}";; esac
       if [ -n "${_root}" ]; then
-        if [ "${_root}" = "${HOME}" ]; then
-          warn "That is your whole home directory — too broad to mount into the daemon."
+        if workspaces_root_too_broad "${_root}"; then
+          warn "That is your home directory or a folder above it — too broad to mount into the daemon."
           warn "Pick a projects folder under it (e.g. ${HOME}/projects); keeping the previous setting."
           _root="${_prev_root}"
         elif [ ! -d "${_root}" ]; then
@@ -225,6 +225,11 @@ case "${WARDYN_SETUP_MODE:-container}" in
       fi
       WARDYN_WORKSPACES_ROOT="${_root}"
       export WARDYN_WORKSPACES_ROOT
+    fi
+    # The same rule holds for a root from the environment or remembered in .env.
+    _eff_root="${WARDYN_WORKSPACES_ROOT:-$(env_get "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT 2>/dev/null || true)}"
+    if [ -n "${_eff_root}" ] && workspaces_root_too_broad "${_eff_root}"; then
+      die "WARDYN_WORKSPACES_ROOT=${_eff_root} is your home directory or a folder above it, so the daemon would see ~/.ssh, ~/.aws and the rest of home. Point it at a dedicated directory (e.g. ${HOME}/projects) in your shell or deploy/compose/.env, then run make setup again."
     fi
     if [ -n "${WARDYN_WORKSPACES_ROOT:-}" ]; then
       env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT "${WARDYN_WORKSPACES_ROOT}"

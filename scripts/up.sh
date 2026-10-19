@@ -314,7 +314,9 @@ wardyn_cli_prefix() {
 #   Authorization: Bearer — /api/v1/me and /api/v1/setup/status are in the
 #     humanOrAdminAuth group, which 401s an unauthenticated call whenever local
 #     mode is off; local mode returns before the bearer check, so ONE shape
-#     answers both postures. Fallback mirrors compose's :-demo-admin-token.
+#     answers both postures. Fallback mirrors compose's :-demo-admin-token. It
+#     goes in on stdin (-H @-), never on argv, which every local user can read;
+#     /healthz needs no credential and gets none.
 #
 # NOT `2>/dev/null`: `-m 5` bounds the curl, not the image pull docker does first
 # and reports ONLY on stderr — discarded, a slow or failed acquisition reached the
@@ -337,12 +339,23 @@ wardynd_probe() {
     unset _wp_env _wp_path _wp_tok _wp_img
     return 0
   fi
-  docker run --rm --pull=never --network "${WARDYN_NS:-wardyn}-internal" "${_wp_img}" \
+  { [ "${_wp_path}" = /healthz ] || printf 'Authorization: Bearer %s\n' "${_wp_tok:-demo-admin-token}"; } \
+    | docker run -i --rm --pull=never --network "${WARDYN_NS:-wardyn}-internal" "${_wp_img}" \
     -s -m 5 -w '\n%{http_code}' \
     -H "Host: 127.0.0.1:8080" \
-    -H "Authorization: Bearer ${_wp_tok:-demo-admin-token}" \
+    -H @- \
     "http://wardynd:8080${_wp_path}" || echo 000
   unset _wp_env _wp_path _wp_tok _wp_img
+}
+
+# local_mode_for_no_issuer ENV_FILE — with no issuer set, the stack runs local no-auth, except that an
+# explicit WARDYN_LOCAL_MODE=false (token mode, docs/OPERATIONS.md "Turn local mode off") is kept.
+local_mode_for_no_issuer() {
+  case "$(env_get "$1" WARDYN_LOCAL_MODE | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Keeping WARDYN_LOCAL_MODE=false from $1: token auth, not local no-auth." ;;
+    *) env_set "$1" WARDYN_LOCAL_MODE true ;;
+  esac
+  env_set "$1" WARDYN_OIDC_ISSUER ""
 }
 
 # ensure_env_file EXAMPLE FILE — create FILE from EXAMPLE on first run, born
@@ -655,8 +668,7 @@ cmd_up() {
     # lock the operator out if the IdP is down.
     refuse_local_mode_with_oidc "${ENV_FILE}"
   else
-    env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
-    env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
+    local_mode_for_no_issuer "${ENV_FILE}"
   fi
   # LocalMode no-auth requires a loopback request PEER; in compose the peer is the
   # docker gateway (port is published loopback-only, so LAN peers can't reach it).

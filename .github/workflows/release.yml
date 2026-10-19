@@ -578,9 +578,12 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             # Nothing was pushed, so there is no digest to scan. The UI-lockfile
             # half needs no image and is the half that shipped broken, so a dry
@@ -748,9 +751,12 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             # Nothing was pushed, so there is no digest to scan — see the job
             # comment above for why a dry run off a branch cannot get further
@@ -907,9 +913,12 @@ jobs:
         env:
           IMAGE_REF: registry:ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ env.DIGEST }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           syft "${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
           # wardynd embeds the console as a Vite bundle, which strips every
           # package.json, so the lockfile scan is merged in (see the `images` job).

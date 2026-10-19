@@ -708,6 +708,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
 	./scripts/test-test-report.sh
+	./scripts/test-test-drive.sh
 	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
@@ -903,7 +904,9 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
 	helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true >/dev/null || { echo "chart does not render against v0.8.5's values (a --reuse-values upgrade): guard the new block with default dict"; exit 1; }; \
 	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=x --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs) || { echo "k8s chart does not render against v0.8.5's values (a --reuse-values upgrade)"; exit 1; }; \
-	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true
+	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true; \
+	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretStore=null --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/x --set kek.required=true) || { echo "kek.provider=awskms does not render without a secretStore block"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEK$$" | grep -q 'value: "awskms"' && echo "$$out" | grep -q "name: WARDYN_KEK_REQUIRED$$" || { echo "a values map with no secretStore block dropped the kek env (WARDYN_KEK / WARDYN_KEK_REQUIRED)"; exit 1; }
 	@# scim.purgeAfter absent (--reuse-values from a release that predates the key) renders the values.yaml 720h, not "<nil>"; an explicit 0 still disables the purge.
 	@S='helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set scim.enabled=true --set scim.tokenSecretRef=wardyn-scim'; \
 	$$S --set scim.purgeAfter=null | grep -A1 'name: WARDYN_SCIM_PURGE_AFTER$$' | grep -q 'value: "720h"' || { echo 'scim.purgeAfter absent did not render the 720h default (a --reuse-values upgrade from a release without the key would hand wardynd "<nil>")'; exit 1; }; \

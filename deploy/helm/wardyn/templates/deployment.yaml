@@ -338,6 +338,8 @@ spec:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
             {{- end }}
+            {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
             {{- with .Values.secretStore }}
             {{- if and .backend (ne .backend "pg") }}
             - name: WARDYN_SECRET_STORE
@@ -384,8 +386,8 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
-            {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
-            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
+            {{- end }}
+            {{- /* kek is read on its own: a release with no secretStore key still gets it. */}}
             {{- if ($.Values.kek | default dict).required }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
@@ -449,6 +451,7 @@ spec:
               value: {{ $awskek.key | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.secretStore }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
             # credentials in Azure Key Vault").

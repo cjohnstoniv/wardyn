@@ -86,6 +86,9 @@ while [[ $# -gt 0 ]]; do
     *) printf 'unknown flag: %s (try --help)\n' "$1" >&2; exit 1 ;;
   esac
 done
+# A section outside 1-7 would run no check and still end green.
+[[ -z "${OPT_SECTION}" || "${OPT_SECTION}" =~ ^[1-7]$ ]] \
+  || { printf 'unknown section: %s (sections are 1-7)\n' "${OPT_SECTION}" >&2; exit 1; }
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 source "${REPO_ROOT}/scripts/lib/common.sh"
@@ -779,17 +782,28 @@ echo
 # ─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────────────────────────────────
-printf '\033[1;36m━━━  test-drive summary  ━━━\033[0m\n'
-if [[ ${fail} -eq 0 ]]; then
-  printf '\033[1;32m  %d passed, 0 failed\033[0m\n' "${pass}"
-else
-  printf '\033[1;31m  %d passed, %d failed\033[0m\n' "${pass}" "${fail}"
-fi
-echo
-note "For agent-task adversarial scenarios see: examples/workspaces/"
-note "UI:        ${WARDYN_URL}  (SSO: demo@wardyn.local / password)"
-note "Admin API: Authorization: Bearer ${WARDYN_ADMIN_TOKEN}"
-note "Tear down: docker compose -f ${COMPOSE_FILE} down -v"
-echo
-
-[[ ${fail} -eq 0 ]] || exit 1
+# summary: the totals and the closing notes; non-zero when a check failed or none ran. Only the
+# published demo token is echoed, so a real one never lands in a terminal or CI log.
+summary() {
+  printf '\033[1;36m━━━  test-drive summary  ━━━\033[0m\n'
+  if [[ $((pass + fail)) -eq 0 ]]; then
+    printf '\033[1;31m  no check ran\033[0m\n'
+  elif [[ ${fail} -eq 0 ]]; then
+    printf '\033[1;32m  %d passed, 0 failed\033[0m\n' "${pass}"
+  else
+    printf '\033[1;31m  %d passed, %d failed\033[0m\n' "${pass}" "${fail}"
+  fi
+  echo
+  note "For agent-task adversarial scenarios see: examples/workspaces/"
+  note "UI:        ${WARDYN_URL}  (sign in with the admin token, docs/TRY-IT.md)"
+  if [[ "${WARDYN_ADMIN_TOKEN}" == demo-admin-token ]]; then
+    note "Admin API: Authorization: Bearer ${WARDYN_ADMIN_TOKEN}"
+  else
+    # shellcheck disable=SC2016 # the variable's name is the point: its value is not printed
+    note 'Admin API: Authorization: Bearer $WARDYN_ADMIN_TOKEN'
+  fi
+  note "Tear down: docker compose -f ${COMPOSE_FILE} down -v"
+  echo
+  [[ ${fail} -eq 0 && $((pass + fail)) -gt 0 ]]
+}
+summary || exit 1

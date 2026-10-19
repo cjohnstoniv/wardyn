@@ -317,6 +317,15 @@ run_preflight BASE=origin/main GATE="$BIN/gate" WARDYN_GATED=1
 assert "WARDYN_GATED=1 leaves the commands bare" test "$(calls | grep -c '^gate ')" -eq 0
 echo "ok  the gate wraps every command, and GATE=none / WARDYN_GATED=1 do not"
 
+# A gate others can write would run every command as you: it is refused, not used.
+chmod g+w "$BIN/gate"
+run_preflight BASE=origin/main GATE="$BIN/gate"
+chmod g-w "$BIN/gate"
+[[ ${RC} -ne 0 ]] || die "a group-writable gate was used"
+grep -q "GATE=$BIN/gate must be an executable you own" "$TMP/err" || die "the refused gate was not named"
+assert "a refused gate runs nothing" test "$(calls | grep -c '^gate ')" -eq 0
+echo "ok  a gate others can write is refused"
+
 # Changed Playwright specs run three times; only the first builds.
 git -C "$WORK" checkout --quiet -- . && git -C "$WORK" clean --quiet -fd
 seed ui/e2e/flow.spec.ts "// spec edited"
