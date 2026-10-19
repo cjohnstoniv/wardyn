@@ -89,39 +89,41 @@ func dialerTypeOf(e ast.Expr) string {
 	}
 }
 
-// declaredDialers maps every name a file declares as a net.Dialer or tls.Dialer to that package:
-// `var d net.Dialer` (the zero value), `var d = &tls.Dialer{}`, `d := net.Dialer{}`, a parameter or
-// a struct field typed *net.Dialer. It is by NAME and file-wide, not by scope: a type-checked scan
-// would load every package, and a name reused for something else only makes the guard stricter.
-func declaredDialers(f *ast.File) map[string]string {
-	m := map[string]string{}
+// declaredDialers maps every name a file declares as a net.Dialer or tls.Dialer to the set of packages
+// it is declared with: `var d net.Dialer` (the zero value), `var d = &tls.Dialer{}`, `d := net.Dialer{}`,
+// a parameter or a struct field typed *net.Dialer. It is by NAME and file-wide, not by scope: a
+// type-checked scan would load every package. A name declared as both kinds keeps both, and a name
+// reused for something else only makes the guard stricter.
+func declaredDialers(f *ast.File) map[string]map[string]bool {
+	m := map[string]map[string]bool{}
+	note := func(name, kind string) {
+		if kind == "" {
+			return
+		}
+		if m[name] == nil {
+			m[name] = map[string]bool{}
+		}
+		m[name][kind] = true
+	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.ValueSpec:
 			for i, id := range v.Names {
-				kind := ""
 				if v.Type != nil {
-					kind = dialerTypeOf(v.Type)
+					note(id.Name, dialerTypeOf(v.Type))
 				} else if i < len(v.Values) {
-					kind = dialerTypeOf(v.Values[i])
-				}
-				if kind != "" {
-					m[id.Name] = kind
+					note(id.Name, dialerTypeOf(v.Values[i]))
 				}
 			}
 		case *ast.AssignStmt:
 			for i, lhs := range v.Lhs {
 				if id, ok := lhs.(*ast.Ident); ok && i < len(v.Rhs) {
-					if kind := dialerTypeOf(v.Rhs[i]); kind != "" {
-						m[id.Name] = kind
-					}
+					note(id.Name, dialerTypeOf(v.Rhs[i]))
 				}
 			}
 		case *ast.Field:
-			if kind := dialerTypeOf(v.Type); kind != "" {
-				for _, id := range v.Names {
-					m[id.Name] = kind
-				}
+			for _, id := range v.Names {
+				note(id.Name, dialerTypeOf(v.Type))
 			}
 		}
 		return true
@@ -129,61 +131,69 @@ func declaredDialers(f *ast.File) map[string]string {
 	return m
 }
 
-// classifyDialSite reports the kind of an AST node the checklist cares about,
-// or "" for anything else: a CALL to net.Dial*/tls.Dial*, a COMPOSITE LITERAL
+// dialMethodKinds is the "<pkg>.Dialer.Dial*" site kind for each package a name was declared with.
+func dialMethodKinds(declared map[string]bool) []string {
+	var kinds []string
+	for _, pkg := range []string{"net", "tls"} {
+		if declared[pkg] {
+			kinds = append(kinds, pkg+".Dialer.Dial*")
+		}
+	}
+	return kinds
+}
+
+// classifyDialSite reports the kinds of an AST node the checklist cares about,
+// or none for anything else: a CALL to net.Dial*/tls.Dial*, a COMPOSITE LITERAL
 // of http.Transport/http.Client/tls.Dialer, and a Dial* method (called or taken
 // as a value) on a net.Dialer or tls.Dialer, whether that is a literal or a
-// name the file declared with that type (dialers). A `&net.Dialer{}` that is
-// never dialled through is not itself one of them.
-func classifyDialSite(n ast.Node, dialers map[string]string) string {
+// name the file declared with that type (dialers). A name declared as both
+// dialer types yields one site per kind. A `&net.Dialer{}` that is never
+// dialled through is not itself one of them.
+func classifyDialSite(n ast.Node, dialers map[string]map[string]bool) []string {
 	switch v := n.(type) {
 	case *ast.SelectorExpr:
 		if !strings.HasPrefix(v.Sel.Name, "Dial") {
-			return ""
+			return nil
 		}
 		switch x := v.X.(type) {
 		case *ast.Ident:
-			if kind := dialers[x.Name]; kind != "" {
-				return kind + ".Dialer.Dial*"
-			}
+			return dialMethodKinds(dialers[x.Name])
 		case *ast.SelectorExpr: // s.dialer.DialContext
-			if kind := dialers[x.Sel.Name]; kind != "" {
-				return kind + ".Dialer.Dial*"
-			}
+			return dialMethodKinds(dialers[x.Sel.Name])
 		default: // net.Dialer{}.DialContext, (&tls.Dialer{}).DialContext
 			if kind := dialerTypeOf(v.X); kind != "" {
-				return kind + ".Dialer.Dial*"
+				return []string{kind + ".Dialer.Dial*"}
 			}
 		}
 	case *ast.CallExpr:
 		sel, ok := v.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return ""
+			return nil
 		}
 		id, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return ""
+			return nil
 		}
 		if (id.Name == "net" || id.Name == "tls") && strings.HasPrefix(sel.Sel.Name, "Dial") {
-			return id.Name + ".Dial*"
+			return []string{id.Name + ".Dial*"}
 		}
 	case *ast.CompositeLit:
 		sel, ok := v.Type.(*ast.SelectorExpr)
 		if !ok {
-			return ""
+			return nil
 		}
 		id, ok := sel.X.(*ast.Ident)
 		if ok && id.Name == "tls" && sel.Sel.Name == "Dialer" {
-			return "tls.Dialer"
+			return []string{"tls.Dialer"}
 		}
 		if !ok || id.Name != "http" {
-			return ""
+			return nil
 		}
 		if sel.Sel.Name == "Transport" || sel.Sel.Name == "Client" {
-			return "http." + sel.Sel.Name
+			return []string{"http." + sel.Sel.Name}
 		}
 	}
-	return ""
+	return nil
 }
 
 // scanDialSites parses every non-test .go file directly under each of dirs
@@ -212,7 +222,7 @@ func scanDialSites(t *testing.T, root string, dirs []string) (sites []dialSite, 
 			relFile := dir + "/" + name
 			dialers := declaredDialers(f)
 			ast.Inspect(f, func(n ast.Node) bool {
-				if kind := classifyDialSite(n, dialers); kind != "" {
+				for _, kind := range classifyDialSite(n, dialers) {
 					sites = append(sites, dialSite{relFile: relFile, kind: kind, line: fset.Position(n.Pos()).Line})
 				}
 				return true
@@ -369,13 +379,14 @@ func notADialer(x interface{ DialNot() }) { x.DialNot() }
 	dialers := declaredDialers(f)
 	got := map[string]int{}
 	ast.Inspect(f, func(n ast.Node) bool {
-		if kind := classifyDialSite(n, dialers); kind != "" {
+		for _, kind := range classifyDialSite(n, dialers) {
 			got[kind]++
 		}
 		return true
 	})
-	// zeroNet, literalNet, shortNet, param and field are net.Dialer dials; zeroTLS is the one tls.Dialer dial.
-	if got["net.Dialer.Dial*"] != 5 || got["tls.Dialer.Dial*"] != 1 || len(got) != 2 {
-		t.Errorf("sites = %v, want 5 net.Dialer.Dial* and 1 tls.Dialer.Dial* (and nothing else)", got)
+	// `d` is declared as a net.Dialer (zeroNet, shortNet, param) and as a tls.Dialer (zeroTLS), so each of the
+	// four `d.Dial*` uses is one site per kind; literalNet and field add one net.Dialer site each.
+	if got["net.Dialer.Dial*"] != 6 || got["tls.Dialer.Dial*"] != 4 || len(got) != 2 {
+		t.Errorf("sites = %v, want 6 net.Dialer.Dial* and 4 tls.Dialer.Dial* (and nothing else)", got)
 	}
 }
