@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +28,8 @@ type localRig struct {
 	sub    *remote.Substrate
 	fake   *runnertest.Fake
 	rp     *runnerwire.Peer
+	mu     sync.Mutex
+	runs   map[uuid.UUID]string // the runner's run record: run id to local sandbox ref
 }
 
 // localAttachRig connects an org Substrate (with Caps.LocalAttach) to a runnerio Server over a
@@ -54,10 +58,13 @@ func localAttachRig(t *testing.T, times ...func(*localTimes)) *localRig {
 	caps, _ := json.Marshal(runnerwire.Caps{Version: "test", LocalAttach: true})
 	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
 	t.Cleanup(func() { rp.Close(); op.Close(); server.Offline(rp) })
-	return &localRig{server: server, sub: sub, fake: fake, rp: rp}
+	r := &localRig{server: server, sub: sub, fake: fake, rp: rp, runs: map[uuid.UUID]string{}}
+	server.AttachRuns(func(id uuid.UUID) string { r.mu.Lock(); defer r.mu.Unlock(); return r.runs[id] })
+	return r
 }
 
-// run creates a sandbox for a new run and binds its output, as a create with exec output does.
+// run creates a sandbox for a new interactive run (no exec output, so no output binding) and records
+// it as the runner's manager does.
 func (r *localRig) run(t *testing.T) (uuid.UUID, string) {
 	t.Helper()
 	id := uuid.New()
@@ -65,12 +72,9 @@ func (r *localRig) run(t *testing.T) (uuid.UUID, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.server.Output(id); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.server.BindOutput(id, sb.Ref); err != nil {
-		t.Fatal(err)
-	}
+	r.mu.Lock()
+	r.runs[id] = sb.Ref
+	r.mu.Unlock()
 	return id, placement.RunnerRefPrefix("laptop") + sb.Ref
 }
 
@@ -474,11 +478,10 @@ func TestLocalAttachModeObserverDropsInputFromThenOn(t *testing.T) {
 }
 
 // The socket grants nothing by itself: a nonce the org never grants expires, an unknown nonce is
-// refused, a nonce is spent once, reaches only its own connection, and only its own run.
+// refused, and a nonce is spent once and reaches only its own connection.
 func TestLocalAttachNonceRefusals(t *testing.T) {
 	r := localAttachRig(t, func(lt *localTimes) { lt.nonceTTL = 300 * time.Millisecond })
 	id, ref := r.run(t)
-	other, otherRef := r.run(t)
 
 	waiting := dialLocal(t, r.server) // no ticket: the org sends no grant
 	waiting.hello(t, id)
@@ -509,13 +512,58 @@ func TestLocalAttachNonceRefusals(t *testing.T) {
 	if _, err := r.sub.LocalAttach(ctx5(t), ref, runner.LocalAttachRequest{Nonce: na}); err == nil {
 		t.Fatal("a spent nonce was granted again")
 	}
+}
 
-	c := dialLocal(t, r.server)
-	nc := c.hello(t, other)
-	if _, err := r.sub.LocalAttach(ctx5(t), ref, runner.LocalAttachRequest{Nonce: nc}); err == nil {
-		t.Fatalf("a nonce for %s was granted for %s", otherRef, ref)
+// An interactive run has no exec output and so no output binding; it resolves through the runner's
+// run record and attaches.
+func TestLocalAttachInteractiveRunWithoutExecOutputAttaches(t *testing.T) {
+	r := localAttachRig(t)
+	id, ref := r.run(t)
+	r.server.mu.Lock()
+	bound := r.server.outputs[id]
+	r.server.mu.Unlock()
+	if bound != nil {
+		t.Fatal("the interactive run has an output binding")
 	}
-	c.expect(t, LocalRefuse)
+	cli := dialLocal(t, r.server)
+	ls, err := r.sub.LocalAttach(ctx5(t), ref, runner.LocalAttachRequest{Nonce: cli.hello(t, id)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ls.Close()
+	cli.expect(t, LocalBound)
+	cli.send(t, LocalData, []byte("ok"))
+	if got := cli.data(2, 5*time.Second); string(got) != "ok" {
+		t.Fatalf("echo = %q", got)
+	}
+}
+
+// The org's ticket is for run A; the CLI named run B on the socket. The grant is refused as
+// attach_local_unavailable and nothing is attached.
+func TestLocalAttachTicketForRunAWithRunIDBOnTheSocketIsRefused(t *testing.T) {
+	r := localAttachRig(t)
+	_, refA := r.run(t)
+	idB, refB := r.run(t)
+	cli := dialLocal(t, r.server)
+	nonce := cli.hello(t, idB)
+	_, err := r.sub.LocalAttach(ctx5(t), refA, runner.LocalAttachRequest{Nonce: nonce})
+	if err == nil || !strings.Contains(err.Error(), LocalReasonUnavailable) {
+		t.Fatalf("grant for run A on run B's connection = %v, want %s", err, LocalReasonUnavailable)
+	}
+	if f := cli.expect(t, LocalRefuse); !bytes.Contains(f.b, []byte(LocalReasonUnavailable)) {
+		t.Fatalf("refuse = %s", f.b)
+	}
+	for _, ref := range []string{refA, refB} {
+		if local, _ := r.server.local(ref); r.fake.Called("attach", local) {
+			t.Fatalf("a refused grant attached %s", ref)
+		}
+	}
+	r.server.mu.Lock()
+	n := len(r.server.locals)
+	r.server.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a refused grant left %d sessions", n)
+	}
 }
 
 func TestLocalAttachHelloRefusesARunNotHere(t *testing.T) {

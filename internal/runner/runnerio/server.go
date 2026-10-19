@@ -45,6 +45,7 @@ type Server struct {
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
 	holds         func(localRef string) bool
+	attachRef     func(uuid.UUID) string // a live run's local sandbox ref, for local attach
 	nonces        map[string]*localClient // local attach grants waiting for the org
 	locals        map[streamKey]*localSession
 	times         localTimes
@@ -100,6 +101,14 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 func (s *Server) HoldSandboxes(holds func(localRef string) bool) {
 	s.mu.Lock()
 	s.holds = holds
+	s.mu.Unlock()
+}
+
+// AttachRuns sets how a local attach hello resolves its run to a local sandbox ref ("" refuses);
+// without it every hello is refused.
+func (s *Server) AttachRuns(ref func(runID uuid.UUID) string) {
+	s.mu.Lock()
+	s.attachRef = ref
 	s.mu.Unlock()
 }
 

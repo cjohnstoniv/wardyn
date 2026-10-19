@@ -358,6 +358,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	streams.HoldSandboxes(manager.HoldsSandbox)
+	streams.AttachRuns(manager.AttachRef)
 	local, err := newLocalSocket(extra.localAttach, identity.RunnerID.String(), extra.orgURL, stateDir, streams.ServeLocal)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, manager.Close())

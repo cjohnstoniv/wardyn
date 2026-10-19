@@ -60,6 +60,9 @@ const (
 	LocalReasonExited     = "shell_exited"
 	LocalReasonAttach     = "attach_failed"
 	LocalReasonClosed     = "client_closed"
+	// LocalReasonUnavailable: the org granted another run than the one this connection named; the
+	// CLI goes through the organisation instead.
+	LocalReasonUnavailable = "attach_local_unavailable"
 )
 
 type (
@@ -237,8 +240,8 @@ func (s *Server) ServeLocal(conn net.Conn) {
 	}
 }
 
-// helloLocal reads the hello and hands out a nonce for a run whose sandbox this runner holds,
-// resolved through the run's output binding (BindOutput). "" refuses with the reason.
+// helloLocal reads the hello and hands out a nonce for a live run whose sandbox this runner holds,
+// resolved through the runner's own run record (AttachRuns). "" refuses with the reason.
 func (s *Server) helloLocal(c *localClient) (string, string) {
 	_ = c.conn.SetReadDeadline(time.Now().Add(s.times.nonceTTL))
 	typ, b, err := ReadLocalFrame(c.conn)
@@ -248,14 +251,11 @@ func (s *Server) helloLocal(c *localClient) (string, string) {
 		return "", LocalReasonProtocol
 	}
 	s.mu.Lock()
-	out := s.outputs[hello.RunID]
+	resolve := s.attachRef
 	s.mu.Unlock()
-	if out == nil {
-		return "", LocalReasonNotHere
+	if resolve != nil {
+		c.ref = resolve(hello.RunID)
 	}
-	out.mu.Lock()
-	c.ref = out.state.Ref
-	out.mu.Unlock()
 	if c.ref == "" || s.held(c.ref) != nil {
 		return "", LocalReasonNotHere
 	}
@@ -290,9 +290,9 @@ func (s *Server) localAttach(ctx context.Context, peer *runnerwire.Peer, id uint
 		return nil, runnerwire.Refuse("unknown or expired local attach nonce")
 	}
 	close(c.taken)
-	if c.ref != ref {
-		c.close(LocalReasonProtocol)
-		return nil, runnerwire.Refuse("the local attach nonce was issued for another run")
+	if c.ref != ref { // the run named on the socket must be the run the org's ticket is for
+		c.close(LocalReasonUnavailable)
+		return nil, runnerwire.Refuse("attach_local_unavailable: the run on the local socket is not the run the organisation granted")
 	}
 	if err := s.held(ref); err != nil {
 		c.close(LocalReasonNotHere)

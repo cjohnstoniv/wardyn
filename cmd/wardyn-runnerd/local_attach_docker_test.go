@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
 
@@ -47,5 +49,48 @@ func TestLocalAttachRuntimeOpensOnlyWhenOnAndAllowed(t *testing.T) {
 		}
 		_ = rt.close()
 		cancel()
+	}
+}
+
+// The caps event carries LocalAttach exactly when --local-attach is on (a Docker runner); off
+// withdraws it.
+func TestLocalAttachCapsFollowTheFlag(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, key, _ := ed25519.GenerateKey(rand.Reader)
+		rt, err := runnerRuntimeWith(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, t.TempDir(), runnertest.NewFake(),
+			func(id uuid.UUID) string { return "fake-" + id.String() }, newLocalRelay(ctx), unsized, runtimeExtras{localAttach: on, orgURL: "https://org.example"})
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		caps := make(chan runnerwire.Caps, 1)
+		orgEnd, runEnd := runnerwire.Loopback()
+		org := runnerwire.NewPeer(orgEnd, runnerwire.PeerConfig{Org: true, OnEvent: func(e runnerwire.Event) {
+			var c runnerwire.Caps
+			if e.Kind == runnerwire.EventCaps && json.Unmarshal(e.Data, &c) == nil {
+				select {
+				case caps <- c:
+				default:
+				}
+			}
+		}})
+		run := runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{})
+		go func() { _ = org.Run(ctx) }()
+		go func() { _ = run.Run(ctx) }()
+		go func() { _ = rt.hooks.Replay(ctx, run) }()
+		select {
+		case c := <-caps:
+			if c.LocalAttach != on {
+				t.Errorf("--local-attach on=%v: caps LocalAttach = %v", on, c.LocalAttach)
+			}
+		case <-ctx.Done():
+			t.Errorf("--local-attach on=%v: no caps event", on)
+		}
+		cancel()
+		org.Close()
+		run.Close()
+		_ = rt.close()
 	}
 }
