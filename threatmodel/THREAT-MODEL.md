@@ -150,11 +150,8 @@ coverage verdict pointing back into this document.
      [`internal/api/runs_dispatch_gitbroker.go`](../internal/api/runs_dispatch_gitbroker.go), says
      why deliberately.)
    - An **unbrokered** SSH credential — an `ssh_key` for a forge holding no `github_token` (a GitLab
-     host, or `github.com` with no repos granted) — keeps the old shape:
-     - written for the clone only (`wipe_ssh_grants` shreds it and unsets `GIT_SSH_COMMAND` before
-       the agent starts), a narrowing and not a confinement,
-     - since the grant id still rides `WARDYN_SSH_GRANTS` and an auto-mintable grant is re-mintable
-       by design — bounded by the operator who supplied it, not by Wardyn.
+     host, or `github.com` with no repos granted) — signs in through the run proxy's SSH agent
+     and is not resident; §5.1a states its bounds.
    - A token exfiltrated from the proxy itself is bounded only by whatever
      GitHub-side ruleset the operator created.
      - `VerifyRefRuleset` ([`internal/broker/ruleset.go`](../internal/broker/ruleset.go)) reads it
@@ -2962,7 +2959,6 @@ exactly these terms.
 
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
-| `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time, shredded right after (`wipe_ssh_grants`, before the agent starts); mask-registered at mint. On an UNBROKERED forge that window is a narrowing, not a bound; on a BROKERED forge the grant never reaches the sandbox. Wardyn cannot down-scope or expire an SSH private key where it does remain resident ([`internal/broker/broker.go`](../internal/broker/broker.go) `mintSSHKey`, `deploy/images/*/agent-run`). An approval-gated grant is delivered once per run; [CREDENTIALS.md](../docs/CREDENTIALS.md) bounds the other cases. See below. |
 | `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg ([`internal/egress/proxy/pat_broker.go`](../internal/egress/proxy/pat_broker.go)), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no GitLab or Azure DevOps Server equivalent of a scoped installation token (Azure DevOps Services gets one through `minted_pat`, residual #62), so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists ([`docs/adoption/corp-network-onboarding-findings.md`](../docs/adoption/corp-network-onboarding-findings.md) B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
 | `file_secret` grant [0.8.9] | The stored secret's **value**, as a file under `/run/wardyn/secrets` named by the grant's scope, never by a path (`ComponentSecretDir` in [`internal/runner/managed_files.go`](../internal/runner/managed_files.go)) | Nothing structural: the `env_secret` coverage gap, for a tool that reads a credentials file instead of a variable | The `env_secret` bounds, under the same switch and role rule, for the WHOLE run, with nothing to revoke. Docker: mode `0400`, the workload's user. Kubernetes: mode `0440`, every process in the pod. See below. |
@@ -2985,6 +2981,12 @@ exactly these terms.
 - There is no off mode: with `WARDYN_AWS_SSO_PROXY_INJECT=off` the component is refused at launch and at dispatch (`component_cli_aws_inject_off`).
 - Deleting or re-pinning the component deletes every person's sign-in for it, and erasing a person's credentials removes theirs.
 - Residual: within their own run, a person granted the component holds role credentials for that role until they expire, as on the `bedrock_sso` lane.
+
+**The `ssh_key` grant (0.10) is not resident.**
+
+- The proxy holds the key and signs only an SSH sign-in for it (`isUserauthRequest`, [`internal/egress/proxy/ssh_agent.go`](../internal/egress/proxy/ssh_agent.go)); `ssh` reaches it through a per-command socket from `wardyn-git-helper ssh-exec`.
+- The mint route withholds any `ssh_key` answer, the broker issues it once per run (`checkedMintRow`), and `close_ssh_agent` closes the agent after the clone.
+- Residual: until that close, a sandbox process can have the proxy sign a sign-in with it. An image that never closes it leaves that open for the run.
 
 **Where this table is now stated to the person launching the run.**
 
@@ -3012,7 +3014,7 @@ exactly these terms.
 full, under asset #4 (§2).
 
 - Two citations that live only here:
-  - On an unbrokered forge the grant id rides `WARDYN_SSH_GRANTS` and an auto-mintable grant is re-mintable by design (`MintForGrant`), because the proxy's mint route refuses only brokered *GitHub* grant ids (`isBrokeredGitGrant`).
+  - On an unbrokered forge the grant id rides `WARDYN_SSH_GRANTS`, but the proxy's mint route withholds any `ssh_key` answer (`relayControlPlane`) and the broker refuses a second auto-mint in the run (`checkedMintRow`), so there is no key to re-mint.
   - On a brokered forge `validateGrantLaneExclusivity` ([`internal/api/policy.go`](../internal/api/policy.go)) refuses the policy at write time and `dropBrokeredGrants` withholds anything already stored, so no grant id reaches the sandbox and there is nothing to re-mint.
 
 **`git_pat` — the run lease.**

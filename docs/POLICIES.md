@@ -331,10 +331,9 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
 - Every mechanism keys on the same forge, and that non-GitHub lane is what `git_pat` is for.
 - (An `ssh_key` grant for an Azure DevOps host is dropped at dispatch with a warning, and a stored git token for one is read from the run owner's own row only.)
-- There the old shape still applies for `ssh_key`: the key file is written for the clone and wiped after, and an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases).
-- `agent-run` mints it, writes it `0400`, clones, then removes it (`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
-- It is a real narrowing and not a confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`).
-- An auto-mintable grant is re-mintable by design (`MintForGrant` — only `requires_approval: true` makes it single-use).
+- There `ssh_key` signs in through the run proxy's SSH agent: the proxy holds the key, and the sandbox's `ssh` reaches the agent through a socket `wardyn-git-helper ssh-exec` opens for each Git command ([CREDENTIALS.md](CREDENTIALS.md#a-git-credential)).
+- `agent-run` writes an ssh config naming that socket and a known-hosts command, clones, closes the agent, then removes the config and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
+- The grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), but the proxy's mint route never answers an `ssh_key` grant with the key, and the broker issues it once per run unless the grant is approval-gated.
 - The proxy's mint route refuses only *brokered GitHub* grant ids (`isBrokeredGitGrant`).
 - That forge's key is bounded by the operator who supplied it, not by Wardyn ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a) — the honest scope for a non-brokered credential, unchanged by any of the above.
 
