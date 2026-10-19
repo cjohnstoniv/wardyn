@@ -58,7 +58,7 @@ case "${AGENT}" in
     out="deploy/images/claude-code/claude-bin"
     log "Fetching claude ${ver} (${cc_plat}) manifest for the checksum"
     man="$(curl -fsSL "${base}/${ver}/manifest.json")"
-    sum="$(printf '%s' "${man}" | grep -A3 "\"${cc_plat}\"" | grep -oiE '[a-f0-9]{64}' | head -1)"
+    sum="$(printf '%s' "${man}" | grep -A3 "\"${cc_plat}\"" | grep -oiE '[a-f0-9]{64}' | head -1)" || true  # pipefail: a grep miss must reach the die below, not abort here
     [ -n "${sum}" ] || die "no sha256 for ${cc_plat} in the ${ver} manifest"
     log "Downloading the native claude binary (~250MB)"
     curl -fsSL "${base}/${ver}/${cc_plat}/claude" -o "${out}.tmp"

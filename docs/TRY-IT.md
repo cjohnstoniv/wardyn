@@ -75,8 +75,8 @@ make test-drive          # ARGS defaults to --up, which brings the compose stack
   - a governed clone and the no-default-route check, an egress deny,
   - the cloud-metadata block (a proof the table doesn't cover),
   - a first-use approval (queue → approve → retry), the brokered git-credential chain,
-  - and the kill cascade with its `actor_type=human` audit event.
-- Its one weak step is the recording: it uploads a synthetic asciicast and fetches it back, which exercises the endpoint but does not prove the recorder captured a live session.
+  - and the kill cascade with its `run.kill` audit event (`actor_type` is `human` or `system`, per how the script authenticates).
+- Its one weak step is the recording: it only checks that the endpoint refuses an unauthenticated read; upload and serve are covered by the e2e recording run, and neither proves the recorder captured a live session.
 - Check the **Recording** tab after a real run for that.
 - `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to poke at.
 

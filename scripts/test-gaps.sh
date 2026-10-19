@@ -439,10 +439,11 @@ render_cat() {
   cat <<'K8SGATED'
 ### Manual cluster lanes no coverage profile can see at all
 
-No workflow runs the first two, and `-coverpkg` never observes any of the
-three — not even as the K8S-gated bucket above, since they exercise code far
-beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
-untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
+The nightly workflow runs the first two (the `kind-sso-walk` and
+`kind-sso-ado-walk` jobs); no workflow runs the third. `-coverpkg` never
+observes any of the three — not even as the K8S-gated bucket above, since they
+exercise code far beyond `internal/runner/k8s`. Listed here so the k8s surface
+is not read as untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
 Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
 only) — the other two self-skip without `WARDYN_TEST_K8S=1` and a green
 result for them is evidence only for the tip somebody actually ran it on.

@@ -25,6 +25,13 @@ PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
 export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/wardyn_shots?sslmode=disable"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:8098"
+# wardynd's internal TLS listener defaults to :8443 whatever ADDR is; pick a free port as run-ui-e2e.sh does
+# so a stack already holding :8443 cannot break this backend's bind.
+if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
+  internal_port="$(pick_free_port)"
+  [[ "${internal_port}" == 8098 || "${internal_port}" == 8099 ]] && internal_port="$(pick_free_port)"
+  export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:${internal_port}"
+fi
 
 # log() uses WARDYN_LOG_TAG="[screenshots]" set before sourcing common.sh above.
 
