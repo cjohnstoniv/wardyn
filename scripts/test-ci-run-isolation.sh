@@ -151,6 +151,25 @@ if grep -qxF 'WARDYN_URL=http://localhost:8080' "$ARGV" 2>/dev/null; then
 else
     bad "the shim no longer passes WARDYN_URL — dropping the credential must not drop the endpoint"
 fi
+# scripts/demo.sh carries the same shim at top level; the same bearer must stay
+# off its host argv too, while it still execs the in-container CLI.
+demo_shim="$(sed -n '/^wardyn() {$/,/^}$/p' scripts/demo.sh)"
+[ -n "$demo_shim" ] || bad "scripts/demo.sh has no wardyn() shim to extract"
+rm -f "$ARGV"
+(
+  set +u
+  eval "$demo_shim"
+  COMPOSE=("$STUB/argv-docker" compose -f /dev/null)
+  ADMIN_TOKEN='s3cr3t-real-fleet-admin-token'
+  ARGV="$ARGV" wardyn runs list
+) >/dev/null 2>&1 || true
+if grep -qF 's3cr3t-real-fleet-admin-token' "$ARGV" 2>/dev/null; then
+    bad "scripts/demo.sh's wardyn() puts the admin bearer on the host docker argv: $(tr '\n' ' ' < "$ARGV")"
+elif ! grep -qxF '/usr/local/bin/wardyn' "$ARGV" 2>/dev/null || ! grep -qxF 'WARDYN_URL=http://localhost:8080' "$ARGV" 2>/dev/null; then
+    bad "scripts/demo.sh's wardyn() no longer execs the in-container CLI with WARDYN_URL — the case above would pass vacuously. Got: $(tr '\n' ' ' < "$ARGV" 2>/dev/null)"
+else
+    ok "demo.sh's shim keeps the admin bearer off the host docker argv"
+fi
 
 # ── 4. CI's identity (#546) ──────────────────────────────────────────────────
 # Against an existing control plane (WARDYN_URL), every CLI call authenticates

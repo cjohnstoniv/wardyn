@@ -100,4 +100,20 @@ grep -B3 "TRUNCATE secrets;'" "${SETUP_SH}" | grep -q 'stale_secrets_wipe_consen
   || fail "setup.sh runs TRUNCATE secrets without asking stale_secrets_wipe_consent first (#2198)"
 unset -f ask_yn
 
+# 5) workspaces_root_too_broad: home, any folder above it, and / are refused however they are
+#    spelled; a folder under home, or beside it, is not.
+wr="$(mktemp -d)"
+mkdir -p "${wr}/home/me/projects" "${wr}/home/me2"
+ln -s "${wr}/home/me" "${wr}/link"
+broad() { HOME="${wr}/home/me" workspaces_root_too_broad "$1"; }
+for d in "${wr}/home/me" "${wr}/home/me/" "${wr}/home/me/projects/.." "${wr}/home" "${wr}/link" /; do
+  broad "${d}" || fail "workspaces_root_too_broad let ${d} through: it is the home directory or a folder above it"
+done
+for d in "${wr}/home/me/projects" "${wr}/home/me/projects/" "${wr}/home/me2" "${wr}/missing"; do
+  broad "${d}" && fail "workspaces_root_too_broad refused ${d}, which is not home or a folder above it"
+done
+rm -rf "${wr}"
+grep -B4 'env_set "${ROOT}/deploy/compose/.env" WARDYN_WORKSPACES_ROOT' "${SETUP_SH}" | grep -q 'workspaces_root_too_broad "${_eff_root}"' \
+  || fail "setup.sh remembers WARDYN_WORKSPACES_ROOT without checking a root from the environment or .env"
+
 echo "test-setup-launch: self-test PASS"

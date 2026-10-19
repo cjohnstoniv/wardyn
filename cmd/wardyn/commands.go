@@ -854,6 +854,9 @@ only at the end.`,
 			if err != nil {
 				return err
 			}
+			if interval <= 0 {
+				interval = logsInterval // a zero or negative interval would poll the daemon in a tight loop
+			}
 			c := client()
 			// GetRun FIRST, in BOTH modes: an unknown/typo'd id 404s here and an
 			// unauthorized caller 401/403s, while the audit endpoint happily
@@ -914,9 +917,12 @@ only at the end.`,
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", true, "keep polling until the run reaches a terminal state (like tail -f)")
-	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "poll interval while following")
+	cmd.Flags().DurationVar(&interval, "interval", logsInterval, "poll interval while following")
 	return cmd
 }
+
+// logsInterval is run logs' poll interval when --interval is unset, zero or negative.
+const logsInterval = 2 * time.Second
 
 // listPageOpts turns a --limit flag into the SDK's variadic ListOpts: limit<=0
 // sends nothing (the server applies its default page, preserving the prior

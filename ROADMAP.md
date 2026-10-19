@@ -260,7 +260,7 @@ New Run shows these as Coming soon in 0.9.
 | The AI composer | #1993 |
 | Application and server sandboxes | #1994 |
 
-- Session continuity across tabs and sign-ins (#1995) and session lifetime (#1996) target a 0.9.x release.
+- Session continuity across tabs and sign-ins (#1995) targets a 0.9.x release; session lifetime (#1996) shipped in 0.9.3 as `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`.
 
 ### v1.0 scope
 
@@ -272,7 +272,7 @@ New Run shows these as Coming soon in 0.9.
 - OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) ·
 - Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) ·
 - HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry;
-- see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) ·
+- see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "High availability" section for the exact list and what v0.5 already closed) ·
 - k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") ·
 - CC3/Vault (Kata) packaged and GA — experimental today ·
 - Cilium `toFQDNs` ·
@@ -354,10 +354,10 @@ New Run shows these as Coming soon in 0.9.
   - There is also no scheduled or automatic rotation, and no `wardyn secret rotate`: the CLI deliberately never touches the key.
 - **react-router 7 → 8 major bump.**
   - No longer security-forced: GHSA-qwww-vcr4-c8h2 patches at 7.18.2 as well as 8.3.0, the console ships 7.18.2, and the pnpm-audit suppression that once covered it is deleted — `make npm-audit` is green with nothing ignored.
-  - What remains is the major itself, blocked twice over:
-    - every stable 8.x peer-depends on React >=19.2.7 (this console is on 18.3.1, so v8 means a React 19 migration first),
+  - What remains is the major itself:
+    - every stable 8.x peer-depends on React >=19.2.7 (this console is already on React 19, so that half is met),
     - and `react-router-dom` has no 8.x at all — v8 is also a package rename to `react-router`.
-  - Needs a UI owner and a React 19 decision, not an advisory deadline.
+  - Needs a UI owner, not an advisory deadline.
 - **Kata/TPROXY/io_uring composer quick-hits.**
   - Parked since the composer-readiness work.
 - **A member's inline model-access grant needs an operator integration.**
@@ -397,8 +397,8 @@ New Run shows these as Coming soon in 0.9.
   - Per-user BEARER/API-key credentials (`per_user` is `bedrock_sso`-only in 0.7.2) ·
     - an explicit opt-in cross-mechanism fallback (needs a policy field, a ceiling term and an audit story) ·
     - the rest of the mid-run renewal design (the legacy no-block path still ships refresh fields in the sandbox cache;
-    - a renewal channel for runs longer than one access token) ·
-    - a background renewer, if dispatch-time refresh proves insufficient.
+    - a renewal channel for runs longer than one access token).
+    - (The background renewer shipped: `RenewAWSSSOCredentials`.)
 - **Review-round findings with a written shape, deliberately not pulled.**
   - An `llm_inspection` scan-budget policy (fields and their POLICIES rows) and a re-derivation of the docker/k8s hardening-cap rationale have no 0.8/0.8.1 issue.
   - The console copy/state residue this bullet used to also carry is tracked by #157 (part of #84):

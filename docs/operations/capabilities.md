@@ -15,7 +15,7 @@ the ADMIN pre-authorized.
 
 | Kind | Value | Direction | What it bounds, and where |
 |---|---|---|---|
-| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../../internal/api/inline_policy_bounds.go)) |
+| `egress_host` | host (`:port` dropped) or `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../../internal/api/inline_policy_bounds.go)) |
 | `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, [`internal/api/secrets.go`](../../internal/api/secrets.go)) |
 | `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../../internal/api/runs_create_validate.go)) |
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
@@ -200,7 +200,7 @@ the ADMIN pre-authorized.
 - `If-Match` is optional, and the write is audited either way.
 
 - **"Available to" (0.8).**
-- `workspace`, `image`, `agent` and `workspace_provider` values can each be restricted one at a time (migration `0081_capability_restrictions`).
+- `workspace`, `image`, `agent`, `workspace_provider`, `model_provider`, `feature`, `policy` and `component` values can each be restricted one at a time (migration `0081_capability_restrictions` began it with the first four).
 - **A restricted value is closed whatever its kind's enforcement switch says.** Its kind counts as enforced for that value (`capRead.enforced` is true when the switch is on or the value is restricted), so the "not enforced ⇒ permitted" step never applies to it. An unenforced `feature` kind does not open `service_attach` or `self_host_runner`.
 - Only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
 - `GET /permissions` does not show which values are restricted; [`GET /permissions/explain`](#get-permissionsexplain) does (`restricted: true`), with each subject's resulting state.

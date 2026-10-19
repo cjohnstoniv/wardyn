@@ -28,12 +28,16 @@ import (
 // capturing the variable an Env assignment would have to name.
 var execSiteRe = regexp.MustCompile(`(\w+)\s*:?=\s*exec\.Command(?:Context)?\(`)
 
+// funcDeclRe matches a top-level func declaration, capturing its name.
+var funcDeclRe = regexp.MustCompile(`^func (?:\([^)]*\) )?(\w+)`)
+
 // scrubbedEnvExceptions names the exec sites that deliberately inherit the
-// full environment, with the reason. gatherComposeConfig exists to resolve
+// full environment, keyed "file:function" so one exempt function does not
+// exempt the rest of its file, with the reason. gatherComposeConfig exists to resolve
 // ${WARDYN_*} against the REAL environment — that IS its output — and what it
 // returns is passed through redactSecrets before it reaches a bundle.
 var scrubbedEnvExceptions = map[string]string{
-	"supportbundle.go": "gatherComposeConfig resolves ${WARDYN_*} on purpose; its output is redacted by redactSecrets",
+	"supportbundle.go:gatherComposeConfig": "gatherComposeConfig resolves ${WARDYN_*} on purpose; its output is redacted by redactSecrets",
 }
 
 func TestEveryHostExecChildGetsTheScrubbedEnv(t *testing.T) {
@@ -55,7 +59,13 @@ func TestEveryHostExecChildGetsTheScrubbedEnv(t *testing.T) {
 			if !strings.Contains(line, "exec.Command") {
 				continue
 			}
-			if why, ok := scrubbedEnvExceptions[path]; ok {
+			fn := ""
+			for j := i; j >= 0 && fn == ""; j-- {
+				if m := funcDeclRe.FindStringSubmatch(lines[j]); m != nil {
+					fn = m[1]
+				}
+			}
+			if why, ok := scrubbedEnvExceptions[path+":"+fn]; ok {
 				t.Logf("%s:%d exempt — %s", path, i+1, why)
 				continue
 			}

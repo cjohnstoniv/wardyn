@@ -28,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
@@ -392,5 +393,27 @@ func TestReconcileMode_Audits(t *testing.T) {
 	}
 	if rec.calls != 1 || rec.last.Action != "secret.reconcile" || rec.last.Outcome != "success" || !strings.Contains(string(rec.last.Data), `"checked":1`) {
 		t.Fatalf("audit = %d rows, last %s %s %s; want one secret.reconcile success with checked 1", rec.calls, rec.last.Action, rec.last.Outcome, rec.last.Data)
+	}
+}
+
+// azureExternal is memExternal answering as the Azure Key Vault store.
+type azureExternal struct{ *memExternal }
+
+func (azureExternal) Name() string { return azurekv.Name }
+
+// -reconcile's audit row names the organisation's own store as its target, not Vault on every deployment.
+func TestReconcileMode_TargetsTheConfiguredStore(t *testing.T) {
+	pool := envelopeDB(t)
+	ext := azureExternal{&memExternal{vals: map[string][]byte{}}}
+	s, err := newSecretStore(t.Context(), pool, "", nil, azurekv.Name, storeClients{ext: ext}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeAuditRecorder{}
+	if err := reconcileMode(t.Context(), s.(*secretstorepg.Store), rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.calls != 1 || rec.last.Action != "secret.reconcile" || rec.last.Target != azurekv.Name {
+		t.Fatalf("audit = %d rows, last %s target %q; want one secret.reconcile targeting %q", rec.calls, rec.last.Action, rec.last.Target, azurekv.Name)
 	}
 }

@@ -334,6 +334,9 @@ func testEphemeralDiskFilesystemQuota(t *testing.T, r runner.Runner, opts Option
 		t.Fatalf("CreateSandbox with DiskMiB %d: %v", ephemeralDiskLimitMiB, err)
 	}
 	t.Cleanup(func() { _ = r.StopSandbox(context.Background(), sb.Ref) })
+	if st, err := r.Status(ctx, sb.Ref); err != nil || st.State != types.RunRunning {
+		t.Fatalf("before the fill the sandbox is state=%q (Status err %v), want %q: a refusal from a sandbox that never ran proves nothing", st.State, err, types.RunRunning)
+	}
 
 	target := ephemeralFillTargets[1] // Workdir
 	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", ephemeralFillScriptFor(target.path)}); err != nil {
@@ -353,6 +356,11 @@ func testEphemeralDiskFilesystemQuota(t *testing.T, r runner.Runner, opts Option
 	case 0:
 		t.Fatalf("a 256MiB write at %s finished under a %dMiB limit: the %q enforcement the driver declares did not refuse it",
 			target.path, ephemeralDiskLimitMiB, types.StorageEnforcementFilesystem)
+	}
+	// dd's write error (ENOSPC or EDQUOT on a refused write) is its exit 1; any other code is some
+	// other failure (a kill, a signal) and not the quota refusing the write.
+	if code != 1 {
+		t.Fatalf("the fill at %s exited %d, want 1 (dd's refused-write error): the write was not shown to be refused for quota", target.path, code)
 	}
 	st, err := r.Status(ctx, sb.Ref)
 	if err != nil {

@@ -157,7 +157,7 @@ Three more the tier inherits rather than introduces:
 - `wardyn run ssh` works on a managed laptop as of 0.7.
 - The **browser** half of UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN` commented out rather than pretending otherwise.
 - The reason is wiring, not images.
-- `agent-vscode` and `agent-novnc` publish starting with the next tagged release ([`release.yml`](../.github/workflows/release.yml)'s `images-ui-sandbox` job, #141), both `FROM` `agent-base`, never the unpublished `agent-claude-code`.
+- `agent-vscode` and `agent-novnc` are published with every release since 0.8.0 ([`release.yml`](../.github/workflows/release.yml)'s `images-ui-sandbox` job, #141), both `FROM` `agent-base`, never `agent-claude-code`.
 - But the desktop envelope's `WARDYN_AGENT_IMAGES` does not register either by default — they are opt-in, not part of the installer's default catalog —
   - and a managed laptop has no repo and no build path: the launcher runs `--no-build` specifically so it "refuses to fall back to building from source on a laptop with no repo checkout".
 - So enabling the listener here would still publish a port with nothing pinned to serve it, until an operator adds `agent-vscode`/`agent-novnc` to `WARDYN_AGENT_IMAGES` themselves.
@@ -221,7 +221,7 @@ Three more the tier inherits rather than introduces:
 | `WARDYN_USER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
 
 > [!WARNING]
-> Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** — boot warns and starts anyway (a malformed root, by contrast, refuses boot), and a root that wide leaves the credential-dotfile deny-list as the only thing between a member and `~/.ssh`.
+> Use a dedicated projects directory. **Never `$HOME`, never `/`**: a root that wide leaves the credential-dotfile deny-list alone between a member and `~/.ssh`. Boot warns on `/` and the daemon's `$HOME`, not a person's, and starts anyway (a malformed root refuses boot).
 
 - [ENV.md](ENV.md) carries the full semantics.
 

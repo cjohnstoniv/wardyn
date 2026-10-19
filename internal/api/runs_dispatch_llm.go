@@ -259,12 +259,20 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	return injections, mitmHosts, true
 }
 
+// llmModeOn reports whether an llm_inspection.mode is set and not "off", trimmed and case-folded as
+// validateLLMInspection reads it.
+func llmModeOn(mode string) bool {
+	mode = strings.TrimSpace(mode)
+	return mode != "" && !strings.EqualFold(mode, "off")
+}
+
 // llmInspectMITMEnabled reports whether the policy's intercept_tls content
 // inspection is active (mode set and not "off") — the content-inspection reason
 // to provision the per-run MITM CA and TLS-terminate the built-in LLM hosts.
 func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 	li := policy.LLMInspection
-	return li != nil && li.InterceptTLS && li.Mode != "" && !strings.EqualFold(li.Mode, "off")
+	// Trimmed like the validator trims it: " off" is off, not an unknown mode that provisions the MITM.
+	return li != nil && li.InterceptTLS && llmModeOn(li.Mode)
 }
 
 // inspectableLLMRefusal is require_inspectable_llm's refusal. It enumerates
@@ -296,7 +304,7 @@ const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transpo
 // a concurrent kill's KILLED is not clobbered) and dispatch must stop.
 func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, llm llmTransport) bool {
 	li := policy.LLMInspection
-	if li == nil || !li.RequireInspectableLLM || li.Mode == "" || strings.EqualFold(li.Mode, "off") {
+	if li == nil || !li.RequireInspectableLLM || !llmModeOn(li.Mode) {
 		return true
 	}
 	if llm.bedrockReady {

@@ -213,16 +213,22 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 	if a.endsUnterminated() {
 		payload = append([]byte{'\n'}, payload...)
 	}
-	if _, err := a.f.Write(payload); err != nil {
-		return err
+	// A failed Write or Sync may still have put bytes on disk: a short Write
+	// lands a prefix, and a failed fsync leaves the whole line written. Those
+	// bytes are a line to Drain (a torn tail is read as a line), so count them
+	// whenever anything landed or the Write completed, or the gauge under-counts
+	// until the next restart recount.
+	n, werr := a.f.Write(payload)
+	if werr == nil {
+		werr = a.f.Sync()
 	}
-	if err := a.f.Sync(); err != nil {
-		return err
+	if n > 0 {
+		// Exactly one line either way: a torn fragment was ALREADY counted as a
+		// line (a tail with no newline is a line), and the separator only
+		// terminates it.
+		a.lines.Add(1)
 	}
-	// Exactly one line either way: a torn fragment was ALREADY counted as a line
-	// (a tail with no newline is a line), and the separator only terminates it.
-	a.lines.Add(1)
-	return nil
+	return werr
 }
 
 // endsUnterminated reports whether the spool's last on-disk byte is not '\n' —
@@ -629,13 +635,19 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 
 // volumeWritable reports whether the spool's directory takes a synced write at the path compact
 // stages its rewrite at, without touching the spool itself. Caller must hold a.mu.
+// The probe is as large as the spool, the most a rewrite writes: a one-byte probe passes on a
+// nearly full volume the rewrite then fails on, and the lines behind the suspect land again.
 func (a *AuditSpool) volumeWritable() bool {
+	fi, err := os.Stat(a.path)
+	if err != nil {
+		return false
+	}
 	tmp := a.path + ".tmp"
 	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 	if err != nil {
 		return false
 	}
-	_, werr := tf.Write([]byte{'\n'})
+	_, werr := tf.Write(make([]byte, max(fi.Size(), 1)))
 	serr := tf.Sync()
 	cerr := tf.Close()
 	rerr := os.Remove(tmp)

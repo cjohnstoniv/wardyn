@@ -181,7 +181,7 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recor
 	case len(rep.Dangling)+len(rep.Orphans) > 0:
 		outcome, data["reason"] = "failure", "drift"
 	}
-	emitMaintenanceAudit(ctx, rec, "wardyn/reconcile", "secret.reconcile", vaultkv.Name, outcome, data)
+	emitMaintenanceAudit(ctx, rec, "wardyn/reconcile", "secret.reconcile", ps.ExternalName(), outcome, data)
 	if err != nil {
 		return err
 	}

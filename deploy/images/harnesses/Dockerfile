@@ -47,6 +47,7 @@ RUN set -eu; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
         npm install -g "@openai/codex@$CODEX_VERSION"; \
+        npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi
 

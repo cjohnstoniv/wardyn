@@ -39,7 +39,7 @@ depend on the workspace files being present.
 **Option C — API-key-free probe.**
 Run `examples/workspaces/probes.sh` against a live sandbox (any RUNNING run)
 to exercise every egress control with raw `curl` and `wardyn-git-helper`
-calls.  No Anthropic key needed.
+calls.  No Anthropic key needed.  The git probe passes when the helper refuses because the run's GitHub access is brokered through the proxy, when it raises a credential approval, or when it emits a credential.
 
 ## Prerequisites
 

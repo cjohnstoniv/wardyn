@@ -191,7 +191,11 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
     const onGateChange = vi.fn();
     renderStep({ onGateChange });
     await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
-    await screen.findByText("Not tested");
+    // "Not tested" is also the panel's resting text, so wait for the window to close: the request
+    // has failed only once the gate has been told the probe stopped running.
+    await waitFor(() => expect(onGateChange).toHaveBeenCalledWith({ probeRunning: false }));
+    expect(onGateChange).toHaveBeenCalledWith({ probeRunning: true });
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
     for (const call of onGateChange.mock.calls) {
       expect(call[0]).not.toHaveProperty("proxyProbe");
     }

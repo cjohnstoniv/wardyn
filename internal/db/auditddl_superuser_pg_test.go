@@ -23,9 +23,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestPG_AuditDDLProtectedFollowsSuperuserRoleMembership(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -33,12 +36,14 @@ func TestPG_AuditDDLProtectedFollowsSuperuserRoleMembership(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
 		t.Fatalf("read role: %v", err)
 	}
-	if !super {
-		t.Skip("WARDYN_TEST_PG role is not a superuser; creating the superuser role this probe grants needs it")
-	}
 	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
+	urlDSN := err == nil && u.Scheme != "" && u.Host != ""
+	mustNotSkip := probeMustNotSkip(t, super, urlDSN)
+	if !super {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG role is not a superuser; creating the superuser role this probe grants needs it")
+	}
+	if !urlDSN {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
 	}
 
 	n := time.Now().UnixNano() % 1_000_000_000
@@ -84,7 +89,7 @@ func TestPG_AuditDDLProtectedFollowsSuperuserRoleMembership(t *testing.T) {
 	u.User = url.UserPassword(app, pw)
 	appPool, err := Connect(ctx, u.String())
 	if err != nil {
-		t.Skipf("cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
+		skipOrFatal(t, mustNotSkip, "cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
 	}
 	t.Cleanup(appPool.Close)
 
@@ -142,6 +147,7 @@ func TestPG_AuditDDLProtectedFollowsSuperuserRoleMembership(t *testing.T) {
 // this test exists so that is a measured fact rather than a comment somebody
 // later "fixes".
 func TestPG_AuditDDLProtectedIgnoresPgWriteAllData(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -156,12 +162,14 @@ func TestPG_AuditDDLProtectedIgnoresPgWriteAllData(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
 		t.Fatalf("read role: %v", err)
 	}
-	if !super {
-		t.Skip("WARDYN_TEST_PG role cannot CREATE ROLE")
-	}
 	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		t.Skip("WARDYN_TEST_PG is not a URL-form DSN")
+	urlDSN := err == nil && u.Scheme != "" && u.Host != ""
+	mustNotSkip := probeMustNotSkip(t, super, urlDSN)
+	if !super {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG role cannot CREATE ROLE")
+	}
+	if !urlDSN {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG is not a URL-form DSN")
 	}
 
 	role := fmt.Sprintf("wardyn_f61_wad_%d", time.Now().UnixNano()%1_000_000_000)
@@ -189,7 +197,7 @@ func TestPG_AuditDDLProtectedIgnoresPgWriteAllData(t *testing.T) {
 	u.User = url.UserPassword(role, pw)
 	wad, err := Connect(ctx, u.String())
 	if err != nil {
-		t.Skipf("cannot connect as the pg_write_all_data role: %v", err)
+		skipOrFatal(t, mustNotSkip, "cannot connect as the pg_write_all_data role: %v", err)
 	}
 	t.Cleanup(wad.Close)
 

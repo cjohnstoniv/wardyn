@@ -17,14 +17,17 @@ import (
 
 func TestWithMaskScope(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
-		"no data":          {"", `{"mask_scope":"globals_only"}`},
-		"null":             {"null", `{"mask_scope":"globals_only"}`},
-		"empty object":     {"{}", `{"mask_scope":"globals_only"}`},
-		"object":           {`{"a":1}`, `{"mask_scope":"globals_only","a":1}`},
-		"padded object":    {" {\"a\":1} ", `{"mask_scope":"globals_only","a":1}`},
-		"already labelled": {`{"mask_scope":"globals_only","a":1}`, `{"mask_scope":"globals_only","a":1}`},
-		"an array":         {`[1]`, `[1]`},
-		"not json":         {`{oops`, `{oops`},
+		"no data":            {"", `{"mask_scope":"globals_only"}`},
+		"null":               {"null", `{"mask_scope":"globals_only"}`},
+		"empty object":       {"{}", `{"mask_scope":"globals_only"}`},
+		"object":             {`{"a":1}`, `{"mask_scope":"globals_only","a":1}`},
+		"padded object":      {" {\"a\":1} ", `{"mask_scope":"globals_only","a":1}`},
+		"already labelled":   {`{"mask_scope":"globals_only","a":1}`, `{"mask_scope":"globals_only","a":1}`},
+		"string in a value":  {`{"tool":"mask_scope"}`, `{"mask_scope":"globals_only","tool":"mask_scope"}`},
+		"string in an array": {`{"args":["mask_scope"]}`, `{"mask_scope":"globals_only","args":["mask_scope"]}`},
+		"nested key":         {`{"x":{"mask_scope":"y"}}`, `{"mask_scope":"globals_only","x":{"mask_scope":"y"}}`},
+		"an array":           {`[1]`, `[1]`},
+		"not json":           {`{oops`, `{oops`},
 	} {
 		got := withMaskScope(json.RawMessage(tc.in))
 		if string(got) != tc.want {

@@ -77,3 +77,21 @@ func expandDefault(requested, consented []string) (expanded []string, bad string
 	}
 	return expanded, "", true
 }
+
+// firstUnconsented names the first requested scope that is neither in the
+// consented set nor one of the OIDC scopes every app holds. ok=true means every
+// requested scope is covered.
+func firstUnconsented(requested, consented []string) (string, bool) {
+	for _, want := range requested {
+		if slices.Contains(alwaysConsented, want) || slices.Contains(consented, want) {
+			continue
+		}
+		return want, false
+	}
+	return "", true
+}
+
+// splitScope splits an OAuth scope string on whitespace, dropping empties.
+func splitScope(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\t' || r == '+' })
+}

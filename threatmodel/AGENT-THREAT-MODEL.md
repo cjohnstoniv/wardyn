@@ -64,7 +64,7 @@ this space is an axis substitution.
 | 10 | **Privilege escalation within the platform** | a member gains operator powers | 🟡 **partial.** A capability-grant model exists with deny-beats-allow precedence — but **every enforcement switch ships off**, so an upgraded deployment enforces nothing until an admin turns kinds on |
 | 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent; audit events record a single actor field, so sponsor and agent are not separable per event |
 | 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain — which is tamper-**evidence**, not tamper-proofness, and only if a head hash is retained off-box. Session recordings are writable by the run that produces them |
-| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** The platform has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty; see [below](#category-13-verdict). |
+| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** It has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty; see [below](#category-13-verdict). |
 | 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** `WARDYN_RUN_MAX_AGE` is off by default, and there is no token-spend or model-call budget anywhere; see [below](#category-14-verdict). |
 
 - **Deliberately excluded**, so the absence reads as a decision:
@@ -110,7 +110,7 @@ would claim coverage of a framework nothing here is tested against.
 #### Category 13 verdict
 
 - ⛔ **not addressed, by omission.**
-- The platform leans heavily on human approvals and has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty.
+- The platform leans heavily on human approvals and has no rate limit, batching guard or anomaly signal on approval volume, and only opt-in separation of duty (`WARDYN_{EGRESS,CAPABILITY,GOVERNANCE}_SECOND_HUMAN`).
 - This is the failure mode every approval-based control shares, and no code fixes it
 
 #### Category 14 verdict

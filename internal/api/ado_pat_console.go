@@ -96,18 +96,25 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read the Azure DevOps sign-in configuration", err)
 		return
 	}
-	rowIDs := []string{rowID}
-	if !ok {
-		// A cleanup, not a use (the own-token door's rule, handleDeleteADOOwnPAT): a row the caller
-		// may no longer use still lets them remove the sign-in they stored under it.
-		if rowIDs, err = s.adoHeldSignInRows(ctx, subject); err != nil {
-			writeServerError(w, r, "read the Azure DevOps sign-in", err)
-			return
+	// A cleanup, not a use (the own-token door's rule, handleDeleteADOOwnPAT): a row the caller
+	// may no longer use still lets them remove the sign-in they stored under it, alongside the usable row.
+	held, err := s.adoHeldSignInRows(ctx, subject)
+	if err != nil {
+		writeServerError(w, r, "read the Azure DevOps sign-in", err)
+		return
+	}
+	var rowIDs []string
+	if ok {
+		rowIDs = []string{rowID}
+	}
+	for _, id := range held {
+		if !slices.Contains(rowIDs, id) {
+			rowIDs = append(rowIDs, id)
 		}
-		if len(rowIDs) == 0 {
-			writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
-			return
-		}
+	}
+	if len(rowIDs) == 0 {
+		writeErrorReason(w, http.StatusNotFound, reasonADOSignInUnconfigured, adoSignInUnconfiguredRefusal)
+		return
 	}
 	// Revoke first: revoking a token redeems the sign-in this then forgets.
 	// A token created while this runs revokes itself (adoSignInEnds).

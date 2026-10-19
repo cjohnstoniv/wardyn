@@ -55,7 +55,7 @@
 //     ListRunnerTokensPage, RevokeMyRunner, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled, MintOrgRunnerToken,
 //     ClaimOrgRunner, SetRunnerTrust
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
-//     ListRunnerPools, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, OwnRunnerPool, AddMyRunnerToPool,
+//     ListRunnerPools, ListRunnerPoolsPage, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, OwnRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, AddRunnerPoolRunner, RemoveRunnerPoolRunner, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
 //     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
 //     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,
@@ -87,6 +87,8 @@
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
+//   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
+//     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
@@ -145,7 +147,7 @@
 // EVERY list family surfaces that signal, through a *Page variant returning it
 // as a bool: ListRunsPage, ListApprovalsPage, ListPoliciesPage,
 // ListWorkspacesPage, AuditEventsPage, ListGrantsPage, ListSSHKeysPage,
-// ListSecretsPage. The plain forms are thin wrappers that
+// ListSecretsPage, ListRunnerPoolsPage. The plain forms are thin wrappers that
 // discard it, so existing callers are unchanged — but they leave the caller to
 // infer completeness from len(page) == the limit it happened to pass, a guess
 // that silently breaks the moment a caller omits Limit and gets the server's

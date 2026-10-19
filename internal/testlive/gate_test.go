@@ -6,6 +6,7 @@ package testlive
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,4 +72,40 @@ func TestRequireProbe(t *testing.T) {
 		t.Skip("not running as a TestRequire probe")
 	}
 	Require(t, "WARDYN_TESTLIVE_REQUIRE_PROBE_GATE", "WARDYN_TESTLIVE_REQUIRE_PROBE_NAME")
+}
+
+// ReadSecretFile refuses a file that is inside the checkout, whatever path it is named by (#2699): a
+// symlink from outside the repo into it is judged by where it points, and a file outside is read.
+func TestReadSecretFile_JudgesTheRealPath(t *testing.T) {
+	const env = "WARDYN_TESTLIVE_SECRET_PROBE"
+	dir := t.TempDir()
+	inside := filepath.Join(repoRoot(), "go.mod")
+	link := filepath.Join(dir, "looks-outside")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "secret")
+	if err := os.WriteFile(outside, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		path    string
+		wantErr string
+	}{
+		"a path in the repo":                   {inside, "inside the repository"},
+		"a symlink from outside into the repo": {link, "inside the repository"},
+		"a file outside":                       {outside, ""},
+		"a file that does not exist":           {filepath.Join(dir, "missing"), "not readable"},
+	} {
+		t.Setenv(env, tc.path)
+		b, err := ReadSecretFile(env)
+		switch {
+		case tc.wantErr == "" && (err != nil || string(b) != "s3cret"):
+			t.Errorf("%s: got %q, %v; want the file read", name, b, err)
+		case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, tc.wantErr)
+		case err != nil && (strings.Contains(err.Error(), tc.path) || strings.Contains(err.Error(), "s3cret")):
+			t.Errorf("%s: the error names the path or the contents: %v", name, err)
+		}
+	}
 }

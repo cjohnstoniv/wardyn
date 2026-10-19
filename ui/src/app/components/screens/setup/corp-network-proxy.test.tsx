@@ -458,7 +458,10 @@ describe("Custom-URL block — only after a blocked result, weaker claim on a pa
     expect(screen.getByText("Blocked")).toBeInTheDocument();
     expect(screen.getByText(T.TEST_BLOCKED)).toBeInTheDocument();
     // No verdict was observed, so no proxyProbe patch ever reports upward
-    // (customDraft keystrokes and the probeRunning window do, and should).
+    // (customDraft keystrokes and the probeRunning window do, and should). The window opened and
+    // closed, so the loop below has real calls to look at.
+    expect(onGateChange).toHaveBeenCalledWith({ probeRunning: true });
+    expect(onGateChange).toHaveBeenCalledWith({ probeRunning: false });
     for (const call of onGateChange.mock.calls) {
       expect(call[0]).not.toHaveProperty("proxyProbe");
     }

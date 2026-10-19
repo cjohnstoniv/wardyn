@@ -294,8 +294,8 @@ var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is no
 // read a value the erase is about to remove, and its Put would otherwise write
 // it back under a generation that still matches. That holds across processes. The re-list is the
 // backstop for an unfenced writer, and for a store with no generation the
-// caller's locks (internal/api, handleErasePersonCredentials) are all that
-// serialise the writers in this process; Fenced says which of the two held.
+// caller's credential locks (internal/api, handleErasePersonCredentials) are all that
+// serialise the writers; Fenced says which of the two held.
 func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
 	rep := EraseReport{Purged: true}
 	if owner == "" {

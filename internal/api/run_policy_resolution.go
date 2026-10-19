@@ -135,7 +135,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 		}
 		if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
-			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid inline_policy: "+err.Error())
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runSecretRefsRefusal("invalid inline_policy: ", code, err)
 		}
 		// The CPU and memory half for the inline arm, the same helper the stored arm
 		// calls below. The main drive is sized by stepMainDrive, for every door.
@@ -271,7 +271,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}
 	if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
-		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runSecretRefsRefusal("invalid policy: ", code, err)
 	}
 	if !dryRun {
 		source.applyAudits = append(source.applyAudits, s.auditPolicyOverlay(r, source.Overlay)...)

@@ -301,7 +301,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 			denied = authErrorSignInRefused // the page never says the identity is deactivated
 		}
 		// A denied login must not leave a pre-existing session cookie still valid.
-		a.clearCookie(w, sessionCookieName)
+		a.clearSessionCookie(w)
 		a.redirectAuthError(w, r, denied)
 		return
 	}

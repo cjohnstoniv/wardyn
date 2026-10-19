@@ -20,7 +20,8 @@ import (
 // (#1312; the 0.7.9 shared-config regression). The rules:
 //   - every http.Server literal that sets TLSConfig sets it from
 //     tlsConfigForListener(...); the single exception is internal_tls.go's
-//     hop.server, which is the internal CA's own config, not posture's;
+//     hop.server.Clone(), the internal CA's own config, not posture's, and
+//     cloned for the same reason (an http.Server mutates the config it gets);
 //   - exactly 2 literals (serveAndShutdown, startUISandboxGateway) do so, so
 //     a third listener added with a different shape is noticed here;
 //   - nothing selects .tlsConfig outside tlsConfigForListener and
@@ -60,10 +61,11 @@ func tlsListenerViolations(t *testing.T, srcs map[string]string) []string {
 								viaSeam++
 								continue
 							}
-						case *ast.SelectorExpr:
-							if name == "internal_tls.go" && identName(v.X) == "hop" && v.Sel.Name == "server" {
-								hopServer++
-								continue
+							if clone, ok := v.Fun.(*ast.SelectorExpr); ok && clone.Sel.Name == "Clone" && name == "internal_tls.go" {
+								if hop, ok := clone.X.(*ast.SelectorExpr); ok && identName(hop.X) == "hop" && hop.Sel.Name == "server" {
+									hopServer++
+									continue
+								}
 							}
 						}
 						out = append(out, fmt.Sprintf("%s: http.Server TLSConfig is not tlsConfigForListener(...)", pos))

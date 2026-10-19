@@ -165,6 +165,24 @@ func TestPG_SiteConfigSeed_DifferentValuesUntouched(t *testing.T) {
 	}
 }
 
+// A stored field that no longer validates (here an https proxy URL the PUT
+// handler would now refuse) does not stop a seed that only adds other settings.
+func TestPG_SiteConfigSeed_StoredInvalidFieldDoesNotRefuseBoot(t *testing.T) {
+	p := newReplicaPair(t)
+	putRawSiteConfig(t, p.poolA, `{"upstream_proxy_url": "https://proxy-a.corp.example:3128"}`)
+	seed := &SiteConfigSeed{InternalHosts: []types.InternalHost{{HostSuffix: "git.corp.internal", CIDRs: []string{"10.0.0.0/8"}}}}
+	if err := p.a.SeedSiteConfig(context.Background(), seed); err != nil {
+		t.Fatalf("seed refused over a stored field it does not touch: %v", err)
+	}
+	got, err := p.a.cfg.Store.GetSiteConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.InternalHosts) != 1 || got.UpstreamProxyURL != "https://proxy-a.corp.example:3128" {
+		t.Errorf("stored config after seed = %+v", got)
+	}
+}
+
 // Two replicas booting together over one empty database: one write.
 func TestPG_SiteConfigSeed_ConcurrentReplicasWriteOnce(t *testing.T) {
 	p := newReplicaPair(t)

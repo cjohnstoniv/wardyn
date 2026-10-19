@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -216,6 +217,13 @@ func TestEnqueueCarriesThePlanAsThreeParallelArrays(t *testing.T) {
 
 	if off := NewEnqueue(types.ApprovalEgressDomain, nil); off.On() {
 		t.Error("an approval no route matches planned rows")
+	}
+}
+
+func TestEnqueueArgsClampADelayPastInt32Seconds(t *testing.T) {
+	e := Enqueue{planned: []Planned{{Tier: 1, Channel: "a", After: 700000 * time.Hour}}}
+	if got := e.Args()[2].([]int32)[0]; got != math.MaxInt32 {
+		t.Errorf("after_sec = %d, want it clamped to %d rather than wrapped", got, int32(math.MaxInt32))
 	}
 }
 

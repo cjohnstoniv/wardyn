@@ -421,17 +421,36 @@ func TestRunAsciinemaForwardsTermination(t *testing.T) {
 	absorb := make(chan os.Signal, 1)
 	signal.Notify(absorb, syscall.SIGTERM)
 	defer signal.Stop(absorb)
-	done := make(chan error, 1)
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
 	go func() {
-		_, err := runAsciinema(fake, filepath.Join(dir, "r.cast"), []string{"true"})
-		done <- err
+		code, err := runAsciinema(fake, filepath.Join(dir, "r.cast"), []string{"true"})
+		done <- result{code, err}
 	}()
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runAsciinema: %v", err)
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("runAsciinema: %v", res.err)
+		}
+		// Killed by the forwarded SIGTERM: the exit code is the shell's 128+15, never -1 (255 at exit).
+		if want := 128 + int(syscall.SIGTERM); res.code != want {
+			t.Fatalf("exit code = %d, want %d", res.code, want)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the child was still recording 10 s after SIGTERM: it was not forwarded")
+	}
+}
+
+// The no-asciinema fallback reports a signal-killed agent the same way: 128+signal, never -1 (255 at exit).
+func TestRecordToLogReportsASignalKilledAgentAs128PlusSignal(t *testing.T) {
+	code, err := recordToLog(filepath.Join(t.TempDir(), "r.log"), []string{"sh", "-c", "kill -TERM $$"})
+	if err != nil {
+		t.Fatalf("recordToLog: %v", err)
+	}
+	if want := 128 + int(syscall.SIGTERM); code != want {
+		t.Fatalf("exit code = %d, want %d", code, want)
 	}
 }

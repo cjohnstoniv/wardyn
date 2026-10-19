@@ -13,11 +13,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -143,5 +146,44 @@ func TestCredentialDeliveryWrite_DirectSaveETagIsTheNextGETs(t *testing.T) {
 	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
 	if got.Code != http.StatusOK || saved == "" || got.Header().Get("ETag") != saved {
 		t.Fatalf("PUT ETag %q, next GET %d ETag %q, want the same non-empty ETag", saved, got.Code, got.Header().Get("ETag"))
+	}
+}
+
+// A direct save checked against a document that another write then moves is refused 412, not applied
+// over it: the If-Match check and the write run under the target lock an approval takes.
+func TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite(t *testing.T) {
+	e := newGovEnv(t)
+	etag := e.admin(http.MethodGet, credentialDeliveryPath, "").Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("GET answered no ETag")
+	}
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if err := store.LockGovernanceTarget(ctx, tx, govKindCredentialDelivery); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var got *httptest.ResponseRecorder
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		got = doWithHeaders(t, e.srv, http.MethodPut, credentialDeliveryPath, adminToken,
+			`{"classes":{"api_key":{"mode":"via_org"}}}`, map[string]string{"If-Match": etag})
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if _, err := store.PutCredentialDeliveryPolicyQ(ctx, tx, mustJSON(placement.DeliveryPolicy{
+		Classes: map[string]placement.ClassPolicy{"env_secret": {Mode: "via_org"}}}), "other", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	if got.Code != http.StatusPreconditionFailed || !strings.Contains(got.Body.String(), reasonCredentialDeliveryStale) {
+		t.Fatalf("direct PUT checked before a concurrent write = %d %s, want 412 %s", got.Code, got.Body, reasonCredentialDeliveryStale)
 	}
 }

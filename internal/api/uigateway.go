@@ -590,7 +590,7 @@ func uiStripInbound(out *http.Request, policy UICookiePolicy) {
 // delete a wardyn_* cookie in the operator's browser (cookie tossing — a sandbox-set wardyn_ui_sess or
 // console session cookie would be an authentication attack, not a rendering quirk), nor set one that
 // escapes its own host (uiSetCookieAllowed), nor register a service worker that controls more than its
-// own app (uiConfineServiceWorker), nor clear site data.
+// own app (uiConfineServiceWorker), nor clear site data (a browser applies it to the registrable domain the console shares).
 func (s *Server) uiStripOutbound(resp *http.Response) error {
 	uiFilterSetCookie(resp.Header)
 	resp.Header.Del("Clear-Site-Data")

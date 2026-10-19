@@ -75,8 +75,8 @@ make test-drive          # ARGS defaults to --up, which brings the compose stack
   - a governed clone and the no-default-route check, an egress deny,
   - the cloud-metadata block (a proof the table doesn't cover),
   - a first-use approval (queue → approve → retry), the brokered git-credential chain,
-  - and the kill cascade with its `actor_type=human` audit event.
-- Its one weak step is the recording: it uploads a synthetic asciicast and fetches it back, which exercises the endpoint but does not prove the recorder captured a live session.
+  - and the kill cascade with its `run.kill` audit event.
+- Its one weak step is the recording: it only checks that the endpoint refuses an unauthenticated read, not that the recorder captured a live session.
 - Check the **Recording** tab after a real run for that.
 - `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to poke at.
 
@@ -130,7 +130,7 @@ wardyn run attach <id>
 <!-- Regenerated with `make screenshots` (docs.spec.ts) for 0.7.4. Freshness is
      flagged per-PR, as an advisory annotation from ci.yml's diagrams job
      (RELEASING.md "Prerequisites"), not by a release-cut step. -->
-![The runs board — every governed run with its state, barrier tier, and workspace](img/runs-board.png)
+![The runs board — every governed run with its state and workspace](img/runs-board.png)
 
 What you can verify live, even without keys:
 
@@ -168,7 +168,7 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 ```
 
 - Before you run step 3, list the repository in the `github_token` grant's `scope.repos` in `claude-llm.json` (it ships `"repos": []`, which the broker cannot mint against), or the clone fails; see [POLICIES.md](POLICIES.md#github_token).
-- What happens: the run's policy carries an auto-mintable `api_key` grant for `api.anthropic.com`;
+- What happens: the run's model provider (`--model-provider anthropic`) supplies your own credential for `api.anthropic.com`, not a policy grant;
   - the proxy resolves the key **at startup, into proxy memory only** (the sandbox never sees it — check: `docker exec
     wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel `wardyn-proxy-injected`, never your key);
   - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and logs every model call as a `brokered:llm` decision in the audit trail
@@ -176,10 +176,10 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 - Watch the session live via Attach (`wardyn run attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the captured cast only after the fact, it has no live view.
 
-- To also enable real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the credential request the agent raises —
-  - the minted installation token is 1h, repo-scoped, and permission-clamped to `contents:write` + `pull_requests:write`.
-- Branch-namespace confinement (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the brokered git path by default**: a push to any other ref is refused with 403 before the token is minted.
-- Nothing to turn on — `agent-run` checks each cloned repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
+- For real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the agent's credential request —
+  - the minted installation token is 1h, repo-scoped, and permission-clamped to `contents:write` + `pull_requests:write` (a GitHub CLI grant's: to its capabilities).
+- Branch-namespace confinement (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the brokered git path by default**: a push to any other ref is refused with 403 before minting.
+- Nothing to enable — `agent-run` checks each cloned repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
 
 > [!WARNING]
 > - What that does **not** cover, plainly.

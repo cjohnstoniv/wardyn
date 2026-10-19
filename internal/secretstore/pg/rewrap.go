@@ -375,6 +375,7 @@ func rewrap(ctx context.Context, source func(envelope) (kek.KEK, error), to kek.
 	if err != nil {
 		return nil, fmt.Errorf("unwrap with the old key: %w", err)
 	}
+	defer clear(dek)
 	wrapped, err := to.Wrap(ctx, dek, bind)
 	if err != nil {
 		return nil, fmt.Errorf("wrap with the new key: %w", err)

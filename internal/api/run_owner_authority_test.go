@@ -313,8 +313,8 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 			case http.StatusForbidden:
 				f.assertReviveRefused(t, "capability_"+capAgent)
 			case http.StatusServiceUnavailable:
-				if !strings.Contains(body, "resolve user type") || len(f.rr.replaced) != 0 {
-					t.Errorf("revive = %s, replaced %d; want the type read named and the proxy kept", body, len(f.rr.replaced))
+				if !strings.Contains(body, "re-check the run owner's authority") || strings.Contains(body, "resolve user type") || len(f.rr.replaced) != 0 {
+					t.Errorf("revive = %s, replaced %d; want the fixed message, no driver text and the proxy kept", body, len(f.rr.replaced))
 				}
 			}
 		})
@@ -330,7 +330,7 @@ func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T)
 			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || len(out.Results) != 1 {
 				t.Fatalf("restart = %d %s (%v), want 200 with one result", w.Code, w.Body.String(), err)
 			}
-			wantErr := map[int]string{http.StatusForbidden: "the agent capability for claude-code", http.StatusServiceUnavailable: "resolve user type"}[want]
+			wantErr := map[int]string{http.StatusForbidden: "the agent capability for claude-code", http.StatusServiceUnavailable: "re-check the run owner's authority"}[want]
 			if r := out.Results[0]; r.OK != (want == http.StatusOK) || !strings.Contains(r.Error, wantErr) {
 				t.Fatalf("result = %+v; want ok=%v, error naming %q", r, want == http.StatusOK, wantErr)
 			}

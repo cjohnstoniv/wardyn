@@ -48,11 +48,12 @@ host_runner_limits() {
 }
 
 # local_build_needed — true when ./bin/wardynd, ./bin/wardyn or the UI bundle is missing, or any
-# non-test Go source (or go.mod/go.sum) is newer than ./bin/wardyn. An old CLI left by an earlier
+# non-test Go source, embedded migration (.sql), go.mod/go.sum or UI source/package file is newer than ./bin/wardyn. An old CLI left by an earlier
 # checkout lacks the flags setup.sh passes it, so a present binary is not enough.
 local_build_needed() {
   [ ! -x ./bin/wardynd ] || [ ! -x ./bin/wardyn ] || [ ! -f ./ui/dist/index.html ] && return 0
-  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
+  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name '*.sql' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ] \
+    || [ -n "$(find ui/src ui/public ui/index.html ui/package.json ui/pnpm-lock.yaml ui/vite.config.ts -type f -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
 }
 
 # stale_secrets_wipe_consent ENV_FILE — may setup.sh TRUNCATE the secrets table after
@@ -74,5 +75,17 @@ stale_secrets_wipe_consent() {
   warn "Clearing the secrets table DESTROYS every stored credential (model providers, SCM) and the boot keys."
   [ -t 0 ] && ask_yn "Clear the secrets table (audit log, runs and recordings are kept)?" n && return 0
   warn "Nothing was cleared. To clear them: run make setup in a terminal and answer y, or set WARDYN_FORCE_RESET=1 and run make setup again."
+  return 1
+}
+
+# workspaces_root_too_broad DIR — true when DIR is the home directory, a folder above it, or /:
+# the daemon would then see ~/.ssh, ~/.aws and the rest of home (docs/ENV.md: never your home
+# directory). DIR is resolved first (trailing slash, .., symlinks), so ~/ and /home are caught as
+# well as an exact $HOME. A DIR that does not exist is not judged here; setup.sh refuses it itself.
+workspaces_root_too_broad() {
+  local root home
+  root=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  home=$(cd "${HOME}" 2>/dev/null && pwd -P) || home=${HOME}
+  case "${home%/}/" in "${root%/}/"*) return 0 ;; esac
   return 1
 }

@@ -13,6 +13,8 @@ prompt: |
   (oracle task) Probe the egress boundary from inside the sandbox and record the
   results as files in the workspace: allowed_code.txt, denied_probe.txt,
   metadata_rc.txt, metadata_connects.txt. See solution.sh.
-# NOTE: the grader below only checks the in-workspace EVIDENCE files. The audit-side
-# assertions (proxy egress.deny events for the denied host) are checked by the Go
-# orchestrator against the audit log, not by this grader.
+# NOTE: the grader below only checks the in-workspace EVIDENCE files, and that is the
+# only assertion on allow/block. The Go orchestrator (live/live_test.go) reads the
+# run's egress.allow / egress.deny / egress.hold audit events and LOGS their counts as
+# best-effort corroboration (the proxy-to-control-plane callback may not route on a
+# VM-based docker); it asserts nothing on them.

@@ -238,7 +238,7 @@ COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
   - that a container on job A's network cannot reach job B's wardynd,
   - that A survives B's `down --volumes`,
   - and that each tears down independently.
-- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is a manual/pre-release check, not a CI job.
+- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is not part of the per-push CI; the `test-e2e-concurrent` job in [.github/workflows/nightly.yml](../.github/workflows/nightly.yml) runs it nightly.
 - Its `compose_ns` helper scopes the same five ports as `ci-run.sh` above.
 
 > [!WARNING]
@@ -413,8 +413,8 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 ### Nightly scope and release runs
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
-- Eight jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
-- That frees about 60 runner-minutes by median and 12 job slots. What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
+- Nine jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
+- That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
@@ -634,7 +634,7 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
 ## Images
 
 - `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main` ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-- every release tag publishes all seven images (`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+- every release tag publishes all nine images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
 - ([.github/workflows/release.yml](../.github/workflows/release.yml) — see [RELEASING.md](../RELEASING.md) and the Helm chart's [README](../deploy/helm/wardyn/README.md)).
 - This BYOA pipeline (`ci-run.sh`) does not consume them, though: it still builds wardynd, the `wardyn-proxy` sidecar, and the agent image from source on every invocation (a few minutes per job).
 - [`scripts/up.sh`](../scripts/up.sh) now pulls the published images instead, falling back to a build when any is missing; `ci-run.sh` has not yet been switched to the same path, so a pipeline still pays the build.

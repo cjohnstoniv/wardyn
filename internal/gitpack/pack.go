@@ -111,6 +111,10 @@ func (e *MissingObjectError) Is(target error) bool { return target == ErrUninspe
 // the sender's side, push fewer commits at a time.
 var ErrTooLarge = errors.New("gitpack: the push exceeds an inspection ceiling")
 
+// ErrTooDeep is the ErrTooLarge for trees nested deeper than maxTreeDepth: a ceiling like the
+// others, whose remedy is a flatter tree rather than fewer commits.
+var ErrTooDeep = fmt.Errorf("%w: trees nested deeper than %d", ErrTooLarge, maxTreeDepth)
+
 // Change is one path a push introduces, at the mode and size the pushed tree
 // gives it.
 type Change struct {

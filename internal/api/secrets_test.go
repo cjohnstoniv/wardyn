@@ -379,9 +379,9 @@ func TestPutSecret_OwnerParamIsRefused(t *testing.T) {
 // TestDeleteSecret_MemberBedrockNames_403: the three AWS SigV4 names are
 // refused for a non-operator on DELETE as well as PUT (the guard lives in the
 // shared writableSecretName), while an operator may still delete them.
-// bedrock-api-key is absent here for the same reason it is absent from PUT —
-// its member DELETE is asserted to SUCCEED in
-// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
+// bedrock-api-key is absent here: it is the bearer key, not one of the three SigV4
+// names in memberRefusedAWSNames, and its PUT refusal is
+// TestPutSecret_RetiredModelCredentialNamesRefused's.
 func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
 	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {

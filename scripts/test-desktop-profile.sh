@@ -387,10 +387,13 @@ listing="$(tar --numeric-owner -tvzf "${tarball}")"
 not_root="$(awk '$2 != "0/0"' <<<"${listing}")"
 [ -z "${not_root}" ] || fail "the desktop tarball has entries not owned 0/0 — unpacked at / as root they belong to the builder's uid:
 ${not_root}"
-if tar -tzf "${tarball}" | grep -qE '^\.(/|$)'; then
+# One read of the names: a `tar | grep -q` pipeline under pipefail fails whenever grep exits
+# first and tar takes the SIGPIPE.
+names="$(tar -tzf "${tarball}")"
+if grep -qE '^\.(/|$)' <<<"${names}"; then
   fail "the desktop tarball has a './' entry — unpacked at / as root it re-owns / itself"
 fi
-tar -tzf "${tarball}" | grep -qx 'usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh' \
+grep -qx 'usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh' <<<"${names}" \
   || fail "the desktop tarball no longer carries usr/local/lib/wardyn/deploy/desktop/wardyn-desktop.sh"
 rm -rf "${pkg_tmp}"
 

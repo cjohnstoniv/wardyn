@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"slices"
@@ -263,11 +264,19 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	// Operator namespace: an artifact-registry token ref is site-config, not a
 	// member's own row.
 	present := map[string]bool{}
+	secretListFailed := false
 	if s.cfg.Secrets != nil {
-		if names, err := s.cfg.Secrets.List(ctx); err == nil {
-			for _, n := range names {
-				present[n] = true
-			}
+		names, err := s.cfg.Secrets.List(ctx)
+		if err != nil {
+			// A transient store failure must not read as "your secret is missing":
+			// log it once, and let the denied row below say the store could not be
+			// listed. The run still degrades to redirect-only, as before.
+			secretListFailed = true
+			slog.ErrorContext(ctx, "wardynd: could not list the secret store for artifact-redirect token injection; redirects apply without a token",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+		for _, n := range names {
+			present[n] = true
 		}
 	}
 
@@ -333,6 +342,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		port := redirectPort(r.To)
 		tok, why := s.resolveRedirectToken(ctx, r, present)
 		if why != "" {
+			if secretListFailed && (strings.HasSuffix(why, "not found") || strings.HasSuffix(why, "is not in the store")) {
+				why = "the secret store could not be listed (transient store error), so the token secret's presence is unknown"
+			}
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,

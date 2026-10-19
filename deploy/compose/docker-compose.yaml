@@ -684,8 +684,8 @@ services:
   # would only put the master key on an argv any `ps`/`/proc` reader on the
   # host can see for no benefit.
   #   export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
-  #     /usr/local/bin/wardynd -print-groundtruth-token \
-  #     -dsn "$WARDYN_PG_DSN")
+  #     /wardynd -print-groundtruth-token)
+  # (No -dsn: the running container already has WARDYN_PG_DSN in its environment.)
   # (The token has the provider's 1h TTL; re-mint on rotation. The wardynd image
   # bundles the wardynd binary, so the same image mints it.)
   # ───────────────────────────────────────────────────────────────────────────
@@ -739,6 +739,8 @@ services:
       # Comma-separated run ids the host sensor is blind to (CC3/Kata); a
       # kernel.sensor.bypass event is emitted once per id at boot.
       WARDYN_GROUNDTRUTH_BLIND_RUNS: "${WARDYN_GROUNDTRUTH_BLIND_RUNS:-}"
+      # Opt-in (see README): forward host-wide events the sidecar could not map to a Wardyn run. Off by default.
+      WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS: "${WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS:-false}"
     volumes:
       # Read the Tetragon JSON export.
       - tetragon_export:/var/log/tetragon:ro

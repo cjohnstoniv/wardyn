@@ -130,6 +130,8 @@ func TestVerifySubjectTokenEntraPortalToken(t *testing.T) {
 		gate     *fakeGate
 		wantSub  string
 		want     string
+		// askedBound: the binding is read, and under the token's issuer, tenant and object id.
+		askedBound bool
 	}{
 		// Unchanged behaviour.
 		{name: "a token for Wardyn keeps its sub", edit: func(map[string]any) {},
@@ -143,7 +145,7 @@ func TestVerifySubjectTokenEntraPortalToken(t *testing.T) {
 		{name: "a deactivated identity", edit: portalToken,
 			gate: &fakeGate{refused: true, bound: map[string]string{keyObject: "signed-in-sub"}}, want: writoidc.DenialIdentityDeactivated},
 		// The principal comes from the identity's binding.
-		{name: "the principal the person's sign-in bound", edit: portalToken,
+		{name: "the principal the person's sign-in bound", edit: portalToken, askedBound: true,
 			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "signed-in-sub"},
 		{name: "the binding outranks an object-id person", keying: true, edit: portalToken,
 			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "signed-in-sub"},
@@ -179,6 +181,14 @@ func TestVerifySubjectTokenEntraPortalToken(t *testing.T) {
 			sess, denied := auth.VerifySubjectToken(r, env.sign(t, c), testPortalClient, nil)
 			if denied != tc.want || sess.Sub != tc.wantSub {
 				t.Fatalf("exchange = (%q, %q), want (%q, %q)", sess.Sub, denied, tc.wantSub, tc.want)
+			}
+			if tc.askedBound {
+				if len(tc.gate.boundRefs) != 1 {
+					t.Fatalf("binding read %d times, want once: %+v", len(tc.gate.boundRefs), tc.gate.boundRefs)
+				}
+				if got := tc.gate.boundRefs[0]; got.Issuer != env.httpSrv.URL || got.TenantID != keyTenant || got.ObjectID != keyObject {
+					t.Fatalf("binding asked about %+v, want issuer %s tenant %s object %s", got, env.httpSrv.URL, keyTenant, keyObject)
+				}
 			}
 		})
 	}

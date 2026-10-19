@@ -80,3 +80,23 @@ func TestEnforceInspectableLLM_InspectableStillAdmitted(t *testing.T) {
 		t.Error("an inspectable transport must not be failed closed")
 	}
 }
+
+// The validator trims and case-folds llm_inspection.mode, so dispatch must read it the same way: " off" is off
+// and provisions no MITM, and a whitespace-only mode is no mode.
+func TestLLMInspectionModeIsReadTrimmedAtDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{{"alert", true}, {" block ", true}, {"off", false}, {" off", false}, {"OFF ", false}, {"  ", false}, {"", false}} {
+		spec := &types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{InterceptTLS: true, Mode: tc.mode}}
+		if got := llmInspectMITMEnabled(spec); got != tc.want {
+			t.Errorf("llmInspectMITMEnabled(mode %q) = %v, want %v", tc.mode, got, tc.want)
+		}
+	}
+	st := &inspectableGateStore{}
+	srv := New(baseTestConfig(newHarness(t), st))
+	spec := &types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: " off", RequireInspectableLLM: true}}
+	if !srv.enforceInspectableLLM(context.Background(), types.AgentRun{ID: uuid.New()}, spec, llmTransport{bedrockReady: true}) || st.failed {
+		t.Error(`require_inspectable_llm with mode " off" failed a Bedrock run, though inspection is off`)
+	}
+}

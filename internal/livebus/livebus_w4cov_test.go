@@ -93,3 +93,24 @@ func TestW4CovListenerFailureIsLogged(t *testing.T) {
 		t.Errorf("log = %q, want the failed connect named", out)
 	}
 }
+
+// A listener that keeps failing the same way logs it once, not on every retry.
+func TestListenerRepeatedFailureIsLoggedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	b := New(pool, "replica-a")
+	for range 3 {
+		b.listenOnce(context.Background())
+	}
+	if n := strings.Count(logs.String(), "listener failed"); n != 1 {
+		t.Errorf("logged the same failure %d times over three retries, want once:\n%s", n, logs.String())
+	}
+}

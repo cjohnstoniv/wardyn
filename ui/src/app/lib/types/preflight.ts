@@ -57,8 +57,7 @@ export type SetupFixAction = "add_secret" | "scan_workspace" | "sign_in" | "choo
 // WHERE the credential this item concerns actually lives at run time, derived
 // from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
 // doc comment): "proxy_injected" (an api_key grant — the value never leaves the
-// wardyn-proxy sidecar), "resident_mount" (a host credential bind-mounted into
-// the sandbox), "brokered_mint" (a github_token/git_pat grant minted/resolved
+// wardyn-proxy sidecar), "brokered_mint" (a github_token/git_pat grant minted/resolved
 // at task time), "resident_env" (an env_secret grant: the value is in the
 // sandbox environment for the whole run) or "resident_file" (a file_secret
 // grant: the value is a file in the sandbox for the whole run). "none" is a
@@ -67,7 +66,6 @@ export type SetupFixAction = "add_secret" | "scan_workspace" | "sign_in" | "choo
 // rows carry no single credential).
 export type SetupItemResidency =
   | "proxy_injected"
-  | "resident_mount"
   | "brokered_mint"
   | "resident_env"
   | "resident_file"

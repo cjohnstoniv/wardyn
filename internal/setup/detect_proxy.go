@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -293,6 +294,12 @@ func winningSetting(candidates []proxyCandidate, category string) *HostProxySett
 	return nil
 }
 
+// newProxyPAC builds a HostProxyPAC whose URL has any embedded credential masked.
+func newProxyPAC(raw string, source HostProxySource, detail string) *HostProxyPAC {
+	masked, _ := maskProxyURL(raw)
+	return &HostProxyPAC{URL: masked, Source: source, Detail: detail}
+}
+
 // newProxySetting builds a masked-safe HostProxySetting from a raw value.
 func newProxySetting(raw string, source HostProxySource, detail string) *HostProxySetting {
 	masked, hasCred := maskProxyURL(raw)
@@ -325,7 +332,8 @@ func detectionHasCredentials(det HostProxyDetection) bool {
 
 // maskProxyURL parses raw as a proxy address and, when it carries userinfo
 // (user[:pass]@host), returns a display-safe form with any password replaced
-// by "***" — the raw credential is never returned. Values with no userinfo
+// by "***" — the raw credential is never returned. A token-only login
+// (":token@host") counts as userinfo. Values with no userinfo
 // (including a bare "host:port", and anything net/url can't parse) are
 // returned UNCHANGED with hasCredentials=false: there is nothing to mask.
 func maskProxyURL(raw string) (masked string, hasCredentials bool) {
@@ -351,9 +359,10 @@ func maskProxyURL(raw string) (masked string, hasCredentials bool) {
 		}
 		return raw, false
 	}
-	if u.User == nil || u.User.Username() == "" {
+	if u.User == nil {
 		return raw, false
 	}
+	// A token-only login (":token@host") has an empty username but still a secret.
 	display := u.User.Username()
 	if _, hasPass := u.User.Password(); hasPass {
 		display += ":***"
@@ -465,6 +474,9 @@ func detectShellProxyCandidates(home string) []proxyCandidate {
 		if err != nil {
 			continue
 		}
+		// A shell applies the LAST assignment, so within one file the last
+		// declaration of a category wins; across files the first file wins.
+		var fileOut []proxyCandidate
 		scanner := bufio.NewScanner(f)
 		for lines := 0; scanner.Scan() && lines < maxShellProfileLines; lines++ {
 			m := shellProxyLineRE.FindStringSubmatch(scanner.Text())
@@ -475,10 +487,18 @@ func detectShellProxyCandidates(home string) []proxyCandidate {
 			if category == "" || seen[category] {
 				continue
 			}
-			seen[category] = true
-			out = append(out, proxyCandidate{category, m[2], ProxySourceShell, m[1] + " declared in " + path})
+			c := proxyCandidate{category, m[2], ProxySourceShell, m[1] + " declared in " + path}
+			if i := slices.IndexFunc(fileOut, func(o proxyCandidate) bool { return o.category == category }); i >= 0 {
+				fileOut[i] = c
+			} else {
+				fileOut = append(fileOut, c)
+			}
 		}
 		f.Close()
+		for _, c := range fileOut {
+			seen[c.category] = true
+		}
+		out = append(out, fileOut...)
 	}
 	return out
 }
@@ -580,8 +600,9 @@ var (
 	npmProxyRE    = regexp.MustCompile(`(?i)^(?:https-proxy|proxy)\s*=\s*(\S+)`)
 	pipProxyRE    = regexp.MustCompile(`^proxy\s*=\s*(\S+)`)
 	cargoProxyRE  = regexp.MustCompile(`^proxy\s*=\s*"?([^"\s]+)"?`)
-	aptProxyRE    = regexp.MustCompile(`Acquire::(?:http|https)::Proxy\s+"([^"]+)"`)
+	aptProxyRE    = regexp.MustCompile(`^\s*Acquire::(?:http|https)::Proxy\s+"([^"]+)"`)
 	mavenProxyRE  = regexp.MustCompile(`(?s)<proxies>(.*?)</proxies>`)
+	xmlCommentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
 	mavenHostRE   = regexp.MustCompile(`<host>\s*([^<\s]+)\s*</host>`)
 	mavenPortRE   = regexp.MustCompile(`<port>\s*([^<\s]+)\s*</port>`)
 	mavenActiveRE = regexp.MustCompile(`<active>\s*false\s*</active>`)
@@ -595,6 +616,8 @@ func detectMavenProxy(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	// The shipped settings.xml carries a commented-out example <proxy>; it is not live.
+	data = xmlCommentRE.ReplaceAll(data, nil)
 	m := mavenProxyRE.FindSubmatch(data)
 	if m == nil {
 		return "", false
@@ -731,8 +754,7 @@ func parseWindowsRegistryProxyJSON(raw []byte) ([]proxyCandidate, *HostProxyPAC)
 	}
 	var pac *HostProxyPAC
 	if reg.AutoConfigURL != "" {
-		pac = &HostProxyPAC{URL: reg.AutoConfigURL, Source: ProxySourceOS,
-			Detail: "Windows Internet Settings AutoConfigURL (via powershell.exe)"}
+		pac = newProxyPAC(reg.AutoConfigURL, ProxySourceOS, "Windows Internet Settings AutoConfigURL (via powershell.exe)")
 	}
 	return candidates, pac
 }
@@ -824,7 +846,7 @@ func parseScutilProxyOutput(text string) ([]proxyCandidate, *HostProxyPAC) {
 	var pac *HostProxyPAC
 	if scutilPACEnableRE.MatchString(text) {
 		if u := scutilPACURLRE.FindStringSubmatch(text); u != nil {
-			pac = &HostProxyPAC{URL: u[1], Source: ProxySourceOS, Detail: "macOS scutil --proxy ProxyAutoConfigURLString"}
+			pac = newProxyPAC(u[1], ProxySourceOS, "macOS scutil --proxy ProxyAutoConfigURLString")
 		}
 	}
 	return candidates, pac

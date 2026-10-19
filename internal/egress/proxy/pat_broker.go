@@ -219,7 +219,13 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// rest and let net/url do the escaping — never a raw concatenation of the
 	// decoded path (git_broker.go: "never the raw request path").
 	hostHeader := upstreamURLHost(host, 443, 443) // an IPv6 literal is bracketed in a URL host and in a Host header
-	upstream := (&url.URL{Scheme: "https", Host: hostHeader, Path: rest, RawQuery: r.URL.RawQuery}).String()
+	// Refs discovery forwards exactly the one service value the checks read,
+	// rebuilt, so a repeated key cannot hand the forge a different one.
+	rawQuery := r.URL.RawQuery
+	if strings.HasSuffix(rest, "/info/refs") {
+		rawQuery = url.Values{"service": {r.URL.Query().Get("service")}}.Encode()
+	}
+	upstream := (&url.URL{Scheme: "https", Host: hostHeader, Path: rest, RawQuery: rawQuery}).String()
 	// Vet the destination through the SAME guard every other egress takes: the
 	// broker is a credential path, not a bypass of the IP guard.
 	target, _, err := p.egressTarget(host, 443)

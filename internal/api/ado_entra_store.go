@@ -680,7 +680,7 @@ func (s *Server) postADOEntraToken(ctx context.Context, cfg ADOEntraConfig, form
 		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
 			// The console's own application is refused; the stored sign-ins are kept,
 			// so the operator has to learn it from the log.
-			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored azure devops sign-ins are kept until it is fixed",
+			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
 				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
 		}
 		return out, classifyADOEntraError(out.Error, out.ErrorDescription)

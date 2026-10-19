@@ -101,15 +101,67 @@ func presetReadView(p types.LaunchPreset) (client.Preset, error) {
 }
 
 // presetForRead is presetReadView with the redaction every policy read applies to
-// the stored inline_policy, for the two reads a member reaches. Launch and the
-// write answers keep the unredacted view.
+// the stored inline_policy, and the same for policy_overlay, for the two reads a
+// member reaches. Launch and the write answers keep the unredacted view.
 func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Preset, error) {
 	v, err := presetReadView(p)
 	if err == nil && v.Request.InlinePolicy != nil {
 		spec := redactSpecForRead(*v.Request.InlinePolicy, s.isSecurityOperator(r.Context()))
 		v.Request.InlinePolicy = &spec
 	}
+	if err == nil {
+		v.Request.PolicyOverlay = redactPresetOverlay(v.Request.PolicyOverlay, s.isSecurityOperator(r.Context()))
+	}
 	return v, err
+}
+
+// overlayOperatorKeys are the policy_overlay keys whose values redactSpecForUser strips for a reader
+// who is not a security operator: the same details, by the same code, as in an inline_policy.
+var overlayOperatorKeys = []string{"workspace_mounts", "eligible_grants", "llm_inspection"}
+
+// redactOverlayValue is one overlay value after redactSpecForUser, or nil when it does not decode.
+func redactOverlayValue(key string, raw json.RawMessage) json.RawMessage {
+	var spec types.RunPolicySpec
+	one, err := json.Marshal(map[string]json.RawMessage{key: raw})
+	if err != nil || json.Unmarshal(one, &spec) != nil {
+		return nil
+	}
+	out, err := json.Marshal(redactSpecForUser(spec))
+	var redacted map[string]json.RawMessage
+	if err != nil || json.Unmarshal(out, &redacted) != nil {
+		return nil
+	}
+	return redacted[key]
+}
+
+// redactPresetOverlay is a stored policy_overlay as a reader may see it. A security operator (the
+// preset's author among them) gets it as stored; anyone else gets the operator-only details of the
+// keys above redacted exactly as an inline_policy's would be. A value that does not decode as its
+// key's type is dropped rather than guessed at.
+func redactPresetOverlay(overlay json.RawMessage, securityOperator bool) json.RawMessage {
+	if securityOperator || len(overlay) == 0 {
+		return overlay
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(overlay, &fields) != nil {
+		return nil
+	}
+	for k, raw := range fields {
+		i := slices.IndexFunc(overlayOperatorKeys, func(o string) bool { return strings.EqualFold(k, o) })
+		if i < 0 {
+			continue
+		}
+		if v := redactOverlayValue(overlayOperatorKeys[i], raw); v != nil {
+			fields[k] = v
+		} else {
+			delete(fields, k)
+		}
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {

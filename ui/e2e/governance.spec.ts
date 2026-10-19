@@ -26,7 +26,8 @@ import { SPEC_LABEL } from "./policy-source";
 // Governance profiles e2e (0.7) — lane: governance, port 8288, db wardyn_e2e.
 //
 // #209 split this file by behaviour: the member's own view of a ceiling
-// (route-spliced, independent of this file's real backend state) lives in
+// (route-spliced, plus one real-member case that writes and removes its own
+// profile, independent of this file's real backend state) lives in
 // governance-member.spec.ts, and the self-contained profile-limits round
 // trips (quota, storage ceilings, run limits — each creates its own named
 // profile) live in governance-profile-limits.spec.ts. What stays HERE is the

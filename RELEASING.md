@@ -11,7 +11,7 @@
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
   - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
@@ -220,7 +220,7 @@ crash or a usage limit resumes with the same command:
 - A final `X.Y.Z` fast-forwards `release/X.Y`.
 - A real `X.Y.Z-rc.N` never does: it is tagged and published as a pre-release from the candidate branch, and the next final's `--from` is the newest tag `release/X.Y` itself contains.
 
-- A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s promote preflight refuses staging older than that.
+- A dispatched nightly older than 23 hours counts as absent, because `release.yml`'s promote preflight refuses staging older than that.
 - prepare dispatches a fresh one, wait does not accept the old one,
   - and publish checks again before it pushes `release/X.Y` and before it pushes the tag, so a cut resumed the next day stops instead of going red in `release.yml` after the push.
 
@@ -263,7 +263,7 @@ crash or a usage limit resumes with the same command:
 - **Recovery.** Every recovery is the same command again, or a rerun it printed.
   - A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the tree, so a newer red is not hidden by an older green.
     - Rerun the failed jobs with the printed `gh run rerun <id> --failed`, or dispatch a fresh one (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it when the newest finished run is not green).
-    - A rerun does not refresh image age: staging is judged by the run's creation time, so a nightly created more than 24 hours ago needs a fresh dispatch, never a rerun.
+    - A rerun does not refresh image age: staging is judged by the run's creation time, so a nightly created more than 23 hours ago needs a fresh dispatch, never a rerun.
     - Re-dispatching is the deliberate recovery.
   - A red `release.yml` run: rerun its failed jobs, then run the command again.
   - The tag, the branch push and the published Release are each skipped once they exist.
@@ -412,9 +412,10 @@ crash or a usage limit resumes with the same command:
    If that job is red, the Release is missing assets [`docs/VERIFY.md`](docs/VERIFY.md) tells
    consumers to check. Treat it as a failed release, not a cosmetic warning.
 
-6. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
-   as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
-   pre-alpha.
+6. **Publish the GitHub Release** for the tag, pasting that version's CHANGELOG section
+   as the body. The `release-assets` job already created it as a draft pre-release, so
+   edit rather than create: `gh release edit vX.Y.Z --draft=false --prerelease --notes-file <body>`
+   — Wardyn is pre-alpha, so it stays a pre-release.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.
@@ -546,14 +547,14 @@ JSON
   - The compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).**
   - [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and
-    pushes all EIGHT images a release ships —
+    pushes all NINE images a release ships —
     - `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
       `GO_BUILD_TAGS=docker,k8s`),
     - `ghcr.io/cjohnstoniv/wardynd-fips` (the same
       recipe built with `GOFIPS140` pinned to a frozen Go Cryptographic Module
       snapshot; the job reads that pin back out of the pushed digest with
       [`scripts/check-fips-image.sh`](scripts/check-fips-image.sh) before it signs it),
-    - `ghcr.io/cjohnstoniv/wardyn-proxy`,
+    - `ghcr.io/cjohnstoniv/wardyn-proxy`, `ghcr.io/cjohnstoniv/wardyn-runnerd`,
       `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
       `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
       `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`

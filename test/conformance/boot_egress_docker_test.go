@@ -236,10 +236,11 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	// auto-install among them) room to happen before the proxy log is read.
 	time.Sleep(20 * time.Second)
 
-	// Give the sink's async worker a moment after the read window closes.
-	time.Sleep(3 * time.Second)
-	logs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs)
+	// The agent may dial nothing here (hosted CI has no model credential), so the test
+	// dials one known host itself: that decision is what proves the log was read.
+	control := bootEgressControl(t, sub, sb.Ref, claudeImage)
+	logs := bootEgressLogsAfterControl(t, runID, control)
+	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs, control)
 
 	// PHASE 3 — the AUTONOMOUS shape, which meets no dialog at all and is what the
 	// live walk's case G launches. Its first-use approvals are the ones a member
@@ -254,18 +255,41 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 		t.Fatalf("Exec autonomous agent-run: %v", err)
 	}
 	time.Sleep(45 * time.Second)
-	autoLogs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs)
+	control = bootEgressControl(t, sub, sb.Ref, claudeImage)
+	autoLogs := bootEgressLogsAfterControl(t, runID, control)
+	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs, control)
+}
+
+// bootEgressControl is the positive control: it drives one known dial, to the allowlisted
+// model host, through the sandbox's proxy and returns that host, or "" when the image is not
+// held to a control. The fetch's own outcome is irrelevant (an unauthenticated Bedrock call
+// fails); only the proxy's decision row for the host is read back.
+func bootEgressControl(t testing.TB, sub *docker.Driver, ref string, want bool) string {
+	t.Helper()
+	if !want {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := sub.Exec(ctx, ref, []string{"curl", "-sS", "--max-time", "20", "-o", "/dev/null", "https://" + bootEgressModelHost + "/"})
+	t.Logf("control dial to %s: err=%v out=%q", bootEgressModelHost, err, out)
+	return bootEgressModelHost
 }
 
 // bootEgressAssertQuiet is the whole verdict: what the sandbox dialled, and
 // whether any of it parked. Logged pass or fail — the measurement is the
-// deliverable, not just the verdict.
-func bootEgressAssertQuiet(t *testing.T, image, phase, logs string) {
+// deliverable, not just the verdict. control is a host the test itself dialled through
+// the proxy (see bootEgressControl), or "" for an image not held to one: its decision
+// missing means the log was not read (or its format moved), and "nothing parked" over
+// nothing proves nothing.
+func bootEgressAssertQuiet(t testing.TB, image, phase, logs, control string) {
 	t.Helper()
 	hosts, pending, denied := bootEgressDecisions(logs)
 	t.Logf("hosts dialled by %s (%s): %v", image, phase, hosts)
 	t.Logf("proxy decision stream (%s):\n%s", phase, bootEgressDecisionLines(logs))
+	if control != "" && !bootEgressDialled(hosts, control) {
+		t.Fatalf("%s: the control dial to %s left no decision in the proxy log (hosts parsed: %v), so the quiet verdict below would be vacuous\nlog:\n%s", phase, control, hosts, logs)
+	}
 	if len(pending) > 0 {
 		t.Errorf("%s raised %d first-use approval(s): %v\n"+
 			"A member's first run must park on nothing before they have asked the agent for anything.", phase, len(pending), pending)
@@ -420,6 +444,37 @@ func bootEgressDecisions(logs string) (hosts, pending, denied []string) {
 		}
 	}
 	return bootEgressKeys(seen), bootEgressKeys(pend), bootEgressKeys(den)
+}
+
+// bootEgressLogsAfterControl re-reads the proxy log until the control host's decision shows
+// (the sink writes asynchronously) or 30s pass, and returns the last read either way; the
+// caller's assertions then decide. With no control there is nothing to wait for, so it keeps
+// the short fixed wait.
+func bootEgressLogsAfterControl(t *testing.T, runID uuid.UUID, control string) string {
+	t.Helper()
+	if control == "" {
+		time.Sleep(3 * time.Second)
+		return bootEgressProxyLogs(t, runID)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		logs := bootEgressProxyLogs(t, runID)
+		hosts, _, _ := bootEgressDecisions(logs)
+		if bootEgressDialled(hosts, control) || time.Now().After(deadline) {
+			return logs
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// bootEgressDialled reports whether hosts holds control, with or without a port.
+func bootEgressDialled(hosts []string, control string) bool {
+	for _, h := range hosts {
+		if h == control || strings.HasPrefix(h, control+":") {
+			return true
+		}
+	}
+	return false
 }
 
 func bootEgressKeys(m map[string]bool) []string {

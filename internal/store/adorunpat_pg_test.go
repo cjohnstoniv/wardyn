@@ -56,7 +56,9 @@ func TestPG_ADORunPATState(t *testing.T) {
 		t.Fatalf("the stored value is %d bytes and contains the token: %v", len(sealed), bytes.Contains(sealed, []byte(token)))
 	}
 	var dump string
-	_ = pool.QueryRow(ctx, `SELECT row(s.*)::text FROM ado_run_pat_state s WHERE run_id = $1`, run).Scan(&dump)
+	if err := pool.QueryRow(ctx, `SELECT row(s.*)::text FROM ado_run_pat_state s WHERE run_id = $1`, run).Scan(&dump); err != nil {
+		t.Fatalf("read the row's text form: %v", err)
+	}
 	if bytes.Contains([]byte(dump), []byte(token)) {
 		t.Fatal("the token is in the row's text form")
 	}
@@ -91,7 +93,9 @@ func TestPG_ADORunPATState(t *testing.T) {
 		t.Fatalf("a save after the erasure = %v, want ErrFenced", err)
 	}
 	var rows int
-	_ = pool.QueryRow(ctx, `SELECT count(*) FROM ado_run_pat_state WHERE owner = $1`, owner).Scan(&rows)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ado_run_pat_state WHERE owner = $1`, owner).Scan(&rows); err != nil {
+		t.Fatalf("count the person's token rows: %v", err)
+	}
 	if rows != 0 {
 		t.Fatalf("%d of the person's token rows remain after the erasure and a late write", rows)
 	}

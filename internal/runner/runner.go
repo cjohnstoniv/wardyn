@@ -275,6 +275,11 @@ var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 // exec into it is not a fault of the read.
 var ErrSandboxGone = errors.New("runner: the sandbox is gone")
 
+// ErrRecordingChoiceUnknown is a recording runner's refusal to start an agent whose run's own
+// recording choice it could not read back from the sandbox: guessing either way could record a run
+// that chose not to be recorded, or skip a recording the run requires.
+var ErrRecordingChoiceUnknown = errors.New("runner: recording_choice_unknown: the run's recording choice could not be read from its sandbox")
+
 // ErrImageArch is a runner's refusal of an image its engine cannot run: the image is built for
 // another CPU architecture and the engine does not emulate it. It crosses the wire as the
 // image_arch code, so the org can tell it from a daemon fault.

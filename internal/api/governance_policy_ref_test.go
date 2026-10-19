@@ -98,7 +98,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 		{"interactive", taggedProfile(name, tag, types.GovernanceLimits{DenyInteractive: true}),
 			`{"agent":"claude-code"}`, 0, 403, "governance_profile", "runs.interactive"},
 		{"run quota", taggedProfile(name, tag, types.GovernanceLimits{MaxConcurrentRuns: 2}),
-			`{"agent":"claude-code","task":"t"}`, 2, 422, "run_quota", "runs.quota"},
+			`{"agent":"claude-code","task":"t"}`, 2, 422, "run_quota", ""}, // a 422 refusal is not audited
 		{"seed_auto_tools under hold rules", hold,
 			`{"agent":"claude-code","task":"t","interactive":true,"seed_auto_tools":true}`, 0, 403, "governance_profile", "runs.seed_auto_tools"},
 		{"codex-cli under hold rules", hold,
@@ -125,15 +125,22 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			}
 			audit.mu.Lock()
 			defer audit.mu.Unlock()
+			sawTarget := false
 			for _, ev := range audit.events {
 				if ev.Action != authz.AuditAction {
 					continue
+				}
+				if ev.Target == tc.wantTarget {
+					sawTarget = true
 				}
 				for _, secret := range []string{want.Owner, want.Email} {
 					if strings.Contains(string(ev.Data), secret) {
 						t.Errorf("authz.denied row carries %q: %s", secret, ev.Data)
 					}
 				}
+			}
+			if tc.wantTarget != "" && !sawTarget {
+				t.Errorf("no authz.denied row names target %q: the refusal came from a different door", tc.wantTarget)
 			}
 		})
 	}

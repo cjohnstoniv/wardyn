@@ -40,6 +40,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -308,7 +309,13 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 	if createOnly && m.live() {
 		return "", fmt.Errorf("vault already holds a value at %s that this row does not point to: a Put landing concurrently (re-run), or an orphan (`wardynd -reconcile` lists it; remove it at Vault, then re-run)", s.ref(rel))
 	}
-	want := binding(owner, name)
+	// Vault's metadata POST replaces custom_metadata, so the body carries the keys the
+	// organisation added alongside the binding's; bound() leaves those alone and so must this.
+	want := maps.Clone(m.CustomMetadata)
+	if want == nil {
+		want = map[string]string{}
+	}
+	maps.Copy(want, binding(owner, name))
 	if !found || m.MaxVersions != s.maxVersions || !sameMap(m.CustomMetadata, want) {
 		body := map[string]any{"max_versions": s.maxVersions, "custom_metadata": want}
 		if _, err := s.as(rel).call(ctx, http.MethodPost, s.mount+"/metadata/"+rel, body, nil); err != nil {

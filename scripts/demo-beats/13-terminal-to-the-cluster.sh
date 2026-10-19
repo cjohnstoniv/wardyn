@@ -68,9 +68,9 @@
 #     A passphrase-locked key with no agent hangs the take otherwise, on camera.
 #  8. THE ADMIN TOKEN IS NEVER TYPED. `wardyn audit` reads it from
 #     WARDYN_ADMIN_TOKEN, which preflight exports from the install's own
-#     Secret. Nothing in the beats prints it, and nothing here runs a command
-#     whose --help would (cobra renders a flag default, and that default is the
-#     token).
+#     Secret. Nothing in the beats types or prints it. (`--help` would not show
+#     it either: the CLI resolves the env token in PersistentPreRun and the
+#     flag's declared default is empty.)
 #  9. THE OPERATOR HAS TO BE IN THE ROOM (V11/V12's lesson, same lane). This is
 #     a gdigrab of a fixed desktop rectangle (WARDYN_DEMO_CAPTURE, default
 #     1920x1080+0+0). Nothing here can see inside it, so nothing here can fail

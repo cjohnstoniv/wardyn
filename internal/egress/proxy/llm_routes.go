@@ -634,18 +634,20 @@ func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision
 }
 
 // emitLLMBlindOnce emits a single llm.scan.bypass signal per LLM host: an
-// opaque CONNECT tunnel inspection couldn't see into. The CONNECT is allowed
+// opaque tunnel (or plain-HTTP forward) inspection couldn't see into, keyed on
+// host and port, with the real port and method on the row. The request is allowed
 // separately; this is purely the honest coverage signal.
-func (p *Proxy) emitLLMBlindOnce(host string) {
+func (p *Proxy) emitLLMBlindOnce(host string, port int, method string) {
 	if p.sink == nil {
 		return
 	}
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	key := net.JoinHostPort(h, strconv.Itoa(port))
 	p.blindMu.Lock()
 	if p.blindHosts == nil {
 		p.blindHosts = make(map[string]struct{})
 	}
-	if _, seen := p.blindHosts[h]; seen {
+	if _, seen := p.blindHosts[key]; seen {
 		p.blindMu.Unlock()
 		return
 	}
@@ -656,18 +658,18 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 		p.blindMu.Unlock()
 		p.sink.dropped.Add(1)
 		slog.Warn("llm.scan.bypass coverage suppressed: per-run blind-host cap reached",
-			"host", h, "cap", maxBlindHosts, "rule_source", ruleSourceLLMBlind)
+			"host", key, "cap", maxBlindHosts, "rule_source", ruleSourceLLMBlind)
 		return
 	}
-	p.blindHosts[h] = struct{}{}
+	p.blindHosts[key] = struct{}{}
 	p.blindMu.Unlock()
 
 	p.sink.emit(egress.DecisionLog{
 		Request: egress.Request{
 			RunID:  p.runID,
 			Host:   h,
-			Port:   443,
-			Method: http.MethodConnect,
+			Port:   port,
+			Method: method,
 			Time:   p.now(),
 		},
 		Decision:   egress.Allow,

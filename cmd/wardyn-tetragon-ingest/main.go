@@ -67,6 +67,24 @@ func main() {
 	}
 }
 
+// checkTuning refuses the values that would otherwise crash the sensor after boot, a ticker interval
+// that is not positive (time.NewTicker panics) and a negative buffer (make panics): exit 2 with the
+// setting named, as for an unparseable one, rather than a panic that crash-loops with no named cause.
+func checkTuning(heartbeat, refresh, stats time.Duration, buffer int) error {
+	for _, d := range []struct {
+		env string
+		v   time.Duration
+	}{{"WARDYN_GROUNDTRUTH_HEARTBEAT", heartbeat}, {"WARDYN_GROUNDTRUTH_REFRESH", refresh}, {"WARDYN_GROUNDTRUTH_STATS", stats}} {
+		if d.v <= 0 {
+			return fmt.Errorf("%s must be a positive duration, not %s", d.env, d.v)
+		}
+	}
+	if buffer < 0 {
+		return fmt.Errorf("WARDYN_GROUNDTRUTH_BUFFER must not be negative, not %d", buffer)
+	}
+	return nil
+}
+
 func run() error {
 	var (
 		exportPath      = flagEnv("export", "WARDYN_TETRAGON_EXPORT", "/var/log/tetragon/tetragon.log", "path to the Tetragon JSON export (JSONL) to tail")
@@ -82,6 +100,10 @@ func run() error {
 		batchSize       = flagIntEnv("batch", "WARDYN_GROUNDTRUTH_BATCH", 64, "max events per POST batch")
 	)
 	flag.Parse()
+	if err := checkTuning(*heartbeatFlag, *refreshFlag, *statsFlag, *bufferSize); err != nil {
+		fmt.Fprintln(os.Stderr, "wardyn-tetragon-ingest:", err)
+		os.Exit(2)
+	}
 
 	if err := checkBootTokenSource(*token); err != nil {
 		return err

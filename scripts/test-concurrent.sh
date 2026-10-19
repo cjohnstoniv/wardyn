@@ -25,8 +25,11 @@ source "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
-A="wardyn-cc-a-$$"
-B="wardyn-cc-b-$$"
+# Random suffix, not $$: a PID is unique only within its own PID namespace (see ci-run.sh's CI_PROJECT),
+# and teardown is `down --volumes`.
+SUF="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+A="wardyn-cc-a-${SUF}"
+B="wardyn-cc-b-${SUF}"
 FAILED=0
 note() { printf '  %s %s\n' "$1" "$2"; }
 pass() { note "[pass]" "$1"; }

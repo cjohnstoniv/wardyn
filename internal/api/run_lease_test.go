@@ -848,3 +848,26 @@ func TestCancelTerminalRunApprovals_CountsTheIdleStop(t *testing.T) {
 		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d, want %d", got, before+1)
 	}
 }
+
+// TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun: run.ending_soon says the files
+// are kept for the grace only when the end keeps the run. A Background run is
+// killed at its end with nothing kept, so it reports 0 (#2792).
+func TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun(t *testing.T) {
+	keptSec := func(exp types.RunExperience) float64 {
+		f := newLeaseFixture(t, 30*time.Minute)
+		f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
+		f.st.run.Experience = exp
+		f.sweep(t)
+		evs := f.audit.eventsFor(f.run.ID, "run.ending_soon")
+		if len(evs) != 1 {
+			t.Fatalf("%q: ending_soon rows = %d, want 1", exp, len(evs))
+		}
+		return leaseAuditData(t, evs[0])["files_kept_sec"].(float64)
+	}
+	if got := keptSec(types.ExperienceInteractive); got != float64(7*24*3600) {
+		t.Errorf("interactive run files_kept_sec = %v, want the grace", got)
+	}
+	if got := keptSec(types.ExperienceBackground); got != 0 {
+		t.Errorf("background run files_kept_sec = %v, want 0 (nothing is kept)", got)
+	}
+}

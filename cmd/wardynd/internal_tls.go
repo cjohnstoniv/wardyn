@@ -131,7 +131,7 @@ func startInternalListener(hop *hopTLS, f *bootFlags, handler http.Handler, errC
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           internalRoutesOnly(handler),
-		TLSConfig:         hop.server,
+		TLSConfig:         hop.server.Clone(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,

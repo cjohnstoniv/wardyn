@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -482,5 +483,34 @@ func TestAWSCLI_ReconcileOnReadLeavesAHoldWhenTheRunDroppedTheRow(t *testing.T) 
 	st.attached = nil
 	if got := pollApproval(t, f, ap); got.State != types.ApprovalPending {
 		t.Fatalf("state = %s, want PENDING: the run no longer carries the row", got.State)
+	}
+}
+
+// An id that names no row answers as a row the caller may not attach (403), not
+// a 500, so whether it exists is not observable.
+func TestAWSCLI_SignInDoorAbsentRowIsTheUnavailableRefusal(t *testing.T) {
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	srv, st, _, _ := signInFixture(t, nil, types.SiteConfig{})
+	srv.cfg.Store = &cliSignInStore{signInStore: st}
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/components/"+cliAWSID+"/sign-in", member, "")
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != "capability_component" {
+		t.Fatalf("sign-in for an absent row = %d %s, want 403 capability_component", w.Code, w.Body.String())
+	}
+}
+
+type componentReadFails struct{ *cliSignInStore }
+
+func (componentReadFails) GetComponent(context.Context, uuid.UUID, string) (types.Component, error) {
+	return types.Component{}, errors.New("db down")
+}
+
+// A failed row read is not "the row changed": the capture is not refused as
+// stale, the failure is returned.
+func TestAWSCLI_StoreSignInSurfacesAFailedRowRead(t *testing.T) {
+	srv, st, _, _ := signInFixture(t, nil, types.SiteConfig{})
+	srv.cfg.Store = componentReadFails{&cliSignInStore{signInStore: st}}
+	changed, err := srv.storeCLISignIn(context.Background(), loginRunStamp{CLIComponentID: cliAWSID}, awsSSOScope{}, awsSSOBlob{})
+	if changed || err == nil {
+		t.Fatalf("storeCLISignIn = changed %v, err %v; want changed=false and the read error", changed, err)
 	}
 }

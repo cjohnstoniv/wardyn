@@ -138,6 +138,7 @@ func TestCreateRunGateRefusesBeforeTheStore(t *testing.T) {
 func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	wantGated := []string{
 		"harnesscred.go:launchHarnessLoginRun",
+		"run_queue.go:answer",
 		"runs.go:handleCreateRun",
 		"site_config_probe.go:runSiteConfigProbe",
 		"source_scan.go:launchSourceScanRun",
@@ -152,7 +153,7 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 		"site_config_probe.go:runSiteConfigProbe",
 		"workspace_run_launch.go:dispatchAndSettle",
 	}
-	var gated, direct, sandboxes, dispatchers, atTarget, leaseCreates []string
+	var gated, direct, directQueued, sandboxes, dispatchers, atTarget, leaseCreates []string
 	fset := token.NewFileSet()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -187,8 +188,10 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 				switch sel.Sel.Name {
 				case "CreateRun":
 					direct = append(direct, where)
-				case "createRun":
+				case "createRun", "createQueuedRun":
 					gated = append(gated, where)
+				case "CreateQueuedRun":
+					directQueued = append(directQueued, where)
 				case "CreateSandbox", "CreateSandboxOn":
 					sandboxes = append(sandboxes, where)
 				case "dispatchRun":
@@ -207,6 +210,9 @@ func TestRunCreationRoutesThroughTheRevocationGate(t *testing.T) {
 	slices.Sort(sandboxes)
 	if !slices.Equal(direct, []string{"org_revocation.go:createRun"}) {
 		t.Errorf("a CreateRun method is called from %v; only org_revocation.go:createRun may call one — route the launcher through s.createRun", direct)
+	}
+	if !slices.Equal(directQueued, []string{"org_revocation.go:createQueuedRun"}) {
+		t.Errorf("a CreateQueuedRun method is called from %v; only org_revocation.go:createQueuedRun may call one — route the launcher through s.createQueuedRun", directQueued)
 	}
 	if !slices.Equal(gated, wantGated) {
 		t.Errorf("launchers calling the revocation gate = %v, want %v", gated, wantGated)

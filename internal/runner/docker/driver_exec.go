@@ -161,9 +161,17 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	if d.cfg.Record {
 		// Recover the run id and the run's own recording choice from the
 		// container labels so wardyn-rec names the recording deterministically.
-		// If we cannot, record under a nil id rather than failing the exec.
+		// An inspect that fails again on one retry refuses the exec rather than
+		// guess the choice either way.
 		runID, record := uuid.Nil, true
-		if insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{}); err == nil && insp.Container.Config != nil {
+		insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+		if err != nil {
+			insp, err = d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+		}
+		if err != nil {
+			return "", fmt.Errorf("docker: exec: %w: %v", runner.ErrRecordingChoiceUnknown, err)
+		}
+		if insp.Container.Config != nil {
 			record = d.recordsLabels(insp.Container.Config.Labels)
 			if id, perr := parseRunID(insp.Container.Config.Labels[labelRun]); perr == nil {
 				runID = id

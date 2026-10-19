@@ -709,6 +709,14 @@ jobs:
         env:
           WARDYN_GOVERNANCE_SECOND_HUMAN: "true"
         run: scripts/run-ui-e2e.sh governance-changes
+      - name: Run Playwright UI e2e, console served under a base path
+        # The step above runs base-path.spec.ts at the root, where its proxy-only assertions are off.
+        # WARDYN_BASE_PATH is only exercised with the backend under a sub-path behind
+        # test/basepathproxy, which run-ui-e2e.sh sets up for this variable. Once per run: shard 1.
+        if: matrix.shard == 1
+        env:
+          WARDYN_E2E_BASE_PATH: /wardyn
+        run: scripts/run-ui-e2e.sh base-path
       - name: Upload Playwright report
         id: upload_playwright_report
         if: always()
@@ -1246,6 +1254,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Start the user's systemd manager
         run: |
           set -euo pipefail
@@ -1632,10 +1641,10 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent images actually ship. The scan targets are the eight images the
-  # release publishes (the matrix below): wardynd, wardynd-fips and wardyn-proxy,
-  # plus the five agent images (agent-base, agent-codex-cli, agent-aws-sso,
-  # agent-vscode, agent-novnc). wardynd, wardynd-fips and wardyn-proxy are
+  # the agent images actually ship. The scan targets are the nine images the
+  # release publishes (the jobs below): wardynd, wardynd-fips, wardyn-proxy and
+  # wardyn-runnerd, plus the five agent images (agent-base, agent-codex-cli,
+  # agent-aws-sso, agent-vscode, agent-novnc). The four wardyn images are
   # distroless-static, which carries
   # essentially no OS package surface; the agent images (trixie + node/python +
   # git/ssh/tmux/socat) are where the OS findings land.
@@ -1805,6 +1814,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       TRIVY_IMAGE: wardyn-runnerd
       TRIVY_DOCKERFILE: deploy/compose/Dockerfile.runnerd
+      TRIVY_PRIME: '/library/(golang:[0-9.]+-alpine)@'
       TRIVY_BUILD_ARGS: ''
     steps: *trivy_steps
   trivy-agent-base:

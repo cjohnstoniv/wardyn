@@ -757,8 +757,14 @@ func TestNestedHostRootDrivesAreRefused(t *testing.T) {
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("code = %d, want 500: %s", w.Code, w.Body.String())
 		}
+		if got := errorReason(w); got != reasonUserDriveRehomeListUnavailable {
+			t.Errorf("the 500 reason = %q, want %q", got, reasonUserDriveRehomeListUnavailable)
+		}
 		if st.listErr != nil {
 			t.Fatal("the blip was never consumed — the nesting gate did not read the store at all, so this subtest proved nothing")
+		}
+		if strings.Contains(w.Body.String(), "boom") {
+			t.Errorf("the 500 carries the store's own error text: %s", w.Body.String())
 		}
 	})
 }

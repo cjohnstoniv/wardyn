@@ -77,6 +77,13 @@ var terminalWriterCensus = map[string]string{
 	// A revived run whose proxy could not be replaced and that cannot be kept
 	// lost (#575).
 	"reloseRun": "reconcileFinalize -> finalizeRunTail",
+	// (6) The runner substrate's store methods end runs in SQL. A revoke kills
+	// the runner's RUNNING runs, and revokeRunner then hands each one to
+	// revokedRunKillTail, which calls cancelRunApprovals.
+	"revokeRunner": "RevokeRunner kills the runs; revokedRunKillTail calls cancelRunApprovals",
+	// A runner's reported exit completes or fails the run; the exit tail runs
+	// finalizeRunEffects, which calls cancelRunApprovals.
+	"applyRunnerExit": "AcceptRunnerExit, then RetryRunnerExitTail -> finalizeRunEffects -> cancelRunApprovals",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api
@@ -142,7 +149,8 @@ func TestTerminalRunStateWriterCensus(t *testing.T) {
 // one of the terminal states — the three primitives every transition goes
 // through (internal/api's casRunState, its StopKeptRunIf sibling for a kept
 // run's atomic-mark CAS (F04), and the reaper's guarded UpdateRunStateIfIdle)
-// — or a finalize helper handed a terminal state.
+// — or a finalize helper handed a terminal state — or one of the two runner
+// store methods that end runs themselves (RevokeRunner, AcceptRunnerExit).
 func writesTerminalState(call *ast.CallExpr) bool {
 	name := ""
 	switch fn := call.Fun.(type) {
@@ -152,6 +160,10 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		name = fn.Sel.Name
 	}
 	switch name {
+	case "RevokeRunner", "AcceptRunnerExit":
+		// Store methods that end runs in SQL, with the terminal state inside the
+		// statement rather than in an argument.
+		return true
 	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize":
 	default:
 		return false

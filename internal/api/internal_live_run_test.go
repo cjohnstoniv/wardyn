@@ -27,6 +27,12 @@ import (
 // overrides GetRun explicitly rather than by omission.
 type anyRunLive struct{ store.Store }
 
+// GetSiteConfig answers the zero document (no site config), so a handler that reads it for a side
+// check (countReauthTimeout) does not reach the nil embedded store.
+func (anyRunLive) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (anyRunLive) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
 	return types.AgentRun{ID: id, State: types.RunRunning, UpdatedAt: time.Now().UTC()}, nil
 }

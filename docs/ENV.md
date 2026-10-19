@@ -27,7 +27,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every parseable read through `internal/cliutil` (bool / duration / int) is **loud** — an unparseable value exits 2 rather than silently reinstating the default.
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
-- The five `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`) are also read once at boot so a bad value is refused there.
+- The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
+- The six `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) are also read once at boot so a bad value is refused there.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
 - It also accepts `disable`/`disabled`/`none` and `enable`/`enabled`, and a garbage value exits 2.
@@ -102,7 +103,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_ROLE` | string | (unset) | Kubernetes-auth role wardynd logs in as (flag `-vault-role`); required with `WARDYN_VAULT_AUTH=kubernetes` |
 | `WARDYN_VAULT_ROLE_PLATFORM` | string | (unset) | optional second Kubernetes-auth role (flag `-vault-role-platform`, chart `secretStore.vault.rolePlatform`) for wardynd's own signing, session and SSH host keys. **Recommended**. [Details](#wardyn_vault_role_platform) |
 | `WARDYN_VAULT_K8S_TOKEN_FILE` | string | (unset; the chart sets `/var/run/secrets/wardyn-vault/token`) | the projected service-account token (audience `vault`) for Kubernetes auth (flag `-vault-k8s-token-file`); re-read at every login. [Details](#wardyn_vault_k8s_token_file) |
-| `WARDYN_VAULT_TOKEN_FILE` | string | (unset) | a file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read on every 403. [Details](#wardyn_vault_token_file) |
+| `WARDYN_VAULT_TOKEN_FILE` | string | (unset) | a file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read when Vault answers 401 or 403, at most once every 30s. [Details](#wardyn_vault_token_file) |
 | `WARDYN_VAULT_CACERT_FILE` | string | (unset) | PEM bundle added to the system roots for the Vault client only (flag `-vault-cacert-file`); unset, `WARDYN_TRUSTED_CA_FILE` is used, else the system roots. The Vault client's TLS config is its own, never shared |
 | `WARDYN_VAULT_KV_MOUNT` | string | `wardyn` | the KV v2 mount (flag `-vault-kv-mount`) |
 | `WARDYN_VAULT_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | this install's path prefix under the mount (flag `-vault-kv-prefix`). Values live at `<prefix>/platform/<name>` (Wardyn's boot keys), `<prefix>/operator/<name>` and `<prefix>/people/<owner in base32hex>/<name>`. Fixed once rows exist, as is `WARDYN_VAULT_KV_MOUNT` (wardynd warns at boot) |
@@ -125,7 +126,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AZURE_TENANT_ID` | string | (unset) | Entra tenant id (flag `-azure-tenant-id`); required with `workload-identity` |
 | `WARDYN_AZURE_CLIENT_ID` | string | (unset) | client id of the app registration or user-assigned managed identity wardynd runs as (flag `-azure-client-id`); required with `workload-identity`, optional with `managed-identity` (unset: the VM's system-assigned identity) |
 | `WARDYN_AZURE_FEDERATED_TOKEN_FILE` | string | the value of `AZURE_FEDERATED_TOKEN_FILE` | the projected token exchanged for an Entra token (flag `-azure-federated-token-file`). Unset, the path the AKS workload identity webhook sets in `AZURE_FEDERATED_TOKEN_FILE` is used. [Details](#wardyn_azure_federated_token_file) |
-| `WARDYN_AZURE_AUTHORITY_HOST` | string | `https://login.microsoftonline.com` | Entra authority host (flag `-azure-authority-host`), for a sovereign cloud |
+| `WARDYN_AZURE_AUTHORITY_HOST` | string | `https://login.microsoftonline.com` | Entra authority host (flag `-azure-authority-host`). The Key Vault client always asks for the public cloud's `vault.azure.net` resource, so this does not make a sovereign-cloud vault work |
 | `WARDYN_AZURE_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | the start of every secret name this install writes (flag `-azure-kv-prefix`): 1-63 lowercase letters, digits and inner `-`. Names are `<prefix>-<platform\|operator\|people>-<32 hex of a hash of the owner and name>-g<generation>`. Fixed once rows exist, like the `WARDYN_AZURE_KV_URL` spelling |
 | `WARDYN_AZURE_KV_MAX_VERSIONS` | int | `100` | versions a secret holds before the next write starts a new name and deletes the old one (flag `-azure-kv-max-versions`); 1-500. Key Vault cannot delete old versions, so every write disables the ones before it |
 | `WARDYN_AZURE_KV_PURGE` | string | `auto` | `auto` purges a removed secret right after its soft delete, when the vault allows it; `never` always leaves it soft-deleted (flag `-azure-kv-purge`). [Details](#wardyn_azure_kv_purge) |
@@ -229,7 +230,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` | bool | `false` | Refuse a sign-in whose ID token does not prove the email is verified. **Entra ID tokens typically omit the claim entirely, so turning this on against an Entra tenant denies every login** (flag `-oidc-require-email-verified`). [Details](#wardyn_oidc_require_email_verified) |
 | `WARDYN_OIDC_EXTRA_SCOPES` | CSV | (unset = none; the authorization request stays `openid profile email`) | Opt-in scopes appended to the authorization request, most commonly `groups` (flag `-oidc-extra-scopes`). A listed scope the provider's discovery document does not advertise **refuses boot**. [Details](#wardyn_oidc_extra_scopes) |
 | `WARDYN_OIDC_OPERATOR_EMAILS` | CSV | (unset = **refused at boot** when OIDC is configured) | Operator (admin) allowlist of the minimal user/admin role gate: a signed-in human whose session email is NOT listed is a **user**. Leaving it empty with OIDC configured is refused at boot (flag `-oidc-operator-emails`). [Details](#wardyn_oidc_operator_emails) |
-| `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` | bool | `false` | Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty, normally refused (`validateOperatorPosture`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)). No effect without OIDC (flag `-allow-oidc-no-operator-list`). [Details](#wardyn_allow_oidc_no_operator_list) |
+| `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` | bool | `false` | Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty, normally refused (`validateOperatorPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). No effect without OIDC (flag `-allow-oidc-no-operator-list`). [Details](#wardyn_allow_oidc_no_operator_list) |
 | `WARDYN_SSO_ONLY` | bool | `false` | Declare SSO the **only** way into the console. Boot is refused unless OIDC is configured and `WARDYN_ADMIN_TOKEN`, `WARDYN_LOCAL_MODE`, `WARDYN_USER_DESKTOP` and `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` are all unset (flag `-sso-only`). [Details](#wardyn_sso_only) |
 | `WARDYN_OIDC_ROLE_MAP` | CSV (`value=role` pairs) | (unset = role derivation off unless a console-managed mapping actually contributes to the merged map) | Maps an Entra App Role, `groups` claim entry or email to `admin`, `security_admin`, `user` or a user type id (flag `-oidc-role-map`); the only way to `security_admin`; a group deny against a partial snapshot fails closed. [Details](#wardyn_oidc_role_map) |
 | `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` has been refused at boot since 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
@@ -283,7 +284,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY` | duration | `400ms` | the pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`); `100ms` to `10s`. [Details](#wardyn_aws_sso_refresh_retry_delay) |
 | `WARDYN_AWS_SSO_REFRESH_TIMEOUT` | duration | `10s` | the bound on one AWS SSO token request (flag `-aws-sso-refresh-timeout`); `2s` to `1m`. [Details](#wardyn_aws_sso_refresh_timeout) |
 | `WARDYN_ALLOW_TEST_ENDPOINTS` | bool | `false` | override: acknowledge that this deployment is a **test** deployment (flag `-allow-test-endpoints`); it unlocks exactly two things, one being `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` (`resolveAWSSSOEndpointOverride`, [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)). [Details](#wardyn_allow_test_endpoints) |
-| `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
+| `WARDYN_RECORDING_MOUNT` | string | (unset) | a named Docker volume or absolute host path mounted at `/wardyn/recordings` in each agent container (Docker runner, `register.go`). Reduced-isolation fallback: casts are UNMASKED with NO cross-run isolation, so boot warns when it is set |
 | `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)). [Details](#wardyn_ssh_listen) |
 | `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway (flag `-ssh-advertise`); purely advisory copy, the gateway itself binds `WARDYN_SSH_LISTEN`. [Details](#wardyn_ssh_advertise) |
 | `WARDYN_SSH_PROXY_COMMAND` | string | (unset) | an ssh `ProxyCommand` published on `/healthz` as `ssh.proxy_command` (flag `-ssh-proxy-command`), for an estate whose only way in is a TLS-terminating listener on 443. [Details](#wardyn_ssh_proxy_command) |
@@ -410,7 +411,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_VAULT_TOKEN_FILE`
 
-- A file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read on every 403.
+- A file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read when Vault answers 401 or 403, at most once every 30s.
 - Each read refuses a group- or world-writable file, or one wardynd's own non-root uid owns that others can read — the `_FILE` rule (`cliutil.ReadSecretFile`); surrounding whitespace is trimmed.
 
 ### `WARDYN_KEK`
@@ -977,12 +978,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The absolute host directories a **member's own** `local_dir` workspace source may live under.
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
-- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), which holds even when a root is set too wide.
+- And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
-- Point it at a dedicated projects directory — **never `$HOME` or `/`**, which boot WARNs about but permits
+- Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).
-- Operator mounts are never narrowed by it.
+- It never narrows operator mounts.
 - ([`internal/runner/member_mount.go`](../internal/runner/member_mount.go); flag `-member-workspace-roots`)
 
 ### `WARDYN_USER_WORKSPACE_ROOTS_MAP`
@@ -1105,7 +1106,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`
 
-- Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty — i.e. every signed-in human admin-equivalent — normally refused (`validateOperatorPosture`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)).
+- Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty — i.e. every signed-in human admin-equivalent — normally refused (`validateOperatorPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 - Unconditional, unlike the plaintext rule: a loopback bind bounds who can reach the port, not who the IdP authenticates.
 - No effect without OIDC (flag `-allow-oidc-no-operator-list`).
 
@@ -1131,7 +1132,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A `security_admin` sign-in is refused like a `user` one.
 - The pre-0.8 value `member` is no longer accepted: since 0.9 it is a boot refusal naming the entry, like any unknown role value. `wardyn setup status --pre-upgrade` lists the leftovers (see [OPERATIONS.md](OPERATIONS.md#upgrades)).
 - A `groups`-keyed row depends on the IdP actually EMITTING the claim.
-- Wardyn's authorization request is fixed at `openid profile email` and deliberately does not ask for a `groups` scope
+- Wardyn's authorization request asks for `openid profile email` plus whatever `WARDYN_OIDC_EXTRA_SCOPES` lists, and by default does not ask for a `groups` scope
 - (Entra defines none and rejects unrecognised ones, and an IdP that merely advertises one may not have granted it to this client registration — asking would be `invalid_scope`, i.e. every human locked out).
 - On an IdP that gates its group claim behind that scope the claim simply does not arrive, which is indistinguishable from "this human is in no groups", so group-keyed rows decide nothing.
 - Wardyn says so rather than guessing.
@@ -2643,6 +2644,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID` | string | (none) | Entra tenant of the LL2c probe app |
 | `WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID` | string | (none) | The LL2c probe's own throwaway public-client app registration, never Wardyn's app |
 | `WARDYN_LIVE_ADO_PAT_PROBE_SCOPE` | string | `499b84ac-1321-427f-aa17-267ca6975798/vso.pats` | Scopes LL2c signs in for, space-separated; run it with `…/vso.pats …/vso.pats_manage`, the two permissions per-run tokens use. `…/user_impersonation` is the control |
+| `WARDYN_LIVE_ADO_PAT_PROBE_PAT_SCOPE` | string | `vso.code vso.project` | Scopes of the personal access token LL2c creates, separated by a single space |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
 | `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in fails the suite once `WARDYN_LIVE_BEDROCK=1` |

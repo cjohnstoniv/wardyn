@@ -31,12 +31,12 @@ This skill is a dispatcher and a checklist. It asks the input questions, then se
 Ask before each step that changes the cluster. Check the cheap prerequisites first.
 
 1. **Prerequisites.** Confirm the kubelet is 1.31 or newer on the sandbox-arch nodes (`kubectl get nodes -o wide`), the CNI enforces NetworkPolicy, storage is ReadWriteOnce, and the cluster does not rewrite pod-to-ClusterIP source addresses. See [Requirements](../../../docs/operations/k8s-runners.md#requirements).
-2. **Mint.** A security operator mints the token (Admin → Runners → Add organisation runner, or `wardyn runner org-token mint`). It is single use, lasts 72 hours and is shown once. Never paste it into chat or a file in the repo.
+2. **Mint.** A security operator mints the token with `wardyn runner org-token mint --name <name>`; the console has no form for this. It is single use, lasts 72 hours and is shown once. Never paste it into chat or a file in the repo.
 3. **Namespaces and Secret.** Create the runner namespace and the runs namespace; create the registration Secret with the token under the key `token`, reading it from stdin. See [Install](../../../docs/operations/k8s-runners.md#install).
 4. **Values.** Author `values.yaml` from the guide's example. The chart fails the render without `org`, `runsNamespace`, `sandbox.arch` and `registration.existingSecret`. Set `apiServer.peers` and `egress.hardDenyCIDRs`.
 5. **Install.** `helm install` from the chart, with `image.tag` set. With `rbac.create=false`, apply the RBAC first ([RBAC order](../../../docs/operations/k8s-runners.md#rbac-order)).
 6. **Fingerprint.** Read it from `kubectl logs deploy/<release> --all-containers` and give it to the second security operator out of band.
-7. **Claim.** The second operator compares the fingerprint in Admin → Runners and claims the runner. An unclaimed runner expires after 24 hours.
+7. **Claim.** The second operator finds the runner with `wardyn runner list --all`, compares the fingerprint and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>`. An unclaimed runner expires after 24 hours.
 8. **Pool.** Add the runner to an organisation pool. Delete the registration Secret.
 9. **Verify.** The card shows Online, the architecture, trust `org_cluster` and the canary verdict `enforced`. Launch a small run into the pool and check its placement on the run page.
 

@@ -28,6 +28,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -359,6 +360,11 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	rec, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
 	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			// The audit row below keeps its reason, actor and bucket; the log says it was
+			// the store, not a stranger's key (#2782).
+			slog.ErrorContext(ctx, "api: ssh key lookup failed; refusing the connection", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unregistered key")
 		return nil, errors.New("ssh: unknown key")
 	}
@@ -377,6 +383,9 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.ErrorContext(ctx, "api: ssh run lookup failed; refusing the connection", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
 		return nil, errors.New("ssh: unknown run")
 	}

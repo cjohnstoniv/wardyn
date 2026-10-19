@@ -465,8 +465,7 @@ func (r *reviewRev08FlakyRecorder) Record(ctx context.Context, ev types.AuditEve
 // independent 0.8 review's finding F12: a ResetFederation failure right after
 // the new credential is durably stored must not spend the enrolment token
 // again, and the next boot must finish the reset (adopted verbatim from the
-// review's evidence, /tmp/claude-1000/rev08/evidence/compatibility/
-// review_rev08_hybrid_recovery_test.go).
+// review's evidence file review_rev08_hybrid_recovery_test.go).
 func TestReviewRev08ReenrolRecoversAfterResetFailure(t *testing.T) {
 	org := &hybridOrg{}
 	server := org.serve(t)

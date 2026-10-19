@@ -39,6 +39,9 @@
 # threatmodel/THREAT-MODEL.md 63972 adds 7 over 63965, measured: 0.9.4 L4b review, residual 93's proxy-caller sentence.
 # 0.9.4 L8: threatmodel/THREAT-MODEL.md 63968 adds 381 over 63587: 4.6 per-drive wording, the L1 canary, the hard-deny set and two residency rows.
 # 0.9.4 L8: threatmodel/THREAT-MODEL.md 63981 adds 13 over 63968: ssh_key delivery claims bounded.
-threatmodel/THREAT-MODEL.md=64404 share=20
+# 0.9.4 W4-DOCS-1: threatmodel/THREAT-MODEL.md 64478 adds 74 over 64404, measured: #2250 #2251 #2252 #2253 #2254 #2256 #2258: token bound, awskms entry, audit delivery label, relay re-check, cookie prefix, managed settings shipped, L1.
+# 0.9.4 W4 train +3: DOCS-1 and DEPLOY edits to the same THREAT-MODEL lines, measured at the merge.
+# 0.9.4 W4 train +6: REST and API-B each used the same THREAT-MODEL slack, measured at the API-B merge.
+threatmodel/THREAT-MODEL.md=64541 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

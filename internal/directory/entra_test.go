@@ -172,6 +172,21 @@ func TestAppRoleLookupIsFilterNotSearch(t *testing.T) {
 	if f.spCalls.Load() != 1 {
 		t.Fatalf("servicePrincipals calls = %d, want 1", f.spCalls.Load())
 	}
+	sp := f.lastSP.Load()
+	if sp == nil {
+		t.Fatal("servicePrincipals endpoint was never called")
+	}
+	if sp.query.Get("$filter") == "" {
+		t.Error("the App Role lookup sent no $filter")
+	}
+	for _, k := range []string{"$search", "$count"} {
+		if _, ok := sp.query[k]; ok {
+			t.Errorf("the App Role lookup sent %s; it is a plain $filter query", k)
+		}
+	}
+	if h := sp.headers.Get("ConsistencyLevel"); h != "" {
+		t.Errorf("the App Role lookup sent ConsistencyLevel = %q; only a $search needs it", h)
+	}
 }
 
 // With no sign-in app named, App Roles are read from the credential app's own
@@ -200,6 +215,25 @@ func TestAppRolesReadTheSignInApp(t *testing.T) {
 	}
 	if got := f.lastSP.Load().query.Get("$filter"); got != "appId eq 'signin-app'" {
 		t.Fatalf("servicePrincipals $filter = %q, want the sign-in app's appId", got)
+	}
+}
+
+// With no sign-in app there are no roles a sign-in carries: App Role
+// suggestions are absent, and the credential app's own roles are never read.
+func TestAppRolesOmittedWithNoSignInApp(t *testing.T) {
+	f := newFakeGraph(t)
+	f.appRoles = []graphAppRole{{DisplayName: "Dir Admin", Value: "Dir.Admin", IsEnabled: true}}
+	d, err := newEntra(EntraConfig{TenantID: "tenant-guid", ClientID: "dir-app", ClientSecret: "s3cret", NoSignInApp: true},
+		f.srv.URL+"/token", f.srv.URL+"/v1.0")
+	if err != nil {
+		t.Fatalf("newEntra: %v", err)
+	}
+	got, err := d.Search(context.Background(), "admin", KindAppRole)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("approle search = %v, %v; want no suggestions", got, err)
+	}
+	if f.lastSP.Load() != nil {
+		t.Fatal("a deployment with no sign-in app read the credential app's service principal")
 	}
 }
 

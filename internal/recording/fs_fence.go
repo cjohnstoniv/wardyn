@@ -159,7 +159,7 @@ func markFSErased(ctx context.Context, root *os.Root, key string) error {
 	if err != nil {
 		return err
 	}
-	err = errors.Join(marker.Sync(), marker.Close(), dir.Sync())
+	err = errors.Join(marker.Sync(), marker.Close(), syncDirTolerant(dir))
 	if err != nil {
 		return err
 	}
@@ -169,5 +169,5 @@ func markFSErased(ctx context.Context, root *os.Root, key string) error {
 		return err
 	}
 	defer f.Close()
-	return f.Sync()
+	return syncDirTolerant(f)
 }

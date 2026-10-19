@@ -469,3 +469,27 @@ func TestMarkInertGrants_RetiredKind(t *testing.T) {
 		t.Error("a live kind's canonical grant must not read as inert")
 	}
 }
+
+// An egress_host grant written with a ":port" is stored as its host, and the
+// stored form matches exactly the requests the written one matched: the
+// resolver compares hosts only. An older row that still carries the port is not
+// marked inert, since it matches as it always did.
+func TestCanonicalGrantValue_EgressPortStoredAsItsHost(t *testing.T) {
+	wants := []string{"pypi.org", "pypi.org:443", "pypi.org:8080", "files.pypi.org", "api.example.com", "api.example.com:22", "example.com", "evil.net"}
+	for written, stored := range map[string]string{"pypi.org:443": "pypi.org", "*.example.com:443": "*.example.com", "pypi.org": "pypi.org"} {
+		got, err := canonicalGrantValue(capEgressHost, written)
+		if err != nil || got != stored {
+			t.Fatalf("canonicalGrantValue(%q) = %q, %v; want %q", written, got, err, stored)
+		}
+		for _, want := range wants {
+			if before, after := capValueMatches(capEgressHost, written, want), capValueMatches(capEgressHost, got, want); before != after {
+				t.Errorf("grant %q matches %q = %v, but its stored form %q = %v", written, want, before, got, after)
+			}
+		}
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/permissions", nil)
+	views := New(Config{}).markInertGrants(r, []types.CapabilityGrant{{Capability: capEgressHost, Value: "pypi.org:443"}})
+	if views[0].Inert {
+		t.Error("a stored port-qualified egress_host row was marked inert, but it still matches its host")
+	}
+}

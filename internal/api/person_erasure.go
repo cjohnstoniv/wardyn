@@ -113,7 +113,7 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 }
 
 // The two answers credential.erase gives for what held back a writer that began before it:
-// the owner's erase generation, which refuses it in any process, or the in-process locks alone,
+// the owner's erase generation, which refuses it in any process, or the credential locks alone,
 // for a store that keeps no generation.
 const (
 	writeFenceGeneration = "generation"

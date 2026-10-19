@@ -37,9 +37,7 @@ type SetupItem struct {
 	// Residency names WHERE the credential this item concerns actually lives at
 	// run time, derived from the FINAL spec's own delivery mechanism (never
 	// guessed): "proxy_injected" (an api_key grant — the value never leaves the
-	// wardyn-proxy sidecar, injection.go), "resident_mount" (a host credential
-	// bind-mounted into the sandbox, e.g. the Claude subscription mount), or
-	// "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
+	// wardyn-proxy sidecar, injection.go), "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
 	// a value and hands it directly to the in-sandbox git-credential helper at
 	// task time, internal.go handleInternalMint), "resident_env" (an env_secret
 	// grant — the value is in the sandbox environment for the whole run), or
@@ -116,11 +114,9 @@ func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run comp
 // banner. ok=false for a non-LLM/unknown agent (llmAccess is nil): nothing to
 // check, no row.
 //
-// Residency is derived from a mount check (specHasMountTarget on the FINAL
-// spec): a Claude
-// subscription run mounts the operator's resident credential
-// (claudeCredTarget); every other LLM-backed run brokers an api_key that never
-// leaves the proxy.
+// Residency is always proxy_injected: every LLM-backed run brokers its credential
+// at the proxy and it never leaves it. A legacy policy's resident .claude mount
+// is stripped at dispatch (runs_dispatch_provider.go), so no run holds one.
 func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, spec types.RunPolicySpec) (SetupItem, bool) {
 	if llmAccess == nil {
 		return SetupItem{}, false
@@ -137,17 +133,10 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 		Status:     status,
 		Detail:     llmAccess.Note,
 	}
-	if agent == "claude-code" && specHasMountTarget(&spec, claudeCredTarget) {
-		it.Residency = "resident_mount"
-		// Subscription mode is the ONE path where the Claude CLI (a Node fetch()
-		// client) sets ANTHROPIC_BASE_URL directly to https://api.anthropic.com and
-		// relies on the sandbox's HTTP_PROXY/HTTPS_PROXY env to tunnel there
-		// (runs.go); api-key mode instead points at the proxy's own /wardyn/llm
-		// gateway URL directly, so no tunnel — and no gap — is in play there.
-		it.Detail = strings.TrimSpace(it.Detail + " Node's built-in fetch() ignores HTTP(S)_PROXY by default before Node 24 (set NODE_USE_ENV_PROXY=1), so without it the Claude CLI's model calls won't traverse the proxy and — since the sandbox has no direct egress — will fail to reach api.anthropic.com (they cannot escape confinement, only error out).")
-	} else {
-		it.Residency = "proxy_injected"
-	}
+	// Every LLM-backed run brokers its credential at the proxy: dispatch strips a
+	// legacy policy's resident .claude mount (runs_dispatch_provider.go), so a
+	// spec carrying one never reaches a run as a resident mount.
+	it.Residency = "proxy_injected"
 	if !llmAccess.Provisioned {
 		if p, ok := s.llmProviderFor(agent); ok {
 			// Name the run's ACTUAL resolved

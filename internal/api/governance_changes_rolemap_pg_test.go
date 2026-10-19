@@ -241,6 +241,10 @@ func TestPG_GovernanceChanges_RoleMappingPostureFlipIsReEvaluatedOnApproval(t *t
 	if w.Code != http.StatusBadRequest || json.Unmarshal(w.Body.Bytes(), &flip) != nil || !flip.RequiredAcknowledgement {
 		t.Fatalf("approving into a flip = %d %s, want the 400 with required_acknowledgement", w.Code, w.Body)
 	}
+	// The approve route takes no acknowledgement, so the refusal names the remedy that works.
+	if !strings.Contains(flip.Error, "propose it again with acknowledge_access_change=true") {
+		t.Fatalf("approving into a flip says %q, want it to say the change must be proposed again", flip.Error)
+	}
 	if e.changeState(ch.ID) != types.GovernanceChangePending || len(e.mappings()) != 0 {
 		t.Fatal("a refused approval applied or left pending")
 	}

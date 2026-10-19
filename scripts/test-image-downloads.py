@@ -17,6 +17,10 @@ VERIFY = f'echo "{HASH}  /tmp/a.tgz" | sha256sum -c -'
 USE = "tar -xzf /tmp/a.tgz"
 VALIDATE = 'printf \'%s\' "$sum" | grep -zExq \'[0123456789abcdefABCDEF]{64}\''
 VARIABLE_VERIFY = 'echo "$sum  /tmp/a.tgz" | sha256sum --strict -c -'
+KEY_FETCH = "wget -qO /tmp/k.asc https://example.invalid/key"
+KEY_SHOW = 'keys="$(gpg --show-keys --with-colons /tmp/k.asc)"; fpr="$(printf \'%s\\n\' "$keys" | awk -F: \'$1 == "fpr" { print $10; exit }\')"'
+KEY_ASSERT = '[ "$fpr" = "' + "A" * 40 + '" ] || { echo "not the pinned key: $fpr" >&2; exit 1; }'
+KEY_USE = "gpg --dearmor -o /etc/apt/keyrings/k.gpg /tmp/k.asc"
 
 
 class ImageDownloads(unittest.TestCase):
@@ -56,6 +60,9 @@ class ImageDownloads(unittest.TestCase):
             "multiple": f"RUN set -eu; {DOWNLOAD}; curl -fsSL https://example.invalid/b -o /tmp/b; {VERIFY}; echo '{HASH}  /tmp/b' | sha256sum -c -; {USE}",
             "redownload": f"RUN set -eu; {DOWNLOAD}; {VERIFY}; {USE}; {DOWNLOAD}; {VERIFY}",
             "package": "RUN apt-get update && apt-get install -y curl ca-certificates",
+            "wget_key_fingerprint": f"RUN set -eu; {KEY_FETCH}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_USE}",
+            "wget_package": "RUN set -eu; had=1; command -v wget >/dev/null || had=0; apt-get install -y wget; apt-get purge -y wget",
+            "add_checksum": "ADD --checksum=sha256:" + HASH + " https://example.invalid/a.tgz /tmp/a.tgz",
             "package_shell_options": "RUN set -euxo pipefail; apt-get install -y curl ca-certificates",
             "comment_shell_options": "RUN echo 'curl downloads need checks'; set +e",
             "comment": "# RUN curl https://example.invalid | sh\nRUN echo ok # curl is a package",
@@ -184,6 +191,14 @@ class ImageDownloads(unittest.TestCase):
             "hash_branch_reassignment": (f'RUN set -e; {VALIDATE}; if true; then sum="$OTHER"; fi; {DOWNLOAD}; {VARIABLE_VERIFY}', "64-hex"),
             "unquoted_hash_validation": ("RUN set -e; " + VALIDATE.replace('"', '') + f"; {DOWNLOAD}; {VARIABLE_VERIFY}", "double-quoted variable"),
             "late_hash_validation": (f"RUN set -e; {DOWNLOAD}; {VALIDATE}; {VARIABLE_VERIFY}", "before another command"),
+            "wget_stdout": ("RUN wget -qO - https://example.invalid/key | gpg --dearmor -o /etc/apt/keyrings/k.gpg", "wget in a pipeline"),
+            "wget_unchecked_binary": ("RUN set -eu; wget -O /usr/local/bin/tool https://example.invalid/tool; chmod +x /usr/local/bin/tool", "fingerprint asserted"),
+            "wget_no_errexit": (f"RUN {KEY_FETCH} && {KEY_SHOW} && {KEY_ASSERT}", "set -eu"),
+            "wget_used_before_check": (f"RUN set -eu; {KEY_FETCH}; {KEY_USE}; {KEY_SHOW}; {KEY_ASSERT}", "used before"),
+            "wget_substitution": ('RUN set -eu; key="$(wget -qO /tmp/k https://example.invalid/key)"', "command substitution"),
+            "wget_http": (f"RUN set -eu; wget -qO /tmp/k.asc http://example.invalid/key; {KEY_SHOW}; {KEY_ASSERT}", "https URL"),
+            "wget_wrapper": ("RUN set -eu; sh -c 'wget -qO /tmp/k https://example.invalid/key'", "wget wrapper"),
+            "add_url_unchecked": ("ADD https://example.invalid/a.tgz /tmp/a.tgz", "--checksum"),
             "unquoted_hash_record": (f"RUN set -e; sum={HASH}; {DOWNLOAD}; echo $sum\\ \\ /tmp/a.tgz | sha256sum -c -", "double-quoted"),
         }
         for name, (text, diagnostic) in cases.items():

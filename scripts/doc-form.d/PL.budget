@@ -1,4 +1,5 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; PLUGGABILITY.md adds 172 words for 13 cell-expansion headings (51) and summaries (121), adoption/README.md adds 1 for the H2 the summary rule needs. VERIFY.md 1526 = 1454 measured base + 72: the stated sign-in prerequisite of the build-provenance check (31: 29 of budget, 2 were slack), then the page's claim naming both `gh` commands (11), the attestation sentence saying it is the CLI that needs the sign-in (7), and the release-asset download bullet (23).
+# 0.9.4 W4-DOCS-2: the doc budgets below and in the O-*, T*, M, E, ... files rose by the measured words of the doc corrections (#2377-#2817); RECORDING-ROOT-READ.md fell to 332 once the review-receipt lines left.
 # docs/PLUGGABILITY.md 3214 adds 152 for run-level custom components: 68 (the matrix row) and 85 (the seam-status section: no seam, on purpose); the gate counts 152.
 # 1532 adds 6: the runner binaries and units tarball in the release-asset sentence (#1968).
 # docs/PLUGGABILITY.md 3229 adds 15 (0.9 F-588 M1): azurekv and awskms are shipped KEK alternates, no longer planned.
@@ -8,6 +9,6 @@ docs/PLUGGABILITY.md=3229 share=35
 # docs/VERIFY.md 1547 adds 15 over 1532 (0.9.3 PKG), measured: the runner-package release-asset bullet.
 # docs/VERIFY.md 1559 adds 12 over 1547 (0.9.4 L9, #2472): the licence bundle among the release assets, measured.
 docs/VERIFY.md=1559 share=35
-docs/EXPORT.md=476 share=35
-docs/RECORDING-ROOT-READ.md=524 share=35
-docs/adoption/README.md=241 share=35
+docs/EXPORT.md=507 share=35
+docs/RECORDING-ROOT-READ.md=332 share=35
+docs/adoption/README.md=249 share=35

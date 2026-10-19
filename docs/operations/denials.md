@@ -15,7 +15,7 @@ read.
   - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
 - The reasons of a Kubernetes runner's node-loss containment (0.9.3) are not `authz.denied` reasons, so they have no row below.
   - `run_containment_pending` (`403`): token renewal refuses a run its runner deleted but cannot yet prove stopped. It is written on the `identity.renew` row, beside the runner's own relay fence, which is what bounds the run's egress.
-  - `node_record_invalid` (`400`), `node_record_refused` (`409`) and `node_record_human_only` (`403`) refuse a security operator's node record (`POST /runs/{id}/node-record`): a body that is not a whole record, or a `source_id` that holds control characters; the run is not held, the runner's record changed since the form was loaded, the attestation does not fit the run, or another stop waits for its runner; or the admin token, or local mode where two people are needed. The runner's own refusal of an accepted record is `runner.action.refuse`.
+  - `node_record_invalid` (`400`), `node_record_refused` (`409`) and `node_record_human_only` (`403`) refuse a security operator's node record (`POST /runs/{id}/node-record`): a body that is not a whole record, or a `source_id` that holds control characters; the run is not held, the runner's record changed since the form was loaded, the attestation does not fit the run, or another stop waits for its runner; or the admin token, an API token, or local mode where two people are needed. The runner's own refusal of an accepted record is `runner.action.refuse`.
   - `relay_ip_fenced` is not a refusal of a person: it is the `reason` on the `run.create` failure row of a run the runner stopped at start, because its proxy pod was given an IP the runner still fences for an earlier run.
 - One FIELD rides beside the reason since 0.7.4: `user_view: true`.
   - (Renamed in 0.8 from `member_mode` — see [Renamed in 0.8](../OPERATIONS.md#renamed-in-08); pre-0.8 rows keep `member_mode`.)
@@ -43,7 +43,7 @@ read.
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
-| `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
+| `admin_view` | an SSO admin in the Admin view started or previewed a run (`POST /runs`, `POST /runs/preflight` or `POST /runs/policy-preview`, `refuseAdminViewLaunch`, [`internal/api/membermode.go`](../../internal/api/membermode.go)), or launched one after the type the view looks through was deleted. Not audited on its own; in the deleted-type case the cause row is `user_view_type_deleted`, which the launch response answered | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. Its `403` body is byte-identical to `admin_surface`'s, so a refusal never maps a route's tier; only the reason tells them apart | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path ([`internal/api/attach_ticket.go`](../../internal/api/attach_ticket.go)) | ⛔ `404` (byte-identical to missing) |
@@ -112,7 +112,7 @@ read.
 - A 404 on a resource that genuinely doesn't exist stays silent by design.
 
 > [!NOTE]
-> One exception: the `always`-scope 403 (the `security_admin_surface` row in [the reasons table](#every-denial-that-isnt-a-404)) returns before `decide()` reaches any audit call, so it is a bare 403 with no audit trail at all.
+> One exception: the `always`-scope 403 (the `security_admin_surface` row in [the reasons table](#every-denial-that-isnt-a-404)) is audited like every other member denial on this path: an `authz.denied` row naming that reason ([`internal/api/approvals.go`](../../internal/api/approvals.go)).
 
 - **What's still not built.**
   - No custom roles: the tier set is the three fixed ones (admin, `security_admin`, member — see "[Three roles, and who sets the walls](three-roles.md#three-roles-and-who-sets-the-walls)").

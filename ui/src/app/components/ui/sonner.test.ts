@@ -20,7 +20,7 @@ describe("Toaster — closeButton + a longer default duration", () => {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "sonner.tsx"), "utf8");
 
   it("defaults closeButton to true (a manual-dismiss affordance, not auto-dismiss-only)", () => {
-    expect(src).toMatch(/closeButton(?:=\{true\}|\s*\n)/);
+    expect(src).toMatch(/^\s+closeButton(?:=\{true\})?\s*$/m);
   });
 
   it("raises the default toast duration above sonner's stock 4000ms", () => {
@@ -35,8 +35,11 @@ describe("Toaster — closeButton + a longer default duration", () => {
     // lastIndexOf: the FIRST `{...props}` in the file is the `({ ...props })`
     // destructure in the component's own parameter list, not the JSX spread.
     const propsSpreadIdx = src.lastIndexOf("{...props}");
-    const closeButtonIdx = src.indexOf("closeButton");
-    const toastOptionsIdx = src.indexOf("toastOptions");
+    // The JSX attributes, not the first mention: the comment above them names both props too.
+    const closeButtonIdx = /^\s+closeButton(?:=\{true\})?\s*$/m.exec(src)?.index ?? -1;
+    const toastOptionsIdx = src.indexOf("toastOptions={{");
+    expect(closeButtonIdx).toBeGreaterThan(-1);
+    expect(toastOptionsIdx).toBeGreaterThan(-1);
     expect(propsSpreadIdx).toBeGreaterThan(-1);
     expect(closeButtonIdx).toBeLessThan(propsSpreadIdx);
     expect(toastOptionsIdx).toBeLessThan(propsSpreadIdx);

@@ -314,7 +314,7 @@ func (s *Server) reviveMCPBindings(ctx context.Context, run types.AgentRun, cfg 
 	}
 	comps, err := s.runComponentSnapshot(ctx, run.ID)
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, "re-check the run's MCP servers: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check the run's MCP servers", err))
 	}
 	narrowMCPBindings(cfg, comps)
 	return nil

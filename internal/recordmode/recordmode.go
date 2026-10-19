@@ -276,8 +276,8 @@ func captureExec(ev types.AuditEvent, execs, anomalies map[string]bool) {
 	}
 }
 
-// captureConnect records a connect destination and flags a FAILED connect (a reach to the cloud
-// metadata IP — the only destination the mapper stamps outcome=failure). It does NOT look for
+// captureConnect records a connect destination and flags a FAILED connect (a reach to a cloud
+// metadata or credential endpoint — the only destinations the mapper stamps outcome=failure). It does NOT look for
 // correlation=unmapped: that signal is the sensor's dropped_unmapped counter, read via KernelWindow.
 func captureConnect(ev types.AuditEvent, connects, anomalies map[string]bool) {
 	var d groundtruth.EventData

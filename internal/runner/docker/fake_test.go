@@ -90,6 +90,9 @@ type createdContainer struct {
 type fakeDocker struct {
 	mu sync.Mutex
 
+	// inspectFailures is how many more ContainerInspect calls fail outright.
+	inspectFailures int
+
 	info system.Info
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
 	pingErr   error
@@ -734,6 +737,10 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectFailures > 0 {
+		f.inspectFailures--
+		return client.ContainerInspectResult{}, errors.New("fake: inspect: daemon busy")
+	}
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerInspectResult{}, fakeNotFound{msg: "no such container: " + id}

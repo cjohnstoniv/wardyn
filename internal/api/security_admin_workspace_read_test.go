@@ -203,15 +203,18 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	// build recipe.
 	t.Run("GET env-as-code did not widen with the read", func(t *testing.T) {
 		srv, st := newWorkspaceReadServer(t, memberSub)
+		// A scanned profile, or every reader gets the 422 "nothing to emit" and the checks below
+		// would pass for the wrong reason.
+		st.ws.Profile = json.RawMessage(`{"languages":["Go"]}`)
 		p := fmt.Sprintf("/api/v1/workspaces/%s/env-as-code", st.ws.ID)
 		for who, session := range map[string]*http.Cookie{"security_admin": sec, "a foreign member": other} {
-			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code == http.StatusOK {
-				t.Errorf("%s read the operator's committable environment (200) — this route moved to owner-or-super "+
-					"with its operatorOnly write twin; body=%s", who, w.Body.String())
+			if w := doSSO(t, srv, http.MethodGet, p, session, ""); w.Code != http.StatusNotFound {
+				t.Errorf("%s: status = %d, want the owner-or-super 404 — this route moved to owner-or-super "+
+					"with its operatorOnly write twin; body=%s", who, w.Code, w.Body.String())
 			}
 		}
 		// And the OWNER keeps it: the move is a tier, not a shutdown.
-		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code == http.StatusNotFound || w.Code == http.StatusForbidden {
+		if w := doSSO(t, srv, http.MethodGet, p, member, ""); w.Code != http.StatusOK {
 			t.Errorf("the workspace's OWNER lost their own env-as-code (%d); body=%s", w.Code, w.Body.String())
 		}
 	})

@@ -13,8 +13,8 @@
 #          $WARDYN_VERSION, never a hard-coded release number.
 #     C6   RELEASING.md's required-status-checks `contexts` cover `notices`
 #          and every one of ci.yml's `trivy (<image>)` jobs (F121).
-#     C7   ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
-#          compose file they describe (F081/F091/F155).
+#     C7   VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
+#          compose file they describe (F091/F155).
 #     C8a  docs/ci/github-actions.yml and azure-pipelines.yml pin the wardyn
 #          checkout they EXECUTE at the shipped version (F007, security: an
 #          unpinned pin runs tip-of-default-branch shell in a secret-bearing
@@ -130,7 +130,7 @@ grep -qF "${pg_pw}" <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions that Postgres publishes on loopback with the PUBLISHED literal password '${pg_pw}' — the second person psql's straight past every admin/member control the section is about (F155)"
 grep -qi 'registry' <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
-pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
+pass "C7 VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
 
 # ── C8a: both pasteable CI pipelines pin the wardyn checkout they EXECUTE ───
 #

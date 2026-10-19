@@ -72,7 +72,7 @@ derives its role.
   - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
   - A write that would make a cycle or push any existing descendant past three is a `409` (`governance_profile_cycle`, `governance_profile_depth`).
   - An overlay lists only the fields it narrows.
-  - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would mean every method).
+  - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains), except where empty would mean "everything" or "the default": `allowed_methods: []`, `azure_devops_capabilities: []` and `github_capabilities: []` are refused.
   - The write is strict.
   - Take an overlay that names something its base does not permit:
     - a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes,
@@ -108,11 +108,13 @@ derives its role.
 | `push_rules.hold_seconds` | 120 | smaller |
 | `push_rules.max_file_size_mib` | off | smaller positive (off is unbounded) |
 | `push_rules.deny_new_executables` | false | OR |
-| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable |
+| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable; a base on the provider default keeps it |
+| `github_capabilities` | the provider row's default | as `azure_devops_capabilities` |
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
-| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive` | false | OR |
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives` | false | OR |
+| `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
 | `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
 | `autonomy_rubric` | caps nothing | per field, the lower level; a field set on one side only takes that side |

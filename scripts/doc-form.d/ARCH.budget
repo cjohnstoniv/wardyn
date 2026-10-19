@@ -9,10 +9,11 @@
 # ARCHITECTURE.md 5755 adds 356, measured: the wardyn-runnerd row and the runner substrates section (laptop and organisation runners, resident credentials), and the runner chart named beside the two stacks.
 # 0.9.4 L8: ARCHITECTURE.md 5870 adds 115 over 5755: credential-claims rewrite of invariants 1 and 2 (auto-mint branch, brokered-token wording).
 # 0.9.4 L8: ARCHITECTURE.md 5876 adds 6 over 5870: ssh_key delivery claims bounded.
-ARCHITECTURE.md=5876 share=35
+# 0.9.4 W4-DOCS-1: ARCHITECTURE.md 5936 adds 60 over 5876, measured: #2231 #2232 #2233 #2235: CSP summary, invariant 3 scope, QUEUED state, CLI pointer.
+ARCHITECTURE.md=5936 share=35
 # 0.9.4 L8: SECURITY.md 1326 adds 327 over 999: the 'Which credentials enter the sandbox' section and the qualified invariants.
 SECURITY.md=1326 share=35
-PROVENANCE.md=798 share=35
+PROVENANCE.md=821 share=35
 # 0.9.4 L8: docs/DATA-FLOW.md 1421 adds 221 over 1200: rows for notifications, key services, Azure DevOps and the demo player.
 docs/DATA-FLOW.md=1421 share=35
 # threatmodel/AGENT-THREAT-MODEL.md 2305 adds 31 over 2274: 0.9 final docs pass, measured: the ownership row for a developer's own runner.

@@ -492,7 +492,7 @@ describe("RunDetailScreen — Recordings library link", () => {
 // (listApprovals("")) and filter in the browser — i.e. AFTER the server's
 // requested_at DESC window — so past LIST_LIMIT lifetime approvals a run's own
 // holds vanished from its own detail page, PENDING badge and all
-// (internal/api/approvals.go:56-61). The fetch must carry ?run_id=.
+// (handleListApprovals in internal/api/approvals.go). The fetch must carry ?run_id=.
 describe("RunDetailScreen — its approvals are scoped server-side", () => {
   it("asks /approvals for THIS run, so an old run past the list window still shows its holds", async () => {
     // The honest server: an un-scoped read answers with the newest window,

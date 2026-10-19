@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -160,8 +161,12 @@ func TestUpShProbeCarriesLoopbackHostAndBearer(t *testing.T) {
 	if !regexp.MustCompile(`-H "Host: (127\.0\.0\.1|localhost|\[::1\])`).MatchString(body) {
 		t.Error(`wardynd_probe does not override Host with a loopback authority — local mode 403s the Docker-DNS authority "wardynd:8080" via the DNS-rebinding guard, so every probe fails on every ` + "`make setup`" + ` (ADV2-01)`)
 	}
-	if !regexp.MustCompile(`-H "Authorization: Bearer `).MatchString(body) {
-		t.Error("wardynd_probe sends no Authorization bearer — /api/v1/me and /api/v1/setup/status sit in the humanOrAdminAuth group and 401 an unauthenticated call whenever local mode is off (ADV2-02)")
+	// The bearer goes in on stdin (curl -H @-): on argv it is readable by every local user.
+	if !regexp.MustCompile(`printf 'Authorization: Bearer %s\\n'`).MatchString(body) || !strings.Contains(body, "-H @-") {
+		t.Error("wardynd_probe sends no Authorization bearer on stdin — /api/v1/me and /api/v1/setup/status sit in the humanOrAdminAuth group and 401 an unauthenticated call whenever local mode is off (ADV2-02)")
+	}
+	if strings.Contains(body, `-H "Authorization:`) {
+		t.Error("wardynd_probe puts the Authorization bearer on the docker argv, which every local user can read; pass it on stdin with -H @-")
 	}
 	if !regexp.MustCompile(`WARDYN_ADMIN_TOKEN`).MatchString(body) {
 		t.Error("wardynd_probe does not read WARDYN_ADMIN_TOKEN from the env file — it would send a token wardynd never booted with")

@@ -15,10 +15,16 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 func main() {
+	// First, before any run's credentials arrive: no core dump, no same-uid ptrace.
+	if err := nodump.Disable(); err != nil {
+		fmt.Fprintln(os.Stderr, "wardyn-runnerd:", err)
+		os.Exit(1)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	err := rootCommand().ExecuteContext(ctx)

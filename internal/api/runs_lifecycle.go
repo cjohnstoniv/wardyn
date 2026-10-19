@@ -227,12 +227,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 // itself lives on types.RunState so the CLI and SDK share one definition.
 func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 
-// casRunState is the ONE place a run's state CAS is issued: it delegates to
+// casRunState is the one place this package issues a run's state CAS: it delegates to
 // Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed
 // terminal, counts it for /metrics. Every state change (dispatch claim,
 // completion watcher, kill, failAndRevoke, boot reconcile, compose reclaim)
 // routes through here, so the counter cannot drift the way a per-call-site
-// increment would — add new transitions here, not around it. The !from guard
+// increment would — add new transitions here, not around it. The one exception
+// is the idle reaper's RUNNING->STOPPED CAS, which is issued outside this
+// package and is counted in CancelTerminalRunApprovals instead. The !from guard
 // keeps handleKillRun's supported KILLED→KILLED re-kill retry from counting
 // the same run twice.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
@@ -288,6 +290,32 @@ func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, acti
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
+	data := s.revokeRunSteps(ctx, runID)
+	if len(data) > 0 {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
+	}
+	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		return ctx.Err()
+	}
+	return fmt.Errorf("run revoke incomplete: %v", data)
+}
+
+// RevokeStoppedRun is revokeRunCascade for the idle reaper (cmd/wardynd's
+// lifecycleStopper), the one terminal writer outside this package. It runs the
+// same steps and returns what failed or is still pending, keyed as the cascade's
+// run.revoke row is, without auditing it: the reaper writes that row itself
+// from the map it is handed. An empty map is a clean revoke.
+func (s *Server) RevokeStoppedRun(ctx context.Context, runID uuid.UUID) map[string]string {
+	out := map[string]string{}
+	for k, v := range s.revokeRunSteps(ctx, runID) {
+		out[k] = fmt.Sprint(v)
+	}
+	return out
+}
+
+// revokeRunSteps is the cascade's work, unaudited: every step runs, and each
+// failure (or the count of PATs still unrevoked) is returned under its key.
+func (s *Server) revokeRunSteps(ctx context.Context, runID uuid.UUID) map[string]any {
 	data := map[string]any{}
 	if s.cfg.Identity != nil {
 		if rerr := s.cfg.Identity.RevokeRun(ctx, runID); rerr != nil {
@@ -312,13 +340,7 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 			data["pat_revoke_pending"] = len(rows)
 		}
 	}
-	if len(data) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
-	}
-	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
-		return ctx.Err()
-	}
-	return fmt.Errorf("run revoke incomplete: %v", data)
+	return data
 }
 
 // cancelRunApprovals is the approval half of the terminal cascade: every
@@ -875,8 +897,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
-	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries).
+	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
+	// and the erase of any value its runner holds resident, as revokeRunCascade does.
 	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
+	s.kickRunResidentErase(ctx, id)
 	// (7) Its output, on a tracked goroutine: the drain barrier and the write
 	// never delay the kill's answer, and the sandbox is already gone.
 	s.finishRunOutputDetached(ctx, id)

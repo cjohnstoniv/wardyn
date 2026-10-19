@@ -125,7 +125,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Session recordings
 
-**Recording defaults to `preferred`: a runner that does not record (started with `--recording-store off`, or older than 0.9.3) still takes runs, and they run unrecorded.** To refuse those runs instead, an admin sets `"recording": "required"` on the organisation's defaults (`PUT /api/v1/runner-pool-defaults`) or on a pool (`PUT /api/v1/runner-pools/{id}`).
+**Recording defaults to `preferred`: a runner that does not record (started with `--recording-store off`, or older than 0.9.3) still takes runs, and they run unrecorded.** To refuse those runs instead, an admin sets `"recording": "required"` on the organisation's defaults (`PUT /api/v1/runner-pool-defaults`) or on a pool (`PUT /api/v1/runner-pools/{id}`). Read the organisation's defaults first: that `PUT` replaces the whole document, so a write that leaves `pool_id` or `barrier` out clears it (leaving `recording` out keeps it).
 
 - `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
 - The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.

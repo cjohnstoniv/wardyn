@@ -252,6 +252,9 @@ func ValidDomainEntry(d string) error {
 		return bad(`a "*" is only supported as a leading "*."`)
 	case strings.ContainsAny(exact, "/ \t"), strings.ContainsAny(wild, "/ \t"):
 		return bad("must be a bare host, not a URL")
+	// A bracketed IPv6 literal with no port ("[fd00::1]") also keeps its ':' but is no ":port" mistake.
+	case strings.HasPrefix(exact, "["):
+		return bad(`an IPv6 address is written without brackets ("fd00::1") or, with a port, as "[fd00::1]:443"`)
 	// domainmatch.Classify leaves a malformed ":port" attached (so it can't silently
 	// widen to any-port), which makes it a dead entry. IPv6 legitimately
 	// contains ':', so exempt it.

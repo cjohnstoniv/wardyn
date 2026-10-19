@@ -107,11 +107,15 @@ type (
 	ADOTokenMode = types.ADOTokenMode
 
 	// ComponentKind names what a ComponentFact describes. The override
-	// narrowing table's OverrideKind, OverrideOp and OverrideRule are the
-	// vocabulary RunOverrides.Items answers in.
+	// narrowing table's OverrideKind and OverrideOp are the vocabulary
+	// RunOverrides.Items answers in.
 	ComponentKind = types.ComponentKind
 	OverrideKind  = types.OverrideKind
 	OverrideOp    = types.OverrideOp
+
+	// FirstUseMode is how a destination no list names is handled, carried in
+	// RunEgressOverrides.FirstUseApproval.
+	FirstUseMode = types.FirstUseMode
 
 	// PlacementMode is how an organisation-held credential reaches a local
 	// run (own, via_org, runner_resident or refuse); PlacementReason is the
@@ -355,6 +359,36 @@ const (
 	ScopeRun    = types.ScopeRun
 	ScopeUntil  = types.ScopeUntil
 	ScopeAlways = types.ScopeAlways
+)
+
+// FirstUseMode values.
+const (
+	FirstUseAlwaysDeny     = types.FirstUseAlwaysDeny
+	FirstUseDenyWithReview = types.FirstUseDenyWithReview
+	FirstUseWaitForReview  = types.FirstUseWaitForReview
+)
+
+// OverrideKind and OverrideOp values, the ones OverrideItem carries.
+const (
+	OverrideAgentHost         = types.OverrideAgentHost
+	OverrideAgentHostWildcard = types.OverrideAgentHostWildcard
+	OverrideAgentSecret       = types.OverrideAgentSecret
+	OverrideToolRuleRestrict  = types.OverrideToolRuleRestrict
+	OverrideToolRuleAllow     = types.OverrideToolRuleAllow
+	OverrideADOCapability     = types.OverrideADOCapability
+	OverrideGitPATScope       = types.OverrideGitPATScope
+	OverridePushDeny          = types.OverridePushDeny
+	OverridePushReview        = types.OverridePushReview
+	OverrideRunHostAllow      = types.OverrideRunHostAllow
+	OverrideRunHostWildcard   = types.OverrideRunHostWildcard
+	OverrideRunHostDeny       = types.OverrideRunHostDeny
+	OverrideFirstUseApproval  = types.OverrideFirstUseApproval
+	OverrideAllowAllEgress    = types.OverrideAllowAllEgress
+
+	OverrideAdd    = types.OverrideAdd
+	OverrideRemove = types.OverrideRemove
+	OverrideNarrow = types.OverrideNarrow
+	OverrideSet    = types.OverrideSet
 )
 
 // RunState values.

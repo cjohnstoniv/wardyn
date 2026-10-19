@@ -57,7 +57,7 @@ func (s *Server) DecisionIngestFromRunner(ctx context.Context, runnerID uuid.UUI
 	if d.Decision == egress.Deny && row.Count == 0 && isPolicyDeny(d.RuleSource) {
 		s.metrics.egressDenied()
 	}
-	s.countReauthTimeout(d)
+	s.countReauthTimeout(ctx, d)
 	if d.UpstreamFault != "" {
 		s.noteBedrockDataPlaneFault(context.WithoutCancel(ctx), *event.RunID, d.UpstreamFault)
 	}

@@ -95,7 +95,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 				run := created.AgentRun
 				t.Logf("run %s was ADMITTED non-interactively; killing it now", run.ID)
 				if _, kerr := c.KillRun(ctx, run.ID); kerr != nil {
-					t.Logf("kill %s: %v (may already have exited)", run.ID, kerr)
+					t.Logf("kill %s: %s (may already have exited)", run.ID, Redact(kerr.Error()))
 				}
 				t.Fatalf("run %s was admitted: L0 no longer refuses an unattended run. This is the regression "+
 					"T-45 exists to catch — report it, don't adjust the request (docs/LIVE-TESTS.md, LL5)", run.ID)
@@ -132,7 +132,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 		run := created.AgentRun
 		defer func() {
 			if _, err := c.KillRun(context.Background(), run.ID); err != nil {
-				t.Logf("kill %s: %v (may already have exited)", run.ID, err)
+				t.Logf("kill %s: %s (may already have exited)", run.ID, Redact(err.Error()))
 			}
 		}()
 
@@ -156,7 +156,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 		var events []types.AuditEvent
 		for i := 0; i < 10; i++ {
 			if events, err = c.AuditEvents(ctx, run.ID); err != nil {
-				t.Fatalf("audit events for %s: %v", run.ID, err)
+				t.Fatalf("audit events for %s: %s", run.ID, Redact(err.Error()))
 			}
 			if AgentPolicyDeliveredOK(events, string(types.AutonomyL0)) == nil {
 				break
@@ -164,7 +164,7 @@ func TestLive_AutonomyL0Enforced(t *testing.T) {
 			time.Sleep(2 * time.Second)
 		}
 		if err := AgentPolicyDeliveredOK(events, string(types.AutonomyL0)); err != nil {
-			t.Fatalf("run %s: %v", run.ID, err)
+			t.Fatalf("run %s: %s", run.ID, Redact(err.Error()))
 		}
 		t.Logf("run %s: managed-settings delivered at L0", run.ID)
 	})

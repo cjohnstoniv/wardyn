@@ -524,6 +524,75 @@ def check_run(body):
         Checker(tree).sequence(tree, root=True)
 
 
+# wget is supported in one shape only: a signing key fetched to a literal file in an
+# errexit RUN, whose fingerprint that RUN asserts against a literal 40-hex value before
+# the file is used for anything else. An ADD of a URL needs --checksum. Anything else
+# is a download nobody checks, trusted on first fetch.
+FINGERPRINT_ASSERT = r'\[ "\$\{?fpr\}?" = "[0-9A-F]{40}" \] \|\| \{[^}]*exit 1; \}'
+
+
+def wget_key_file(words):
+    for word in words[1:]:
+        plain_word(word)
+    args = [word.value for word in words[1:]]
+    output, urls = None, []
+    while args:
+        arg = args.pop(0)
+        if arg in {"-O", "-qO"} and args and output is None:
+            output = args.pop(0)
+        elif arg in {"-q", "--quiet"}:
+            pass
+        elif arg.startswith("-"):
+            raise ValueError(f"unsupported wget option {arg!r}; use wget -qO <file> <https URL>")
+        else:
+            urls.append(arg)
+    if output in (None, "-") or len(urls) != 1 or not urls[0].startswith("https://"):
+        raise ValueError("wget stdout/direct consumption is unverified; use wget -qO <file> <https URL> and assert the key's fingerprint")
+    return literal_path(output)
+
+
+def wget_downloads(node, piped=False):
+    if isinstance(node, list):
+        return [path for child in node for path in wget_downloads(child, piped)]
+    if node.kind == "simple":
+        words = command_words(node.words)
+        if not any(re.search(r"\bwget\b", word.value) for word in node.words):
+            return []
+        name = words[0].value if words else ""
+        if name == "wget":
+            if piped:
+                raise ValueError("wget in a pipeline is unverified; download to a file and assert its fingerprint")
+            return [wget_key_file(words)]
+        references = [word.value for word in words[1:] if re.search(r"\bwget\b", word.value)]
+        if name in PACKAGES and references == ["wget"] * len(references):
+            return []
+        if name == "command" and [word.value for word in words[1:3]] == ["-v", "wget"] and references == ["wget"]:
+            return []
+        raise ValueError("fail closed: unsupported wget wrapper or generated shell command")
+    if node.kind == "pipeline":
+        piped |= len(node.children) > 1
+    return wget_downloads(node.children, piped)
+
+
+def check_wget(body):
+    tokens = tokenize(body)
+    for token in tokens:
+        if ("$(" in token.raw or "`" in token.raw) and re.search(r"\bwget\b", token.value):
+            raise ValueError("wget in command substitution is unverified; download to a checked file")
+    tree = Parser(tokens).sequence()
+    paths = wget_downloads(tree)
+    if paths and not re.match(r"set -e(u|o errexit)?;", body):
+        raise ValueError("a wget key fetch must fail closed: start the RUN with set -eu")
+    for path in paths:
+        show = f"gpg --show-keys --with-colons {path}"
+        check = re.search(FINGERPRINT_ASSERT, body[body.find(show):]) if show in body else None
+        if not check:
+            raise ValueError(f"wget download {path} needs its key fingerprint asserted: {show}, then [ \"$fpr\" = \"<40 hex>\" ] || {{ ...; exit 1; }}")
+        before = body[:body.find(show) + check.end()]
+        if before.count(path) != 2:
+            raise ValueError(f"wget download {path} is used before its fingerprint is asserted")
+
+
 def check_file(path):
     with open(path, encoding="utf-8", newline="") as handle:
         text = handle.read().removeprefix("\ufeff")
@@ -540,6 +609,8 @@ def check_file(path):
             name = name.upper()
         if name == "SHELL":
             custom_shell = True
+        if name == "ADD" and re.search(r"(^|\s)(https?|git)://", body) and not re.search(r"--checksum=sha256:[0-9a-f]{64}\s", body):
+            raise ValueError(f"{path}:{number}: ADD of a URL needs --checksum=sha256:<hash>")
         if name != "RUN":
             continue
         try:
@@ -547,6 +618,10 @@ def check_file(path):
                 raise ValueError("heredoc RUN is unsupported; use explicit continued RUN commands")
             candidate = body + "\n" + PARAMETER.sub("", body)
             candidate = candidate.replace("\\", "").replace("'", "").replace('"', "")
+            if re.search(r"\bwget\b", candidate):
+                if custom_shell:
+                    raise ValueError("custom SHELL/escape with wget is unsupported")
+                check_wget(body)
             if not re.search(r"\bcurl\b", candidate):
                 continue
             if custom_shell:

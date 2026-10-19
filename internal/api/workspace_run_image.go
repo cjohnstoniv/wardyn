@@ -65,9 +65,10 @@ func repoDevcontainerCacheKey(url, ref string) string {
 // wires model credentials for it regardless, so a silent absence reads as a
 // broken session rather than an image that legitimately doesn't carry the
 // CLI. Uses the SAME predicate resolveWorkspaceImage's repo-devcontainer
-// branch gates on (repoOwnDevcontainerURL), so the caveat fires exactly when
-// that lane will actually be selected.
-func repoDevcontainerImageCaveats(ws types.Workspace) []string {
+// branch gates on (repoOwnDevcontainerURL). fellBack is the resolve result:
+// the run got the convention image because no builder is configured or the
+// build failed, so the caveat says that instead.
+func repoDevcontainerImageCaveats(ws types.Workspace, fellBack bool) []string {
 	// An explicit BaseImage choice takes precedence over this lane in
 	// resolveWorkspaceImage (checked first) — mirror that here so the caveat
 	// never fires for a session that will actually run the operator's chosen
@@ -78,6 +79,12 @@ func repoDevcontainerImageCaveats(ws types.Workspace) []string {
 	p, ok := workspaceProfile(ws)
 	if !ok || repoOwnDevcontainerURL(ws, p) == "" {
 		return nil
+	}
+	if fellBack {
+		return []string{
+			"This workspace's repo has its own devcontainer, but it was not built (no image builder is configured, " +
+				"or the build failed), so this session runs Wardyn's convention agent image without the repo's toolchain.",
+		}
 	}
 	return []string{
 		"This workspace's image is built from the repo's OWN devcontainer, not Wardyn's generated one — " +

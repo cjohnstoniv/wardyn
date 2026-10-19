@@ -46,8 +46,8 @@ const (
 // csrfAuditReason is the `reason` both arms emit on the EXISTING auth.fail
 // action (docs/AUDIT-ACTIONS.md) — no new action, no new row shape, and the
 // same rate limiter and coalescer every other refusal in this middleware goes
-// through (auth_failed_coalesce.go keys on actor+reason+path+source IP, so a
-// page hammering one route folds into one row plus a summary). It is emitted
+// through (auth_failed_coalesce.go keys on actor+reason+path, not the source IP,
+// so a page hammering one route folds into one row plus a summary). It is emitted
 // because a security control that refuses SILENTLY cannot answer either
 // question an operator has at 3am: "is someone attacking this?" and "why did
 // the console stop saving?". Not a closed enum member by accident — it joins

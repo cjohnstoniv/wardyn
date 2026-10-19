@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -210,5 +211,25 @@ func TestWatchAnswersFromTheLastCheckWithinItsInterval(t *testing.T) {
 	m.pool = nil
 	if watch() {
 		t.Fatal("Watch changed its answer inside the interval")
+	}
+}
+
+// Covered answering false because Postgres failed says so in the log (#2808), with the run and never a
+// value; the answer itself is unchanged.
+func TestCoveredLogsWhyItIsNotCovered(t *testing.T) {
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m, _ := newManifests(t, downPool(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run := uuid.New()
+	if m.Covered(ctx, run) {
+		t.Fatal("Covered answered true with Postgres down")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "reading a run's manifest row failed") || !strings.Contains(got, run.String()) || strings.Contains(got, string(secretValue)) {
+		t.Fatalf("log = %q, want the failed read named with the run id and no value", got)
 	}
 }

@@ -76,6 +76,12 @@
 #      wardyn-licenses.tar.gz next to the standalone binaries and fails the
 #      release unless that asset landed — the binaries are copies, and their
 #      MIT/BSD/Apache terms need the notice texts to travel with them.
+#  21. no workflow step pipes a download into a shell, and every syft install in
+#      release.yml checks a pinned sha256 — those jobs hold the signing identity.
+#  22. .dockerignore excludes every secret-bearing local file .gitignore names, so
+#      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
+#  23. an agent image that sets npm's proxy keys for an install deletes them again
+#      in the same RUN, so a build proxy URL never stays in the shipped layer.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -723,6 +729,55 @@ elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEA
     bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
 else
     ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"
+fi
+
+# ── 21. release tooling is checked before it runs ───────────────────────────
+# The publishing jobs hold id-token: write, so a fetched script piped into sh runs
+# as the release identity. Tools come from a SHA-pinned action or a download whose
+# sha256 is pinned beside its version.
+WORKFLOWS_DIR="${WORKFLOWS_DIR:-.github/workflows}"
+piped="$(grep -nE '\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' "$WORKFLOWS_DIR"/*.yml || true)"
+syft_versions=$(grep -c '^ *SYFT_VERSION:' "$RELEASE_YML" || true)
+syft_sums=$(grep -cE '^ *SYFT_SHA256: [0-9a-f]{64}$' "$RELEASE_YML" || true)
+syft_checks=$(grep -c 'SYFT_SHA256}  .*| sha256sum -c -' "$RELEASE_YML" || true)
+if [ -n "$piped" ]; then
+    bad "a workflow pipes a download into a shell: ${piped}"
+elif [ "$syft_versions" = 0 ] || [ "$syft_sums" != "$syft_versions" ] || [ "$syft_checks" != "$syft_versions" ]; then
+    bad "$RELEASE_YML: ${syft_versions} SYFT_VERSION pin(s), ${syft_sums} SYFT_SHA256 pin(s), ${syft_checks} sha256sum check(s) — every syft install must check its pinned sha256"
+else
+    ok "no workflow pipes a download into a shell; all ${syft_versions} syft installs check a pinned sha256"
+fi
+
+# ── 22. secret-bearing local files stay out of the build context ────────────
+DOCKERIGNORE="${DOCKERIGNORE:-.dockerignore}"
+missing=""
+for want in .env '**/.env' .npmrc '**/.npmrc' local/ '**/.env.*.local' \
+    examples/composer-configs/anthropic-api.json examples/composer-configs/openai-api.json; do
+    grep -qxF -- "$want" "$DOCKERIGNORE" || missing="$missing $want"
+done
+if [ -n "$missing" ]; then
+    bad "$DOCKERIGNORE does not exclude:${missing} — a repo-root COPY . . would layer it into a builder stage"
+else
+    ok ".dockerignore excludes every secret-bearing local file .gitignore names"
+fi
+
+# ── 23. a build proxy never stays in an agent image's npm config ────────────
+# `npm config set proxy` writes the image user's .npmrc; the RUN that sets it
+# for an install deletes it again, so the layer keeps no (possibly credentialed)
+# build proxy and in-sandbox npm keeps wardyn-proxy.
+IMAGES_DIR="${IMAGES_DIR:-deploy/images}"
+leaky=""
+for f in "$IMAGES_DIR"/*/Dockerfile; do
+    sets=$(grep -c 'npm config set https\?-\?proxy' "$f" || true)
+    [ "$sets" = 0 ] && continue
+    awk '/^RUN /{r=""} {r=r $0 "\n"} !/\\$/ && r!="" {print r; r=""}' "$f" \
+        | awk -v RS='' '/npm config set (https-)?proxy/ && !/npm config delete proxy https-proxy/ {bad=1} END {exit bad}' \
+        || leaky="$leaky $f"
+done
+if [ -n "$leaky" ]; then
+    bad "an agent image keeps npm's build proxy in its layer:${leaky} — delete proxy https-proxy in the RUN that sets them"
+else
+    ok "every agent image that sets npm's proxy keys deletes them in the same RUN"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

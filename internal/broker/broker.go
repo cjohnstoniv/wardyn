@@ -7,14 +7,18 @@
 // SECURITY INVARIANTS (see ARCHITECTURE.md, non-negotiable):
 //
 //   - Approval mints the credential. For a grant whose spec sets
-//     RequiresApproval, the mint happens ONLY inside the same Postgres
-//     transaction that verifies approvals.state='APPROVED' for this run, and
-//     writes approvals.minted_jti back in that same transaction. Single-use:
-//     a non-empty minted_jti blocks any second mint.
+//     RequiresApproval, the credential is issued ONLY after a snapshot that
+//     shows approvals.state='APPROVED' for this run, and is returned ONLY when
+//     the transaction that re-verifies that approval also writes
+//     approvals.minted_jti; a credential that commit refuses is discarded
+//     (revoked at its issuer where it has one). Single-use: a non-empty
+//     minted_jti blocks any second mint.
 //   - No widening. The scope minted is EXACTLY the scope the approver saw:
 //     approvals.requested_scope must deep-equal the grant spec scope, else
-//     ErrScopeMismatch. github_token scopes are additionally clamped to a
-//     ceiling of contents:write + pull_requests:write.
+//     ErrScopeMismatch. github_token scopes on the git lane are additionally
+//     clamped to a ceiling of contents:write + pull_requests:write; a GitHub
+//     CLI scope (api) is bounded by its capabilities instead, narrowed to the
+//     App's own grant (githubAPIPermissions).
 //   - Secrets never enter the sandbox. api_key grants resolve to a proxy-side
 //     egress.InjectionRule (returned by reference, never the secret value).
 //   - Fail closed. cloud_sts hard-requires SPIRE and is refused here.
@@ -513,8 +517,9 @@ func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMe
 }
 
 // mintKind dispatches to the kind-specific minter. github_token scopes are
-// clamped to the contents:write + pull_requests:write ceiling and tagged with
-// the per-run branch namespace. api_key resolves to a proxy InjectionRule
+// clamped to the contents:write + pull_requests:write ceiling (a GitHub CLI
+// scope to its capabilities, see githubAPIPermissions) and tagged with the
+// per-run branch namespace. api_key resolves to a proxy InjectionRule
 // (secret value never returned). cloud_sts is refused (caller already checked),
 // and so are env_secret and file_secret — see their case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
@@ -651,9 +656,10 @@ func (b *Broker) githubAPIPermissions(ctx context.Context, sc githubScope) (map[
 // from the setup check, which grades unknown rather than fail so a network blip
 // never reads as a security regression on a checklist nobody opted into.
 //
-// This runs inside the mint transaction, alongside the mint call it guards —
-// the same lane MintInstallationToken already occupies — hence the per-repo
-// deadline (see refRulesetProbeTimeout).
+// This runs while the credential is prepared, before the transaction that
+// burns the approval opens, alongside the mint call it guards — the same lane
+// MintInstallationToken already occupies — hence the per-repo deadline (see
+// refRulesetProbeTimeout).
 func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
 	if !b.requireRefRuleset {
 		return nil

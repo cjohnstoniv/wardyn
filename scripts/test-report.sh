@@ -239,7 +239,7 @@ if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
     REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured'
   fi
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+    REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI TestFinalizeBase_IDEqualsTheDaemonsAuxID'
   fi
   # #703 (T-43): these three top-level funcs all self-skip
   # (test/awsssofake.SkipUnlessDocker + requireDockerBinary's own

@@ -769,7 +769,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     for (const m of go.matchAll(/\bResidency\s*=\s*"[a-z_]+",\s*"([a-z_]+)"/g)) assigned.add(m[1]);
     // add(secret, label, residency) in setupSecretItems
     for (const m of go.matchAll(/\badd\([^\n]*,\s*"([a-z_]+)"\)/g)) assigned.add(m[1]);
-    expect(assigned.size).toBeGreaterThanOrEqual(6);
+    // Five since 0.9.4: an llm_access row is always proxy_injected, so nothing assigns resident_mount.
+    expect(assigned.size).toBeGreaterThanOrEqual(5);
     expect(tsValues).toEqual(assigned);
   });
 

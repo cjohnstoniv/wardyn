@@ -976,6 +976,47 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	}
 }
 
+// componentSignInRoute is the one route whose handler answers an id that names no row exactly as a row the
+// caller may not attach (#2419): so whether the row exists is not observable.
+const componentSignInRoute = "/api/v1/components/{id}/sign-in"
+
+// absentRowSignInAnswer reports whether w is that handler's own 403 on that route. The exemption is the
+// route's alone: componentAttachRefusal also guards POST and PUT /components, the run component refs and
+// the Azure sign-in, and a member denial there must still fail the matrix.
+func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
+	return method == http.MethodPost && pattern == componentSignInRoute &&
+		w.Code == http.StatusForbidden && errorReason(w) == "capability_component"
+}
+
+// assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
+func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if absentRowSignInAnswer(method, pattern, w) {
+		return
+	}
+	assertNotBlocked(t, who, w)
+}
+
+func TestAbsentRowSignInAnswer_IsScopedToTheSignInRoute(t *testing.T) {
+	w := httptest.NewRecorder()
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.WriteString(`{"error":"x","reason":"capability_component"}`)
+	for _, tc := range []struct {
+		method, pattern string
+		want            bool
+	}{
+		{http.MethodPost, componentSignInRoute, true},
+		{http.MethodPost, "/api/v1/components", false},
+		{http.MethodPut, "/api/v1/components/{id}", false},
+		{http.MethodPost, "/api/v1/runs", false},
+		{http.MethodGet, componentSignInRoute, false},
+	} {
+		if got := absentRowSignInAnswer(tc.method, tc.pattern, w); got != tc.want {
+			t.Errorf("%s %s: exempt = %v, want %v", tc.method, tc.pattern, got, tc.want)
+		}
+	}
+}
+
 // fakeAuthzSessionRevocations is a no-op oidc.SessionRevocations double that
 // exists only to make POST /api/v1/sessions/revoke visible to chi.Walk: the
 // route is mounted conditionally (see routes.go) on cfg.SessionRevocations
@@ -1080,6 +1121,18 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
 	return matrixServer(cfg)
+}
+
+// assertSameAsMissing404 holds a foreign-entity 404 to the claim the comments make: the body is
+// byte-identical to the 404 the same caller gets for an id that does not exist, so the answer is
+// no existence oracle. The status alone would let a distinguishing message through.
+func assertSameAsMissing404(t *testing.T, srv *Server, method, pattern string, sess *http.Cookie, body string, got *httptest.ResponseRecorder, who string) {
+	t.Helper()
+	missing := doSSO(t, srv, method, buildPath(pattern, uuid.New().String()), sess, body)
+	if missing.Code != got.Code || missing.Body.String() != got.Body.String() {
+		t.Errorf("%s: a FOREIGN entity answers %d %q but a missing id answers %d %q — the two must be byte-identical",
+			who, got.Code, got.Body.String(), missing.Code, missing.Body.String())
+	}
 }
 
 func TestAuthzMatrix(t *testing.T) {
@@ -1324,8 +1377,8 @@ func TestAuthzMatrix(t *testing.T) {
 				// answering on its own merits, which is what this matrix
 				// tolerates by design.
 				p := buildPath(pattern, uuid.New().String())
-				assertNotBlocked(t, "admin", doSSO(t, srv, method, p, adminSess, body))
-				assertNotBlocked(t, "member", doSSO(t, srv, method, p, memberSess, body))
+				assertNotBlockedOn(t, method, pattern, "admin", doSSO(t, srv, method, p, adminSess, body))
+				assertNotBlockedOn(t, method, pattern, "member", doSSO(t, srv, method, p, memberSess, body))
 				if w := doSSO(t, srv, method, p, nil, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
@@ -1396,6 +1449,8 @@ func TestAuthzMatrix(t *testing.T) {
 				// (no existence oracle) — never 403.
 				if w := doSSO(t, srv, method, pNonOwnerForeign, memberSess, body); w.Code != http.StatusNotFound {
 					t.Errorf("non-owning member: status = %d, want 404 (no existence oracle); body=%s", w.Code, w.Body.String())
+				} else {
+					assertSameAsMissing404(t, srv, method, pattern, memberSess, body, w, "non-owning member")
 				}
 				if w := doSSO(t, srv, method, pOwned, nil, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
@@ -1568,6 +1623,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					if w.Code != http.StatusNotFound {
 						t.Errorf("security_admin on a FOREIGN entity, tierSuper route: status = %d, want 404 "+
 							"(the tiers do not nest); body=%s", w.Code, w.Body.String())
+					} else {
+						assertSameAsMissing404(t, srv, method, pattern, sec, bodyFor(method, rc), w, "security_admin, tierSuper route")
 					}
 				case tierSecurity:
 					// Inspect-or-stop IS this tier's warrant, so the bypass must
@@ -1586,6 +1643,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					if w.Code != http.StatusNotFound {
 						t.Errorf("security_admin on a FOREIGN entity, tierOwnerOnly route: status = %d, want 404 "+
 							"(no admin bypass at all); body=%s", w.Code, w.Body.String())
+					} else {
+						assertSameAsMissing404(t, srv, method, pattern, sec, bodyFor(method, rc), w, "security_admin, tierOwnerOnly route")
 					}
 				default:
 					t.Fatalf("classOwner route %q has no ownerTier set", key)

@@ -17,7 +17,7 @@
 #   l0_isolation        -- confirm no default route exists (L0 structural egress)
 #   egress_deny         -- curl an unlisted domain; expect 403 or connection refused
 #   metadata_deny       -- curl 169.254.169.254; expect deny from builtin guard
-#   git_credential      -- invoke wardyn-git-helper; expect credential approval request
+#   git_credential      -- invoke wardyn-git-helper; expect a brokered refusal or an approval request
 #   kill_switch         -- demonstrate wardyn run kill (requires WARDYN_RUN_ID env var)
 #
 # Prerequisites:
@@ -26,7 +26,7 @@
 #   - WARDYN_URL and WARDYN_ADMIN_TOKEN set for the kill_switch probe
 #
 # Sandbox ref discovery (if you do not know the container name):
-#   docker ps --filter label=wardyn.run=<run-id> --format '{{.Names}}'
+#   docker ps --filter label=wardyn.run-id=<run-id> --format '{{.Names}}'
 #
 # Constraints:
 #   - All commands are read-only with respect to the host; they exec into the
@@ -169,9 +169,10 @@ probe_metadata_deny() {
 # ── probe: git_credential ──────────────────────────────────────────────────────
 #
 # Invokes wardyn-git-helper directly (as git would during a push) to trigger
-# the brokered credential chain.  Expects an approval request to appear in the
-# control plane and the helper to eventually emit an error (no GitHub App) or
-# the credential (if a GitHub App is configured).
+# the brokered credential chain.  Three outcomes are a pass: the helper refuses
+# because the run's GitHub access is brokered through wardyn-proxy (it mints no
+# token into the sandbox, and prints nothing for git); a credential approval is
+# raised in the control plane; or a credential is emitted.
 probe_git_credential() {
     section "git_credential -- brokered credential chain via wardyn-git-helper"
     require_sandbox
@@ -183,7 +184,9 @@ probe_git_credential() {
 
     printf "Output:\n%s\n" "$cred_output"
 
-    if echo "$cred_output" | grep -qiE "approval|pending|waiting|credential"; then
+    if echo "$cred_output" | grep -q "is brokered through wardyn-proxy"; then
+        pass "Helper refused to mint into the sandbox -- GitHub access is brokered through wardyn-proxy"
+    elif echo "$cred_output" | grep -q "credential approval pending"; then
         pass "Credential approval request raised -- check UI Approvals tab for kind=credential"
     elif echo "$cred_output" | grep -qiE "error|fail|unauthorized|no app"; then
         pass "Broker fail-closed path triggered (no GitHub App configured) -- expected for stock demo"

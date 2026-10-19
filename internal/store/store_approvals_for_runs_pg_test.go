@@ -185,7 +185,7 @@ func TestPG_CountPendingApprovalsByRunCreator(t *testing.T) {
 // TestPG_ListExpiredPendingApprovals: the sweep's page holds only PENDING rows that are old enough or
 // past their run's own end, in id order from afterID, at most limit of them.
 func TestPG_ListExpiredPendingApprovals(t *testing.T) {
-	pool := runsPGPool(t)
+	pool := runsPGPoolIsolated(t) // an exact global page: the shared database keeps other tests' old PENDING rows
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	now := time.Now().UTC()

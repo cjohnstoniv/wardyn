@@ -399,3 +399,26 @@ func TestSyslogCloseTimeout_ProductionValueUnchanged(t *testing.T) {
 		t.Fatalf("syslog close bound = %v, want %v", got, SyslogCloseTimeout)
 	}
 }
+
+// An event whose context is already cancelled is counted as a drop, not
+// discarded silently (#2310).
+func TestSyslogSink_CancelledContextCountsADrop(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	s, err := NewSyslogSink("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("NewSyslogSink: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Emit(ctx, types.AuditEvent{ID: uuid.New(), Action: "syslog.test"}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if got := s.Drops(); got != 1 {
+		t.Errorf("Drops() = %d, want 1: the cancelled event vanished uncounted", got)
+	}
+}

@@ -437,15 +437,16 @@ render_cat() {
   # above), so they get no numeric bucket of their own — listed here so the
   # k8s surface is not read as touched only by the package above.
   cat <<'K8SGATED'
-### Manual cluster lanes no coverage profile can see at all
+### Cluster lanes no coverage profile can see at all
 
-No workflow runs the first two, and `-coverpkg` never observes any of the
-three — not even as the K8S-gated bucket above, since they exercise code far
+The nightly workflow runs the first two (the `kind-sso-walk` and
+`kind-sso-ado-walk` jobs) and no workflow runs the third, and `-coverpkg` never
+observes any of the three — not even as the K8S-gated bucket above, since they exercise code far
 beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
 untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
 Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
-only) — the other two self-skip without `WARDYN_TEST_K8S=1` and a green
-result for them is evidence only for the tip somebody actually ran it on.
+only) — the three above self-skip without `WARDYN_TEST_K8S=1`, and the third
+is evidence only for the tip somebody actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
@@ -473,6 +474,17 @@ result for them is evidence only for the tip somebody actually ran it on.
   Resize/Write, every one of them listed in the K8S-gated bucket above.
 - `make test-conformance-k8s` — the containment conformance suite against a
   NetworkPolicy-enforcing CNI.
+
+### Test arms no CI lane runs
+
+- **PostgreSQL 12 refusal** (#2683): every CI Postgres lane runs 17, so `TestMigratePG13Floor`'s
+  refuse-and-record-nothing arm (`internal/db/migrate_pg13_floor_test.go`) never executes there. To run it, start a
+  `postgres:12` container, point `WARDYN_TEST_PG` at it and run only that test: every other migrating test fails on
+  PG12 by design.
+- **Credential-reauth hold timing out, live** (#2716): the `test.fixme` walk `negative (credential-reauth-hold): a
+  hold nobody answers times out, and the request stays open` (`ui/e2e/walk/sso-reauth-hold.spec.ts`) asserts too
+  early to drive the row. The proxy's own credhold tests (`internal/egress/proxy/credhold_test.go`) pin that path
+  hermetically; no live walk covers it.
 K8SGATED
 } > "$OUT"
 

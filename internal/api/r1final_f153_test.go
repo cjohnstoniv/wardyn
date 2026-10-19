@@ -18,25 +18,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The first fix added recordCeilingLimits, which reads the two
-// named limits — and it CANNOT FIRE on the record route, so that
+// The first fix added a guard that reads the two named limits (now
+// stepRunCeilingLimits) — and it CANNOT FIRE on the record route, so that
 // route's behaviour was byte-for-byte unchanged:
 //
 //	POST /workspaces/{id}/record is mounted operatorOnly (routes.go);
 //	requireOperator gates on s.isOperator; resolveEffectiveCeiling
 //	short-circuits to a nil-Profile deployment ceiling on that SAME predicate;
-//	and recordCeilingLimits returns nil at its first line for a nil Profile.
+//	and stepRunCeilingLimits returns nil at its first line for a nil Profile.
 //
 // So every principal who can reach the route arrives unwalled, and the guard's
 // own comment rested on a false premise ("a SECURITY-tier route, so a security
 // admin can open one" — a security admin gets 403 at the door).
 //
-// The residue is closed by binding the LANE rather than two of its limits: this
+// The residue is closed by the route's tier, which the tests below pin: this
 // lane skips the member clamp and opens an interactive, attachable, allow-all,
-// operator-credentialed sandbox, so a principal with ANY assigned profile may
-// not use it at all. That is the strongest form of the finding's `expected`,
-// and it is what makes the route's tier and its governance story one fact
-// instead of two that can drift.
+// operator-credentialed sandbox, so it stays operator-only. The limit check
+// itself is limit by limit (deny_interactive, max_concurrent_runs), not a
+// refusal of every assigned profile; a walled principal with neither limit set
+// is not refused by it.
 
 // f153RecordSrv drives launchRecordRun over a store that hands `profile` to
 // whoever asks, with `active` runs already going.

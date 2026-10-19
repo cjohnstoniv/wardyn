@@ -62,6 +62,9 @@ type EntraConfig struct {
 	// AppRolesAppID is the sign-in (OIDC) app registration, whose App Roles a sign-in's roles
 	// claim carries: App Role suggestions read its service principal. Empty reads ClientID's.
 	AppRolesAppID string
+	// NoSignInApp says the deployment has no sign-in app at all (a dedicated directory app
+	// with no OIDC): App Role suggestions are omitted instead of read from ClientID's app.
+	NoSignInApp bool
 }
 
 type entraDirectory struct {
@@ -112,8 +115,12 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 	// Reuses clientcredentials' own reuse wrapper rather than nesting a second one.
 	tokens := oauth2.ReuseTokenSourceWithExpiry(nil, ccfg.TokenSource(tokenCtx), tokenRefreshMargin)
 
+	roleAppID := cmp.Or(strings.TrimSpace(cfg.AppRolesAppID), strings.TrimSpace(cfg.ClientID))
+	if cfg.NoSignInApp {
+		roleAppID = ""
+	}
 	return &entraDirectory{
-		roleAppID: cmp.Or(strings.TrimSpace(cfg.AppRolesAppID), strings.TrimSpace(cfg.ClientID)),
+		roleAppID: roleAppID,
 		graphBase: strings.TrimRight(graphBase, "/"),
 		hc:        hc,
 		tokens:    tokens,
@@ -260,9 +267,9 @@ type graphAppRole struct {
 // searchAppRoles reads the sign-in app's service principal and filters
 // appRoles client-side (a handful of entries; no server-side query needed).
 // Best-effort: without Application.Read.All the read is refused and App Role
-// results are simply absent, not an error.
+// results are simply absent, not an error, as they are with no sign-in app.
 func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry, error) {
-	if d.approleDenied.Load() {
+	if d.roleAppID == "" || d.approleDenied.Load() {
 		return nil, nil
 	}
 	v := url.Values{}

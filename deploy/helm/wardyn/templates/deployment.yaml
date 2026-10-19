@@ -136,6 +136,9 @@ chart can read.
 {{- if not (hasPrefix "/tmp/" $spool) -}}
 {{- fail (printf "wardyn: ha.enabled needs WARDYN_AUDIT_SPOOL under /tmp, and the chart reads %q. Each replica spools audit rows to the per-pod tmp emptyDir while Postgres is unreachable; a path anywhere else is the read-only root filesystem or a volume another replica shares. Remove WARDYN_AUDIT_SPOOL from env and extraEnv to take the chart's default /tmp/audit-spool.jsonl." $spool) -}}
 {{- end -}}
+{{- if and (not .Values.k8s.enabled) (ne ((index $eff "WARDYN_RUNNER") | default "") "k8s") -}}
+{{- fail "wardyn: ha.enabled needs the Kubernetes runner, and k8s.enabled is false, so the runner would be docker. wardynd refuses to start with WARDYN_HA set on any runner but k8s (the Docker driver keeps its sandbox tracking in per-process maps, so a teardown served by a replica that did not create the sandbox cannot see it), and every replica would exit at boot. Set k8s.enabled=true (see the k8s runner values), or leave ha.enabled off." -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
@@ -292,7 +295,7 @@ spec:
                   key: scim-token-next
                   optional: true
             - name: WARDYN_SCIM_PURGE_AFTER
-              value: {{ $scim.purgeAfter | toString | quote }}
+              value: {{ ternary "720h" $scim.purgeAfter (kindIs "invalid" $scim.purgeAfter) | toString | quote }}
             - name: WARDYN_SCIM_LEAVER_WORKSPACES
               value: {{ $scim.leaverWorkspaces | quote }}
             {{- end }}
@@ -335,6 +338,8 @@ spec:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
             {{- end }}
+            {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
             {{- with .Values.secretStore }}
             {{- if and .backend (ne .backend "pg") }}
             - name: WARDYN_SECRET_STORE
@@ -381,8 +386,8 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
-            {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
-            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
+            {{- end }}
+            {{- /* kek is read on its own: a release with no secretStore key still gets it. */}}
             {{- if ($.Values.kek | default dict).required }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
@@ -446,6 +451,7 @@ spec:
               value: {{ $awskek.key | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.secretStore }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
             # credentials in Azure Key Vault").

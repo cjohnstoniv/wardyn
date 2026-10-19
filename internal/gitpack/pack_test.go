@@ -1019,6 +1019,10 @@ func TestPackTree_MaxTreeDepthIsEnforced(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "nested deeper") {
 				t.Fatalf("walk = %v, want the depth ceiling named", err)
 			}
+			// A ceiling like the others, so the proxy refuses it as one (413), not as uninspectable.
+			if !errors.Is(err, ErrTooLarge) {
+				t.Errorf("walk = %v, want it to wrap ErrTooLarge", err)
+			}
 		})
 	}
 }

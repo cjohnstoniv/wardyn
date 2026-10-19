@@ -87,6 +87,11 @@ func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, ru
 		return
 	}
 	if endMoved {
+		// The runner contains a run at the end its lease carries, so a local run
+		// whose end just moved is re-leased, as handleSetRunEndAndWait does (#2791).
+		if run.Placement == types.PlacementLocal {
+			s.renewLeaseAfterEndChange(ctx, run.ID)
+		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.end.set", run.ID.String(),
 			"success", mustJSON(map[string]any{
 				"reason": "limits_tightened", "from": run.EndsAt, "to": end, "max": limits.MaxEndAheadSec,

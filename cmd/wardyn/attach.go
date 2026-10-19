@@ -82,6 +82,20 @@ Authentication: your own token (WARDYN_TOKEN) or WARDYN_ADMIN_TOKEN (or --token)
 	}
 }
 
+// dialError reports a failed attach dial against safeURL (the URL without the
+// ticket). A minted ticket stays live until redeemed: keep it out of the error,
+// the transport's *url.Error included (exitCodeFor still classes it as one).
+func dialError(safeURL, ticket string, err error) error {
+	if ue := (*url.Error)(nil); errors.As(err, &ue) {
+		return &url.Error{Op: "dial", URL: safeURL, Err: ue.Err}
+	}
+	msg := err.Error()
+	if ticket != "" {
+		msg = strings.ReplaceAll(msg, ticket, "<redacted>")
+	}
+	return fmt.Errorf("dial %s: %s", safeURL, msg)
+}
+
 // runAttach performs the attach flow:
 //  1. Mints a single-use attach ticket with the configured token (falls back
 //     to a bare dial on the configured token when minting is inconclusive).
@@ -203,7 +217,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 			body, _ := io.ReadAll(resp.Body)
 			return sdk.NewAPIError(resp.StatusCode, body)
 		}
-		return fmt.Errorf("dial %s: %w", wsURL, err)
+		return dialError(buildWSURL(c.BaseURL, runID, ""), ticket, err)
 	}
 	// CloseNow is the fail-closed backstop; a normal exit path does a clean close.
 	defer conn.CloseNow()

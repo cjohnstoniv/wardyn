@@ -1009,6 +1009,9 @@ func TestResident_RevokedErasesAll(t *testing.T) {
 	if err := f.deliver(uuid.New(), "in flight", true); !refusedUnavailable(err) {
 		t.Fatalf("deliver = %v, want a timeout refusal", err)
 	}
+	// Only the refusal above needs the short bound; EraseAll's own deletes get the real one, or a
+	// slow -race runner times them out.
+	shortTimeout(t, 30*time.Second)
 	if err := f.res.EraseAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}

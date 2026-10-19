@@ -78,7 +78,7 @@ func ClassifyContent(req Request) (ContentTarget, error) {
 	if r.res != "repositories" || r.at(3) == "" {
 		return ContentTarget{}, nil
 	}
-	t := ContentTarget{RepoPath: strings.Join(append(slices.Clone(r.segs[:r.apis]), "_git", r.at(3)), "/")}
+	t := ContentTarget{RepoPath: strings.Join(append(slices.Clone(r.segs[:r.apis]), "_git", r.id(3)), "/")}
 	// Only a POST to pushes has a body ParsePush can read; any other verb
 	// there is refused as opaque rather than waved through.
 	switch res := r.at(4); {

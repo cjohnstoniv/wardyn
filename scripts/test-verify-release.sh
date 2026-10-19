@@ -56,6 +56,7 @@ cat > "${bin}/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "docker $*" >> "${LOG}"
 case "$*" in
+  *"buildx imagetools inspect"*) [ -z "${IMG_ERR:-}" ] || { echo "${IMG_ERR}" >&2; exit 1; } ;;&
   *"buildx imagetools inspect"*"Manifest.Digest"*) echo '"sha256:0000000000000000000000000000000000000000000000000000000000000001"' ;;
   *"buildx imagetools inspect"*) echo "linux/amd64 linux/arm64 " ;;
   *) echo "docker: mutating or unexpected verb: $*" >&2; exit 99 ;;
@@ -69,7 +70,9 @@ case "$1 $2" in
     echo "prerelease=false draft=false assets=0"
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
-    if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want.txt"; else cat "${DIR}/want.txt"; fi
+    # The licence tarball exists from 0.9.4.
+    if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver.txt"
+    if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
     while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; shift; done
@@ -97,7 +100,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -135,13 +138,29 @@ run 0.8.5-rc.1 v0.8.5 bundle
 pass "a prerelease version is bound to its own tag"
 
 # 3b. the macOS package is required from 0.9.3 and not before.
+# 0.9.3-rc.1 and rc.2 were built before the package job existed: no package is expected of them.
 run 0.9.3-rc.1 v0.9.3-rc.1 bundle
-[ "${rc}" = 0 ] || fail "V=0.9.3-rc.1 with the package exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+[ "${rc}" = 0 ] || fail "V=0.9.3-rc.1 (no package in that prerelease) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+run 0.9.3-rc.2 v0.9.3-rc.2 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.3-rc.2 (no package in that prerelease) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+run 0.9.3-rc.3 v0.9.3-rc.3 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.3-rc.3 with the package exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+NO_PKG=1 run 0.9.3-rc.3 v0.9.3-rc.3 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3-rc.3 without wardyn-runnerd.pkg was accepted"
 NO_PKG=1 run 0.9.3 v0.9.3 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
 run 0.9.2 v0.9.2 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.2 (no package in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-runnerd.pkg is required from 0.9.3 on"
+run 0.9.4 v0.9.4 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.4 with the licence tarball exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
+
+# 3c. a failed imagetools call says why, instead of only "no index digest".
+IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL wardynd: no index digest' && printf '%s' "${out}" | grep -q 'unknown command: docker buildx' \
+  || fail "a failed imagetools call did not surface its stderr: $(printf '%s' "${out}" | head -4)"
+pass "an imagetools failure reports its cause"
 
 # 4. a malformed V exits 2 BEFORE any network call, and never reaches a regexp.
 for bad in '0.8.3.*' '0.8' 'v0.8.3' '0.8.3 ' '0.8.3/../x' '0.8.3;id' '..*'; do

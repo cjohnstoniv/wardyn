@@ -22,11 +22,62 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func probeDriveFixture() types.DriveMount {
+// probeDriveFixture is a share home inside a fresh root, with d's runner
+// ceiling set to that root.
+func probeDriveFixture(t *testing.T, d *Driver) types.DriveMount {
+	t.Helper()
+	root, home := driveHostRoot(t)
+	d.cfg.UserDriveHostRoots = []string{root}
 	return types.DriveMount{
 		Backend:    types.DriveBackendHostPath,
-		ObjectName: "/srv/nas/homes/bob",
+		ObjectName: home,
+		HostRoot:   root,
 		Target:     runner.DriveTarget,
+	}
+}
+
+// TestProbeDrive_RunsTheMountCeilingFirst: the probe binds only what the mount
+// would, the path the runner's own ceiling resolved. A path outside the
+// runner's roots, outside the drive's own host_root, or on a runner with no
+// roots is refused before any container exists.
+func TestProbeDrive_RunsTheMountCeilingFirst(t *testing.T) {
+	f := newFakeDocker()
+	f.images[defaultDriveProbeImage] = true
+	d := newTestDriver(f)
+	drive := probeDriveFixture(t, d)
+	if _, err := d.ProbeDrive(context.Background(), drive); err != nil {
+		t.Fatalf("ProbeDrive in root: %v", err)
+	}
+	for _, c := range f.containers {
+		if m := c.host.Mounts; len(m) != 1 || m[0].Source != drive.ObjectName {
+			t.Fatalf("probe mounts = %+v, want the one resolved home %q", m, drive.ObjectName)
+		}
+	}
+
+	_, other := driveHostRoot(t)
+	otherRoot := filepath.Dir(other)
+	for name, mutate := range map[string]func(*Driver, *types.DriveMount){
+		"outside the runner's roots": func(_ *Driver, m *types.DriveMount) { m.ObjectName, m.HostRoot = other, otherRoot },
+		"outside its own host_root": func(d *Driver, m *types.DriveMount) {
+			d.cfg.UserDriveHostRoots = append(d.cfg.UserDriveHostRoots, otherRoot)
+			m.HostRoot = otherRoot
+		},
+		"no roots on the runner": func(d *Driver, _ *types.DriveMount) { d.cfg.UserDriveHostRoots = nil },
+		"a host file":            func(_ *Driver, m *types.DriveMount) { m.ObjectName = "/etc/shadow" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images[defaultDriveProbeImage] = true
+			d := newTestDriver(f)
+			m := probeDriveFixture(t, d)
+			mutate(d, &m)
+			if _, err := d.ProbeDrive(context.Background(), m); err == nil {
+				t.Fatal("ProbeDrive bound a path the mount ceiling refuses")
+			}
+			if len(f.containers) != 0 {
+				t.Fatalf("a refused probe created %d container(s)", len(f.containers))
+			}
+		})
 	}
 }
 
@@ -38,7 +89,7 @@ func TestProbeDrive_Readable(t *testing.T) {
 	f.images[defaultDriveProbeImage] = true
 	d := newTestDriver(f)
 
-	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d))
 	if err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
@@ -58,7 +109,7 @@ func TestProbeDrive_Unreadable(t *testing.T) {
 	f.probeExitCode = 1
 	d := newTestDriver(f)
 
-	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d))
 	if err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
@@ -75,7 +126,7 @@ func TestProbeDrive_RunsAsTheAgentUID(t *testing.T) {
 	f.images[defaultDriveProbeImage] = true
 	d := newTestDriver(f)
 
-	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture()); err != nil {
+	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d)); err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
 	var got *createdContainer
@@ -161,7 +212,12 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 		t.Fatalf("pull busybox: %v", err)
 	}
 
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	// The probe runs the drive mount ceiling first, as a launch does: the share root is the deployment's.
+	d.cfg.UserDriveHostRoots = []string{root}
 	// Both directories are made by a plain (unmodified) busybox container,
 	// which runs as root by default — so a bind-mounted mkdir lands root-owned
 	// on the HOST, exactly the shape a misconfigured NAS export takes.
@@ -170,7 +226,7 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 
 	t.Run("a 0700 root-owned directory is refused", func(t *testing.T) {
 		probe, err := d.ProbeDrive(ctx, types.DriveMount{
-			Backend: types.DriveBackendHostPath, ObjectName: blocked, Target: runner.DriveTarget})
+			Backend: types.DriveBackendHostPath, ObjectName: blocked, HostRoot: root, Target: runner.DriveTarget})
 		if err != nil {
 			t.Fatalf("ProbeDrive: %v", err)
 		}
@@ -182,7 +238,7 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 
 	t.Run("a world-readable directory is readable", func(t *testing.T) {
 		probe, err := d.ProbeDrive(ctx, types.DriveMount{
-			Backend: types.DriveBackendHostPath, ObjectName: open, Target: runner.DriveTarget})
+			Backend: types.DriveBackendHostPath, ObjectName: open, HostRoot: root, Target: runner.DriveTarget})
 		if err != nil {
 			t.Fatalf("ProbeDrive: %v", err)
 		}
@@ -228,4 +284,35 @@ func makeRootOwnedHostDir(ctx context.Context, t *testing.T, d *Driver, hostRoot
 		t.Fatalf("wait mkdir fixture: %v", ctx.Err())
 	}
 	return filepath.Join(hostRoot, name)
+}
+
+// createTimesOut is a daemon that finishes the create the client already gave up on.
+type createTimesOut struct{ *fakeDocker }
+
+func (c createTimesOut) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	_, _ = c.fakeDocker.ContainerCreate(ctx, opts)
+	return client.ContainerCreateResult{}, context.DeadlineExceeded
+}
+
+// The probe container is labelled as Wardyn's (with the runner's id, so a sweeper can claim a stray),
+// and a create that timed out client-side is still removed by name.
+func TestProbeDrive_LabelledAndRemovedAfterAClientSideCreateTimeout(t *testing.T) {
+	f := newFakeDocker()
+	f.images[defaultDriveProbeImage] = true
+	d := newWithClient(createTimesOut{f}, Config{ProxyImage: "wardyn-proxy:dev", RunnerID: "r-1"})
+
+	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d)); err == nil {
+		t.Fatal("ProbeDrive with a failed create returned no error")
+	}
+	if len(f.containers) != 1 {
+		t.Fatalf("containers = %d, want the one the daemon made", len(f.containers))
+	}
+	for name, c := range f.containers {
+		if c.cfg.Labels[labelManaged] != "true" || c.cfg.Labels[runner.LabelRunnerID] != "r-1" {
+			t.Errorf("%s labels = %v, want wardyn's managed label and the runner id", name, c.cfg.Labels)
+		}
+		if !c.removed || !c.forceRemoved {
+			t.Errorf("%s removed=%v force=%v, want force-removed by name", name, c.removed, c.forceRemoved)
+		}
+	}
 }

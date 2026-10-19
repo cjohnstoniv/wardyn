@@ -413,11 +413,10 @@ type optionalFeatures struct {
 // Log only the COUNT — the list itself is not disclosed.
 func logOperatorAllowlistPosture(f *bootFlags) {
 	if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
-		slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML, SCIM provisioning of joiners) does not exist yet, but admin/member RBAC and SCIM leaver deprovisioning do. "+
-			"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are MEMBERS (unless a WARDYN_OIDC_ROLE_MAP entry raises them to admin) — owner-scoped: they launch/kill runs and "+
+		slog.Info("wardynd: NOTE WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are USERS (unless a WARDYN_OIDC_ROLE_MAP entry raises them to admin or security_admin) — owner-scoped: they launch/kill runs and "+
 			"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment ("+
-			"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a member may still "+
-			"decide egress_domain approvals on their own runs). admin/member is the only role tier — everything else, incl. the admin token, is always admin",
+			"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a user may still "+
+			"decide egress_domain approvals on their own runs). The admin token is always admin",
 			slog.Int("operator_emails", len(ops)))
 		// The allowlist matches the IdP's email claim, and email_verified is
 		// only enforced when the domains list is set — without it, an IdP
@@ -428,9 +427,8 @@ func logOperatorAllowlistPosture(f *bootFlags) {
 			slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list or the require flag too")
 		}
 	} else {
-		slog.Warn("wardynd: NOTE a first-class packaged team deployment (SAML, SCIM provisioning of joiners) does not exist yet; " +
-			"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so — absent a WARDYN_OIDC_ROLE_MAP — every SSO human would have the same power as the admin token — " +
-			"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a member)")
+		slog.Warn("wardynd: NOTE the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so — absent a WARDYN_OIDC_ROLE_MAP — every SSO human would have the same power as the admin token — " +
+			"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a user)")
 	}
 }
 

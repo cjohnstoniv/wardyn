@@ -155,6 +155,14 @@ func TestL0_NoDefaultRoute(t *testing.T) {
 	if !strings.Contains(out, "dev eth0") {
 		t.Errorf("sandbox must have an on-link route via eth0 (the per-run internal net), got:\n%s", out)
 	}
+	// `ip route` is IPv4 only: an IPv6 default route would be a second way off the segment. The
+	// table may be empty (no IPv6 at all), which is fine; a "default" line is not.
+	out6 := execInSandbox(ctx, t, d, sb.Ref, []string{"ip", "-6", "route"})
+	for _, line := range strings.Split(out6, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "default") {
+			t.Errorf("L0 violated: sandbox %q has an IPv6 default route.\nip -6 route:\n%s", sb.Ref, out6)
+		}
+	}
 }
 
 // TestL0_MetadataUnreachable asserts the cloud metadata / link-local endpoint
@@ -196,6 +204,22 @@ func TestL0_MetadataUnreachable(t *testing.T) {
 	low := strings.ToLower(conn)
 	if !strings.Contains(low, "unreachable") && !strings.Contains(low, "can't connect") && !strings.Contains(low, "bad address") {
 		t.Errorf("connect to metadata %s should report an unreachable/connect error, got:\n%s", metadataIP, conn)
+	}
+
+	// (c) The same endpoint over IPv6 (the EC2 IPv6 metadata address): no route, and no connect. A
+	// sandbox with no IPv6 at all also answers "unreachable" or "not supported", which is the
+	// sealed outcome.
+	const metadataIP6 = "fd00:ec2::254"
+	routeGet6 := strings.ToLower(execInSandbox(ctx, t, d, sb.Ref, []string{"ip", "-6", "route", "get", metadataIP6}))
+	if !strings.Contains(routeGet6, "unreachable") && !strings.Contains(routeGet6, "not supported") {
+		t.Errorf("metadata IP %s must have NO route from the sandbox; `ip -6 route get` returned:\n%s", metadataIP6, routeGet6)
+	}
+	conn6 := execInSandbox(ctx, t, d, sb.Ref, []string{
+		"sh", "-c",
+		"wget -q -T 3 -O - 'http://[" + metadataIP6 + "]/latest/meta-data/' 2>&1; echo RC=$?",
+	})
+	if strings.Contains(conn6, "RC=0") {
+		t.Errorf("connect to metadata %s must FAIL (no egress path); wget succeeded:\n%s", metadataIP6, conn6)
 	}
 }
 

@@ -88,7 +88,7 @@ We agree with the rejection of option (i). We verified the two halves independen
 
 We looked at whether we could pilot (ii) today on the existing channel. Mostly yes, with four concrete gaps:
 
-1. **No sync-capable binary in the published agent images.** The claude-code image installs exactly `git curl ca-certificates asciinema tmux openssh-client openssh-sftp-server socat corkscrew` (`deploy/images/claude-code/Dockerfile`, package install layer). `rsync` is absent, so `rsync --server` cannot run; `unison` likewise. **Adding `rsync` is one line and would unlock the well-trodden client today**, independent of the rest of 0.9. We would take that change on its own.
+1. **No sync-capable binary in the published agent images.** The claude-code image installs exactly `git curl ca-certificates asciinema tmux openssh-client openssh-sftp-server socat corkscrew` (`deploy/images/claude-code/Dockerfile`, package install layer). `rsync` is absent, so `rsync --server` cannot run; `unison` likewise. **Adding `rsync` is one line and would unlock the well-trodden client today**, independent of the rest of 0.9. We would take that change on its own. *(Done in 0.9.0: `rsync` ships in the published agent images, and the list above is the 0.8.9 one.)*
    - Tools that ship their own agent (Mutagen, and VS Code's remote server) should work on the existing channel, since §5's Remote-SSH recipe already establishes "local tool pushes its own binary in" as a supported pattern via `remote.SSH.localServerDownload: "always"`. We have not yet proven Mutagen specifically.
    - Note bring-your-own-image is not a workaround for a deployment with the per-run image builder off: a `--image` run is rejected outright, so the binary has to be in the published image.
 

@@ -121,7 +121,8 @@ describe("one throwing widget is contained — in BOTH renderers of RUN_WIDGETS"
     );
     expect(await screen.findByText("unmapped wire value")).toBeInTheDocument();
     expect(screen.getByTestId("hero")).toBeInTheDocument();
-    expect(screen.queryByText(/Something went wrong rendering Runs/)).toBeNull();
+    // The shell's own boundary names its region by the route's pathname, never "Runs".
+    expect(screen.queryByText(/Something went wrong rendering \/runs\/run-1/)).toBeNull();
   });
 
   it("focus mode does too — the dock degrades, the full-screen session stays up", () => {
