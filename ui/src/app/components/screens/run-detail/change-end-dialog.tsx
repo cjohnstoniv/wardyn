@@ -15,18 +15,13 @@ import * as React from "react";
 import { toast } from "sonner";
 import type { RunDetail } from "../../../lib/types";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { toDatetimeLocalValue } from "../../../lib/datetime-local";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-// <input type=datetime-local> wants local wall-clock time with no offset.
-function toDatetimeLocalValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export function ChangeEndDialog({
   open,
@@ -56,6 +51,9 @@ export function ChangeEndDialog({
     }
   }, [open]);
 
+  // A cleared or half-typed field parses to nothing; Save waits for a real date (or No end) instead of throwing.
+  const invalid = !noEnd && Number.isNaN(Date.parse(changeValue));
+
   const submit = async () => {
     setBusy(true);
     try {
@@ -80,7 +78,7 @@ export function ChangeEndDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{RL.ENDS_DIALOG_TITLE}</DialogTitle>
-          <DialogDescription>{maxDays ? RL.endsHint(maxDays) : "Pick a date, or turn this run's end off."}</DialogDescription>
+          <DialogDescription>{maxDays ? RL.endsHint(maxDays) : allowNoEnd ? "Pick a date, or turn this run's end off." : "Pick a date."}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           {allowNoEnd && (
@@ -103,7 +101,7 @@ export function ChangeEndDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy}>
+          <Button onClick={() => void submit()} disabled={busy || invalid}>
             Save
           </Button>
         </DialogFooter>

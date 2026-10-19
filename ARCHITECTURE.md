@@ -544,7 +544,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 |---|---|---|
 | `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` ([`internal/egress/proxy/git_broker.go`](internal/egress/proxy/git_broker.go)) | proxy memory only; an un-brokered GitHub URL has no route **by name**, and `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out of the push-branch confinement; see [below](#github_token-credential). |
 | `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg; see [below](#git_pat-mechanism). | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a); not least-privilege either way; **not available for the SAME forge as a `github_token` grant**; see [below](#git_pat-credential). |
-| `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after; an approval-gated grant is delivered once | resident file, wiped post-clone (documented exception, invariant 1); **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
+| `ssh_key`, any host | **proxy SSH agent** — `wardyn-git-helper ssh-exec` bridges each `ssh` to it ([`internal/egress/proxy/ssh_agent.go`](internal/egress/proxy/ssh_agent.go)) | proxy memory only; **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
 
 - **Azure DevOps is not a fourth grant kind.**
   - It has no `git_pat` or `ssh_key` lane:
@@ -564,7 +564,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 - A GitLab PAT cannot traverse it.
 - Conversely `ssh_key`
   cannot be proxy-injected at all — git's SSH transport has no credential-helper
-  seam.
+  seam — so the proxy acts as its SSH agent.
 - `git_pat` CAN be proxy-injected, but only through its OWN broker (the row
   above):
   - on the default `WARDYN_GIT_PAT_BROKER=on`, `agent-run`'s rewrite REMOVES
@@ -625,7 +625,7 @@ clone is decided by grant kind and host, and none can cover another's set:
 
 ### `ssh_key`: credential
 
-- resident file, wiped post-clone (documented exception, invariant 1).
+- proxy memory only, behind its SSH agent, closed after the clone.
 - **Not available at all for the SAME forge as a `github_token` grant** — refused at policy write (`validateGrantLaneExclusivity`),
   - and for anything already stored, withheld from the sandbox at dispatch (`dropBrokeredGrants`)
   - while `confineGitBrokerEgress` denies that forge's SSH endpoint too

@@ -240,3 +240,36 @@ func TestAgentRunLib_CloneByShaUsesTheFetchFallback(t *testing.T) {
 		t.Errorf("the commit was not checked out (%v):\n%s", err, out)
 	}
 }
+
+// A pinned ref whose fetch fails leaves the target as the attempt found it, not holding a bare .git
+// that the next start would take for a populated checkout and never retry; the retry then clones.
+func TestAgentRunLib_FailedFetchLeavesTheTargetRetryable(t *testing.T) {
+	src := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", src, "-c", "user.name=t", "-c", "user.email=t@example.test"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	git("config", "uploadpack.allowAnySHA1InWant", "true")
+	if err := os.WriteFile(filepath.Join(src, "README"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "README")
+	git("commit", "-q", "-m", "one")
+	dest := filepath.Join(t.TempDir(), "widget")
+	out := cloneOne(t, "file://"+src, dest, strings.Repeat("0", 40))
+	if !strings.Contains(out, "clone FAILED for "+dest) {
+		t.Fatalf("no failure line for a sha the remote does not have:\n%s", out)
+	}
+	if left, _ := os.ReadDir(dest); len(left) != 0 {
+		t.Fatalf("the failed fetch left %d entr(ies) in the target (a bare .git reads as a checkout):\n%s", len(left), out)
+	}
+	out = cloneOne(t, "file://"+src, dest, git("rev-parse", "HEAD"))
+	if b, err := os.ReadFile(filepath.Join(dest, "README")); err != nil || string(b) != "hi" {
+		t.Errorf("the retry did not clone into the target (%v):\n%s", err, out)
+	}
+}

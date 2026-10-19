@@ -46,13 +46,13 @@ const (
 // a sign-in LOOP through a Postgres incident, which the console's own contract
 // says must never be reported as a credential problem.
 const (
-	sessionExpiredMsg     = "your session expired — sign in again"
-	sessionRevokedMsg     = "your session was revoked — sign in again"
-	sessionInvalidMsg     = "your session could not be verified — sign in again"
-	sessionRoleStaleMsg   = "your sign-in is too old to trust your role — sign in again"
-	sessionDeactivatedMsg = "your access to Wardyn has been turned off — ask your Wardyn admin"
-	signInRequiredMsg     = "sign-in required — sign in to Wardyn with single sign-on"
-	sessionUnavailableMsg = "this deployment cannot check whether your session was revoked, so it cannot " +
+	sessionExpiredMsg     = "Your session expired — sign in again"
+	sessionRevokedMsg     = "Your session was revoked — sign in again"
+	sessionInvalidMsg     = "Your session could not be verified — sign in again"
+	sessionRoleStaleMsg   = "Your sign-in is too old to trust your role — sign in again"
+	sessionDeactivatedMsg = "Your access to Wardyn has been turned off — ask your Wardyn admin"
+	signInRequiredMsg     = "Sign-in required — sign in to Wardyn with single sign-on"
+	sessionUnavailableMsg = "This deployment cannot check whether your session was revoked, so it cannot " +
 		"authenticate you right now — this is a control-plane database problem, not a problem with your " +
 		"credentials; retry shortly"
 )

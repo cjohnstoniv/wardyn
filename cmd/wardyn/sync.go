@@ -20,11 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -50,6 +52,10 @@ type syncFlags struct {
 	asJSON          bool
 	advertisedProxy bool
 	maxPullBytes    int64
+	pullDeletes     bool
+	maxPullDeletes  int
+	git             bool
+	pullCommits     bool
 }
 
 func syncCmd(client clientFn) *cobra.Command {
@@ -62,12 +68,35 @@ subsystem, using the SSH key from 'wardyn ssh-key ensure' (~/.wardyn/id_ed25519)
 
 The direction is laptop to sandbox. --pull also brings the sandbox's changes
 back, for this run only. Safety rules, all enforced here and none optional:
-nothing is ever deleted; symlinks are refused both ways; pulled files never get
-an exec bit; .git, .envrc, .direnv, .vscode/tasks.json, .vscode/launch.json,
+symlinks are refused both ways; pulled files never get an exec bit; .git,
+.envrc, .direnv, .vscode/tasks.json, .vscode/launch.json,
 .idea/runConfigurations and .idea/workspace.xml are never synced either way; a
 file changed on both sides since the last sync is not pulled (the laptop's copy
 is pushed) and is listed as a conflict. State is kept in
 ~/.local/state/wardyn/sync/<run-id>.json, outside the synced directory.
+
+Ignore files: every .gitignore and .wardynignore in the tree is honoured both
+ways, in git's syntax; a .wardynignore line wins over a .gitignore one in the
+same directory, so "!name" there sends a git-ignored file. Your organisation's
+own patterns, if it set any, apply on top and no ignore file can undo them.
+
+Deletes and renames: a file deleted or renamed on this computer is deleted or
+renamed in the sandbox, but only while the sandbox's copy is still the one this
+sync sent (a sandbox edit is kept and listed as a conflict). A sandbox delete
+never removes a file here unless --pull-deletes is given: those deletes are
+listed before they are applied, at most --max-pull-deletes of them in one pass
+(over that, none), and each file is moved into
+~/.local/state/wardyn/sync/<run-id>-deleted/ rather than removed.
+
+Git history: .git is never synced. --git sends this computer's current branch
+as a git bundle (commits and the branch name, no hooks, no config) after the
+first pass; a sandbox directory with no repository gets a new one with that
+branch checked out over the synced files, one with a repository gets it as
+refs/remotes/laptop/<branch>. --pull-commits brings the sandbox's commits
+since then back as a bundle and fetches them into the branch
+wardyn/sync-<run-id prefix> here, for you to review; your working tree and other
+branches are never touched. Both need the top of a git work tree, and both
+run git in the sandbox over an SSH exec channel.
 
 --remote-dir (default /home/agent/work) must exist in the sandbox. The
 directory is where the transfer starts, not a boundary: the sandbox's sftp
@@ -85,20 +114,25 @@ computer, so it needs --advertised-proxy (same as 'wardyn run ssh').
 	cmd.Flags().BoolVar(&f.pull, "pull", false, "also pull the sandbox's changes to this computer")
 	cmd.Flags().BoolVar(&f.watch, "watch", false, "keep syncing every couple of seconds until interrupted")
 	cmd.Flags().BoolVar(&f.asJSON, "json", false, "print each pass as JSON")
+	cmd.Flags().BoolVar(&f.pullDeletes, "pull-deletes", false, "with --pull, let a file deleted in the sandbox be removed here too (moved into the run's sync state folder)")
+	cmd.Flags().IntVar(&f.maxPullDeletes, "max-pull-deletes", 20, "most files --pull-deletes may remove here in one pass; over it, none is removed")
+	cmd.Flags().BoolVar(&f.git, "git", false, "after the first pass, send this computer's current branch and its history to the sandbox as a git bundle")
+	cmd.Flags().BoolVar(&f.pullCommits, "pull-commits", false, "after the first pass, fetch the sandbox's new commits into the branch wardyn/sync-<run> here (never into your working tree)")
 	cmd.Flags().Int64Var(&f.maxPullBytes, "max-pull-bytes", defaultMaxPullBytes, "most bytes one pass may pull from the sandbox (a single file over 256 MiB is always refused)")
 	cmd.Flags().BoolVar(&f.advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
 	return cmd
 }
 
 func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFlags) error {
-	if _, err := parseID("run", runID); err != nil {
+	id, err := parseID("run", runID)
+	if err != nil {
 		return err
 	}
 	if err := refusePlainHTTPGateway("sync", c.BaseURL); err != nil {
 		return err
 	}
-	if f.maxPullBytes <= 0 {
-		return errors.New("sync: --max-pull-bytes must be positive")
+	if err := f.check(); err != nil {
+		return err
 	}
 	root, err := filepath.Abs(localDir)
 	if err != nil {
@@ -133,6 +167,10 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if gw.fingerprint == "" {
 		return errors.New("sync: the gateway publishes no host key fingerprint, so its identity cannot be checked; ask your operator")
 	}
+	rules, err := c.GetRunSyncRules(cmd.Context(), id)
+	if err != nil {
+		return fmt.Errorf("sync: read the run's sync rules: %w", err)
+	}
 	signer, err := loadSyncSigner()
 	if err != nil {
 		return err
@@ -165,8 +203,34 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 		return fmt.Errorf("sync: %w", err)
 	}
 	defer lroot.Close()
-	sy := &syncer{c: sess.sftp, meter: sess.meter, root: lroot, o: syncOptions{remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes}, st: st, stateFile: stateFile}
-	runErr := runSyncLoop(ctx, cmd, sy, f)
+	sy := &syncer{c: sess.sftp, meter: sess.meter, root: lroot, st: st, stateFile: stateFile, o: syncOptions{
+		remote: remote, pull: f.pull, maxPullBytes: f.maxPullBytes, orgDeny: rules.Deny,
+		pullDeletes: f.pullDeletes, maxPullDeletes: f.maxPullDeletes, notify: cmd.ErrOrStderr(),
+		trash: filepath.Join(filepath.Dir(stateFile), runID+"-deleted", time.Now().UTC().Format("20060102T150405.000000000Z")),
+	}}
+	var gitStep func() error
+	if f.git || f.pullCommits {
+		if err := syncGitCheck(ctx, sy, root); err != nil {
+			_ = sess.close()
+			return fmt.Errorf("sync: %w", err)
+		}
+		w := cmd.OutOrStdout()
+		if f.asJSON {
+			w = cmd.ErrOrStderr() // stdout stays one JSON object per pass
+		}
+		gitStep = func() error {
+			if f.git {
+				if err := sendGit(ctx, w, sy, sshc, runID, root); err != nil {
+					return err
+				}
+			}
+			if f.pullCommits {
+				return pullCommits(ctx, w, sy, sshc, runID, root)
+			}
+			return nil
+		}
+	}
+	runErr := runSyncLoop(ctx, cmd, sy, sess, f, gitStep)
 	if cerr := sess.close(); runErr == nil {
 		runErr = cerr
 	}
@@ -196,21 +260,31 @@ func portOr22(port string) string {
 	return port
 }
 
-func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, f syncFlags) error {
+func runSyncLoop(ctx context.Context, cmd *cobra.Command, sy *syncer, sess *syncSession, f syncFlags, gitStep func() error) error {
 	for first := true; ; first = false {
 		rep, err := sy.pass(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return errors.New("sync: interrupted")
 			}
+			sess.report(syncPassReport{Error: syncShown(err.Error())})
 			return fmt.Errorf("sync: %w", err)
 		}
+		sess.report(syncPassReport{Complete: true, DeletedOnLaptop: len(rep.DeletedLocal)})
 		if f.asJSON {
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rep); err != nil {
 				return err
 			}
 		} else if first || !rep.empty() {
 			printSyncReport(cmd.OutOrStdout(), rep)
+		}
+		if first && gitStep != nil {
+			if err := gitStep(); err != nil {
+				if ctx.Err() != nil {
+					return errors.New("sync: interrupted")
+				}
+				return fmt.Errorf("sync: %w", err)
+			}
 		}
 		if !f.watch {
 			return nil
@@ -228,8 +302,20 @@ func printSyncReport(w io.Writer, r *syncReport) {
 	for _, p := range r.Conflicts {
 		fmt.Fprintf(w, "conflict (changed on both sides; the laptop's copy wins, the sandbox's is not pulled): %s\n", syncShown(p))
 	}
+	for _, p := range r.Renamed {
+		fmt.Fprintf(w, "renamed in the sandbox: %s -> %s\n", syncShown(p.From), syncShown(p.To))
+	}
+	for _, p := range r.DeletedRemote {
+		fmt.Fprintf(w, "deleted in the sandbox (deleted here): %s\n", syncShown(p))
+	}
+	for _, p := range r.DeletedLocal {
+		fmt.Fprintf(w, "deleted here (deleted in the sandbox; kept in %s): %s\n", syncShown(r.KeptIn), syncShown(p))
+	}
 	for _, x := range r.Refused {
 		fmt.Fprintf(w, "refused (%s): %s\n", syncShown(x.Reason), syncShown(x.Path))
+	}
+	if r.Ignored > 0 {
+		fmt.Fprintf(w, "left out by ignore files: %d\n", r.Ignored)
 	}
 }
 
@@ -432,6 +518,28 @@ func openSyncSession(c *ssh.Client, dir, direction string) (*syncSession, error)
 	return s, nil
 }
 
+// syncPassRequest is the channel request `wardyn sync` sends after each pass:
+// the gateway counts the laptop deletes into the session's ssh.sync.transfer
+// row and, for a run that holds its agent for this folder, takes a complete
+// pass as the first sync landing (or an error as it failing). It is the
+// client's own account; a gateway that predates it refuses it, which is ignored.
+const syncPassRequest = "wardyn-sync-pass"
+
+type syncPassReport struct {
+	Complete        bool   `json:"complete"`
+	Error           string `json:"error,omitempty"`
+	DeletedOnLaptop int    `json:"deleted_on_laptop"`
+}
+
+// report sends one pass's account and reports whether the gateway took it.
+func (s *syncSession) report(r syncPassReport) bool {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return false
+	}
+	return s.request(syncPassRequest, ssh.Marshal(struct{ Report string }{string(b)})) == nil
+}
+
 func (s *syncSession) request(typ string, payload []byte) error {
 	ok, err := s.ch.SendRequest(typ, true, payload)
 	if err == nil && !ok {
@@ -494,4 +602,88 @@ func syncExitError(status int, stderr string) error {
 		return errors.New("sync: the channel ended without an exit status from the sandbox's sftp-server")
 	}
 	return fmt.Errorf("sync: the sandbox's sftp-server exited %d: %s", status, syncShown(strings.TrimSpace(stderr)))
+}
+
+func (f syncFlags) check() error {
+	if f.maxPullBytes <= 0 {
+		return errors.New("sync: --max-pull-bytes must be positive")
+	}
+	if f.pullDeletes && !f.pull {
+		return errors.New("sync: --pull-deletes needs --pull")
+	}
+	if f.maxPullDeletes <= 0 {
+		return errors.New("sync: --max-pull-deletes must be positive")
+	}
+	return nil
+}
+
+// setLocalFolder sets --local-folder on the create request as its folder's
+// base name, never its path on this computer. No dir sets nothing.
+func setLocalFolder(body *sdk.CreateRunRequest, dir, remoteDir string, createJSON bool) error {
+	if dir == "" {
+		return nil
+	}
+	if createJSON {
+		return errors.New("--local-folder prints the sync's progress, so it does not go with --json")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
+		return fmt.Errorf("--local-folder: %s is not a directory", dir)
+	}
+	if _, err := syncRemoteDir(remoteDir); err != nil {
+		return fmt.Errorf("--local-folder-remote-dir: %w", err)
+	}
+	body.LocalFolder = &types.RunLocalFolder{Name: filepath.Base(abs), RemoteDir: remoteDir}
+	return nil
+}
+
+// seedThenWait seeds a new run's local folder, if it has one, then waits for
+// the run when --wait asks.
+func seedThenWait(cmd *cobra.Command, c *sdk.Client, id uuid.UUID, dir, remoteDir string, wait bool, timeout time.Duration) error {
+	if err := seedLocalFolder(cmd, c, id, dir, remoteDir, timeout); err != nil {
+		return err
+	}
+	if wait {
+		return waitForRun(cmd.Context(), cmd.ErrOrStderr(), c, id, timeout)
+	}
+	return nil
+}
+
+// seedLocalFolder waits for the new run's sandbox, then runs one sync pass of
+// dir into it, which releases the held agent. On a failure the run stays held
+// until its seed wait ends, so the error names the command that seeds it. A
+// run without one has nothing to seed.
+func seedLocalFolder(cmd *cobra.Command, c *sdk.Client, id uuid.UUID, dir, remoteDir string, timeout time.Duration) error {
+	if dir == "" {
+		return nil
+	}
+	errW := cmd.ErrOrStderr()
+	fmt.Fprintf(errW, "waiting for run %s's sandbox to seed %s into it\n", id, dir)
+	deadline := time.Now().Add(timeout)
+	for {
+		run, err := c.GetRun(cmd.Context(), id)
+		switch {
+		case err != nil:
+			return err
+		case run.State == types.RunRunning:
+			err := runSync(cmd, c, id.String(), dir, syncFlags{remoteDir: remoteDir, maxPullBytes: defaultMaxPullBytes, maxPullDeletes: 20})
+			if err != nil {
+				return fmt.Errorf("%w\nthe agent of run %s is held for this folder: seed it with 'wardyn sync %s %s' before the run's seed wait ends", err, id, id, dir)
+			}
+			fmt.Fprintf(errW, "seeded %s; the agent of run %s starts now. Keep it in step with 'wardyn sync %s %s --watch'\n", dir, id, id, dir)
+			return nil
+		case run.State.IsTerminal():
+			return &exitError{code: 1, err: fmt.Errorf("run %s ended %s before its folder was seeded", id, run.State)}
+		case time.Now().After(deadline):
+			return &exitError{code: 124, err: fmt.Errorf("run %s's sandbox was not up within --timeout %s, so %s was not seeded", id, timeout, dir)}
+		}
+		select {
+		case <-cmd.Context().Done():
+			return cmd.Context().Err()
+		case <-time.After(waitPollInterval):
+		}
+	}
 }

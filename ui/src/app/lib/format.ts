@@ -18,12 +18,42 @@ export function relativeTime(iso: string): string {
   return future ? `in ${mo}mo` : `${mo}mo ago`;
 }
 
+export type DurationStyle = "short" | "words" | "clock";
+
+/** One duration, three voices. "short" is the console's default ("1h 2m", "5m 12s"); "words" is prose
+ *  for limits and time left, in the largest whole unit ("1 hour", "30 minutes", "2 days"); "clock" is a
+ *  player position ("4:07"). */
+export function formatDuration(ms: number, style: DurationStyle = "short"): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (style === "clock") return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  if (style === "words") {
+    const unit = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+    if (total >= 86400 && total % 86400 === 0) return unit(total / 86400, "day");
+    if (total >= 3600 && total % 3600 === 0) return unit(total / 3600, "hour");
+    if (total % 60 === 0) return unit(total / 60, "minute");
+    return unit(total, "second");
+  }
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${total % 60}s`;
+}
+
 /** "3 Sep" — a day-of-month and short month, no year or time. Model
  *  connections' "Added {date}" meta line (#592): the exact instant is
  *  already one click away via title=absoluteTime, so the visible stamp stays
  *  short, the same tradeoff relativeTime/absoluteTime make together. */
 export function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** "Oct 5, 2026" — a full calendar date, no time of day. */
+export function mediumDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** "Mon" — the weekday alone. */
+export function weekday(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { weekday: "short" });
 }
 
 export function absoluteTime(iso: string): string {

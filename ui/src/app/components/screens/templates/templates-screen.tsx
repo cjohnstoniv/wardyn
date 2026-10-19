@@ -149,15 +149,17 @@ export function TemplatesScreen() {
     );
   else
     body = (
-      <>
-        <div aria-hidden="true" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 md:grid ${ROW_GRID}`}>
-          <span>{T.COL_NAME}</span>
-          <span>{T.COL_AVAILABLE}</span>
-          <span>{T.COL_INCLUDES}</span>
-          <span>{T.COL_UPDATED}</span>
-          <span className="sr-only">{T.COL_ACTIONS}</span>
+      // A table by role, not by element: the rows stay the grid cards that collapse below 760 px, where the
+      // per-cell labels name each value and the header row is not shown.
+      <div role="table" aria-label={T.LIST_ARIA}>
+        <div role="row" className={`label-eyebrow hidden gap-x-4 bg-surface-2 px-4 py-2.5 md:grid ${ROW_GRID}`}>
+          <span role="columnheader">{T.COL_NAME}</span>
+          <span role="columnheader">{T.COL_AVAILABLE}</span>
+          <span role="columnheader">{T.COL_INCLUDES}</span>
+          <span role="columnheader">{T.COL_UPDATED}</span>
+          <span role="columnheader" className="sr-only">{T.COL_ACTIONS}</span>
         </div>
-        <ul>
+        <ul role="rowgroup">
           {shown.map((t) => (
             <TemplateRow
               key={t.id}
@@ -173,7 +175,7 @@ export function TemplatesScreen() {
             />
           ))}
         </ul>
-      </>
+      </div>
     );
 
   return (

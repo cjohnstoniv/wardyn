@@ -353,7 +353,7 @@ export async function walkNewRunToReview(page: Page, plan: GuidedPlan = {}): Pro
     else if (plan.task !== undefined) await page.locator("#nr-text-0").fill(plan.task);
   }
   await continueTo(page, NR_FILES.TITLE);
-  await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  await page.getByRole("checkbox", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
   const size = page.locator("#nr-main-drive-size");
   if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
   await continueTo(page, NR_TOOLS.TITLE);

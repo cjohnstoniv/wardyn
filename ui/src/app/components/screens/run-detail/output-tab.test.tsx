@@ -142,6 +142,38 @@ describe("OutputTab — polling", () => {
     });
     expect(getMock).toHaveBeenCalledTimes(3);
   });
+
+  // #2535: one 502 or network blip while a live run's output polls must not replace it with the error screen.
+  it("a failed poll after a good read keeps the output and reads again; the next good read carries on", async () => {
+    vi.useFakeTimers();
+    getMock
+      .mockResolvedValueOnce(out({ complete: false, output: "line one", captured_at: undefined }))
+      .mockRejectedValueOnce(new HttpError(502, "bad gateway"))
+      .mockResolvedValue(out({ output: "line two" }));
+    await mount({ live: true });
+    expect(screen.getByText(/line one/)).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/line one/)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.loadError)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/line two/)).toBeInTheDocument();
+  });
+
+  it("a poll that keeps failing is shown after a few tries, not retried forever", async () => {
+    vi.useFakeTimers();
+    getMock.mockResolvedValueOnce(out({ complete: false, captured_at: undefined })).mockRejectedValue(new HttpError(502, "bad gateway"));
+    await mount({ live: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(screen.getByText(RUN_COCKPIT.loadError)).toBeInTheDocument();
+  });
 });
 
 describe("OutputTab — refusals", () => {

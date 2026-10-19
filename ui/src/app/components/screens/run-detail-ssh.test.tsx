@@ -385,7 +385,7 @@ describe("ConnectSSHCard — UI apps lane", () => {
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
-    await waitFor(() => expect(attachTicketMock).toHaveBeenCalledWith(baseRun.id));
+    await waitFor(() => expect(attachTicketMock).toHaveBeenCalledWith(baseRun.id, "ui"));
     await waitFor(() => expect(submitSpy).toHaveBeenCalled());
 
     const form = submitSpy.mock.instances[0] as HTMLFormElement;

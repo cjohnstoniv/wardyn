@@ -90,6 +90,27 @@ test.describe("unbranded console (the harness as it stands)", () => {
   });
 });
 
+test.describe("a failed settings read", () => {
+  // A 5xx on GET /branding/settings is not "Default branding": the form must not offer a Save that would replace
+  // the stored document with an empty one.
+  test("the card says it could not read, offers no Save, and Retry brings the stored brand back", async ({ page }) => {
+    let failures = 1;
+    await page.route("**/api/v1/branding/settings", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (failures-- > 0) return route.fulfill({ status: 502, json: { error: "bad gateway" } });
+      return route.fulfill({ json: { org_name: "Example Corp", name_format: "prefix", primary: "#7c3aed", primary_text: "#ffffff" } });
+    });
+    await gotoConsole(page, "admin");
+    await page.goto("/admin/settings");
+    await expandCard(page, BRANDING.TITLE);
+    const card = page.locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${BRANDING.TITLE}( |$)`), level: 3 }) });
+    await expect(card.getByText(BRANDING.LOAD_FAILED_SUMMARY)).toBeVisible();
+    await expect(card.getByRole("button", { name: BRANDING.SAVE })).toHaveCount(0);
+    await card.getByRole("button", { name: "Retry" }).click();
+    await expect(card.getByLabel(BRANDING.ORG_NAME_LABEL)).toHaveValue("Example Corp");
+  });
+});
+
 test.describe("branded console", () => {
   test("the sign-in page shows the org's logo, name, colours, tab title and icon", async ({ browser }, testInfo) => {
     const page = await signedOutPage(browser, testInfo.project.use.baseURL, true);

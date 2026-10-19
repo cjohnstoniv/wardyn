@@ -8,7 +8,7 @@
 // erase. Expected strings are the packet's, spelled out rather than read back
 // from the copy module.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -220,6 +220,19 @@ describe("Erase someone's data (M4)", () => {
       "The erase didn't finish, so some of ana@example.com's data may still be stored. Try again — erasing twice is safe.",
     );
     expect(within(dialog).getByRole("button", { name: "Erase data" })).toBeInTheDocument();
+  });
+
+  // #2509: dismissing mid-erasure hid the per-scope outcome, a partial erasure included.
+  it("stays open through Escape while the erase runs, then shows the outcome", async () => {
+    let finish!: (v: unknown) => void;
+    erasePersonMock.mockReturnValue(new Promise((r) => (finish = r)));
+    const dialog = await openDialog();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => finish({ person: "sub-ana", scopes: [], outcome: {} }));
+    expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
   });
 
   it("a refusal shows the server's sentence as sent", async () => {

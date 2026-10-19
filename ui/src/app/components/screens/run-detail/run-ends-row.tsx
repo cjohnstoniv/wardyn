@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import type { RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { relativeTime, getErrorMessage } from "../../../lib/format";
+import { getErrorMessage, relativeTime, shortDate, shortTime, weekday } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import {
@@ -43,10 +43,7 @@ const FAR_FUTURE_MS = 100 * 365 * DAY_MS;
 // from format.ts's absoluteTime (full date, used for audit timestamps) and
 // relativeTime (the app's standard "in 8h" short form, used here beside it).
 export function weekdayClock(iso: string): string {
-  const d = new Date(iso);
-  const weekday = d.toLocaleDateString(undefined, { weekday: "short" });
-  const clock = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return `${weekday} ${clock}`;
+  return `${weekday(iso)} ${shortTime(iso)}`;
 }
 
 // How the Ended banner names kept_until. The default grace is exactly 7 days, so
@@ -57,10 +54,7 @@ export function keptUntilText(iso: string, now: number = Date.now()): string {
   const days = Math.round((Date.parse(iso) - now) / DAY_MS);
   if (days < 6) return weekdayClock(iso);
   if (days < 14) return `${weekdayClock(iso)} next week`;
-  const d = new Date(iso);
-  const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-  const clock = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return `${date} ${clock}`;
+  return `${shortDate(iso)} ${shortTime(iso)}`;
 }
 
 export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {

@@ -4,7 +4,8 @@
 # Desktop-tier entrypoint. The desktop tier is a CONFIGURATION of the same
 # compose stack every other single-host deployment uses (docs/DESKTOP.md "It
 # is a configuration, not a build"), never a separate stack — `include:`
-# pulls in deploy/compose/docker-compose.yaml unmodified, and that is now the
+# pulls in deploy/compose/docker-compose.yaml unmodified (plus the port-publish
+# trim in docker-compose.ports.yaml, merged by the same include), and that is now the
 # WHOLE file: the MDM-managed directory rides the included stack's own
 # WARDYN_MANAGED_DIR mount, set by the envelope.
 #
@@ -34,4 +35,6 @@
 # Run FROM this directory: `docker compose --env-file wardyn.env.example
 # -p <name> config` (no -f needed — this IS the entrypoint compose file).
 include:
-  - path: ../compose/docker-compose.yaml
+  - path:
+      - ../compose/docker-compose.yaml
+      - ./docker-compose.ports.yaml

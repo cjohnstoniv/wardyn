@@ -215,7 +215,7 @@ export const CUSTOM_COMPONENT = {
 /** Your account: the card of saved components. */
 export const MY_COMPONENTS = {
   TITLE: "Your components",
-  SUMMARY: (n: number) => (n === 0 ? "None saved" : n === 1 ? "1 saved" : `${n} saved`),
+  SUMMARY: (n: number) => (n === 0 ? "No components" : n === 1 ? "1 saved" : `${n} saved`),
   LEAD: "Components you saved to reuse in runs. A run only gets one when you add it on New run.",
   NEW: "New component",
   EDIT: "Edit",

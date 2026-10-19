@@ -155,12 +155,14 @@ export function WorkspacesScreen() {
   }, []);
   React.useEffect(load, [load]);
 
-  const filtered = workspaces.filter(
-    (w) =>
-      !query ||
-      w.name.toLowerCase().includes(query.toLowerCase()) ||
-      w.source.toLowerCase().includes(query.toLowerCase()),
-  );
+  // `source` is "" for a multi-source workspace, so its attached sources' paths are searched too (#2592).
+  const filtered = workspaces.filter((w) => {
+    const q = query.toLowerCase();
+    return (
+      !q ||
+      [w.name, w.source, ...(w.sources ?? []).flatMap((s) => [s.path, s.source])].some((t) => t?.toLowerCase().includes(q))
+    );
+  });
 
   const openDetail = (id: string) => navigate(`/workspaces/${encodeURIComponent(id)}`);
 

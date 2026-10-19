@@ -1020,8 +1020,26 @@ func (s *scimCovStore) SetWorkspaceOwner(_ context.Context, id uuid.UUID, owner 
 	}
 	for i := range s.workspaces {
 		if s.workspaces[i].ID == id {
+			// Names are unique per owner, as the workspaces index is (0192).
+			if slices.ContainsFunc(s.workspaces, func(w types.Workspace) bool {
+				return w.ID != id && w.OwnedBy == owner && w.Name == s.workspaces[i].Name
+			}) {
+				return types.Workspace{}, store.ErrConflict
+			}
 			s.workspaces[i].OwnedBy = owner
 			return s.workspaces[i], nil
+		}
+	}
+	return types.Workspace{}, store.ErrNotFound
+}
+
+func (s *scimCovStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.Workspace, _ bool) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.workspaces {
+		if s.workspaces[i].ID == id {
+			s.workspaces[i] = ws
+			return ws, nil
 		}
 	}
 	return types.Workspace{}, store.ErrNotFound

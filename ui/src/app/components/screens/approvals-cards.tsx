@@ -18,7 +18,7 @@ import {
 import { capabilityAllowed } from "../../lib/capabilities";
 import { DENIED } from "../../lib/permissions-copy";
 import type { MeCapabilities } from "../../lib/types";
-import { relativeTime } from "../../lib/format";
+import { absoluteTime, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
@@ -308,7 +308,7 @@ export function PendingCard({
           </>
           )
         )}
-        <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
+        <span className="ml-auto text-xs text-muted-foreground" title={absoluteTime(item.requested_at)}>
           requested {relativeTime(item.requested_at)}
         </span>
       </div>

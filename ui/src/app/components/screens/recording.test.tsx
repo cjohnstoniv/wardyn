@@ -194,10 +194,9 @@ describe("RecordingScreen", () => {
     expect(screen.queryByText(/none of your runs have a recording yet/i)).not.toBeInTheDocument();
   });
 
-  // #459 — a deployment that has turned recording off still shows its
-  // (historical) library, but the search field states in visible text why
-  // it's dead, not only via a title tooltip.
-  it("disables search and states the reason visibly when recording is disabled on this deployment", async () => {
+  // #2523: a deployment that has turned recording off still lists its
+  // (historical) library, and the search field filters it like the facets do.
+  it("keeps search enabled over the historical library when recording is disabled on this deployment", async () => {
     healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
     const runs = Array.from({ length: 5 }, (_, i) => recorded(`run_${i}`, { task: `task number ${i}` }));
     listRunsMock.mockResolvedValue(page(runs));
@@ -205,12 +204,11 @@ describe("RecordingScreen", () => {
 
     await screen.findByText("task number 0");
     const search = screen.getByPlaceholderText(/search tasks, repos, run ids/i);
-    expect(search).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Session recording is disabled on this deployment — there is nothing to search.",
-      ),
-    ).toBeInTheDocument();
+    expect(search).toBeEnabled();
+    expect(screen.queryByText(/nothing to search/i)).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "task number 3" } });
+    await waitFor(() => expect(screen.queryByText("task number 0")).not.toBeInTheDocument());
+    expect(screen.getByText("task number 3")).toBeInTheDocument();
   });
 
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {

@@ -294,8 +294,13 @@ func TestCallbackHandlerRejectsInvalidState(t *testing.T) {
 	w := httptest.NewRecorder()
 	auth.CallbackHandler(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("state mismatch: status = %d, want %d", w.Code, http.StatusBadRequest)
+	if loc := w.Header().Get("Location"); w.Code != http.StatusFound || !strings.HasSuffix(loc, "/?auth_error=sign_in_expired") {
+		t.Fatalf("state mismatch: status = %d, Location %q, want a redirect to the sign-in error sign_in_expired", w.Code, loc)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.MaxAge == -1 {
+			t.Errorf("state mismatch cleared %s: the newer login that owns the cookies would fail too", c.Name)
+		}
 	}
 }
 
@@ -310,8 +315,8 @@ func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	w := httptest.NewRecorder()
 	auth.CallbackHandler(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("missing state cookie: status = %d, want %d", w.Code, http.StatusBadRequest)
+	if loc := w.Header().Get("Location"); w.Code != http.StatusFound || !strings.HasSuffix(loc, "/?auth_error=sign_in_expired") {
+		t.Fatalf("missing state cookie: status = %d, Location %q, want a redirect to the sign-in error sign_in_expired", w.Code, loc)
 	}
 }
 

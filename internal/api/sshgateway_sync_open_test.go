@@ -103,3 +103,12 @@ func TestGetRun_SyncOpenIsOnTheRunDetail(t *testing.T) {
 		t.Errorf("after release: %v", got)
 	}
 }
+
+func TestRunSyncView_ServesTheOrganisationDeny(t *testing.T) {
+	f := newSSHSyncFixture(t)
+	f.h.srv.cfg.SyncDeny = []string{".env*", "*.pem"}
+	raw, _ := json.Marshal(f.h.srv.runSyncOpenView(f.run.ID))
+	if string(raw) != `{"open":[],"deny":[".env*","*.pem"]}` {
+		t.Errorf("sync = %s, want the organisation's patterns as sync.deny", raw)
+	}
+}

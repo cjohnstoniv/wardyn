@@ -139,7 +139,7 @@ func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var title, description, file string
-	var devcontainerRepo, devcontainerRef, modelProvider string
+	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
 	var mode runModeFlags
@@ -205,6 +205,9 @@ func runCmd(client clientFn) *cobra.Command {
 					return fmt.Errorf("--wait and the document's interactive: true are mutually exclusive (an interactive run never finishes on its own)")
 				}
 			}
+			if err := setLocalFolder(&body, localFolder, localFolderRemote, createJSON); err != nil {
+				return err
+			}
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
 				return err
 			}
@@ -254,10 +257,7 @@ func runCmd(client clientFn) *cobra.Command {
 			for _, w := range run.Warnings {
 				fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s\n", w)
 			}
-			if wait {
-				return waitForRun(cmd.Context(), cmd.ErrOrStderr(), client(), run.ID, timeout)
-			}
-			return nil
+			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
@@ -279,6 +279,8 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "model provider id to run on (optional; unset uses the workspace's pinned provider, else the agent's default, else the one provider serving the agent — see GET /model-providers)")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, and the operator's model access is not auto-injected; an explicit policy grant or a workspace's declared secret still applies)")
 	mode.bind(cmd.Flags())
+	cmd.Flags().StringVar(&localFolder, "local-folder", "", "a folder on this computer to seed into the sandbox with 'wardyn sync': the agent starts only once this first sync completes (a task run whose SSH access is open; needs 'wardyn ssh-key ensure')")
+	cmd.Flags().StringVar(&localFolderRemote, "local-folder-remote-dir", "", "where --local-folder lands in the sandbox, under /home/agent/ (default /home/agent/work)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+

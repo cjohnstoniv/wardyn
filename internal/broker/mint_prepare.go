@@ -141,5 +141,26 @@ func (b *Broker) checkedMintRow(ctx context.Context, tx Tx, caller *identity.Cla
 		return grantApprovalRow{}, false, ErrRunRevoked
 	}
 
+	// An ssh_key is issued once per run. An approval-gated one is already bound
+	// by minted_jti above; an auto-mint one is bound by the run's own success
+	// row for this grant, read after the grant lock so a concurrent winner's
+	// committed row is seen. A failed preparation records "failure" and does
+	// not count.
+	if row.grantSpec.Kind == types.GrantSSHKey && !row.hasApproval {
+		var minted bool
+		if err := tx.QueryRow(ctx, sshKeyMintedSQL, row.grantRunID, grantID.String()).Scan(&minted); err != nil {
+			return grantApprovalRow{}, false, fmt.Errorf("broker: read the run's ssh_key mint: %w", err)
+		}
+		if minted {
+			b.auditRefusedMint(ctx, tx, caller, grantID, uuid.Nil, row.grantSpec.Scope, "denied")
+			return grantApprovalRow{}, false, ErrAlreadyMinted
+		}
+	}
+
 	return row, leased, nil
 }
+
+// sshKeyMintedSQL reports whether the run already holds a successful mint of
+// the grant, from the same rows mintedCredentialsSQL reads.
+const sshKeyMintedSQL = `SELECT EXISTS(SELECT 1 FROM audit_events
+	 WHERE run_id = $1 AND action = 'credential.mint' AND outcome = 'success' AND target = $2)`

@@ -157,6 +157,9 @@ type approvalService struct {
 func (s *approvalService) Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
 	return approval.RequestApproval(ctx, s.st, req)
 }
+func (s *approvalService) Rejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
+	return approval.Rejoin(ctx, s.st, id, runID, kind)
+}
 func (s *approvalService) Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	return approval.Decide(ctx, s.st, id, decidedByType, decision)
 }
@@ -583,6 +586,7 @@ func reapTickLock(pool *pgxpool.Pool) func(context.Context) (func(), bool) {
 		}
 		if ok {
 			pruneAWSSSOSpentTokens(ctx, pool)
+			pruneAWSSSORefusedTokens(ctx, pool)
 		}
 		return release, ok
 	}
