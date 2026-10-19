@@ -808,3 +808,20 @@ func TestLocalRouteRefusesAPartAboveTheLimit(t *testing.T) {
 		t.Fatalf("decision = %+v, want %s deny", d, ruleSourceRecordings)
 	}
 }
+
+// A tool approval's text renders in the order of its bytes: control and format
+// runes (a bidi override, a zero-width mark, an escape) are spelled out, while
+// tab and newline stay as they are.
+func TestClampToolField_SpellsOutHiddenRunes(t *testing.T) {
+	for in, want := range map[string]string{
+		"echo done # \u202Eabc\u2066": `echo done # \u{202E}abc\u{2066}`,
+		"Ba\u200Bsh":                  `Ba\u{200B}sh`,
+		"\x1b[2Jls":                   `\u{001B}[2Jls`,
+		"cat <<EOF\n\tx\nEOF":         "cat <<EOF\n\tx\nEOF",
+		"plain":                       "plain",
+	} {
+		if got := clampToolField(in, maxToolCmd); got != want {
+			t.Errorf("clampToolField(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

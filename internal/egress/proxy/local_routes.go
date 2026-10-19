@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -297,14 +298,37 @@ func sandboxNamesLane(raw []byte) bool {
 }
 
 // clampToolField bounds a sandbox-supplied string for storage and marks any
-// truncation honestly, since a human decides on what this renders.
-// ToValidUTF8 drops the partial rune a byte-slice cut can leave behind.
+// truncation honestly, since a human decides on what this renders. Control and
+// format runes are spelled out first (visibleText). ToValidUTF8 drops the
+// partial rune a byte-slice cut can leave behind.
 func clampToolField(s string, max int) string {
-	s = strings.TrimSpace(s)
+	s = visibleText(strings.TrimSpace(s))
 	if len(s) <= max {
 		return s
 	}
 	return strings.ToValidUTF8(s[:max], "") + "… (truncated)"
+}
+
+// visibleText spells each control or format rune (Unicode Cc and Cf: bidi
+// controls, zero-width marks, escapes) except tab and newline as \u{XXXX}, so
+// the text a human reads runs in the order of its bytes.
+func visibleText(s string) string {
+	if !strings.ContainsFunc(s, hiddenRune) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if hiddenRune(r) {
+			fmt.Fprintf(&b, `\u{%04X}`, r)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func hiddenRune(r rune) bool {
+	return r != '\n' && r != '\t' && (unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r))
 }
 
 // envNames renders the sandbox-supplied env variable NAMES for display, bounded
