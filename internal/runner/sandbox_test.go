@@ -226,6 +226,18 @@ func TestBuildProxyConfig_Unattended(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_VMAndPortRule: the VM flag and the port rule reach
+// the sidecar's config, and a container run with the rule off names neither.
+func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{VM: true, PortRule: "dry_run"}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"vm":true`) || !strings.Contains(string(b), `"port_rule":"dry_run"`) {
+		t.Fatalf("BuildProxyConfig = %s, %v", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), `"vm"`) || strings.Contains(string(b), "port_rule") {
+		t.Fatalf("an off run's config names the keys: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {

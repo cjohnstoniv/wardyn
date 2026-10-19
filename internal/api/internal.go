@@ -87,6 +87,13 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// A desktop VM's relay flow id, and the port rule's dry-run mark.
+	if dl.Flow != "" {
+		fields["flow"] = dl.Flow
+	}
+	if dl.PortRule != "" {
+		fields["port_rule"] = dl.PortRule
+	}
 	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
 	if dl.UpstreamFault != "" {
 		fields["upstream_fault"] = dl.UpstreamFault

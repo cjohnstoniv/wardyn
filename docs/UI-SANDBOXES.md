@@ -100,6 +100,7 @@
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
 | `policy:method` | the host is allowed, the HTTP method is not | |
+| `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
 | `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up (resolver outage, no such name, no address); not policy-tunable — check the sandbox's DNS, not the allowlist |
 | `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
@@ -110,7 +111,7 @@
   "Team A". To request a change: …"): the JSON `attribution` field on the forward
   lane, a trailing sentence in the provider-shaped message on the SDK lanes.
 - These come only with `policy:denied`,
-  `policy:default-deny`, `policy:method` and `approval:denied`, and with the git,
+  `policy:default-deny`, `policy:method`, `policy:port` and `approval:denied`, and with the git,
   PAT and Azure DevOps broker refusals the policy decides (a repository or host not
   granted, the branch namespace, the push content rules).
 - A fault (`builtin:*`,

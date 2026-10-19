@@ -242,6 +242,16 @@ type Config struct {
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
+	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
+	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set by the
+	// runner for a linux_vm run only; false (every container run) is today.
+	VM bool `json:"vm,omitempty"`
+	// PortRule is the container runs' port rule (port_rule.go): "" or "off"
+	// (today: a bare host is open on every port), "dry_run" (nothing refused,
+	// the allows the rule would refuse are marked) or "on". wardynd's
+	// WARDYN_EGRESS_PORT_RULE; any other value refuses to start.
+	PortRule string `json:"port_rule,omitempty"`
 	// Attribution names the policy that governs this run, for the refusals the
 	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
 	// for a run under a governance profile, or any run when the site sets
@@ -469,6 +479,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// scheme/host/port. The live proxy re-parses it in NewServer.
 	if _, err := parseUpstreamProxy(c.UpstreamProxyURL); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if !ValidPortRule(c.PortRule) {
+		return fmt.Errorf("config: port_rule %q is not one of off, dry_run, on", c.PortRule)
 	}
 	// Parse-check each bypass entry, same "validate at load, build for real in
 	// NewServer" split as the upstream proxy URL above. compileNoProxy DROPS an

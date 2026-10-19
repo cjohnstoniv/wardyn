@@ -93,6 +93,14 @@ type DecisionLog struct {
 	// always arrives as a NEW row: the audit chain is append-only and a
 	// recorded decision is never rewritten.
 	Repeat int `json:"repeat,omitempty"`
+	// Flow is wardyn-vmnet's id for the guest TCP flow a desktop VM's row is
+	// about, so the proxy's decision and the relay's own log line join. Empty
+	// on every container run's row.
+	Flow string `json:"flow,omitempty"`
+	// PortRule is "dry_run" on an allow the port rule would have refused had
+	// it been on (WARDYN_EGRESS_PORT_RULE=dry_run): the dry run's list of the
+	// non-web ports runs use. Empty on every other row.
+	PortRule string `json:"port_rule,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

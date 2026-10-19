@@ -216,6 +216,10 @@ type Config struct {
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.
 	TrustedCAPEM string
+	// EgressPortRule is WARDYN_EGRESS_PORT_RULE for container runs: "" (off,
+	// the default: a bare allowlist host is open on every port), "dry_run" or
+	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
+	EgressPortRule string
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".

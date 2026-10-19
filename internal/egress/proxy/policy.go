@@ -629,6 +629,9 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	case "builtin:resolve-failed":
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
 		detail = "egress denied: " + resolveFailedDetail
+	case ruleSourcePort:
+		w.Header().Set(egressHeaderDetail, portRuleDetail)
+		detail = "egress denied: " + portRuleDetail
 	}
 	headerHost := host
 	if shape != shapePlain {
