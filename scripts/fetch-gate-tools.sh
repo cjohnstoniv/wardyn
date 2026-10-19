@@ -47,6 +47,8 @@ for name in "${want[@]}"; do
     cd "${work}"
     go mod init gatetools >/dev/null 2>&1
     go get "${spec}"
+    # A restored cache entry is trusted only after its files match go.sum's hashes.
+    go mod verify >/dev/null
     go list -deps "${spec%@*}" >/dev/null
   )
   rm -rf "${work}"
