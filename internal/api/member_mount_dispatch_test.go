@@ -141,6 +141,10 @@ func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 	if spec.UserMountRoots != nil {
 		t.Errorf("spec.UserMountRoots = %v, want nil for an operator-owned workspace (today's driver path)", spec.UserMountRoots)
 	}
+	// The workspace bind must exist, or the loop below inspects nothing and passes.
+	if m := mountFor(t, spec, composerWorkspaceTarget); m.MemberAuthored {
+		t.Errorf("operator workspace bind %q -> %q stamped member-authored", m.Source, m.Target)
+	}
 	for _, m := range spec.Mounts {
 		if m.MemberAuthored {
 			t.Errorf("operator run stamped %q -> %q member-authored", m.Source, m.Target)
