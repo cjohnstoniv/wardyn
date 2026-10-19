@@ -37,9 +37,7 @@ type SetupItem struct {
 	// Residency names WHERE the credential this item concerns actually lives at
 	// run time, derived from the FINAL spec's own delivery mechanism (never
 	// guessed): "proxy_injected" (an api_key grant — the value never leaves the
-	// wardyn-proxy sidecar, injection.go), "resident_mount" (a host credential
-	// bind-mounted into the sandbox, e.g. the Claude subscription mount), or
-	// "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
+	// wardyn-proxy sidecar, injection.go), "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
 	// a value and hands it directly to the in-sandbox git-credential helper at
 	// task time, internal.go handleInternalMint), "resident_env" (an env_secret
 	// grant — the value is in the sandbox environment for the whole run), or
