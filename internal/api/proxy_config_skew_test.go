@@ -107,6 +107,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 	ghCaps := base
 	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
+	innerWalls := base
+	innerWalls.Policy.HarnessInnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}
 
 	for _, tc := range []struct {
 		name string
@@ -121,6 +123,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"a governed run's attribution", attributed, ""},
 		{"azure devops capabilities chosen by the policy", adoCaps, ""},
 		{"github capabilities chosen by the policy", ghCaps, ""},
+		// Only a run whose policy chooses inner walls carries the key, and the previous proxy refuses it.
+		{"harness inner walls chosen by the policy", innerWalls, "policy.harness_inner_walls"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)

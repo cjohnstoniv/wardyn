@@ -160,6 +160,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Policy", Path: "PushRules", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "AzureDevOpsCapabilities", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "GitHubCapabilities", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "HarnessInnerWalls", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of LLMInspection; its resolved secret names are the strip row above"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneURL", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "MITMLLM", Class: ClassExempt, Rule: RuleExempt},

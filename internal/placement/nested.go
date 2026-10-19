@@ -57,11 +57,12 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB"),
 	reflect.TypeFor[types.ResourceLimits]():       strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods MinConfinementClass EligibleGrants AutoStopAfterSec " +
-		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities"),
+		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls"),
 	reflect.TypeFor[types.ToolRule]():          strings.Fields("Tool Effect"),
 	reflect.TypeFor[types.PushRuleSet]():       strings.Fields("Provider Host Org BasePath Rules"),
 	reflect.TypeFor[types.HarnessToolRules]():  strings.Fields("Harness Default Rules"),
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),
+	reflect.TypeFor[types.HarnessInnerWalls](): strings.Fields("SandboxMode Approvals"),
 	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path"),
 	reflect.TypeFor[types.WorkspaceMount]():    strings.Fields("Source Target ReadOnly"),
 	reflect.TypeFor[types.WorkspaceRepo]():     strings.Fields("Repo Target Ref"),
