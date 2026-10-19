@@ -134,11 +134,13 @@ describe("a row that creates a token for each run", () => {
     expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeInTheDocument();
   });
 
-  it("9: a stored sign-in that lacks the token permissions asks the same, so Microsoft can ask for consent", async () => {
+  it("a stored sign-in that lacks the token permissions is the admin's to fix: the member sentence, the chip, and no Connect", async () => {
     renderCard({ ...minted, state: "expired_signin", cause: "permissions_missing", source: "org" });
+    expect(screen.getByText(ADO_PAT.CHIP_NOT_CONNECTED)).toBeInTheDocument();
     await expandCard("Azure DevOps");
-    expect(screen.getByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeInTheDocument();
+    expect(screen.getByText(ADO_PAT.MEMBER_NEEDS_ADMIN)).toBeInTheDocument();
+    expect(screen.queryByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
   });
 
   it("a row the console cannot redeem gives a member the chip and a member sentence, never the admin's, and no Connect", async () => {

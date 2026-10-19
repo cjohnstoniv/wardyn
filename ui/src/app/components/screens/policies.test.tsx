@@ -45,7 +45,7 @@ vi.mock("../../lib/api/setup", () => ({
 
 import { PoliciesScreen } from "./policies";
 import { toYaml } from "../wardyn/yaml-block";
-import { POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
+import { POLICIES_PAGE, POLICY_DIALOG } from "../wardyn/copy/policy-dialog";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -277,7 +277,7 @@ describe("PoliciesScreen — reading a policy never writes it", () => {
     fireEvent.keyDown(sheet, { key: "Escape", code: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    fireEvent.click(await screen.findByText(/^Default \(ceiling\) policy/));
+    fireEvent.click(await screen.findByText(POLICIES_PAGE.CEILING_CAPTION));
     expect(await screen.findByText("mirror.example")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "YAML" }));
 
@@ -347,7 +347,7 @@ describe("PoliciesScreen — plain copy and one primary action (#2833, #2834)", 
 
     getDefaultPolicyMock.mockResolvedValue({ allowed_domains: [] });
     render(<PoliciesScreen />);
-    expect(await screen.findByText(/Default \(ceiling\) policy — applied to runs that name no policy/)).toBeInTheDocument();
+    expect(await screen.findByText(POLICIES_PAGE.CEILING_CAPTION)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/Wardyn checks the spec when you save and shows any problem here\./)).toBeInTheDocument();
