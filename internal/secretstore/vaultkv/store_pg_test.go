@@ -434,7 +434,9 @@ func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	}
 	check(2)
 	var leftover int
-	_ = pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE length(ciphertext) > 0 OR length(wrapped_dek) > 0`).Scan(&leftover)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE length(ciphertext) > 0 OR length(wrapped_dek) > 0`).Scan(&leftover); err != nil {
+		t.Fatalf("count rows holding a local copy: %v", err)
+	}
 	if leftover != 0 {
 		t.Fatalf("%d rows still hold a local copy after moving to Vault", leftover)
 	}
