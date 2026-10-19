@@ -115,7 +115,7 @@ async function openAwsDoor(page: Page): Promise<Door> {
   return {
     setRun: (r) => (run = r),
     setSignIn: (a) => (signIn = a),
-    interactiveStarted: () => (audited = [{ id: "a1", time: "2026-10-19T00:00:00Z", actor_type: "system", actor: "wardynd", action: "run.interactive.start", outcome: "success" }]),
+    interactiveStarted: () => (audited = [{ id: "a1", time: new Date().toISOString(), actor_type: "system", actor: "wardynd", action: "run.interactive.start", outcome: "success" }]),
     socket: () => socketP,
     markCaptured: () => (captured = true),
     kills,
