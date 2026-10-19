@@ -551,3 +551,7 @@ const (
 	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
 	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
+
+// A request with no session and no bearer on a deployment with single sign-on and no admin token
+// (sessionRejectionResponse): the caller has to sign in.
+const reasonSignInRequired = "sign_in_required"

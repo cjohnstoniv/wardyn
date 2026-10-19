@@ -463,7 +463,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			return
 		}
 		// A rejected session cookie answers itself — rejectedSessionAnswer, auth_status.go.
-		if reason, status, msg, ok := rejectedSessionAnswer(r); ok {
+		if reason, status, msg, ok := rejectedSessionAnswer(r, s.cfg.AdminToken == ""); ok {
 			s.auditRejectedSession(r, reason) // carries the ERROR log + authStoreErrorInc
 			writeErrorReason(w, status, reason, msg)
 			return
