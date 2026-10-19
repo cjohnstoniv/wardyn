@@ -52,7 +52,7 @@ test.describe("Workspaces — the four-column list", () => {
 test.describe("Workspaces — search", () => {
   // #2592: a multi-source workspace has no single `source`, so the search reads each attached source.
   test("finds a multi-source workspace by one of its source paths", async ({ page }) => {
-    await page.route("**/api/v1/workspaces", async (route) => {
+    await page.route(/\/api\/v1\/workspaces(\?.*)?$/, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       const response = await route.fetch();
       const mono = {

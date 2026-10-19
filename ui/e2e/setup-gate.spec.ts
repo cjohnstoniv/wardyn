@@ -454,14 +454,17 @@ test.describe("setup gate — forced on access, never a prison", () => {
 // view's page, which the admin token on an SSO install cannot enter.
 test.describe("setup Secrets step — the link stays in the admin view (#2577)", () => {
   test("Secrets page links to /admin/secrets and opens the org secrets screen", async ({ page }) => {
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.onboarding_complete = false;
-      await route.fulfill({ response, json });
-    });
+    await mockGatedStatus(page);
     await skipHero(page);
-    await page.goto("/admin/setup?step=integrations");
+    await page.goto("/admin/setup");
+    // Secrets sits behind the Network gate (the e2e backend's `-runner none` answers no_runner, the one honest
+    // bypass), same walk as the rail test below.
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await expect(rail).toBeVisible({ timeout: 15_000 });
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+    await rail.getByRole("button", { name: /^Secrets/ }).click();
 
     const link = page.getByRole("link", { name: "Secrets page" });
     await expect(link).toHaveAttribute("href", "/admin/secrets");

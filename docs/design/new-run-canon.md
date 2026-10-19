@@ -576,6 +576,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_CREDENTIALS` | mock | No credentials. |
 | `FROM_ROW(name)` | mock | from {name} |
 | `FOR_ROW(name)` | mock | for {name} |
+| `SSO_TOKEN` | deviation (#2541, proposed wording awaiting approval) | sign-in token |
+| `EXPIRES_OWN` | deviation (#2541, proposed wording awaiting approval) | Expires on its own schedule, not when the run ends. |
 | `NET_ALLOWED` | mock | Allowed |
 | `NET_NEEDS_APPROVAL` | mock | Needs approval |
 | `NET_REQUESTED` | pending (W-35) | Requested |
