@@ -526,6 +526,8 @@ func run() error {
 		SSHHostKey:           feats.sshHostKey,
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
+		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.

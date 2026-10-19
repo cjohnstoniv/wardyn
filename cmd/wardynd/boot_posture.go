@@ -437,6 +437,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateSSHProxyCommand(*f.sshProxyCommand); err != nil {
 		return err
 	}
+	if err := validateSyncFlags(f); err != nil {
+		return err
+	}
 	if f.sshMaxSessionsPerRun != nil {
 		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
 			return err
@@ -786,4 +789,18 @@ func parseGovernAdminRunsExempt(csv string, governAdminRuns bool) ([]string, err
 		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS_EXEMPT is set but WARDYN_GOVERN_ADMIN_RUNS is not, so it does nothing.")
 	}
 	return out, nil
+}
+
+// validateSyncFlags checks the wardyn sync flags: the organisation's ignore
+// patterns and the local-folder seed wait.
+func validateSyncFlags(f *bootFlags) error {
+	if f.localFolderSeedWait != nil && *f.localFolderSeedWait <= 0 {
+		return fmt.Errorf("WARDYN_LOCAL_FOLDER_SEED_WAIT must be positive, got %s", *f.localFolderSeedWait)
+	}
+	if f.syncDeny != nil {
+		if _, err := api.ParseSyncDeny(*f.syncDeny); err != nil {
+			return err
+		}
+	}
+	return nil
 }

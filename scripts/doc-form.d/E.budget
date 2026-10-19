@@ -91,6 +91,7 @@
 # API-5 r2: ENV.md 39799 adds 31 over 39768 (the logout event is an object; the 429 bound on tokens that fail to verify), measured.
 # 0.10: docs/ENV.md 39762 adds 142, measured: the connection-bound, local-peer, proxy-peer and component-env knob rows.
 # docs/ENV.md=39766 adds 4, measured: the trusted-peers row names the measured engines.
-docs/ENV.md=39947 share=5
+# docs/ENV.md=39620 adds 84 (0.10 HYB-A): WARDYN_SYNC_DENY and WARDYN_LOCAL_FOLDER_SEED_WAIT
+docs/ENV.md=40031 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
