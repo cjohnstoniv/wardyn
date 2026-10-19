@@ -267,9 +267,6 @@ func TestRunnerRelayForwardsOverItsOwnStream(t *testing.T) {
 // A connection that sends nothing opens no relay stream and is closed after the first-byte wait;
 // one past the cap is closed at once.
 func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
-	old := relayFirstByteWait
-	relayFirstByteWait = 100 * time.Millisecond
-	defer func() { relayFirstByteWait = old }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	opened := make(chan struct{}, 4)
@@ -282,7 +279,8 @@ func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
 	go func() { _ = org.Run(ctx) }()
 	go func() { _ = run.Run(ctx) }()
 
-	r := &localRelay{ctx: ctx, pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	r := &localRelay{ctx: ctx, pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{},
+		firstByte: 100 * time.Millisecond}
 	defer r.Close()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -310,7 +308,9 @@ func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
 		a, b := net.Pipe()
 		defer a.Close()
 		defer b.Close()
+		r.mu.Lock()
 		r.conns[a] = run
+		r.mu.Unlock()
 	}
 	extra, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {

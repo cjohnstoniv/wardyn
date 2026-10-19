@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -23,9 +24,10 @@ import (
 // runnerwire.MaxStreams, so a burst of local connections leaves streams for output and renewal.
 // relayFirstByteWait bounds how long a connection may stay silent before it opens a relay stream:
 // the proxy's TLS client speaks first, so a connection that does not is not a proxy.
-const maxLocalRelays = runnerwire.MaxStreams / 4
-
-var relayFirstByteWait = 10 * time.Second
+const (
+	maxLocalRelays     = runnerwire.MaxStreams / 4
+	relayFirstByteWait = 10 * time.Second
+)
 
 // localRelay is the runner's end of the internal hop (design 0.9 §4.2). A
 // local run's proxy dials its org's internal hostname, which the proxy's hosts
@@ -43,6 +45,7 @@ type localRelay struct {
 	peer      *runnerwire.Peer
 	listeners map[uint16]net.Listener
 	conns     map[net.Conn]*runnerwire.Peer // each copy and the session carrying it
+	firstByte time.Duration                 // relayFirstByteWait when zero; tests shorten it
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -129,14 +132,14 @@ func (r *localRelay) forward(c net.Conn) {
 		r.mu.Unlock()
 		_ = c.Close()
 	}()
-	relayCopy(r.ctx, peer, c)
+	relayCopy(r.ctx, peer, c, cmp.Or(r.firstByte, relayFirstByteWait))
 }
 
 // relayCopy copies c over one new relay stream on peer, with half-close both ways. The stream
-// opens only once c has sent a first byte, within relayFirstByteWait.
-func relayCopy(ctx context.Context, peer *runnerwire.Peer, c net.Conn) {
+// opens only once c has sent a first byte, within firstByteWait.
+func relayCopy(ctx context.Context, peer *runnerwire.Peer, c net.Conn, firstByteWait time.Duration) {
 	var first [1]byte
-	_ = c.SetReadDeadline(time.Now().Add(relayFirstByteWait))
+	_ = c.SetReadDeadline(time.Now().Add(firstByteWait))
 	if _, err := io.ReadFull(c, first[:]); err != nil {
 		return
 	}
