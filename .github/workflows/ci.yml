@@ -381,6 +381,12 @@ jobs:
       - name: Cross-build wardyn-runnerd for macOS
         if: needs.changes.outputs.backend != 'false'
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
+      # The release ships a Windows wardyn; a unix-only symbol in a file with no build tag breaks it silently.
+      - name: Cross-build and vet wardyn for Windows
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          for a in amd64 arm64; do GOOS=windows GOARCH=$a CGO_ENABLED=0 go build -o /dev/null ./cmd/wardyn || exit 1; done
+          GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn/
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

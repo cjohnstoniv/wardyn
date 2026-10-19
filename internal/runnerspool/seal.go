@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"golang.org/x/sys/unix"
 )
 
 // ErrSealed refuses new evidence production after exact settled retirement.
@@ -44,13 +44,13 @@ func (s *Spool) Seal(ctx context.Context, expected types.RunnerSpoolReceipt) (se
 		return false, err
 	}
 	defer func() { err = errors.Join(err, writer.Close()) }()
-	if err = unix.Flock(int(writer.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		if errors.Is(err, unix.EWOULDBLOCK) {
+	if err = filelock.TryLock(writer); err != nil {
+		if errors.Is(err, filelock.ErrLocked) {
 			return false, nil
 		}
 		return false, err
 	}
-	defer unix.Flock(int(writer.Fd()), unix.LOCK_UN) //nolint:errcheck // close also releases the lock
+	defer filelock.Unlock(writer) //nolint:errcheck // close also releases the lock
 	err = s.locked(ctx, func() error {
 		m, err := s.readManifest()
 		if err != nil {
@@ -100,9 +100,9 @@ func (s *Spool) HoldWriter() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := unix.Flock(int(writer.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := filelock.TryLock(writer); err != nil {
 		writer.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) {
+		if errors.Is(err, filelock.ErrLocked) {
 			return nil, ErrWriterHeld
 		}
 		return nil, err
