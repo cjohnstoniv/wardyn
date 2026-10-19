@@ -11,9 +11,9 @@
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
-  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `vm`, `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-cache-prune`,
   - the nine image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
-  - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
+  - and **`notices`** — the copyleft / unreviewed-dependency gate.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
     - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
   - Two more publish workflows are not part of this job list at all (see ["Container images"](#container-images) below):
@@ -21,12 +21,12 @@
     - and `release` ([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by step 5's tag push itself, so it cannot be a prerequisite of tagging).
 - **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for it to complete.**
   - `gh workflow run nightly.yml --ref release/X.Y` (or `main`, if that is the commit).
-  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list, keeping the `multi-arch build` staging jobs, which saves about 60 runner-minutes.
+  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list but keeps the `multi-arch build` staging jobs, saving about 60 runner-minutes.
   - The default, `scope=full`, and the 07:00 schedule run every lane. [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) accepts either scope.
   - A second dispatch on the same ref and scope cancels the first. A scheduled run is never cancelled.
+  - A `train/*` or `prep/*` pull request's `train-gate` waits on this candidate run.
   - Evidence is keyed by the tag's **tree**, not its commit: any commit with the identical tree counts, so a nightly dispatched on the candidate branch still counts after a merge gives `release/X.Y` a different sha.
-  - The tree must be identical.
-  - A nightly on an ancestor, which has a different tree, does not count, and neither does a run from a fork.
+  - A nightly on an ancestor (a different tree) does not count, nor does a fork's run.
   - Only a `workflow_dispatch` nightly counts: a scheduled run never qualifies a tree, because it skips the staging jobs and GitHub may report its skipped `multi-arch build` matrix as one row named `multi-arch build (${{ matrix.name }})` with conclusion `skipped`.
   - The multi-arch build is part of this same nightly run:
     - it is `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so a pull request never runs it,

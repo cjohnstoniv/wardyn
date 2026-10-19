@@ -55,8 +55,8 @@ wait_down() {
 # another process can take it before the caller binds it. run-ui-e2e.sh
 # accepts that rather than run a lockfile protocol: its backend then fails to
 # come up, and it reports "backend up failed ... this is the backend, not the
-# spec". Its one retry reuses the same port, so it does not recover a stolen
-# one. Requires python3, already relied on elsewhere under scripts/.
+# spec". Its one retry re-picks the lane's ports first (repick_lane_ports), so
+# a stolen one is recovered. Requires python3, already relied on elsewhere under scripts/.
 pick_free_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()'
 }

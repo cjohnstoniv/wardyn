@@ -93,16 +93,6 @@ jobs:
       images: ${{ steps.classify.outputs.images }}
       notices: ${{ steps.classify.outputs.notices }}
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # On a pull_request HEAD is GitHub's merge commit and HEAD^1 the base
@@ -243,6 +233,7 @@ jobs:
             tags: k8s
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        if: matrix.suite != 'lint'
         run: |
           command -v dockerd >/dev/null || exit 0
           f=/etc/docker/daemon.json
@@ -264,28 +255,33 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       # setup-go's own cache uses one key with no job component, so only the
       # first job to finish ever saves it and every other job restores a
-      # near-empty cache (issue #470). Keying per job here — and saving only
-      # on push to main, so there is one entry per job per day — fixes that.
-      # The save needs a green run: a run that failed early would otherwise pin
-      # a near-empty cache under the day's key until the next day. The unhashed
-      # restore-key keeps a go.sum/Makefile change warm (both caches are
-      # content-addressed, so an older entry is safe to restore).
+      # near-empty cache (issue #470). Keying per job here fixes that. Each
+      # green push to main saves one entry under its run id, and a run restores
+      # the newest entry for the same OS and go.mod/go.sum (the toolchain and
+      # the module graph), so a pull request warms from the latest main tip, not
+      # the day's first. The save needs a green run, so an early failure never
+      # leaves a near-empty newest entry. The unhashed restore-key keeps a
+      # go.mod/go.sum change warm (the build caches are content-addressed, so
+      # an older entry is safe to restore).
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-${{ matrix.suite }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-
       # The lint leg's `make lint` also runs the console's ESLint
       # (ui/eslint.config.js), so that leg sets up pnpm and node.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -350,10 +346,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `build`, and
   # this is it: green only when every `go` leg passed AND the union of the three
@@ -375,16 +370,6 @@ jobs:
           LEGS: ${{ needs.go.result }}
         run: |
           [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -437,16 +422,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
@@ -500,16 +475,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -643,20 +608,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-ui-e2e-
+            go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-ui-e2e-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -759,10 +732,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
@@ -1111,20 +1083,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-conformance-k8s-
+            go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-k8s-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
@@ -1199,10 +1179,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -1335,20 +1314,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-conformance-docker-
+            go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-docker-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - name: Docker smoke check
         run: docker run --rm hello-world
       # T-33: the Vault Transit KEK and the Vault KV store against the official
@@ -1411,10 +1398,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
   # NOT a required check. Hosted ubuntu-latest exposes /dev/kvm; GitHub's documented udev rule
@@ -1483,20 +1469,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-envbuild-integration-
+            go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-envbuild-integration-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Run envbuild integration test (docker)
@@ -1516,10 +1510,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
@@ -1552,8 +1545,12 @@ jobs:
       packages: read
     # 45: the shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e.
     timeout-minutes: 45
+    # fail-fast: one red shard cancels the others, so a red run stops spending
+    # about 48 runner-minutes on a result that is already a failure. test-pg
+    # still reports: legs cancelled by fail-fast do not cancel the run, so its
+    # `!cancelled()` holds and it fails on the matrix result `failure`.
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - shard: api-1
@@ -1601,20 +1598,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-test-pg-${{ matrix.shard }}-
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -1652,10 +1657,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `test-pg`,
   # and this is it: green only when every shard above passed. `!cancelled()` so
@@ -1966,35 +1970,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-notices-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-notices-
+            go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-notices-${{ runner.os }}-
       - run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -2012,10 +2009,9 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   gates:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
@@ -2027,16 +2023,6 @@ jobs:
       matrix:
         gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -2044,21 +2030,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
             ~/.cache/staticcheck
-          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-gates-${{ matrix.gate }}-
+            go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-gates-${{ matrix.gate }}-${{ runner.os }}-
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
@@ -2066,27 +2055,16 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
             ~/.cache/staticcheck
-          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
-        run: |
-          command -v dockerd >/dev/null || exit 0
-          f=/etc/docker/daemon.json
-          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
-          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
-          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
-          running="$(docker ps -q)"; sudo systemctl restart docker
-          [ -z "$running" ] || docker start $running >/dev/null
-          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Fetch full history so all commits in the PR are visible.
@@ -2128,6 +2106,93 @@ jobs:
               make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
             fi
           fi
+
+  # ── ci-ran: this workflow ran on the pull request ──────────────────────────
+  # A pull request with a merge conflict gets no pull_request run at all, so its
+  # checks can hold only CodeQL and read as green. Required, this context shows
+  # as Expected on such a pull request instead. It does nothing else.
+  ci-ran:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The pull_request workflow ran
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "CI ran on $HEAD_SHA"
+
+  # ── train-gate: a train passes the candidate suites before it merges ──────
+  # A train/* or prep/* pull request merges a whole wave, and a nightly suite has
+  # gone red on a train whose pull request CI was green. On those heads
+  # train-gate passes only when train-suites (the nightly's candidate scope)
+  # passed. On any other head, and on push, train-suites skips and train-gate
+  # passes at once, so the one name can be required everywhere. A fork's
+  # train/* branch never runs train-suites, so train-gate stays red there.
+  #
+  # train-suites dispatches the nightly rather than calling it: GitHub checks a
+  # called workflow's job permissions against the caller's token when a run
+  # starts, and a fork's or Dependabot's read-only token would fail every ci.yml
+  # run. A dispatched run takes the nightly's own permissions, and a newer
+  # dispatch on the same ref cancels it (the nightly's concurrency group), as a
+  # newer push cancels this run. The job holds one runner while it waits.
+  # publish=false: a train is not a release candidate, so the nightly's
+  # buildx-smoke still builds but skips its image push and attest steps.
+  train-suites:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The nightly checks out the branch, so its run is the head's only while
+      # the branch has not moved; a run on another sha is never taken.
+      - name: Dispatch the nightly's candidate scope on this head and wait for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
+          id=
+          for _ in $(seq 40); do
+            id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
+              --json databaseId,headSha,createdAt | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since")"
+            [ -z "$id" ] || break
+            sleep 15
+          done
+          [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
+          echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
+          gh run watch "$id" --interval 60 >/dev/null || true
+          conclusion="$(gh run view "$id" --json conclusion --jq .conclusion)"
+          [ "$conclusion" = success ] || { echo "::error::nightly run $id concluded '$conclusion'"; exit 1; }
+
+  train-gate:
+    needs: train-suites
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: A train head needs the candidate suites green
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          SUITES: ${{ needs.train-suites.result }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            case "$HEAD_REF" in
+              train/*|prep/*)
+                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; } ;;
+            esac
+          fi
+          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES"
 
   # ── every flaky e2e test gets an issue ─────────────────────────────────────
   # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
@@ -2255,3 +2320,79 @@ jobs:
             gh issue create --title "$title" --body "$body"
           fi
 
+  # ── the shared Go module cache ────────────────────────────────────────────
+  # ~/go/pkg/mod depends only on go.mod/go.sum, so one entry serves every job
+  # instead of a copy in each job's build cache. This job saves it on a push to
+  # main when no entry has the key yet. No restore-keys, so a new entry never
+  # carries modules an older go.sum needed. The `go run tool@version` tools are
+  # left out: they would triple the entry (200 to 630 MB compressed) for a few
+  # seconds of download in the jobs that run them.
+  go-modules:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      saved: ${{ steps.saved.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Is this module cache saved already?
+        id: have
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          lookup-only: true
+      - name: Download the modules
+        if: steps.have.outputs.cache-hit != 'true'
+        run: go mod download && du -sh ~/go/pkg/mod
+      - name: Save the module cache
+        id: save
+        if: steps.have.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+      - name: Name the entry this run saved
+        id: saved
+        if: steps.save.outcome == 'success'
+        run: echo "key=gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+
+  # ── one Go cache generation per job ───────────────────────────────────────
+  # Each green push to main saves its Go caches under its run id. The
+  # repository's caches are capped at 10 GB and evicted least recently used
+  # first, so superseded generations would push out live ones. For each cache
+  # family this run saved (the key less its run id, go.mod/go.sum hash and OS;
+  # gomod for the module cache go-modules saved), this deletes the entries
+  # created before this run's. A family this run did not save, because its job
+  # failed or its entry already existed, keeps its older entry.
+  go-cache-prune:
+    needs: [go-modules, go, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the Go cache entries this run superseded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          MOD_KEY: ${{ needs.go-modules.outputs.saved }}
+        run: |
+          set -euo pipefail
+          caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs/heads/main&key=go&per_page=100" --jq '.actions_caches[]')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" '
+            def fam: .key | sub("-[0-9]+$"; "") | sub("-[0-9a-f]{64}$"; "") | sub("-(Linux|Windows|macOS)$"; "");
+            (map(select((.key | endswith($r)) or ($mod != "" and .key == $mod))) | map({key: fam, value: .created_at}) | from_entries) as $fresh
+            | .[] | select(fam as $f | $fresh[$f] != null and .created_at < $fresh[$f])
+            | "\(.id)\t\(.key)"')"
+          [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
+          while IFS=$'\t' read -r id key; do
+            echo "deleting $key"
+            gh cache delete "$id" || echo "::warning::could not delete cache $key"
+          done <<< "$stale"
