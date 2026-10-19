@@ -79,12 +79,17 @@ if printf '%s\n' "$@" | grep -qx 'alpine:3.20'; then
   exec "${cargs[@]}"
 fi
 
+# Every probe's argv is kept: whatever lands there is readable by every local user (ps).
+printf '%s\n' "$*" >> "${PROBE_LOG:-/dev/null}.argv"
 host=""; auth=""; url=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -H) case "${2:-}" in
           Host:*)          host="${2#Host: }" ;;
           Authorization:*) auth="${2#Authorization: }" ;;
+          @-) while IFS= read -r h; do   # curl reads one header per stdin line
+                case "${h}" in Authorization:*) auth="${h#Authorization: }" ;; esac
+              done ;;
         esac
         shift 2 ;;
     http://*) url="$1"; shift ;;
@@ -96,6 +101,7 @@ done
 rest="${url#http://}"
 if [[ -z "${host}" ]]; then host="${rest%%/*}"; fi
 path="/${rest#*/}"
+printf '%s %s\n' "${path}" "${auth:-none}" >> "${PROBE_LOG:-/dev/null}.auth"
 emit() { printf '%s\n%s' "$1" "$2"; exit 0; }
 
 if [[ "${GATE_LOCAL_MODE}" == "true" ]]; then
@@ -191,6 +197,32 @@ got="$(wardynd_probe "${env_file}" /api/v1/me | tail -n1)"
 [ "${got}" = "401" ] || fail "a mismatched admin token got HTTP ${got}, want 401"
 grep -q '      401)' "${UP_SH}" \
   || fail "scripts/up.sh's local-mode gate smoke has no 401 arm — a token-mode mismatch falls into the generic 'inconclusive, check logs' branch (ADV2-01: the branches must distinguish healthy from broken)"
+
+# The bearer reaches wardynd on stdin, never on the docker argv (readable by every local user),
+# and the unauthenticated /healthz is sent none at all.
+export PROBE_LOG="${dir}/probe"; rm -f "${PROBE_LOG}".*
+GATE_TOKEN=s3cret-admin-token
+got="$(wardynd_probe "${env_file}" /api/v1/me | tail -n1)"
+[ "${got}" = "200" ] || fail "the stdin bearer did not answer the token-mode gate (HTTP ${got})"
+wardynd_probe "${env_file}" /healthz >/dev/null
+grep -q 's3cret-admin-token' "${PROBE_LOG}.argv" && fail "wardynd_probe put the admin token on the docker argv: $(cat "${PROBE_LOG}.argv")"
+grep -qx '/healthz none' "${PROBE_LOG}.auth" || fail "wardynd_probe sent a credential to /healthz: $(cat "${PROBE_LOG}.auth")"
+unset PROBE_LOG
+
+# Token mode survives a re-run: an explicit WARDYN_LOCAL_MODE=false stays false, while a fresh .env
+# (or one already in local mode) gets local no-auth.
+eval "$(sed -n '/^local_mode_for_no_issuer() {/,/^}/p' "${UP_SH}")"
+for v in false False 0 off; do
+  printf 'WARDYN_LOCAL_MODE=%s\n' "${v}" > "${dir}/lm.env"
+  local_mode_for_no_issuer "${dir}/lm.env" >/dev/null 2>&1
+  [ "$(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)" = "${v}" ] || fail "a re-run overwrote WARDYN_LOCAL_MODE=${v} (token mode) with $(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)"
+done
+for v in "" true; do
+  if [ -n "${v}" ]; then printf 'WARDYN_LOCAL_MODE=%s\n' "${v}" > "${dir}/lm.env"; else printf '# WARDYN_LOCAL_MODE=true\n' > "${dir}/lm.env"; fi
+  local_mode_for_no_issuer "${dir}/lm.env" >/dev/null 2>&1
+  [ "$(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)" = "true" ] || fail "a .env with WARDYN_LOCAL_MODE='${v}' did not get local no-auth"
+done
+grep -q '^    local_mode_for_no_issuer "${ENV_FILE}"$' "${UP_SH}" || fail "cmd_up no longer calls local_mode_for_no_issuer when no issuer is set"
 
 # ── 4) end to end: the LLM-ready re-pick is reachable again ────────────────
 # ADV2-02's actual consequence. llm_ready_from_probe only trusts a 200, so
