@@ -55,6 +55,7 @@ export { CAPTURE_NOT_CORROBORATED, serverConfirmsProviderCapture } from "./captu
 import { openSignInTab } from "./auth-tab-handle";
 import { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER, SIGNIN_PROGRESS } from "./login-pane-copy";
 export { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
+import RunSignInStrip from "../run-detail/run-sign-in-strip";
 import { SignInDoorState, SignInSteps, isImagePullFailure } from "./signin-progress";
 // review-1 S4: the per-provider flow table is pure data — EXTRACTED to
 // login-flows.tsx to keep this file under the size cap. Re-exported so this
@@ -209,6 +210,8 @@ export function HarnessLoginPane({
   const pullingRef = React.useRef(false);
   const [imageFailed, setImageFailed] = React.useState(false);
   const [tabOpened, setTabOpened] = React.useState(false);
+  // When this launch began, as the run page's sign-in read wants it (its grace window counts from here).
+  const [launchedAt, setLaunchedAt] = React.useState("");
   // Finding 7b: the CLI's own success line — a HINT (S-13's own reasoning), never trusted alone.
   const [signedIn, setSignedIn] = React.useState(false);
 
@@ -286,6 +289,7 @@ export function HarnessLoginPane({
     setEverAttached(false);
     pollFailuresRef.current = 0;
     startedAtRef.current = Date.now();
+    setLaunchedAt(new Date(startedAtRef.current).toISOString());
     failingSinceRef.current = null;
     waitNoteRef.current = "starting";
     setWaitNote("starting");
@@ -714,6 +718,10 @@ function startingSentenceOf(run: AgentRun | undefined): string {
                   : startingSentence || LOGIN_SANDBOX_SLOW_START}
             </p>
           )}
+          {/* The sandbox's own device code, as the run page shows it, from the moment the
+              sign-in reports one — before the terminal is attached. Only the AWS sign-in
+              has a device code to read (the route 409s the others). */}
+          {flow.capture === "helper" && runId && launchedAt && <RunSignInStrip runId={runId} createdAt={launchedAt} />}
           <Button size="sm" variant="ghost" onClick={cancel}>
             {SIGNIN_PROGRESS.CANCEL}
           </Button>
