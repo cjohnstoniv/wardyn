@@ -73,7 +73,7 @@ if run_gate; then fail "reusing the remote's max prefix (0003) must FAIL"; fi
 # grep would report THAT exit rather than grep's own, so capture first (the
 # test-image-pins.sh convention) instead of piping straight into grep.
 out="$(gate_says || true)"
-printf '%s' "$out" | grep -q "0003" || fail "the failure message must name the colliding file: $out"
+printf '%s' "$out" | grep "0003" >/dev/null || fail "the failure message must name the colliding file: $out"
 echo "ok  prefix <= remote max fails, naming the file"
 rm "$WORK/internal/db/migrations/0003_collide.sql"
 
@@ -102,7 +102,7 @@ git -C "$WORK" fetch --quiet origin
 echo "-- mine" > "$WORK/internal/db/migrations/0004_mine.sql"
 if run_gate; then fail "0004 must FAIL once a sibling's 0004 is on origin/main"; fi
 out="$(gate_says || true)"
-printf '%s' "$out" | grep -q "0004_mine" || fail "the failure message must name 0004_mine: $out"
+printf '%s' "$out" | grep "0004_mine" >/dev/null || fail "the failure message must name 0004_mine: $out"
 echo "ok  a sibling's migration landing on origin/main after the fork fails the branch's same number"
 
 # 6. a PR build targeting another branch compares against THAT branch, which
@@ -115,7 +115,7 @@ echo "ok  GITHUB_BASE_REF picks the branch compared against"
 # 7. a push build of a branch other than main has no base to compare against
 #    and skips.
 out="$(gate GITHUB_REF_NAME=release/0.8 2>&1)" || fail "a push build of release/0.8 must SKIP (exit 0): $out"
-printf '%s' "$out" | grep -q "skipping" || fail "a push build of release/0.8 must say it skipped: $out"
+printf '%s' "$out" | grep "skipping" >/dev/null || fail "a push build of release/0.8 must say it skipped: $out"
 echo "ok  push build of a non-main branch skips"
 
 # 8. a checkout with no default fetch refspec (and so no refs/remotes/origin/*
@@ -124,7 +124,7 @@ git -C "$WORK" config --unset-all remote.origin.fetch
 git -C "$WORK" update-ref -d refs/remotes/origin/main
 git -C "$WORK" update-ref -d refs/remotes/origin/release/0.8 2>/dev/null || true
 out="$(gate_says || true)"
-printf '%s' "$out" | grep -q "0004_mine" \
+printf '%s' "$out" | grep "0004_mine" >/dev/null \
   || fail "0004 must still FAIL, naming 0004_mine, when origin/main is fetched without a default refspec: $out"
 echo "ok  no default fetch refspec still fetches origin/main"
 rm "$WORK/internal/db/migrations/0004_mine.sql"
