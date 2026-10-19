@@ -203,6 +203,45 @@ func TestSSHAgent_NoSignWhileOtherSSHIsOpen(t *testing.T) {
 	}
 }
 
+// Two held grants with a session open to each: both sign, since a session to
+// any held grant's endpoint is one the agent serves.
+func TestSSHAgent_TwoGrantsSignWithBothSessionsOpen(t *testing.T) {
+	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com", "ssh.dev.azure.com"}}, sshBannerUpstream(t), nil, nil)
+	gh, ado := uuid.New(), uuid.New()
+	ghPEM, ghPub := testSSHKey(t, false)
+	adoPEM, adoPub := testSSHKey(t, false)
+	expires := time.Now().Add(time.Hour)
+	p.residentMints = residentMintsByGrant([]ResidentMint{
+		{GrantID: gh, Kind: types.GrantSSHKey, Username: "git", Token: ghPEM, ExpiresAt: expires, Host: "github.com"},
+		{GrantID: ado, Kind: types.GrantSSHKey, Username: "git", Token: adoPEM, ExpiresAt: expires, Host: "dev.azure.com"},
+	})
+	for _, g := range []uuid.UUID{gh, ado} {
+		if _, err := agent.NewClient(&agentConn{t: t, p: p, grant: g}).List(); err != nil {
+			t.Fatalf("load grant %s: %v", g, err)
+		}
+	}
+	proxyURL, _ := serveTunnelProxy(t, p)
+	for _, target := range []string{"ssh.github.com:443", "ssh.dev.azure.com:443"} {
+		conn, line := sshTunnelTo(t, proxyURL, target)
+		t.Cleanup(func() { _ = conn.Close() })
+		if line == "" {
+			t.Fatalf("SSH to %s was not relayed", target)
+		}
+	}
+	for _, tc := range []struct {
+		grant uuid.UUID
+		pub   ssh.PublicKey
+		data  []byte
+	}{
+		{gh, ghPub, userauthData("git", ghPub, hostboundMethod, knownHostKeys(pinnedSSHHostKeys, "ssh.github.com")[0])},
+		{ado, adoPub, userauthData("git", adoPub, "publickey")},
+	} {
+		if _, err := agent.NewClient(&agentConn{t: t, p: p, grant: tc.grant}).Sign(tc.pub, tc.data); err != nil {
+			t.Errorf("grant %s with both sessions open: %v", tc.grant, err)
+		}
+	}
+}
+
 // The client's SSH identification is seen even split across writes, and
 // refused before it completes upstream.
 func TestTunnelWatchSeesASplitClientSSHIdent(t *testing.T) {

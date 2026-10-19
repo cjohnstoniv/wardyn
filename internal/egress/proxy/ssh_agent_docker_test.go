@@ -159,6 +159,14 @@ func sshAgentCloneInContainer(t *testing.T) {
 	if out, err := clone(ghGrant, filepath.Join(work, "clone-github")); err == nil {
 		t.Fatalf("a GitHub grant's plain sign-in was signed:\n%s", out)
 	}
+	hostRefused := false
+	for len(p.sink.ch) > 0 {
+		d := <-p.sink.ch
+		hostRefused = hostRefused || (d.Decision == egress.Deny && d.Cause == errSSHAgentHost.Error())
+	}
+	if !hostRefused {
+		t.Fatalf("the GitHub grant's clone failed with no deny saying %q", errSSHAgentHost)
+	}
 	if n := mints.Load(); n != 3 {
 		t.Fatalf("control-plane mints = %d, want one per grant", n)
 	}

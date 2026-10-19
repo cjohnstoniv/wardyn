@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -35,8 +34,10 @@ import (
 // A signature signs in to the grant's own SSH host only: a host-bound sign-in
 // must name a host key of the grant's known_hosts or of the forge's pinned
 // keys, a plain one is signed only for a forge with no host-bound sign-in
-// (Azure DevOps), and while the agent holds a key the proxy carries SSH only
-// to the grant's own endpoint (sshAgents.sshTunnel).
+// (Azure DevOps), and while the agent holds a key a CONNECT tunnel either side
+// opens with an SSH identification goes only to a held grant's endpoint
+// (sshAgents.sshTunnel). That reads banners only: SSH inside TLS, or after
+// lines sent before the banner, is not seen.
 const (
 	routeSSHAgent      = "/wardyn/v1/ssh-agent/"
 	routeSSHAgentClose = "/wardyn/v1/ssh-agent/close"
@@ -129,7 +130,7 @@ type sshAgentKey struct {
 func (s *sshAgents) sshTunnel(w *tunnelWatch, target string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.closed && len(s.keys) > 0 && !slices.ContainsFunc(slices.Collect(maps.Values(s.keys)), func(k *sshAgentKey) bool { return k.endpoint == target }) {
+	if !s.closed && len(s.keys) > 0 && !s.heldEndpoint(target) {
 		return errSSHTunnel
 	}
 	if s.tunnels == nil {
@@ -146,13 +147,24 @@ func (s *sshAgents) dropTunnel(w *tunnelWatch) {
 	s.mu.Unlock()
 }
 
-// onlySSHTo reports whether every live SSH tunnel goes to endpoint, so a
-// session opened before the key was held cannot borrow a signature.
-func (s *sshAgents) onlySSHTo(endpoint string) bool {
+// heldEndpoint reports whether target is a held grant's endpoint. s.mu is held.
+func (s *sshAgents) heldEndpoint(target string) bool {
+	for _, k := range s.keys {
+		if k.endpoint == target {
+			return true
+		}
+	}
+	return false
+}
+
+// sshOnlyToGrants reports whether every live SSH tunnel goes to a held
+// grant's endpoint, so a session opened before a key was held cannot borrow
+// a signature.
+func (s *sshAgents) sshOnlyToGrants() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, t := range s.tunnels {
-		if t != endpoint {
+		if !s.heldEndpoint(t) {
 			return false
 		}
 	}
@@ -345,7 +357,7 @@ func (a *userauthAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agen
 	case hostKey == nil && !a.key.unbound,
 		hostKey != nil && !slices.ContainsFunc(a.key.hostKeys, func(k []byte) bool { return bytes.Equal(k, hostKey) }):
 		a.refused = errSSHAgentHost
-	case !a.agents.onlySSHTo(a.key.endpoint):
+	case !a.agents.sshOnlyToGrants():
 		a.refused = errSSHAgentTunnel
 	default:
 		return a.key.ring.SignWithFlags(key, data, flags)
