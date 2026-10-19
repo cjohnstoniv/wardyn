@@ -16,6 +16,7 @@ import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document"
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -231,6 +232,8 @@ test.describe("New Run, placement: the pool a person picks", () => {
     await press(page, NR_SHAPE.ENV_TITLE);
     await page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).selectOption({ label: NR_RUN.POOL_OPTION_REASON(LAPTOPS.name, NR_RUN.FIT_STARTS_NOW) });
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
+    // Back is on the Run step too: wait for Harnesses, or the click can land before the step has changed.
+    await expect(page.getByRole("heading", { name: NR_HARNESSES.TITLE })).toBeVisible();
     // The pool is gone from the list when the person comes back.
     await page.route("**/api/v1/runner-pools*", (route) =>
       route.fulfill({ json: { pools: [SHARED], default: { pool_id: SHARED.id, selection: "organisation_default" } } }),

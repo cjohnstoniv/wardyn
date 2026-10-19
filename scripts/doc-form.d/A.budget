@@ -193,7 +193,7 @@
 # docs/AUDIT-ACTIONS.md=48498 adds 41 (0.9.4 W4-API-B): groups_truncated on the delegation.exchange outside_scope row (#2764) and the ADO 404 git refusal wording.
 # 0.9.4 W4 train +16: the run.revoke key list gains the cascade and reaper keys (#3134), measured.
 # docs/AUDIT-ACTIONS.md=48834 adds 8 (0.10): identity.unbind counts runners and runner tokens.
-docs/AUDIT-ACTIONS.md=48842 share=8
+docs/AUDIT-ACTIONS.md=48859 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
