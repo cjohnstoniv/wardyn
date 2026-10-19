@@ -255,17 +255,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       # setup-go's own cache uses one key with no job component, so only the
       # first job to finish ever saves it and every other job restores a
-      # near-empty cache (issue #470). Keying per job here — and saving only
-      # on push to main, so there is one entry per job per day — fixes that.
-      # The save needs a green run: a run that failed early would otherwise pin
-      # a near-empty cache under the day's key until the next day. The unhashed
-      # restore-key keeps a go.sum/Makefile change warm (both caches are
-      # content-addressed, so an older entry is safe to restore).
+      # near-empty cache (issue #470). Keying per job here fixes that. Each
+      # green push to main saves one entry under its run id, and a run restores
+      # the newest entry for the same OS and go.mod/go.sum (the toolchain and
+      # the module graph), so a pull request warms from the latest main tip, not
+      # the day's first. The save needs a green run, so an early failure never
+      # leaves a near-empty newest entry. The unhashed restore-key keeps a
+      # go.mod/go.sum change warm (both caches are content-addressed, so an
+      # older entry is safe to restore).
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -273,10 +272,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-${{ matrix.suite }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-
       # The lint leg's `make lint` also runs the console's ESLint
       # (ui/eslint.config.js), so that leg sets up pnpm and node.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -344,7 +343,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `build`, and
   # this is it: green only when every `go` leg passed AND the union of the three
@@ -604,9 +603,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -614,10 +610,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-ui-e2e-
+            go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-ui-e2e-${{ runner.os }}-
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -723,7 +719,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
@@ -1072,9 +1068,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1082,10 +1075,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-conformance-k8s-
+            go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-k8s-${{ runner.os }}-
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
@@ -1163,7 +1156,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -1296,9 +1289,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1306,10 +1296,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-conformance-docker-
+            go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-conformance-docker-${{ runner.os }}-
       - name: Docker smoke check
         run: docker run --rm hello-world
       # T-33: the Vault Transit KEK and the Vault KV store against the official
@@ -1375,7 +1365,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
@@ -1404,9 +1394,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1414,10 +1401,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-envbuild-integration-
+            go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-envbuild-integration-${{ runner.os }}-
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Run envbuild integration test (docker)
@@ -1440,7 +1427,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
@@ -1522,9 +1509,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1532,10 +1516,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-test-pg-${{ matrix.shard }}-
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -1576,7 +1560,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # The required check. Branch protection requires a context named `test-pg`,
   # and this is it: green only when every shard above passed. `!cancelled()` so
@@ -1892,9 +1876,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1902,10 +1883,10 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-notices-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-notices-
+            go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-notices-${{ runner.os }}-
       - run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1926,7 +1907,7 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   gates:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
@@ -1945,9 +1926,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Go build cache key date (one cache generation per job per day)
-        id: cache-date
-        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1956,10 +1934,10 @@ jobs:
             ~/.cache/go-build
             ~/.cache/golangci-lint
             ~/.cache/staticcheck
-          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-gates-${{ matrix.gate }}-
+            go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-gates-${{ matrix.gate }}-${{ runner.os }}-
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
@@ -1971,7 +1949,7 @@ jobs:
             ~/.cache/go-build
             ~/.cache/golangci-lint
             ~/.cache/staticcheck
-          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
