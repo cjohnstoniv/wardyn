@@ -8,6 +8,38 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-10-19
+
+A small fix release on top of 0.9.4 for the sign-in and setup paths: the AWS sign-in dialog shows its code and moves
+on as the run starts, sign-in refusals say why, `wardyn setup status` points at the right console page, and failed
+teardown audit rows name the step that failed. No migration and no new setting.
+
+### Before you upgrade
+
+- **Two `401` answers carry a new reason.** A session cookie of a person whose identity was deactivated now gets
+  `identity_deactivated`. On a single-sign-on deployment with no admin token, a request with no session now gets
+  `sign_in_required`. Both used to get `admin_token_not_configured`, which described the deployment's admin token.
+  A deployment with neither single sign-on nor an admin token keeps `admin_token_not_configured`. A client that keys
+  on the old code for these cases should accept the new ones. The audit rows are unchanged.
+
+### Added
+
+- Reason `sign_in_required` (`401`): a request with neither a session nor a bearer token on a deployment with single
+  sign-on and no admin token.
+- `run.revoke` failure audit rows list `failed_steps`, each with its `step` and `reason`. `run.output.finalize`
+  failure rows carry `step`, plus a plain `reason` where the row had none. No existing key changes.
+
+### Fixed
+
+- The AWS sign-in dialog shows the device code and the verification link as soon as the sign-in reports them, before
+  the terminal attaches.
+- The sign-in dialog's step list moves on once the sandbox has started (it also reads the run's
+  `run.interactive.start` audit row), including when a run-state read fails.
+- `wardyn setup status` names the console page for an unmet model-access row (Your account → Your model
+  connections) instead of a button label.
+- A deactivated person's session and a missing session on a single-sign-on deployment are told why the request was
+  refused, not that the admin token is unset.
+
 ## [0.9.4] — 2026-10-19
 
 A stability and honesty release on top of 0.9.3: runner and output-recovery fixes, a hardening pass on credential
