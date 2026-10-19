@@ -491,9 +491,12 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// to reach credential material or the host exactly both, which is why the
 	// route did not move to make the guard live.
 	//
-	// recordCeilingLimits below is therefore a FAIL-CLOSED assertion rather than
-	// a live gate: any resolved profile refuses the lane outright. It costs
-	// nothing today and is what a re-mount, or a second caller, meets.
+	// stepRunCeilingLimits below is therefore a backstop rather than a live
+	// gate on this route: it reads the two named limits (deny_interactive and
+	// max_concurrent_runs) off a resolved profile, and returns nil at its first
+	// line for the nil-Profile ceiling every operator resolves. A re-mount of the
+	// route, or a second caller, is what meets it; it does NOT refuse a profile
+	// that sets neither limit.
 	//
 	// Which walls ride along, named rather than implied — the earlier wording
 	// ("the same walls as their ordinary runs") was true of one axis and false
@@ -506,10 +509,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	//     denyUserGovernance/denyUserRunQuota sit on POST /runs.
 	//     The scoping rule, stated once here the way ceilingForDispatch states
 	//     the deny axis's, so it cannot be re-decided per call site: the Limits
-	//     axis binds POST /runs and this lane, and this lane binds it by
-	//     refusing every assigned profile outright rather than by reading limit
-	//     by limit — because the axis that makes this lane dangerous is the
-	//     member CLAMP it skips, which is not a limit and can never be one.
+	//     axis binds POST /runs and this lane, and this lane binds it limit by
+	//     limit (stepRunCeilingLimits). The member CLAMP it skips is not a limit
+	//     and can never be one, so the clamp's absence is closed by the route's
+	//     operator-only tier, not by this check.
 	//     deny_task_mode_exec genuinely does not apply: a record session runs an
 	//     agent, never `exec`.
 	//
@@ -703,7 +706,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined,
 		Status: recordStatusRecording, StartedAt: startedAt,
 		LLMMode: llmMode,
-		Caveats: repoDevcontainerImageCaveats(ws),
+		Caveats: repoDevcontainerImageCaveats(ws, image == agentImage("claude-code", s.cfg.AgentImages)),
 	}, recordStatusRecording)
 
 	// Sessions are interactive (the operator drives the activity in the attach

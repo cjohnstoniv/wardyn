@@ -21,8 +21,10 @@ package api
 // boundary the dedicated sign-in enforces and it exists for the same reason:
 // one authorization request yields one id_token from one app registration, and
 // binding a credential to a session is only sound when both come from it. A row
-// naming any other tenant or client widens nothing — those deployments keep
-// using the dedicated sign-in, which was built for exactly that case.
+// naming any other tenant or client widens nothing, and the dedicated sign-in
+// refuses it too (400 ado_sign_in_foreign_app, the 0.7.10 boundary in
+// ado_entra.go): that door serves a login that predates the row or a consent
+// since withdrawn, in the same tenant and application only.
 //
 // WITH NO AZURE DEVOPS ROW CONFIGURED, NOTHING HERE DOES ANYTHING. LoginScopes
 // returns nil, the authorization request is not widened, no parameter is
@@ -233,10 +235,10 @@ func (s *Server) adoEntraForLogin(ctx context.Context, what string) (ADOEntraCon
 		return ADOEntraConfig{}, false
 	}
 	if !cfg.isLoginApplication() {
-		// Not a failure: a row against another tenant or application is a
-		// SUPPORTED configuration, served by the dedicated sign-in. Widening
-		// the console login for it would produce an id_token this deployment
-		// cannot bind a credential to.
+		// Not a failure here: a row against another tenant or application is
+		// refused by the dedicated sign-in too (ado_sign_in_foreign_app), so
+		// nothing connects through it. Widening the console login for it would
+		// produce an id_token this deployment cannot bind a credential to.
 		slog.DebugContext(ctx, "wardynd: the Azure DevOps row names another application, so the console login is not widened for it",
 			slog.String("step", what), slog.String("row", cfg.RowID))
 		return ADOEntraConfig{}, false

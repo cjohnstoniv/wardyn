@@ -233,9 +233,10 @@ func formatStartDeadline(seconds int) string {
 // two: a non-k8s driver; a k8s daemon build that predates this computation;
 // AND a genuine k8s driver whose Capabilities() call itself just errored
 // (setupRunnerInfo's own early-return path, which already leaves Driver
-// "k8s" with nothing else resolved). All three grade identically here: an
-// honest "can't confirm", never a silent Enforcing.
-func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
+// "k8s" with nothing else resolved). All three grade FAIL here: an honest
+// "can't confirm", never a silent Enforcing. The last (capsUnreadable) points at
+// substrate_health, since no upgrade changes a runner that did not answer.
+func k8sEgressContainmentCheck(driver, netpolProven string, capsUnreadable bool) (SetupCheck, bool) {
 	if driver != "k8s" {
 		return SetupCheck{}, false
 	}
@@ -270,6 +271,16 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 				"CNI/NetworkPolicy support to restore real confinement.",
 		}, true
 	default:
+		if capsUnreadable {
+			// The runner did not answer, so there is no verdict to be missing: upgrading wardynd would
+			// not help. The substrate_health row says what is wrong.
+			return SetupCheck{
+				ID: id, Label: label, Status: "fail",
+				Detail: "Indeterminate — the Kubernetes runner did not report its capabilities, so its NetworkPolicy canary verdict " +
+					"is unknown and egress containment cannot be confirmed.",
+				Fix: "The substrate_health row says what is wrong with the runner's substrate; this row clears once the runner answers.",
+			}, true
+		}
 		return SetupCheck{
 			ID: id, Label: label, Status: "fail",
 			Detail: "Indeterminate — this control plane reports a Kubernetes runner but not its NetworkPolicy canary verdict, " +

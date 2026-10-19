@@ -85,7 +85,7 @@ func (d *sidecarDetector) scanReport(s Span, dst *[]Finding) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&sr); err != nil {
 		return fmt.Errorf("sidecar: decode response: %w", err)
 	}
-	path := sanitizePath(s.FieldPath)
+	path := maskFormats(s.FieldPath)
 	for _, f := range sr.Findings {
 		cat := Category(strings.ToLower(f.Category))
 		switch cat {

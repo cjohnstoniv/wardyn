@@ -573,3 +573,25 @@ func TestAuditSpoolHealedVolumeDrainsBehindAPoisonLineTheSidecarStillRefuses(t *
 		t.Fatalf("recorded %d times in all; want 6 (the 3 behind the poison line, once more after the heal)", got)
 	}
 }
+
+// A Sync that fails after the Write landed leaves the line on disk; the lines
+// gauge must count it. A pipe takes the Write and refuses fsync (EINVAL).
+func TestAuditSpoolAppendCountsALineWhoseSyncFailed(t *testing.T) {
+	sp, err := NewAuditSpool(filepath.Join(t.TempDir(), "audit-spool.jsonl"))
+	if err != nil {
+		t.Fatalf("NewAuditSpool: %v", err)
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	sp.f = pw
+	if err := sp.Append(newTestEvent("credential.mint")); err == nil {
+		t.Fatal("Append: want the Sync error, got nil")
+	}
+	if got := sp.Lines(); got != 1 {
+		t.Fatalf("Lines() = %d after a Write that landed and a Sync that failed, want 1", got)
+	}
+}

@@ -70,6 +70,15 @@ func TestDispatchGrantWriteFailure_HintCarriesNoDriverText(t *testing.T) {
 				_, _, ok := s.authorProviderSubscriptionInjection(ctx, run, tr, &types.RunPolicySpec{}, nil)
 				return ok
 			}},
+		{"azure foundry", "could not record the Azure credential grant",
+			func(s *Server, run types.AgentRun) bool {
+				run.Placement = types.PlacementRemote // the grant goes straight to the store
+				tr := llmTransport{azure: &providerAzureLane{
+					provider: types.ModelProvider{ID: "az", UID: "u-az", Kind: types.ModelProviderAzureFoundry},
+					owner:    "member@corp.example", host: "res.services.ai.azure.com", route: types.AzureRouteAnthropic, audience: "https://ai.azure.com/.default"}}
+				_, _, ok := s.authorAzureInjection(ctx, run, tr, "CERT", "KEY", &types.RunPolicySpec{}, nil)
+				return ok
+			}},
 		{"bedrock bearer", "could not record the Bedrock bearer credential grant",
 			func(s *Server, run types.AgentRun) bool {
 				tr := llmTransport{bedrock: bedrockAuth{runtimeHost: "bedrock-runtime.us-east-1.amazonaws.com", runtimePort: 443},

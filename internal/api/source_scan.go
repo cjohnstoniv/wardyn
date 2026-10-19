@@ -231,9 +231,15 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// From here every failure releases the fence and restores the source's
 	// prior status — a launch that never dispatched must not strand the row
 	// in `scanning`.
+	runCreated := false
 	release := func(cause error) error {
 		_ = s.cfg.Store.ClearSourceActiveRun(ctx, src.ID, runID)
 		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, src.Status, nil)
+		if runCreated {
+			// The PENDING row would otherwise hold its slot, run token and any
+			// clone grant until the undispatched sweep (claimImportStep's compensator).
+			s.failAndRevoke(ctx, runID, types.RunPending, "the source scan could not start")
+		}
 		return cause
 	}
 
@@ -285,6 +291,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}
+	runCreated = true
 
 	ghGrantID, sshGrants, gerr := s.workspaceSourceGrants(ctx, runID, run.CreatedAt, url)
 	if gerr != nil {

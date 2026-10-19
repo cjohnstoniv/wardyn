@@ -227,7 +227,7 @@ func (s *Server) authorAzureInjection(ctx context.Context, run types.AgentRun, t
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: raw, TTLSeconds: azureGrantTTLSeconds},
 	}, false); err != nil {
-		return refuse("grant_write", "could not record the Azure credential grant: "+err.Error())
+		return refuse("grant_write", loggedMsg(ctx, "could not record the Azure credential grant", err))
 	}
 	rule, err := injectionRuleFromScope(raw)
 	if err != nil {

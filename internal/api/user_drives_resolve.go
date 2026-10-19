@@ -619,7 +619,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			slog.String("drive", d.Name), slog.String("backend", string(d.Backend)),
 			slog.String("home_template", string(d.HomeTemplate)),
 			slog.Bool("home_override_set", strings.TrimSpace(override) != ""),
-			slog.String("err", err.Error()))
+			slog.String("failure", driveHomeFailureClass(*d, subject, override)))
 		// Filed, not fixed here — the sentence blames the member for an admin's
 		// value. When an override is set it is the ONLY thing that can have
 		// failed (see the short-circuit above), yet this interpolates
@@ -663,6 +663,22 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	// it stamps it on were decided by one claim.
 	resolved.SubjectHash = types.DriveSubjectHash(subject)
 	return resolved, nil
+}
+
+// driveHomeFailureClass names why types.DriveHomeName refused, without the
+// error text, which embeds the subject, the derived name or the override.
+func driveHomeFailureClass(d types.UserDrive, subject, override string) string {
+	switch {
+	case strings.TrimSpace(override) != "":
+		return "override_invalid"
+	case strings.TrimSpace(subject) == "":
+		return "no_subject"
+	case d.HomeTemplate != types.HomeTemplateHash && d.HomeTemplate != "" && !d.HomeTemplate.Valid():
+		return "unknown_template"
+	case d.HomeTemplate == types.HomeTemplateEmailLocal && !strings.Contains(subject, "@"):
+		return "no_email_claim"
+	}
+	return "derived_invalid"
 }
 
 // driveHomeSubject picks WHICH of the caller's identities the drive's home

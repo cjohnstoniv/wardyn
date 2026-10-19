@@ -37,11 +37,16 @@ const (
 	DefaultCoalesceMaxKeys = 1024
 )
 
-type denialKey struct{ actor, action, target, reason, outcome string }
+// denialKey also holds the delegation stamps the head of the chain put on the row
+// (via, sponsor, proxy_peer): a refusal a portal made for a person is not the
+// person's own repeat.
+type denialKey struct{ actor, action, target, reason, outcome, via, sponsor, peer string }
 
 type denialWindow struct {
 	first  types.AuditEvent
 	reason string
+	// stamps are the first row's via, sponsor and proxy_peer, carried onto the summary.
+	stamps denialStamps
 	seq    uint64
 	timer  *time.Timer
 	// count includes first; both are guarded by DenialCoalescer.mu.
@@ -73,9 +78,10 @@ func (c *DenialCoalescer) Record(ctx context.Context, ev types.AuditEvent) error
 	}
 	var d struct {
 		Reason string `json:"reason"`
+		denialStamps
 	}
 	_ = json.Unmarshal(ev.Data, &d)
-	k := denialKey{ev.Actor, ev.Action, ev.Target, d.Reason, ev.Outcome}
+	k := denialKey{ev.Actor, ev.Action, ev.Target, d.Reason, ev.Outcome, string(d.Via), string(d.Sponsor), string(d.ProxyPeer)}
 
 	c.mu.Lock()
 	if w, ok := c.open[k]; ok {
@@ -92,7 +98,7 @@ func (c *DenialCoalescer) Record(ctx context.Context, ev types.AuditEvent) error
 		c.open = map[denialKey]*denialWindow{}
 	}
 	c.seq++
-	w := &denialWindow{first: ev, reason: d.Reason, seq: c.seq, count: 1, lastAt: ev.Time}
+	w := &denialWindow{first: ev, reason: d.Reason, stamps: d.denialStamps, seq: c.seq, count: 1, lastAt: ev.Time}
 	w.timer = time.AfterFunc(cmp.Or(c.Window, DefaultCoalesceWindow), func() { c.closeWindow(k, w) })
 	c.open[k] = w
 	c.mu.Unlock()
@@ -112,6 +118,13 @@ func (c *DenialCoalescer) Record(ctx context.Context, ev types.AuditEvent) error
 		c.mu.Unlock()
 	}
 	return err
+}
+
+// denialStamps are the delegation marks DelegationRecorder puts on a row's data.
+type denialStamps struct {
+	Via       json.RawMessage `json:"via,omitempty"`
+	Sponsor   json.RawMessage `json:"sponsor,omitempty"`
+	ProxyPeer json.RawMessage `json:"proxy_peer,omitempty"`
 }
 
 // evictOldestLocked removes and returns the oldest open window. c.mu is held.
@@ -181,7 +194,8 @@ func (c *DenialCoalescer) summarise(ctx context.Context, w *denialWindow) {
 		Suppressed int       `json:"suppressed"`
 		FirstAt    time.Time `json:"first_at"`
 		LastAt     time.Time `json:"last_at"`
-	}{true, w.reason, count, count - 1, w.first.Time, last})
+		denialStamps
+	}{true, w.reason, count, count - 1, w.first.Time, last, w.stamps})
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),

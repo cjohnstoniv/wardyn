@@ -246,7 +246,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	cfg.RunToken = id.Token
 	freshJTI := id.JTI
-	cfgJSON, rerr := encodeRevivedConfig(cfg) // loaded as the new proxy will load it, before the claim
+	cfgJSON, rerr := encodeRevivedConfig(ctx, cfg) // loaded as the new proxy will load it, before the claim
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -256,7 +256,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if !remotePlacement(run.Placement) {
 		org := *cfg
 		org.Policy = corpus.restoredOn(cfg.Policy)
-		if storedJSON, rerr = encodeRevivedConfig(&org); rerr != nil {
+		if storedJSON, rerr = encodeRevivedConfig(ctx, &org); rerr != nil {
 			return reviveResult{}, rerr
 		}
 	}

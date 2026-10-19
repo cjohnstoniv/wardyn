@@ -976,6 +976,47 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	}
 }
 
+// componentSignInRoute is the one route whose handler answers an id that names no row exactly as a row the
+// caller may not attach (#2419): so whether the row exists is not observable.
+const componentSignInRoute = "/api/v1/components/{id}/sign-in"
+
+// absentRowSignInAnswer reports whether w is that handler's own 403 on that route. The exemption is the
+// route's alone: componentAttachRefusal also guards POST and PUT /components, the run component refs and
+// the Azure sign-in, and a member denial there must still fail the matrix.
+func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
+	return method == http.MethodPost && pattern == componentSignInRoute &&
+		w.Code == http.StatusForbidden && errorReason(w) == "capability_component"
+}
+
+// assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
+func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if absentRowSignInAnswer(method, pattern, w) {
+		return
+	}
+	assertNotBlocked(t, who, w)
+}
+
+func TestAbsentRowSignInAnswer_IsScopedToTheSignInRoute(t *testing.T) {
+	w := httptest.NewRecorder()
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.WriteString(`{"error":"x","reason":"capability_component"}`)
+	for _, tc := range []struct {
+		method, pattern string
+		want            bool
+	}{
+		{http.MethodPost, componentSignInRoute, true},
+		{http.MethodPost, "/api/v1/components", false},
+		{http.MethodPut, "/api/v1/components/{id}", false},
+		{http.MethodPost, "/api/v1/runs", false},
+		{http.MethodGet, componentSignInRoute, false},
+	} {
+		if got := absentRowSignInAnswer(tc.method, tc.pattern, w); got != tc.want {
+			t.Errorf("%s %s: exempt = %v, want %v", tc.method, tc.pattern, got, tc.want)
+		}
+	}
+}
+
 // fakeAuthzSessionRevocations is a no-op oidc.SessionRevocations double that
 // exists only to make POST /api/v1/sessions/revoke visible to chi.Walk: the
 // route is mounted conditionally (see routes.go) on cfg.SessionRevocations
@@ -1336,8 +1377,8 @@ func TestAuthzMatrix(t *testing.T) {
 				// answering on its own merits, which is what this matrix
 				// tolerates by design.
 				p := buildPath(pattern, uuid.New().String())
-				assertNotBlocked(t, "admin", doSSO(t, srv, method, p, adminSess, body))
-				assertNotBlocked(t, "member", doSSO(t, srv, method, p, memberSess, body))
+				assertNotBlockedOn(t, method, pattern, "admin", doSSO(t, srv, method, p, adminSess, body))
+				assertNotBlockedOn(t, method, pattern, "member", doSSO(t, srv, method, p, memberSess, body))
 				if w := doSSO(t, srv, method, p, nil, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
 				}
