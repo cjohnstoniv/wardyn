@@ -165,6 +165,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "ControlPlaneURL", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "MITMLLM", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "LLMChannelHosts", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "LocalModels", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCredential, Variant: "org network, never sent; a local_model run also carries its LLMUpstreams entry, refused the same way"},
 	{Struct: StructProxyConfig, Field: "LLMUnavailableDetail", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},

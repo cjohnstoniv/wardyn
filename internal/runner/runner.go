@@ -208,6 +208,9 @@ type ProxyConfig struct {
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
+
+	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
+	LocalModels map[string]types.LocalModelSettings
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

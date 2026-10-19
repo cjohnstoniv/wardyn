@@ -73,6 +73,11 @@ listen
 llm_channel_hosts
 llm_unavailable_detail
 llm_upstreams
+local_models
+local_models.*.keep_alive_seconds
+local_models.*.max_context
+local_models.*.max_output
+local_models.*.models
 mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers

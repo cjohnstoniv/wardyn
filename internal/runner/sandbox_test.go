@@ -238,6 +238,22 @@ func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_LocalModels: a local_model run's allowlist reaches the
+// sidecar's config, and a run without one writes no key an older proxy refuses.
+func TestBuildProxyConfig_LocalModels(t *testing.T) {
+	const base = "http://host.docker.internal:11434"
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		LLMUpstreams: map[string]string{"api.anthropic.com": base},
+		LocalModels:  map[string]types.LocalModelSettings{base: {Models: []string{"qwen2.5:3b"}}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"local_models":{"`+base+`":{"models":["qwen2.5:3b"]}}`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the allowlist under local_models", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "local_models") {
+		t.Fatalf("a run with no local model names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {

@@ -239,6 +239,9 @@ type Proxy struct {
 	// LLMUnavailableDetail). Empty == the generic route sentence; the
 	// below-policy clause is appended either way. See llm404Detail.
 	llmUnavailableDetail string
+	// localModels is each local_model upstream's route gate, keyed by
+	// localModelKey (local_model.go). Empty == no local model route.
+	localModels map[string]*localModel
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -291,6 +294,7 @@ type internalHostRule struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
+//nolint:funlen // one linear wiring of each Options field into the Proxy; splitting it would scatter the wiring
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
 	if dial == nil {
@@ -389,6 +393,7 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
+		localModels:          compileLocalModels(opts.LocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
 		attribution:          opts.Attribution,
@@ -590,6 +595,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// An attached MCP server's host is the broker's alone, above every allow.
 	if p.mcp.mcpDirectOrigin(host) {
 		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
+		return egress.Deny, "", &log
+	}
+	// So is a local model server's: its gate is on the brokered LLM route.
+	if p.localModelHost(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceLocalModel)
+		log.Cause = "a local model server is reached only on the brokered LLM route"
 		return egress.Deny, "", &log
 	}
 
