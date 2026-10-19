@@ -16,10 +16,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ResidentMint is one runner_resident ssh_key or git_pat grant a runner's proxy
-// answers a mint of locally (design 0.9 §7.4): the sandbox's ssh key file and
-// its git credential helper both mint through this proxy's mint route, and get
-// the runner-held value back. ExpiresAt is the earlier of the delivery's
+// ResidentMint is one runner_resident ssh_key or git_pat grant whose value a
+// runner's proxy holds (design 0.9 §7.4): the sandbox's git credential helper
+// mints a git_pat through this proxy's mint route and gets the runner-held
+// value back; an ssh_key is signed with by this proxy's ssh agent and never
+// answered (ssh_agent.go). ExpiresAt is the earlier of the delivery's
 // not_after and the credential's own expiry; at or after it, or when it is
 // zero, the proxy answers nothing.
 type ResidentMint struct {
@@ -88,13 +89,11 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 		http.Error(w, "wardyn: this runner_resident credential has expired on this runner; start a new run to use it again", http.StatusForbidden)
 		return
 	}
-	// An ssh_key is issued once per run; this proxy answers it once (a revived
-	// run's new proxy answers once more).
-	if m.Kind == types.GrantSSHKey && !p.firstResidentSSHAnswer(m.GrantID) {
+	// A resident ssh_key is signed with by the proxy's ssh agent and never
+	// answered to the sandbox (ssh_agent.go).
+	if m.Kind == types.GrantSSHKey {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"code": types.MintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
+		http.Error(w, sshKeyMintRefused, http.StatusForbidden)
 		return
 	}
 	p.emitLocalDecision(r, egress.Allow, ruleSourceMint, nil)
@@ -108,17 +107,3 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 	}{m.Kind, m.Token, m.Username, m.ExpiresAt.UTC().Format(time.RFC3339), m.KnownHosts})
 }
 
-// firstResidentSSHAnswer records grant as answered and reports whether it was
-// not already.
-func (p *Proxy) firstResidentSSHAnswer(grant uuid.UUID) bool {
-	p.residentSSHMu.Lock()
-	defer p.residentSSHMu.Unlock()
-	if p.residentSSHAnswered[grant] {
-		return false
-	}
-	if p.residentSSHAnswered == nil {
-		p.residentSSHAnswered = map[uuid.UUID]bool{}
-	}
-	p.residentSSHAnswered[grant] = true
-	return true
-}

@@ -123,8 +123,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 # (the only egress route out of the sandbox) to ssh.github.com:443 /
 # ssh.dev.azure.com:443 — SSH-over-443 reuses the CONNECT-443 lane with no
 # port-22 egress. agent-run wires GIT_SSH_COMMAND + a ~/.ssh config at clone time
-# (only when the run has an ssh_key grant); the private key is minted from the
-# broker, written 0400, and WIPED right after the clone. See GrantSSHKey.
+# (only when the run has an ssh_key grant); the private key stays in the run's
+# proxy, whose ssh agent signs the clone's SSH sign-in. See GrantSSHKey.
 #
 # Bake the PUBLISHED host keys so StrictHostKeyChecking=yes verifies the server
 # without a TOFU prompt (the sandbox has no interactive tty). These are GitHub's

@@ -2363,7 +2363,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
-| `WARDYN_SSH_KEYFILES` | internal (bash array) | empty | `deploy/images/claude-code/agent-run`'s own list of minted SSH key/known-hosts files to `shred` after an SSH-remote clone (`wipe_ssh_grants`, also armed as an `EXIT` trap); never exported |
+| `WARDYN_SSH_AGENT_DIR` | internal (path) | set per ssh process | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for the one `ssh` it runs: the `0700` directory holding that process's agent sockets, which `deploy/images/claude-code/agent-run`'s ssh config names as `IdentityAgent`. Removed when `ssh` exits |
 
 ### `WARDYN_CODEX_BIN_URL`
 
