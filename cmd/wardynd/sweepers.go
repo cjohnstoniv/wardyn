@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -109,6 +110,11 @@ type credentialSweeperServer interface {
 	SweepExpiredCredentials(context.Context) (int, error)
 }
 
+// ephemeralSweeperServer is the optional second surface of the credential sweep's server.
+type ephemeralSweeperServer interface {
+	SweepExpiredEphemeral(context.Context) (int, error)
+}
+
 // runSecretSweepInterval is how often the run-secret eviction lane ticks. Well
 // under api.RunSecretGrace so a cold run's corpus is dropped promptly once it
 // qualifies, and cheap enough to leave unconfigured: one run listing per tick,
@@ -158,6 +164,14 @@ func runCredentialSweeper(ctx context.Context, srv credentialSweeperServer, inte
 			n, err := srv.SweepExpiredCredentials(ctx)
 			if n > 0 {
 				slog.InfoContext(ctx, "wardynd: deleted expired stored credentials", slog.Int("deleted", n))
+			}
+			// The same daily tick clears expired attach tickets and delegated tokens.
+			if es, ok := srv.(ephemeralSweeperServer); ok {
+				gone, eerr := es.SweepExpiredEphemeral(ctx)
+				if gone > 0 {
+					slog.InfoContext(ctx, "wardynd: deleted expired attach tickets and delegated tokens", slog.Int("deleted", gone))
+				}
+				err = errors.Join(err, eerr)
 			}
 			return err
 		})

@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -282,6 +283,18 @@ func (s *Server) SweepExpiredCredentials(ctx context.Context) (int, error) {
 			withSecretOwner(map[string]any{"reason": "expired", "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)}, e.Owner, true)))
 	}
 	return len(gone), err
+}
+
+// SweepExpiredEphemeral deletes expired attach tickets and delegated tokens, which otherwise wait for
+// the next mint to be swept. cmd/wardynd calls it on the credential sweep's tick. A store that cannot
+// sweep them is not an error.
+func (s *Server) SweepExpiredEphemeral(ctx context.Context) (int, error) {
+	sw, ok := s.cfg.Store.(store.EphemeralSweeper)
+	if !ok {
+		return 0, nil
+	}
+	n, err := sw.SweepExpiredEphemeral(ctx, s.cfg.Now())
+	return int(n), err
 }
 
 // auditSweepFailure records what a sweep could not do: a failure row for each
