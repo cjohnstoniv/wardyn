@@ -1379,7 +1379,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every other member-reusable kind is bounded after delivery:
   - `api_key` never leaves the broker;
   - `git_pat` is set at the proxy (or, with the broker off, reaches git through the helper);
-  - `ssh_key` is wiped after the clone, and an approval-gated grant is delivered once.
+  - `ssh_key` stays at the proxy, behind an SSH agent closed after the clone.
   - [CREDENTIALS.md](CREDENTIALS.md) says which kinds enter.
 - While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
@@ -2382,7 +2382,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
-| `WARDYN_SSH_KEYFILES` | internal (bash array) | empty | `deploy/images/claude-code/agent-run`'s own list of minted SSH key/known-hosts files to `shred` after an SSH-remote clone (`wipe_ssh_grants`, also armed as an `EXIT` trap); never exported |
+| `WARDYN_SSH_AGENT_DIR` | internal (path) | per `ssh` | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for its `ssh`: the `0700` directory of the agent sockets `agent-run`'s ssh config names; removed when `ssh` exits |
 
 ### `WARDYN_CODEX_BIN_URL`
 

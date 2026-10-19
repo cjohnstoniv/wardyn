@@ -42,7 +42,7 @@ const HOW_IT_WORKS: { Icon: React.ElementType; title: string; sub: string; tone:
   { Icon: BrickWall, title: "Behind a barrier", sub: "Fence, Wall, or Vault — you choose", tone: "primary" },
   // Not "never your real keys, unqualified" — copy.ts's CAPABILITY comments
   // are explicit that brokerLine is "fully true only for github_token"; a
-  // git_pat/ssh_key grant, and a host-CLI Claude subscription
+  // git_pat with its broker off, and a host-CLI Claude subscription
   // (resident_mount), really do put the real credential in the sandbox. "By
   // default" + "labeled" keeps this true for every lane: brokering is the
   // common case, and the resident exceptions are the amber `resident` chip

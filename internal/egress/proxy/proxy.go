@@ -118,6 +118,9 @@ type Proxy struct {
 	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
 	brokeredPATGrantIDs []uuid.UUID
 	residentMints       map[uuid.UUID]ResidentMint // runner_resident mints answered locally (resident_mint.go)
+	// sshAgent holds the run's ssh_key grants' keys for the ssh agent route
+	// (ssh_agent.go).
+	sshAgent sshAgents
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost

@@ -35,12 +35,12 @@ import { cn } from "../../ui/utils";
 export const S = {
   // The three lanes differ in WHERE the credential goes, and the footer owns
   // that split so no lane has to overclaim: the App lane, and a PAT while the PAT
-  // broker is on, keep the token at the proxy; an SSH key enters the sandbox for
-  // the clone as a shredded 0400 file, delivered once when approval-gated (PAT broker off: helper stdout)
+  // broker is on, keep the token at the proxy; an SSH key stays at the proxy too,
+  // which signs the clone's sign-in as its ssh agent (PAT broker off: helper stdout)
   // (ARCHITECTURE.md invariant 1 and the git-egress table are the source).
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
   GIT_FOOTER:
-    "The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all.",
+    "The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy; for SSH the proxy signs the clone's sign-in and closes its agent after the start-up clone. Public repos clone with no credential at all.",
 } as const;
 
 // Lane rows.

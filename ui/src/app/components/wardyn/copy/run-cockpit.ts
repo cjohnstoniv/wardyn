@@ -80,8 +80,9 @@ export const RUN_COCKPIT = {
   // --- Evidence widgets ---
   // Same eligibility framing as the full Credential grants card, tightened for
   // a 400px rail. Grants are what the run MAY request — never live credentials.
-  // It names no single delivery: an ssh_key or resident git_pat is readable in
-  // the sandbox, so a "minted, never seen" line would be false for those grants.
+  // It names no single delivery: an env or file secret, or a resident git_pat,
+  // is readable in the sandbox, so a "minted, never seen" line would be false
+  // for those grants.
   credentialsEligibility:
     "What this run may request. Most credentials are added at the proxy; the kind says whether one is readable inside the sandbox.",
   credentialDetails: "Details",

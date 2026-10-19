@@ -671,8 +671,8 @@ test.describe("Run detail — the Azure DevOps decline", () => {
 });
 
 // The Credentials panel's eligibility line holds for every grant kind: it names
-// what the run may request and promises no delivery (an ssh_key or a resident
-// git_pat is readable inside the sandbox).
+// what the run may request and promises no delivery (an env or file secret, or
+// a resident git_pat, is readable inside the sandbox).
 test.describe("Run detail — the Credentials eligibility line", () => {
   test("says what the run may request and claims no minted token", async ({ page }) => {
     await openRuns(page);

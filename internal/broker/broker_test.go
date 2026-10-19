@@ -77,6 +77,10 @@ type fakeDB struct {
 	// mintedErr fails MintedCredentials — RevokeRun's only input. Zero value
 	// (nil) is the ordinary behaviour every other test sees.
 	mintedErr error
+	// sshWinnerAfter, when > 0, makes every once-per-run ssh_key read after
+	// that many report a mint, as a concurrent winner committing between the
+	// two mint transactions would. sshReads counts the reads.
+	sshWinnerAfter, sshReads int
 	// onCommit runs after a successful Commit — the SIEM test cancels the
 	// request ctx here to model a client hanging up once the mint is durable.
 	onCommit func()
@@ -92,6 +96,9 @@ type auditRow struct {
 	// MintedCredentials mirror below reads the run's mint rows off it, exactly
 	// as mintedCredentialsSQL's audit half does.
 	runID *uuid.UUID
+	// target mirrors audit_events.target (the grant id on a mint row), which
+	// the once-per-run ssh_key read matches on.
+	target string
 	// data is the marshalled Data column — the lease tests read the lease
 	// marker off it, so the fake stores what the statement actually bound
 	// rather than a re-derived guess.
@@ -258,6 +265,21 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		runID := args[0].(uuid.UUID)
 		return boolRow{v: tx.db.revokedRuns[runID]}
 
+	case strings.Contains(sql, "FROM audit_events") && strings.Contains(sql, "target = $2"):
+		// sshKeyMintedSQL: args[0]=runID, args[1]=grant id text. The predicate
+		// is the statement's own: the run's credential.mint success rows.
+		runID, target := args[0].(uuid.UUID), args[1].(string)
+		tx.db.sshReads++
+		if tx.db.sshWinnerAfter > 0 && tx.db.sshReads > tx.db.sshWinnerAfter {
+			return boolRow{v: true}
+		}
+		for _, r := range tx.db.auditRows {
+			if r.action == "credential.mint" && r.outcome == "success" && r.runID != nil && *r.runID == runID && r.target == target {
+				return boolRow{v: true}
+			}
+		}
+		return boolRow{v: false}
+
 	case strings.Contains(sql, "FROM audit_append"):
 		// D29 in-tx mint audit, written through the audit_append function (0111). args: id, time,
 		// run_id, actor_type, actor, action, target, outcome, source_ip, data. Record preCommit so
@@ -268,6 +290,7 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 			actorType: types.ActorType(args[3].(string)),
 			actor:     args[4].(string),
 			action:    args[5].(string),
+			target:    args[6].(string),
 			outcome:   args[7].(string),
 			preCommit: !tx.committed,
 			data:      string(args[9].([]byte)),

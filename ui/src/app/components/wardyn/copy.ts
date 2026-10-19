@@ -96,12 +96,11 @@ export const CAPABILITY = {
   // so whatever's running there can read it.
   gitPatLineResident:
     "A git access token is handed to git inside the sandbox — the process running there can read it.",
-  // Honest exception (same shape as gitPatLine): an ssh_key grant writes a
-  // RESIDENT private key file for the sandbox's git-over-SSH client to read —
-  // git's SSH transport has no credential-helper seam, so the key can't be
-  // proxy-injected or brokered like github_token.
+  // git's SSH transport has no credential-helper seam, so an ssh_key can't be
+  // injected like a header: the proxy holds the key and answers as the
+  // sandbox's ssh agent, signing only the sign-in, and no key file is written.
   sshKeyLine:
-    "A private SSH key is written to disk in the sandbox — the process running there can read it.",
+    "The proxy holds the SSH key and signs Git's SSH sign-in; no key file enters the sandbox.",
 } as const;
 
 

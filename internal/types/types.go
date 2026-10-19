@@ -260,9 +260,8 @@ const (
 	GrantAPIKey      GrantKind = "api_key"   // proxy-side injection only
 	// GrantGitPAT returns a stored PAT to the git credential helper for a non-GitHub host (ADO/GitLab), an opaque CONNECT tunnel the proxy can't inject into.
 	GrantGitPAT GrantKind = "git_pat"
-	// GrantSSHKey materializes a resident, agent-readable SSH private key for git-over-SSH — a DOCUMENTED EXCEPTION to the no-resident-secret invariant
-	// (no credential-helper seam for SSH). agent-run writes it 0400 just before the clone and wipes it right after; residual risk is code running as the
-	// agent uid during that window. See broker.mintSSHKey.
+	// GrantSSHKey is an SSH private key for git-over-SSH. SSH has no credential-helper seam, so the key stays in the run's proxy, whose ssh agent signs
+	// the start-up clone's SSH sign-in and then closes (internal/egress/proxy/ssh_agent.go); the key never enters the sandbox. See broker.mintSSHKey.
 	GrantSSHKey GrantKind = "ssh_key"
 	// GrantEnvSecret places a stored secret into the sandbox environment at dispatch — the second DOCUMENTED EXCEPTION to the no-resident-secret invariant.
 	// Unlike every other kind: NOT BROKERED (no mint/approval/TTL/JTI); RESIDENT FOR THE WHOLE RUN (readable via /proc/self/environ as the agent uid);
@@ -492,7 +491,7 @@ type AuditEvent struct {
 }
 
 // SSHPublicKey is a human's registered public key for the SSH gateway, distinct from GrantSpec's
-// ssh_key grant (a resident private key for git-over-SSH — see GrantSSHKey). This is the gateway's
+// ssh_key grant (a private key for git-over-SSH, held by the run's proxy — see GrantSSHKey). This is the gateway's
 // trust root: it authenticates an incoming connection ONLY against rows here, then authorizes
 // owner-or-admin. Fingerprint is computed server-side from the parsed key, never client-supplied.
 // Role is the registering session's own role, stamped at registration and refreshed on every OIDC

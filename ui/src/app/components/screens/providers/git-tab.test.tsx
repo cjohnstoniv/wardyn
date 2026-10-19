@@ -154,7 +154,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["ssh"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).toBeDisabled();
     expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
   });
 
@@ -163,7 +163,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["pat"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).not.toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeDisabled();
     expect(screen.queryByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).not.toBeInTheDocument();
   });
 
@@ -370,7 +370,7 @@ describe("GitTab", () => {
       render(<Harness initial={[adoServices]} />);
       const row = screen.getByTestId("provider-row-azure_devops");
       expect(within(row).queryByRole("checkbox", { name: /PAT · brokered/ })).not.toBeInTheDocument();
-      expect(within(row).queryByRole("checkbox", { name: /SSH · resident/ })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeInTheDocument();
       expect(within(row).getByLabelText(E.FIELD_TENANT)).toBeInTheDocument();
     });
 
@@ -451,9 +451,9 @@ describe("GitTab", () => {
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(
-      screen.getByText(/The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy/),
+      screen.getByText(/The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/an approval-gated grant is delivered once\. Public/)).toBeInTheDocument();
+    expect(screen.getByText(/closes its agent after the start-up clone\. Public/)).toBeInTheDocument();
   });
 
   it("Remove opens a confirm dialog naming the kind, and clears the row on confirm", async () => {
@@ -509,7 +509,7 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-github");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ }));
       expect(latest[0].lanes).toEqual([]);
     });
   });
