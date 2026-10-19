@@ -76,8 +76,8 @@ test.describe("Design consistency", () => {
       await navToRoute(page, c.path);
       await expect(page.getByRole("heading", { name: c.title, level: 4 })).toBeVisible();
       const block = page.locator('[data-size="compact"]').first();
-      const box = (await block.boundingBox())!;
-      expect(box.height).toBeLessThan(220);
+      // The compact block is padded 32px top and bottom; the page-sized hero is 64px. Its height depends on the copy.
+      expect(await block.evaluate((el) => getComputedStyle(el).paddingTop)).toBe("32px");
       await page.unrouteAll({ behavior: "ignoreErrors" });
     });
   }
