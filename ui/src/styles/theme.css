@@ -397,4 +397,10 @@
     text-transform: uppercase;
     color: var(--muted-foreground);
   }
+
+  /* The step eyebrow in the primary colour ("Guided setup · 1 of 5"); used with .label-eyebrow. */
+  .label-eyebrow-primary {
+    letter-spacing: 0.12em;
+    color: var(--primary);
+  }
 }

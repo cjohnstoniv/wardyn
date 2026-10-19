@@ -681,4 +681,27 @@ test.describe("Run detail — the Credentials eligibility line", () => {
     await expect(page.getByText(RUN_COCKPIT.credentialsEligibility)).toBeVisible();
     await expect(page.getByText(/never sees your real keys/)).toHaveCount(0);
   });
+
+  // A grant reads as a sentence; the scope JSON sits behind Details.
+  test("reads a grant as a sentence and keeps the scope JSON behind Details", async ({ page }) => {
+    await page.route(/\/api\/v1\/runs\/[^/]+\/grants(\?|$)/, (route) =>
+      route.fulfill({
+        json: [
+          {
+            id: "g1",
+            run_id: "r1",
+            created_at: new Date().toISOString(),
+            spec: { kind: "github_token", scope: { repos: [], permissions: { contents: "read" } }, ttl_seconds: 600, requires_approval: false },
+          },
+        ],
+      }),
+    );
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+    const grant = page.getByTestId("credential-grant").first();
+    await expect(grant).toContainText("GitHub token · read contents · no repositories listed");
+    await expect(grant.locator("details")).not.toHaveAttribute("open", "");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
 });

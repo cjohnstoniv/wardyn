@@ -65,7 +65,12 @@ const mine = async (page: Page): Promise<PoolRow[]> => {
 const poolNamed = async (page: Page, name: string) => (await mine(page)).find((p) => p.name === name);
 const uniqueName = (stem: string) => `${stem} ${randomBytes(3).toString("hex")}`;
 const lifetimeUnit = (page: Page, caption: string) =>
-  page.getByLabel(`${POOL_DRAWER.BACKGROUND}, ${POOL_FORM.LIFETIME}, ${caption}, ${POOL_FORM.UNIT}`);
+  page.getByRole("combobox", { name: `${POOL_DRAWER.BACKGROUND}, ${POOL_FORM.LIFETIME}, ${caption}, ${POOL_FORM.UNIT}` });
+// The unit is the shared Select: open it, then choose the option by its word.
+const pickUnit = async (page: Page, caption: string, unit: string) => {
+  await lifetimeUnit(page, caption).click();
+  await page.getByRole("option", { name: unit, exact: true }).click();
+};
 
 test.describe("user pools against the real server", () => {
   test("a user pool is created, then edited, through the form (FUG-L409)", async ({ page }) => {
@@ -102,9 +107,9 @@ test.describe("user pools against the real server", () => {
     await page.goto(`/account/pools/${id}/edit`);
     await expect(page.getByRole("heading", { name: POOL_FORM.TITLE_EDIT(name) })).toBeVisible();
     await expect(page.locator("#f-bg-lifeDn")).toHaveValue("90");
-    await expect(lifetimeUnit(page, POOL_FORM.DEFAULT)).toHaveValue("seconds");
+    await expect(lifetimeUnit(page, POOL_FORM.DEFAULT)).toHaveText("seconds");
     await expect(page.locator("#f-bg-lifeMn")).toHaveValue("150");
-    await expect(lifetimeUnit(page, POOL_FORM.MAXIMUM)).toHaveValue("seconds");
+    await expect(lifetimeUnit(page, POOL_FORM.MAXIMUM)).toHaveText("seconds");
 
     // Renaming alone must not round the durations to the minute.
     await page.locator("#f-name").fill(`${name} b`);
@@ -121,9 +126,9 @@ test.describe("user pools against the real server", () => {
     await page.goto("/account/pools/new");
     await page.locator("#f-name").fill(uniqueName("Bounds"));
     await page.locator("#f-bg-lifeDn").fill("3");
-    await lifetimeUnit(page, POOL_FORM.DEFAULT).selectOption("hours");
+    await pickUnit(page, POOL_FORM.DEFAULT, "hours");
     await page.locator("#f-bg-lifeMn").fill("2");
-    await lifetimeUnit(page, POOL_FORM.MAXIMUM).selectOption("hours");
+    await pickUnit(page, POOL_FORM.MAXIMUM, "hours");
     await page.getByRole("button", { name: POOL_FORM.CREATE }).click();
     await expect(page.locator("#f-bg-lifeMn")).toHaveAttribute("aria-invalid", "true");
     await expect(page.locator("#f-bg-lifeDn")).not.toHaveAttribute("aria-invalid", "true");

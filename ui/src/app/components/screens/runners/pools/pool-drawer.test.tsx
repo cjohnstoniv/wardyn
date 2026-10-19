@@ -288,7 +288,8 @@ describe("who may use it", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit who may use it" }));
     await userEvent.click(screen.getByRole("button", { name: "Add to list" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Name a person, group or role to add.");
-    await userEvent.selectOptions(screen.getByLabelText("Add"), "group");
+    await userEvent.click(screen.getByRole("combobox", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Group" }));
     setField(screen.getByLabelText("Name"), "platform-eng");
     await userEvent.click(screen.getByRole("button", { name: "Add to list" }));
     expect(screen.getByRole("alert")).toHaveTextContent('group "platform-eng" is listed twice');

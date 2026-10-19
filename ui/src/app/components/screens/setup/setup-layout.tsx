@@ -189,7 +189,7 @@ export function SetupLayout({
             onRecheck={onRecheck}
             className="mb-6"
           />
-          <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
+          <div className="mb-2 label-eyebrow">
             {isOptional ? (
               <>
                 <div>Optional</div>

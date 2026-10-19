@@ -298,6 +298,7 @@ export function GovernanceScreen() {
                 <TableSkeleton rows={3} cols={6} />
               ) : noProfiles ? (
                 <EmptyState
+                  size="compact"
                   icon={ShieldCheck}
                   title={GOV.EMPTY_TITLE}
                   // withMono, like every other governance surface that renders

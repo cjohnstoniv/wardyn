@@ -20,8 +20,7 @@ import {
 } from "../../lib/types";
 import { absoluteTime, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
-import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
+import { ApprovalKindChip, ApprovalStateBadge, Chip, SectionLabel } from "../wardyn/primitives";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { EmptyState } from "../wardyn/states";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
@@ -175,9 +174,7 @@ export function ApprovalsTab({
               </dl>
             ) : (
               <div className="mt-3">
-                <Label className="text-meta uppercase tracking-wide text-muted-foreground">
-                  Requested scope
-                </Label>
+                <SectionLabel>Requested scope</SectionLabel>
                 {/* Wrapped here only: the command is what the person is deciding on, so it is never cut off (#2924). */}
                 <JsonBlock value={a.requested_scope} className="mt-1.5 [&_pre]:whitespace-pre-wrap [&_pre]:break-all" />
               </div>

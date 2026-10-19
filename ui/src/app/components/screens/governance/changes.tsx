@@ -113,6 +113,7 @@ export function ChangesTab({
           // trail, where the decided ones are.
           <div data-testid="changes-empty">
             <EmptyState
+              size="compact"
               icon={Inbox}
               title={CHANGES.EMPTY_TITLE}
               description={CHANGES.EMPTY_BODY}

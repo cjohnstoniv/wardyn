@@ -25,7 +25,7 @@ import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
-import { absoluteTime, clockTime } from "../../lib/format";
+import { absoluteTime, clockTime, mediumDate } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
@@ -275,7 +275,8 @@ function dayLabel(ts: number): string {
   const oneDayMs = 86_400_000;
   if (ts === todayStart) return "Today";
   if (ts === todayStart - oneDayMs) return "Yesterday";
-  return new Date(ts).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  // A row with an unreadable time yields a NaN day; say so instead of throwing.
+  return Number.isNaN(ts) ? "Unknown date" : mediumDate(new Date(ts).toISOString());
 }
 
 function groupByDay(events: AuditEvent[]): DayGroup[] {

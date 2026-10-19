@@ -212,6 +212,14 @@ describe("GovernanceScreen — states", () => {
     expect(screen.getAllByRole("button", { name: GOV.NEW_CTA })).toHaveLength(1);
   });
 
+  // #3059: empty states inside the screen's cards are the compact look; none is a page-size hero.
+  it("no profiles: the empty states inside the cards are compact, never a stacked hero", async () => {
+    renderScreen({ profiles: [], assignments: [] });
+    await screen.findByText(GOV.EMPTY_TITLE);
+    expect(document.querySelectorAll('[data-size="page"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-size="compact"]').length).toBeGreaterThanOrEqual(1);
+  });
+
   it("profiles but no assignments is its own state — a profile with no assignment bounds nobody", async () => {
     renderScreen(snapshot({ assignments: [] }));
     expect(await screen.findByText(GOV.EMPTY_ASSIGN_TITLE)).toBeInTheDocument();

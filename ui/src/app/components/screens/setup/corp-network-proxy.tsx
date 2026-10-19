@@ -105,7 +105,7 @@ export function hasUserinfo(url: string): boolean {
 // Small shared bits
 // ------------------------------------------------------------
 function BlockLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
+  return <div className="label-eyebrow">{children}</div>;
 }
 
 function ConfigStatusLine({ tone, children }: { tone: "success" | "neutral" | "warning"; children: React.ReactNode }) {

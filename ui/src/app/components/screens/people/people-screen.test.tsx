@@ -127,6 +127,9 @@ describe("the people table", () => {
     listMock.mockResolvedValue({ people: [] });
     renderScreen();
     expect(await screen.findByText("Nobody has signed in yet. People appear here after their first sign-in, or when you add them.")).toBeInTheDocument();
+    // #3059: the screen's two empty states (the list and the role mappings) are the compact in-card look, never two stacked heroes.
+    expect(document.querySelectorAll('[data-size="page"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-size="compact"]')).toHaveLength(2);
   });
 
   // #2902: the title never repeats the PEOPLE section label, and a filter that

@@ -515,7 +515,7 @@ export function SectionCard({
         <div className="mb-3 flex items-center gap-2">
           {Icon && <Icon className="size-4 text-muted-foreground" />}
           {title && (
-            <h2 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+            <h2 className="label-eyebrow">{title}</h2>
           )}
           {right && <div className="ml-auto">{right}</div>}
         </div>

@@ -56,6 +56,3 @@ export function timeLeft(iso: string, now = Date.now()): string {
   }
   return `${mins} ${mins === 1 ? "minute" : "minutes"}`;
 }
-
-/** "12 Oct": the day a runner was registered, claimed or revoked; the full time is the title. */
-export const shortDate = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
