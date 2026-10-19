@@ -76,6 +76,8 @@
 #      wardyn-licenses.tar.gz next to the standalone binaries and fails the
 #      release unless that asset landed — the binaries are copies, and their
 #      MIT/BSD/Apache terms need the notice texts to travel with them.
+#  21. no workflow step pipes a download into a shell, and every syft install in
+#      release.yml checks a pinned sha256 — those jobs hold the signing identity.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -723,6 +725,23 @@ elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEA
     bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
 else
     ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"
+fi
+
+# ── 21. release tooling is checked before it runs ───────────────────────────
+# The publishing jobs hold id-token: write, so a fetched script piped into sh runs
+# as the release identity. Tools come from a SHA-pinned action or a download whose
+# sha256 is pinned beside its version.
+WORKFLOWS_DIR="${WORKFLOWS_DIR:-.github/workflows}"
+piped="$(grep -nE '\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' "$WORKFLOWS_DIR"/*.yml || true)"
+syft_versions=$(grep -c '^ *SYFT_VERSION:' "$RELEASE_YML" || true)
+syft_sums=$(grep -cE '^ *SYFT_SHA256: [0-9a-f]{64}$' "$RELEASE_YML" || true)
+syft_checks=$(grep -c 'SYFT_SHA256}  .*| sha256sum -c -' "$RELEASE_YML" || true)
+if [ -n "$piped" ]; then
+    bad "a workflow pipes a download into a shell: ${piped}"
+elif [ "$syft_versions" = 0 ] || [ "$syft_sums" != "$syft_versions" ] || [ "$syft_checks" != "$syft_versions" ]; then
+    bad "$RELEASE_YML: ${syft_versions} SYFT_VERSION pin(s), ${syft_sums} SYFT_SHA256 pin(s), ${syft_checks} sha256sum check(s) — every syft install must check its pinned sha256"
+else
+    ok "no workflow pipes a download into a shell; all ${syft_versions} syft installs check a pinned sha256"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
