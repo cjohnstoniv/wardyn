@@ -156,7 +156,7 @@ func TestHostCapacityLaunchersRefuseBeforeState(t *testing.T) {
 			return err
 		},
 		"site_config_probe": func() error {
-			_, _, err := srv.runSiteConfigProbe(ctx, "alice@example.com", "true", nil, nil, nil)
+			_, _, err := srv.runSiteConfigProbe(ctx, "alice@example.com", "true", nil, nil, nil, nil)
 			return err
 		},
 	} {

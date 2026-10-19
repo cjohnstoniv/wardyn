@@ -133,6 +133,11 @@ type dispatchParams struct {
 	// pool-queue doors) from the request the fold graded; a server-authored lane
 	// leaves it empty and resolves from WorkspaceRepos alone.
 	ADOLaneRepo string
+	// RedirectProbe is the stored egress redirect row the redirect Test probes,
+	// nil for every other run. Set only by handleTestSiteConfigRedirect: dispatch
+	// plans that one row's token as for a run that reaches its public host, so
+	// the probe presents the token proxy-side exactly as a run does.
+	RedirectProbe *types.EgressRedirect
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -369,7 +374,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// cannot keep reaching the public host the operator redirected away
 		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
 		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains, resolvedLaneHosts(adoRun, adoInject))
+		planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, p.RedirectProbe)
+		artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -972,4 +978,17 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 // The local placement parity test reads the same list, so a key added here needs a placement origin.
 func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
 	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
+}
+
+// redirectPlanScope is what planArtifactRedirect plans over: the site config
+// and the run's pre-substitution egress, or, for the redirect Test, only the
+// probed row as for a run that names its public hosts. The probe's egress names
+// only the mirror, so the run-scoped gate (artifactRedirectApplies) would
+// otherwise withhold the row's token.
+func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.EgressRedirect) (types.SiteConfig, []string) {
+	if probe == nil {
+		return sc, preDomains
+	}
+	sc.EgressRedirects = []types.EgressRedirect{*probe}
+	return sc, redirectPublicHosts(*probe)
 }
