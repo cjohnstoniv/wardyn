@@ -21,6 +21,7 @@ import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunDetail, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { aheadByHours } from "../../lib/test-clock";
 import { RUN_HEADER } from "../wardyn/copy/run-header";
 import { RUN_FACTS } from "../wardyn/copy/door";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
@@ -316,14 +317,16 @@ describe("SummaryHeader — state once, with a visible status sentence", () => {
   });
 
   it("a run that ended says how long it ran and when it ended", () => {
+    const created = aheadByHours(-2);
+    const updated = new Date(Date.parse(created) + 38 * 60_000).toISOString();
     renderHeader(
       <OperatorProvider operator>
         <SummaryHeader
           run={{
             ...runningInteractive,
             state: "COMPLETED",
-            created_at: "2026-10-19T09:04:00Z",
-            updated_at: "2026-10-19T09:42:00Z",
+            created_at: created,
+            updated_at: updated,
           }}
           terminal
           onKill={() => {}}
