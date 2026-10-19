@@ -252,8 +252,12 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
-	if field := PostureUnmet(cp.RequirePosture, p.Posture); field != "" {
-		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
+	switch unmet := PostureUnmetAll(cp.RequirePosture, p.Posture); {
+	case len(unmet) == 0:
+	case p.Posture == nil:
+		return refuse(ReasonRunnerPostureUnmet, path, "posture: no runner is chosen at launch, so no posture can be judged yet; a delivery policy with require_posture refuses every launch (requires "+cp.RequirePosture.requires()+")")
+	default:
+		return refuse(ReasonRunnerPostureUnmet, path, strings.Join(unmet, ", ")+": the runner's reported posture does not meet "+class+"'s requirement (requires "+cp.RequirePosture.requires()+")")
 	}
 	return nil
 }
