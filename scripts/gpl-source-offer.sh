@@ -23,6 +23,11 @@
 # that actually pushes images cannot disagree.
 #
 # Usage: scripts/gpl-source-offer.sh <sbom-dir> <tag>
+#
+# Run it in every release commit (RELEASING.md): the offer must name the digests
+# the previous release published, never a pre-publication scan of an image that
+# has since shipped. scripts/check-image-pins.sh fails a "(not yet published)"
+# section for an image the previous tag's release.yml already publishes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # INPUT. This reads syft SBOMs from a directory. Nothing in the repo produces
@@ -34,7 +39,8 @@ cd "$(dirname "$0")/.."
 # against that PREVIOUS release's published digest:
 #
 #     mkdir -p /tmp/sbom
-#     for i in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do
+#     for i in $(git show v<prev-tag>:.github/workflows/release.yml \
+#                | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u); do
 #       syft "registry:ghcr.io/cjohnstoniv/$i:<prev-tag>" -o syft-json \
 #         > "/tmp/sbom/04-sbom-$i-<prev-tag>-amd64.json"
 #     done
