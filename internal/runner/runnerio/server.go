@@ -45,6 +45,9 @@ type Server struct {
 	execSlots     chan struct{}
 	outputs       map[uuid.UUID]*outputBuffer
 	holds         func(localRef string) bool
+	nonces        map[string]*localClient // local attach grants waiting for the org
+	locals        map[streamKey]*localSession
+	times         localTimes
 }
 
 // New opens private output storage beneath the runner's state directory.
@@ -63,7 +66,7 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return nil, errors.New("runnerio: private output directory required")
 	}
-	s := &Server{sub: sub, runnerID: runnerID, dir: dir, peers: map[*runnerwire.Peer]peerLife{}, sessions: map[streamKey]*attached{}, execs: map[streamKey]*execution{}, execSlots: make(chan struct{}, 256), outputs: map[uuid.UUID]*outputBuffer{}}
+	s := &Server{sub: sub, runnerID: runnerID, dir: dir, peers: map[*runnerwire.Peer]peerLife{}, sessions: map[streamKey]*attached{}, execs: map[streamKey]*execution{}, execSlots: make(chan struct{}, 256), outputs: map[uuid.UUID]*outputBuffer{}, nonces: map[string]*localClient{}, locals: map[streamKey]*localSession{}, times: defaultLocalTimes}
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -192,6 +195,11 @@ func (s *Server) Offline(peer *runnerwire.Peer) {
 			closeFns = append(closeFns, e.close)
 		}
 	}
+	for k, l := range s.locals {
+		if k.peer == peer {
+			closeFns = append(closeFns, func() { l.end(LocalReasonLinkLost) })
+		}
+	}
 	s.mu.Unlock()
 	if ok {
 		life.cancel()
@@ -221,6 +229,12 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 		return s.recoverOutput(ctx, peer, id, args)
 	case runnerwire.MethodOutputAck:
 		return nil, s.outputAck(args)
+	case runnerwire.MethodLocalAttach:
+		return s.localAttach(ctx, peer, id, args)
+	case runnerwire.MethodLocalAttachMode:
+		return nil, s.localMode(peer, args)
+	case runnerwire.MethodLocalAttachTeeAck:
+		return nil, s.localTeeAck(peer, args)
 	default:
 		return nil, fmt.Errorf("runnerio: unsupported method %q", method)
 	}

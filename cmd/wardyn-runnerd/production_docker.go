@@ -79,8 +79,14 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
+	local, err := opts.localAttachEnabled()
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	extras := sink.extras(sub, ev)
+	extras.localAttach, extras.orgURL = local, opts.orgURL
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
-	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, sink.extras(sub, ev))
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
@@ -328,6 +334,10 @@ type runtimeExtras struct {
 	started func(context.Context, *offline.Manager) error
 	// closeAlso runs when the runtime closes (the decision sink).
 	closeAlso func() error
+	// localAttach opens the local attach socket while the organisation allows it (--local-attach on,
+	// Docker only); orgURL is the organisation its pointer file names.
+	localAttach bool
+	orgURL      string
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
@@ -348,6 +358,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	streams.HoldSandboxes(manager.HoldsSandbox)
+	local, err := newLocalSocket(extra.localAttach, identity.RunnerID.String(), extra.orgURL, stateDir, streams.ServeLocal)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, manager.Close())
+	}
 	manager.ReleaseSettledOutput(streams.ReleaseOutput)
 	defer func() {
 		if retErr != nil {
@@ -378,7 +392,13 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
-		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
+		BeforeRefCall: func(ctx context.Context, method, ref string, generation uuid.UUID) error {
+			if method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+				streams.EndLocalAttach(ref) // a local terminal never outlives its sandbox
+			}
+			return manager.BeforeRefCall(ctx, method, ref, generation)
+		},
+		AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
@@ -419,7 +439,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if arch == "" {
 				arch = engineArch(ctx)
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps, LocalAttach: local != nil})
 			if err != nil {
 				return err
 			}
@@ -443,6 +463,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 				go reporter.Watch(peer, postureInterval)
 			}
 		},
+		LocalAttach: local.Set,
 		StreamOffline: func(peer *runnerwire.Peer) {
 			streams.Offline(peer)
 			relay.Offline(peer)
@@ -460,7 +481,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return manager.Run(ctx)
 	}
 	return runnerRuntime{hooks: hooks, run: run, close: func() error {
-		err := errors.Join(manager.Close(), relay.Close())
+		err := errors.Join(local.Close(), manager.Close(), relay.Close())
 		if extra.closeAlso != nil {
 			err = errors.Join(err, extra.closeAlso())
 		}
