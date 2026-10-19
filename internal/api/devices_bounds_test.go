@@ -120,8 +120,11 @@ func TestDevices_IngestFailureRowsAreBoundedPerDevice(t *testing.T) {
 	ingest := auditRows(rec, "device.audit.ingest", "failure")
 	authFailed := auditRows(rec, "auth.fail", "failure")
 	t.Logf("%d refused pushes -> device.audit.ingest failure rows = %d; %d bad tokens -> auth.fail rows = %d", n, len(ingest), n, len(authFailed))
-	if len(ingest) >= n {
-		t.Errorf("device.audit.ingest failure rows = %d for %d requests: unbounded per-request writes into the append-only log", len(ingest), n)
+	// The per-device bucket's burst is the most rows 300 refusals inside a few milliseconds can
+	// write; its refill (one per minute) cannot add one here.
+	if len(ingest) == 0 || len(ingest) > int(ingestFailureBurst) {
+		t.Errorf("device.audit.ingest failure rows = %d for %d requests, want 1..%d (the per-device burst): unbounded per-request writes into the append-only log",
+			len(ingest), n, int(ingestFailureBurst))
 	}
 
 	// With the fold on (the boot default), one refused batch replayed is ONE
@@ -181,8 +184,13 @@ func TestDevices_RevokedBetweenAuthAndIngestIsReportedAsRevoked(t *testing.T) {
 		reason = auditReason(t, rows[0])
 	}
 	t.Logf("status = %d body = %s; failure row reason = %q", w.Code, strings.TrimSpace(w.Body.String()), reason)
-	if w.Code == http.StatusUnprocessableEntity || reason == "chain_mismatch" {
-		t.Errorf("revoked-during-ingest answered %d with reason %q — should read as revoked (401), not as a chain mismatch", w.Code, reason)
+	// Asserted as what it must be, not as what it must not be: a 500 store_error would pass a
+	// "not 422 / not chain_mismatch" check.
+	if w.Code != http.StatusUnauthorized || reason != "revoked" {
+		t.Errorf("revoked-during-ingest answered %d with reason %q — should read as revoked (401, reason revoked), not as a chain mismatch or a store error", w.Code, reason)
+	}
+	if got := w.Header().Get("WWW-Authenticate"); got != `Bearer realm="wardyn-device", error="invalid_token"` {
+		t.Errorf("revoked-during-ingest WWW-Authenticate = %q, want the device realm's invalid_token challenge", got)
 	}
 	// Control: the next request IS 401.
 	if w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/heartbeat", tok, ""); w.Code != http.StatusUnauthorized {

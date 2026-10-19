@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -40,20 +38,9 @@ func (s createGrantFailStore) CreateGrant(context.Context, types.CredentialGrant
 // lets a case swap the store for a failure-injecting wrapper over the same pool.
 func abortHarness(t *testing.T, wrap func(store.Store) store.Store) (*Server, *fakeBroker, *recRecorder, *pgxpool.Pool) {
 	t.Helper()
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed run-create abort test")
-	}
-	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := db.Migrate(ctx, pool); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	// A throwaway database of its own, not the shared WARDYN_TEST_PG one: a run row left there by
+	// another test or a rerun must not be what these cases find.
+	pool := throwawayPGPool(t)
 
 	audit := &recRecorder{}
 	idp, err := embedded.New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), audit)

@@ -1082,6 +1082,18 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	return matrixServer(cfg)
 }
 
+// assertSameAsMissing404 holds a foreign-entity 404 to the claim the comments make: the body is
+// byte-identical to the 404 the same caller gets for an id that does not exist, so the answer is
+// no existence oracle. The status alone would let a distinguishing message through.
+func assertSameAsMissing404(t *testing.T, srv *Server, method, pattern string, sess *http.Cookie, body string, got *httptest.ResponseRecorder, who string) {
+	t.Helper()
+	missing := doSSO(t, srv, method, buildPath(pattern, uuid.New().String()), sess, body)
+	if missing.Code != got.Code || missing.Body.String() != got.Body.String() {
+		t.Errorf("%s: a FOREIGN entity answers %d %q but a missing id answers %d %q — the two must be byte-identical",
+			who, got.Code, got.Body.String(), missing.Code, missing.Body.String())
+	}
+}
+
 func TestAuthzMatrix(t *testing.T) {
 	srv, ast, aap, rs := newAuthzMatrixServer(t)
 	uiSrv := newAuthzMatrixServerWithUI(t)
@@ -1396,6 +1408,8 @@ func TestAuthzMatrix(t *testing.T) {
 				// (no existence oracle) — never 403.
 				if w := doSSO(t, srv, method, pNonOwnerForeign, memberSess, body); w.Code != http.StatusNotFound {
 					t.Errorf("non-owning member: status = %d, want 404 (no existence oracle); body=%s", w.Code, w.Body.String())
+				} else {
+					assertSameAsMissing404(t, srv, method, pattern, memberSess, body, w, "non-owning member")
 				}
 				if w := doSSO(t, srv, method, pOwned, nil, body); w.Code != http.StatusUnauthorized {
 					t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
@@ -1568,6 +1582,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					if w.Code != http.StatusNotFound {
 						t.Errorf("security_admin on a FOREIGN entity, tierSuper route: status = %d, want 404 "+
 							"(the tiers do not nest); body=%s", w.Code, w.Body.String())
+					} else {
+						assertSameAsMissing404(t, srv, method, pattern, sec, bodyFor(method, rc), w, "security_admin, tierSuper route")
 					}
 				case tierSecurity:
 					// Inspect-or-stop IS this tier's warrant, so the bypass must
@@ -1586,6 +1602,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					if w.Code != http.StatusNotFound {
 						t.Errorf("security_admin on a FOREIGN entity, tierOwnerOnly route: status = %d, want 404 "+
 							"(no admin bypass at all); body=%s", w.Code, w.Body.String())
+					} else {
+						assertSameAsMissing404(t, srv, method, pattern, sec, bodyFor(method, rc), w, "security_admin, tierOwnerOnly route")
 					}
 				default:
 					t.Fatalf("classOwner route %q has no ownerTier set", key)

@@ -52,6 +52,13 @@ func TestOnlyThreeArmsSetBlocking(t *testing.T) {
 			switch node := n.(type) {
 			case *ast.FuncDecl:
 				fn = node.Name.Name
+			case *ast.AssignStmt:
+				// `check.Blocking = true` sets the flag as surely as the literal key does.
+				for _, lhs := range node.Lhs {
+					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Blocking" {
+						owners = append(owners, fn+" ("+filepath.Base(fset.Position(node.Pos()).Filename)+")")
+					}
+				}
 			case *ast.KeyValueExpr:
 				key, ok := node.Key.(*ast.Ident)
 				if !ok || key.Name != "Blocking" {

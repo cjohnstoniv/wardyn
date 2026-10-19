@@ -371,22 +371,28 @@ func TestRunPolicyView_ForeignReaderGetsTheRunsOwn404(t *testing.T) {
 	st.rows(run.ID, pvResolve(types.RunPolicySpec{MinConfinementClass: types.CC2}, false))
 	foreign := pvMember(t, "sub-pv-foreign")
 
+	notOwnerRows := func() int {
+		n := 0
+		for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+			if ev.Action == authz.AuditAction && strings.Contains(string(ev.Data), `"reason":"not_owner"`) {
+				n++
+			}
+		}
+		return n
+	}
+
 	wPolicy, _ := foreign.get(t, srv, run.ID)
+	// Counted before the control request below: GET /runs/{id} writes the same row, and would
+	// satisfy this check on its own.
+	if notOwnerRows() == 0 {
+		t.Error("no not_owner audit row for the foreign policy read")
+	}
 	wRun := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+run.ID.String(), foreign.cookie, "")
 	if wPolicy.Code != http.StatusNotFound || wRun.Code != http.StatusNotFound {
 		t.Fatalf("foreign reader: policy=%d run=%d, want 404 both", wPolicy.Code, wRun.Code)
 	}
 	if !bytes.Equal(wPolicy.Body.Bytes(), wRun.Body.Bytes()) {
 		t.Errorf("the 404 differs from GET /runs/{id}'s:\n policy: %s\n run:    %s", wPolicy.Body.String(), wRun.Body.String())
-	}
-	var notOwner bool
-	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
-		if ev.Action == authz.AuditAction && strings.Contains(string(ev.Data), `"reason":"not_owner"`) {
-			notOwner = true
-		}
-	}
-	if !notOwner {
-		t.Error("no not_owner audit row for the foreign read")
 	}
 	if w, _ := foreign.get(t, srv, uuid.New()); w.Code != http.StatusNotFound {
 		t.Errorf("unknown id = %d, want 404", w.Code)

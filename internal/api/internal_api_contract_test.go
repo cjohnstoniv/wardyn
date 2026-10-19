@@ -263,6 +263,15 @@ func TestReviewRev08N1ProxyDecisionSemantics(t *testing.T) {
 			}
 			switch tc.name {
 			case "scan-error":
+				// Exactly one scan row, or the outcome loop below runs on nothing and passes.
+				_, sc := countActions(h.audit.events)
+				rows := 0
+				for _, n := range sc {
+					rows += n
+				}
+				if rows != 1 {
+					t.Fatalf("old proxy scan failure wrote scan rows %v, want exactly one llm.scan row", sc)
+				}
 				for _, ev := range h.audit.events {
 					if strings.HasPrefix(ev.Action, "llm.scan.") && ev.Outcome != "failure" {
 						t.Errorf("old proxy scan failure becomes action=%s outcome=%s, want failure", ev.Action, ev.Outcome)

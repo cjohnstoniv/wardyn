@@ -261,11 +261,20 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	if runErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
-			return exitErr.ExitCode(), nil
+			return exitCodeOf(exitErr), nil
 		}
 		return 0, fmt.Errorf("asciinema: %w", runErr)
 	}
 	return 0, nil
+}
+
+// exitCodeOf is the code a finished child exits with. ExitCode() is -1 for a signal-killed child, which
+// os.Exit turns into 255; report the shell's 128+signal instead (143 for a SIGTERM).
+func exitCodeOf(e *exec.ExitError) int {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return e.ExitCode()
 }
 
 // agentExitFile is the sidecar path the -c trailer writes the agent's $? to,
@@ -322,7 +331,7 @@ func recordToLog(logPath string, agentArgv []string) (int, error) {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode(), nil
+			return exitCodeOf(exitErr), nil
 		}
 		return 0, fmt.Errorf("run agent: %w", err)
 	}
