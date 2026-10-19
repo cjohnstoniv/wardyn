@@ -203,11 +203,13 @@ func TestSSHAgent_NoSignWhileOtherSSHIsOpen(t *testing.T) {
 	}
 }
 
-// Two held grants with a session open to each: both sign, since a session to
-// any held grant's endpoint is one the agent serves.
-func TestSSHAgent_TwoGrantsSignWithBothSessionsOpen(t *testing.T) {
-	p, _ := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com", "ssh.dev.azure.com"}}, sshBannerUpstream(t), nil, nil)
-	gh, ado := uuid.New(), uuid.New()
+// twoGrantProxy is a proxy holding a resident GitHub and a resident Azure
+// DevOps ssh_key grant, with both endpoints allowed and dialled to an SSH
+// server.
+func twoGrantProxy(t *testing.T) (p *Proxy, gh, ado uuid.UUID, ghPub, adoPub ssh.PublicKey, proxyURL string, done <-chan struct{}) {
+	t.Helper()
+	p, _ = newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"ssh.github.com", "ssh.dev.azure.com"}}, sshBannerUpstream(t), nil, nil)
+	gh, ado = uuid.New(), uuid.New()
 	ghPEM, ghPub := testSSHKey(t, false)
 	adoPEM, adoPub := testSSHKey(t, false)
 	expires := time.Now().Add(time.Hour)
@@ -220,25 +222,64 @@ func TestSSHAgent_TwoGrantsSignWithBothSessionsOpen(t *testing.T) {
 			t.Fatalf("load grant %s: %v", g, err)
 		}
 	}
-	proxyURL, _ := serveTunnelProxy(t, p)
-	for _, target := range []string{"ssh.github.com:443", "ssh.dev.azure.com:443"} {
-		conn, line := sshTunnelTo(t, proxyURL, target)
-		t.Cleanup(func() { _ = conn.Close() })
-		if line == "" {
-			t.Fatalf("SSH to %s was not relayed", target)
-		}
+	proxyURL, done = serveTunnelProxy(t, p)
+	return p, gh, ado, ghPub, adoPub, proxyURL, done
+}
+
+// openSSH opens an SSH session through the proxy to target.
+func openSSH(t *testing.T, proxyURL, target string) net.Conn {
+	t.Helper()
+	conn, line := sshTunnelTo(t, proxyURL, target)
+	t.Cleanup(func() { _ = conn.Close() })
+	if line == "" {
+		t.Fatalf("SSH to %s was not relayed", target)
 	}
-	for _, tc := range []struct {
-		grant uuid.UUID
-		pub   ssh.PublicKey
-		data  []byte
-	}{
-		{gh, ghPub, userauthData("git", ghPub, hostboundMethod, knownHostKeys(pinnedSSHHostKeys, "ssh.github.com")[0])},
-		{ado, adoPub, userauthData("git", adoPub, "publickey")},
-	} {
-		if _, err := agent.NewClient(&agentConn{t: t, p: p, grant: tc.grant}).Sign(tc.pub, tc.data); err != nil {
-			t.Errorf("grant %s with both sessions open: %v", tc.grant, err)
-		}
+	return conn
+}
+
+// signs reports whether grant's agent signs data with pub.
+func signs(t *testing.T, p *Proxy, grant uuid.UUID, pub ssh.PublicKey, data []byte) bool {
+	t.Helper()
+	_, err := agent.NewClient(&agentConn{t: t, p: p, grant: grant}).Sign(pub, data)
+	return err == nil
+}
+
+// Two held grants with a session open to each: the GitHub grant's host-bound
+// sign-in is signed, since a session to any held grant's endpoint is one the
+// agent serves; the Azure DevOps grant's plain one, which names no host, is
+// signed only once its own session is the only one open.
+func TestSSHAgent_TwoGrantsSignWithBothSessionsOpen(t *testing.T) {
+	p, gh, ado, ghPub, adoPub, proxyURL, done := twoGrantProxy(t)
+	hostbound := userauthData("git", ghPub, hostboundMethod, knownHostKeys(pinnedSSHHostKeys, "ssh.github.com")[0])
+	plain := userauthData("git", adoPub, "publickey")
+	ghConn := openSSH(t, proxyURL, "ssh.github.com:443")
+	openSSH(t, proxyURL, "ssh.dev.azure.com:443")
+	if !signs(t, p, gh, ghPub, hostbound) {
+		t.Fatal("GitHub host-bound sign-in with both sessions open: refused")
+	}
+	if signs(t, p, ado, adoPub, plain) {
+		t.Fatal("Azure DevOps plain sign-in beside a GitHub session: signed")
+	}
+	_ = ghConn.Close()
+	awaitDecision(t, p, done)
+	if !signs(t, p, ado, adoPub, plain) {
+		t.Fatal("Azure DevOps plain sign-in beside its own session only: refused")
+	}
+	if !signs(t, p, gh, ghPub, hostbound) {
+		t.Fatal("GitHub host-bound sign-in beside the Azure DevOps session: refused")
+	}
+}
+
+// With only a GitHub session open, the Azure DevOps grant's plain sign-in is
+// refused and the GitHub grant's host-bound one is signed.
+func TestSSHAgent_PlainSignOnlyBesideItsOwnSession(t *testing.T) {
+	p, gh, ado, ghPub, adoPub, proxyURL, _ := twoGrantProxy(t)
+	openSSH(t, proxyURL, "ssh.github.com:443")
+	if signs(t, p, ado, adoPub, userauthData("git", adoPub, "publickey")) {
+		t.Fatal("Azure DevOps plain sign-in with a GitHub session open: signed")
+	}
+	if !signs(t, p, gh, ghPub, userauthData("git", ghPub, hostboundMethod, knownHostKeys(pinnedSSHHostKeys, "ssh.github.com")[0])) {
+		t.Fatal("GitHub host-bound sign-in with its session open: refused")
 	}
 }
 

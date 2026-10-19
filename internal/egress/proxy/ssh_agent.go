@@ -159,12 +159,25 @@ func (s *sshAgents) heldEndpoint(target string) bool {
 
 // sshOnlyToGrants reports whether every live SSH tunnel goes to a held
 // grant's endpoint, so a session opened before a key was held cannot borrow
-// a signature.
+// a host-bound signature (its host key binds it to one of them).
 func (s *sshAgents) sshOnlyToGrants() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, t := range s.tunnels {
 		if !s.heldEndpoint(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// sshOnlyTo reports whether every live SSH tunnel goes to endpoint: a plain
+// sign-in names no host, so it is signed only beside its own grant's sessions.
+func (s *sshAgents) sshOnlyTo(endpoint string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.tunnels {
+		if t != endpoint {
 			return false
 		}
 	}
@@ -357,7 +370,7 @@ func (a *userauthAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agen
 	case hostKey == nil && !a.key.unbound,
 		hostKey != nil && !slices.ContainsFunc(a.key.hostKeys, func(k []byte) bool { return bytes.Equal(k, hostKey) }):
 		a.refused = errSSHAgentHost
-	case !a.agents.sshOnlyToGrants():
+	case hostKey != nil && !a.agents.sshOnlyToGrants(), hostKey == nil && !a.agents.sshOnlyTo(a.key.endpoint):
 		a.refused = errSSHAgentTunnel
 	default:
 		return a.key.ring.SignWithFlags(key, data, flags)
