@@ -886,8 +886,9 @@ type Server struct {
 	// than the source of truth: it is write-through and read-once-memoized
 	// against store.AWSSSOSpentTokenStore (Postgres), so a restart no longer
 	// re-grades an already-spent credential `live` (#149) — the first read of a
-	// given fingerprint after a restart costs one best-effort row read, and
-	// every read after that (in THIS process) costs nothing.
+	// spent fingerprint after a restart costs one best-effort row read, and
+	// every read after that (in THIS process) costs nothing. Only spent marks
+	// are memoized (#2138).
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
