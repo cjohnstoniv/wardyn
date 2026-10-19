@@ -4,8 +4,13 @@
 package api
 
 import (
+	"net/http"
+	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -33,7 +38,7 @@ const (
 	// being told is a silently lost recording. It names the run id rather than a
 	// title: the id is what /runs/{id} takes and what the audit trail keys on.
 	workspaceDelete409ActiveRun = "workspace is in use by run %s — stop that run first, then delete"
-	workspaceNameTakenMsg       = "a workspace with this name already exists — pick another name"
+	workspaceNameTakenMsg       = "this owner already has a workspace with this name — pick another name, or rename the other workspace first"
 	workspaceUpdateConflictMsg  = "the workspace changed while this edit was being saved — reload it and apply the edit again"
 )
 
@@ -99,4 +104,29 @@ func (s *Server) deadApprovedEgressHosts() map[string]struct{} {
 		dead[selfHost] = struct{}{}
 	}
 	return dead
+}
+
+// refuseTakenWorkspaceName answers 409 workspace_name_taken when owner already has a workspace other than
+// except called name, before any source is upserted, so a refused write leaves no library rows and no
+// source.write audit rows. The UNIQUE(owned_by, name) index (0192) is the guarantee; a write that races
+// this check still gets the same 409 from the store. Names are per owner, so only the owner's own
+// workspaces can collide and the answer tells nobody about anyone else's. A store without the owner
+// listing (only test doubles) skips the early check and keeps the index's answer.
+func (s *Server) refuseTakenWorkspaceName(w http.ResponseWriter, r *http.Request, owner, name string, except uuid.UUID) bool {
+	pg, ok := s.cfg.Store.(store.WorkspacesByOwnerPager)
+	if !ok {
+		return false
+	}
+	all, err := pg.ListWorkspacesPageForOwner(r.Context(), owner, store.Page{})
+	if err != nil {
+		writeServerError(w, r, "check workspace name", err)
+		return true
+	}
+	if slices.ContainsFunc(all, func(ws types.Workspace) bool {
+		return ws.OwnedBy == owner && ws.Name == name && ws.ID != except
+	}) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken, workspaceNameTakenMsg)
+		return true
+	}
+	return false
 }
