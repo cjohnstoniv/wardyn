@@ -130,7 +130,7 @@ var vmShell = []string{"/bin/sh", "-c", "if command -v bash >/dev/null; then exe
 func (d *Driver) vmAttach(ctx context.Context, v *vmRun, opts runner.AttachOptions) (runner.Session, error) {
 	if opts.Observer {
 		// No shared terminal to watch or take over in this release: each attach is its own shell.
-		return nil, fmt.Errorf("%w: watching a terminal", errVMUnsupported)
+		return nil, fmt.Errorf("%w: %w", errVMUnsupported, runner.ErrObserveUnsupported)
 	}
 	s, err := v.agent.Exec(ctx, guestagent.ExecRequest{Argv: vmShell, TTY: true, Cols: opts.Cols, Rows: opts.Rows})
 	if err != nil {

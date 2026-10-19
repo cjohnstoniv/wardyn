@@ -276,6 +276,10 @@ type Session interface {
 // ExecStream when unimplemented, so the conformance suite can skip cleanly.
 var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 
+// ErrObserveUnsupported is Attach's answer for an observer when the sandbox has no shared terminal to
+// watch (a Linux VM): a capability the sandbox lacks, so the console says so and does not retry.
+var ErrObserveUnsupported = errors.New("runner: this sandbox does not support watching a terminal")
+
 // ErrSandboxGone is what a Runner/Substrate wraps around an ExecStream failure
 // whose cause is that the sandbox (the pod or container) no longer exists: a
 // finishing run's sandbox is torn down a moment before its state flips, and an

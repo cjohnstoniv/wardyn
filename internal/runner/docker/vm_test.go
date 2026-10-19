@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -560,62 +561,83 @@ func TestVMTeardownRemovesSidecarsAndDirWhenProxyRemovalFails(t *testing.T) {
 	}
 }
 
-// The sweep removes VM sidecars and run directories whose run has no QEMU container any more, and
-// only those: not a live VM's, not a create still in flight (too young), not another runner's.
+// The sweep removes a crashed VM's sidecars and run directory, labelled as createVM labels them,
+// once its run has no QEMU container and isOrphan says the run owns nothing; never while the run
+// is live (a create in flight has residue and no QEMU container yet), however old, and never
+// another runner's.
 func TestVMSweepRemovesOrphanedSidecarsAndRunDirs(t *testing.T) {
-	state, err := os.MkdirTemp("", "wvm") // short: the config bounds socket paths
+	r := newVMRig(t)
+	rid := uuid.NewString()
+	r.d.cfg.RunnerID, r.d.cfg.DecisionSink, r.d.cfg.Evidence = rid, newFakeSink(), &memEvidence{m: map[uuid.UUID][]byte{}}
+	spec := vmSpec()
+	spec.Labels = map[string]string{runner.LabelRunnerID: rid} // as runneragent fills them
+	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}}
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(state) })
-	rid := uuid.NewString()
-	f := newFakeDocker()
-	d := newWithClient(f, Config{ProxyImage: "p", RunnerID: rid})
-	vc := VMConfig{StateDir: state, QEMUImage: "q", CPUModel: "Haswell-v4", MachineType: "pc-q35-10.0", UID: 1000, GID: 1000, KVMGID: "1"}
-	if err := d.EnableVM(&vc); err != nil {
+	// The runner crashed: the sidecars createVM made are all still there, the QEMU container is not.
+	past := time.Now().Add(-time.Hour)
+	theirs := uuid.New()
+	r.f.mu.Lock()
+	var items []container.Summary
+	comps := map[string]bool{}
+	seen := map[*createdContainer]bool{}
+	for name, c := range r.f.containers {
+		comp := c.cfg.Labels[labelComponent]
+		if seen[c] || name != c.name || (comp != componentVMFS && comp != componentVMPrep) {
+			continue
+		}
+		seen[c], c.removed, comps[comp] = true, false, true
+		items = append(items, container.Summary{ID: name, Created: past.Unix(), Labels: c.cfg.Labels})
+	}
+	other := maps.Clone(r.f.containers[vmfsName(spec.RunID, 0)].cfg.Labels)
+	other[labelRun], other[runner.LabelRunnerID] = theirs.String(), uuid.NewString()
+	r.f.containers[vmfsName(theirs, 0)] = &createdContainer{name: vmfsName(theirs, 0)}
+	items = append(items, container.Summary{ID: vmfsName(theirs, 0), Created: past.Unix(), Labels: other})
+	r.f.containers[sb.Ref].removed = true
+	r.f.listItems = items
+	r.f.mu.Unlock()
+	if !comps[componentVMFS] || !comps[componentVMPrep] {
+		t.Fatalf("createVM made sidecars of %v, want virtiofsd and prep", comps)
+	}
+	dir := r.vc.runDir(spec.RunID)
+	if err := os.Chtimes(dir, past, past); err != nil {
 		t.Fatal(err)
 	}
-	orphan, live, young, theirs := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	old, past := time.Now().Add(-time.Hour), time.Now().Add(-time.Hour).Unix()
-	f.containers[agentContainerName(live)] = &createdContainer{name: agentContainerName(live)}
-	mine := map[string]string{runner.LabelRunnerID: rid}
-	var items []container.Summary
-	add := func(name string, id uuid.UUID, comp string, created int64, extra map[string]string) {
-		f.containers[name] = &createdContainer{name: name}
-		items = append(items, container.Summary{ID: name, Created: created, Labels: wardynLabels(id, comp, extra)})
-	}
-	for _, id := range []uuid.UUID{orphan, live} {
-		add(vmfsName(id, 0), id, componentVMFS, past, mine)
-		add(vmPrepName(id, "overlay"), id, componentVMPrep, past, mine)
-	}
-	add(vmfsName(young, 0), young, componentVMFS, time.Now().Unix(), mine)
-	add(vmfsName(theirs, 0), theirs, componentVMFS, past, map[string]string{runner.LabelRunnerID: uuid.NewString()})
-	f.listItems = items
-	for _, id := range []uuid.UUID{orphan, live, young} {
-		if err := os.MkdirAll(filepath.Join(vc.runDir(id), "ctl"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if id != young {
-			if err := os.Chtimes(vc.runDir(id), old, old); err != nil {
-				t.Fatal(err)
+	removed := func() (n int) {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		for _, it := range items {
+			if r.f.containers[it.ID].removed {
+				n++
 			}
 		}
+		return n
 	}
 
-	n, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return false })
+	// A live run (a create in flight, or one whose QEMU container is being made) keeps everything,
+	// even with no minimum age, as the on-connect sweep passes.
+	if n, err := r.d.SweepOrphanedSandboxes(context.Background(), 0, func(uuid.UUID) bool { return false }); err != nil || n != 0 || removed() != 0 {
+		t.Fatalf("sweep of a live run = %d, %v, %d removed; want nothing", n, err, removed())
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("a live run's directory was removed: %v", err)
+	}
+
+	n, err := r.d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })
 	if err != nil || n != 1 {
 		t.Fatalf("sweep = %d, %v; want the one orphaned run", n, err)
 	}
+	r.f.mu.Lock()
 	for _, it := range items {
-		id, _ := parseRunID(it.Labels[labelRun])
-		if f.containers[it.ID].removed != (id == orphan) {
-			t.Errorf("%s removed = %v", it.ID, f.containers[it.ID].removed)
+		if r.f.containers[it.ID].removed != (it.Labels[labelRun] == spec.RunID.String()) {
+			t.Errorf("%s removed = %v", it.ID, r.f.containers[it.ID].removed)
 		}
 	}
-	for _, id := range []uuid.UUID{orphan, live, young} {
-		if _, err := os.Stat(vc.runDir(id)); errors.Is(err, os.ErrNotExist) != (id == orphan) {
-			t.Errorf("run dir of %s: %v", id, err)
-		}
+	r.f.mu.Unlock()
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the orphaned run's directory survived: %v", err)
 	}
 }
 
@@ -657,7 +679,7 @@ func TestVMAttachRefusesAWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.d.Attach(context.Background(), sb.Ref, runner.AttachOptions{Observer: true}); !errors.Is(err, errVMUnsupported) {
+	if _, err := r.d.Attach(context.Background(), sb.Ref, runner.AttachOptions{Observer: true}); !errors.Is(err, errVMUnsupported) || !errors.Is(err, runner.ErrObserveUnsupported) {
 		t.Fatalf("watching attach = %v, want refused", err)
 	}
 }

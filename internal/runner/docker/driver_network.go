@@ -646,7 +646,7 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	}
 	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
 	cutoff := time.Now().Add(-minAge)
-	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff)
+	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, isOrphan)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All: true, // a crashed sandbox's agent may be exited, not running
 		// Values of one label key are ANDed, so the component is matched below.

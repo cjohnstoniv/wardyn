@@ -449,7 +449,7 @@ func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, path 
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{Image: spec.Image, Entrypoint: []string{"/nonexistent"},
-			Labels: d.labels(spec.RunID, componentVMPrep, nil)},
+			Labels: d.labels(spec.RunID, componentVMPrep, d.runnerIDLabel())},
 		HostConfig: &container.HostConfig{NetworkMode: "none"},
 	})
 	if err != nil {
@@ -474,6 +474,15 @@ func (d *Driver) exportImage(ctx context.Context, spec runner.SandboxSpec, path 
 	return f.Close()
 }
 
+// runnerIDLabel is the label that tells the orphan sweep a prep container is this runner's, as
+// drive_probe.go's: absent on a deployment's own executor, which has no runner id.
+func (d *Driver) runnerIDLabel() map[string]string {
+	if d.cfg.RunnerID == "" {
+		return nil
+	}
+	return map[string]string{runner.LabelRunnerID: d.cfg.RunnerID}
+}
+
 func vmPrepName(runID uuid.UUID, what string) string {
 	return "wardyn-vmprep-" + runID.String() + "-" + what
 }
@@ -493,7 +502,7 @@ func (d *Driver) runOneShot(ctx context.Context, runID uuid.UUID, what string, a
 	host.Mounts = mounts
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       vmPrepName(runID, what),
-		Config:     &container.Config{Image: vc.QEMUImage, User: vc.user(), Cmd: argv, Labels: d.labels(runID, componentVMPrep, nil)},
+		Config:     &container.Config{Image: vc.QEMUImage, User: vc.user(), Cmd: argv, Labels: d.labels(runID, componentVMPrep, d.runnerIDLabel())},
 		HostConfig: host,
 	})
 	if err != nil {
@@ -724,18 +733,20 @@ func (d *Driver) teardownVM(ctx context.Context, agentRef string, runID uuid.UUI
 }
 
 // sweepVMOrphans removes the VM residue a teardown cannot reach: virtiofsd and prep containers,
-// and run directories, older than cutoff whose run has no agent (QEMU) container. They are made
-// before the QEMU container, so the age gate keeps a create in flight safe. It answers how many
-// runs it cleaned. The containers are swept even with VMs off; the directories need the config.
-func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, cutoff time.Time) (int, error) {
-	gone := map[uuid.UUID]bool{}
-	agentGone := func(runID uuid.UUID) bool {
-		if g, ok := gone[runID]; ok {
-			return g
+// and run directories, older than cutoff, of a run that has no agent (QEMU) container and that
+// isOrphan says owns no sandbox. They are made before the QEMU container, so a create in flight has
+// residue and no QEMU container yet: isOrphan (a live run is never an orphan) is what keeps it, as
+// the age gate alone cannot when a sweep passes no minimum age. It answers how many runs it
+// cleaned. The containers are swept even with VMs off; the directories need the config.
+func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, cutoff time.Time, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	verdict := map[uuid.UUID]bool{}
+	sweepable := func(runID uuid.UUID) bool {
+		if v, ok := verdict[runID]; ok {
+			return v
 		}
 		_, err := d.cli.ContainerInspect(ctx, agentContainerName(runID), client.ContainerInspectOptions{})
-		gone[runID] = isNotFound(err)
-		return gone[runID]
+		verdict[runID] = isNotFound(err) && isOrphan(runID)
+		return verdict[runID]
 	}
 	cleaned := map[uuid.UUID]bool{}
 	var errs []error
@@ -753,7 +764,7 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 			if c.Labels[runner.LabelRunnerID] != d.cfg.RunnerID || d.otherDeployment(c.Labels) {
 				continue
 			}
-			if time.Unix(c.Created, 0).After(cutoff) || !agentGone(runID) {
+			if time.Unix(c.Created, 0).After(cutoff) || !sweepable(runID) {
 				continue
 			}
 			if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
@@ -774,7 +785,7 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 				continue
 			}
 			fi, ierr := e.Info()
-			if ierr != nil || fi.ModTime().After(cutoff) || !agentGone(runID) {
+			if ierr != nil || fi.ModTime().After(cutoff) || !sweepable(runID) {
 				continue
 			}
 			if err := os.RemoveAll(vc.runDir(runID)); err != nil {

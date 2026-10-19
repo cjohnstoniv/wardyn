@@ -15,15 +15,16 @@ import (
 // The code list is closed and pinned: adding one is a design change.
 func TestErrorCodeToSentinelMap(t *testing.T) {
 	want := map[Code]error{
-		"runner_offline":     runner.ErrRunnerOffline,
-		"pending_on_runner":  runner.ErrPendingOnRunner,
-		"sandbox_gone":       runner.ErrSandboxGone,
-		"exec_unsupported":   runner.ErrExecStreamUnsupported,
-		"end_unsupported":    runner.ErrEndUnsupported,
-		"revive_unsupported": runner.ErrReviveUnsupported,
-		"never_started":      runner.ErrExecNeverStarted,
-		"image_arch":         runner.ErrImageArch,
-		"relay_ip_fenced":    runner.ErrRelayIPFenced,
+		"runner_offline":      runner.ErrRunnerOffline,
+		"pending_on_runner":   runner.ErrPendingOnRunner,
+		"sandbox_gone":        runner.ErrSandboxGone,
+		"exec_unsupported":    runner.ErrExecStreamUnsupported,
+		"end_unsupported":     runner.ErrEndUnsupported,
+		"revive_unsupported":  runner.ErrReviveUnsupported,
+		"never_started":       runner.ErrExecNeverStarted,
+		"image_arch":          runner.ErrImageArch,
+		"relay_ip_fenced":     runner.ErrRelayIPFenced,
+		"observe_unsupported": runner.ErrObserveUnsupported,
 	}
 	if len(codeSentinels) != len(want) {
 		t.Fatalf("%d sentinel-mapped codes, design lists %d", len(codeSentinels), len(want))
