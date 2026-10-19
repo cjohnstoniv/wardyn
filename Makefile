@@ -904,6 +904,10 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true >/dev/null || { echo "chart does not render against v0.8.5's values (a --reuse-values upgrade): guard the new block with default dict"; exit 1; }; \
 	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=x --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs) || { echo "k8s chart does not render against v0.8.5's values (a --reuse-values upgrade)"; exit 1; }; \
 	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true
+	@# scim.purgeAfter absent (--reuse-values from a release that predates the key) renders the values.yaml 720h, not "<nil>"; an explicit 0 still disables the purge.
+	@S='helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set scim.enabled=true --set scim.tokenSecretRef=wardyn-scim'; \
+	$$S --set scim.purgeAfter=null | grep -A1 'name: WARDYN_SCIM_PURGE_AFTER$$' | grep -q 'value: "720h"' || { echo 'scim.purgeAfter absent did not render the 720h default (a --reuse-values upgrade from a release without the key would hand wardynd "<nil>")'; exit 1; }; \
+	$$S --set scim.purgeAfter=0 | grep -A1 'name: WARDYN_SCIM_PURGE_AFTER$$' | grep -q 'value: "0"' || { echo 'scim.purgeAfter=0 no longer renders "0" (the documented switch that disables the automatic purge)'; exit 1; }
 	@# metrics.serviceMonitor (o-o1): off by default (a default render holds no ServiceMonitor), and on
 	@# it renders exactly one, scraping the named http port at the base-pathed /metrics with the
 	@# operator's Secret as the bearer credential (the chart never creates that Secret).
@@ -1197,7 +1201,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@# ha.enabled (0.8.6) is the one switch for more than one replica; allowMultiReplica is removed.
 	@# Every refusal is asserted by its message, and the extraEnv half of each guard is asserted on its own:
 	@# a guard that read only .Values.env would pass the env cases while extraEnv set the unsafe value.
-	@H='helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true'; HA="$$H --set ha.enabled=true --set replicas=2"; \
+	@H='helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true'; HA="$$H --set ha.enabled=true --set replicas=2"; K8S='--set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.allowRunsInReleaseNamespace=true'; \
 	$$H --set allowMultiReplica=true 2>&1 | grep -q 'allowMultiReplica was removed' || { echo 'chart no longer refuses allowMultiReplica=true with a pointer to ha.enabled'; exit 1; }; \
 	$$H --set replicas=2 2>&1 | grep -q 'replicas > 1 is refused without ha.enabled' || { echo 'chart no longer refuses replicas=2 without ha.enabled'; exit 1; }; \
 	$$H --set env.WARDYN_HA=true 2>&1 | grep -q 'WARDYN_HA is set through env or extraEnv' || { echo 'chart no longer refuses a hand-set WARDYN_HA, which lifts the single-instance lock without the HA guards'; exit 1; }; \
@@ -1207,7 +1211,8 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	$$H --set ha.enabled=true --set persistence.enabled=true --set env.WARDYN_RECORDING_STORE=pg 2>&1 | grep -q 'ha.enabled refuses persistence.enabled=true' || { echo 'chart no longer refuses ha.enabled with persistence.enabled=true'; exit 1; }; \
 	$$HA --set env.WARDYN_RECORDING_STORE=pg --set env.WARDYN_AUDIT_SPOOL=/var/spool.jsonl 2>&1 | grep -q 'ha.enabled needs WARDYN_AUDIT_SPOOL under /tmp' || { echo 'chart no longer refuses an env WARDYN_AUDIT_SPOOL outside /tmp under ha.enabled'; exit 1; }; \
 	$$HA --set env.WARDYN_RECORDING_STORE=pg --set 'extraEnv[0].name=WARDYN_AUDIT_SPOOL' --set 'extraEnv[0].value=/data/spool.jsonl' 2>&1 | grep -q 'ha.enabled needs WARDYN_AUDIT_SPOOL under /tmp' || { echo 'chart no longer refuses an extraEnv WARDYN_AUDIT_SPOOL outside /tmp under ha.enabled'; exit 1; }; \
-	out=$$($$HA --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with replicas=2 and the pg recording store no longer renders'; exit 1; }; \
+	$$HA --set env.WARDYN_RECORDING_STORE=pg 2>&1 | grep -q 'ha.enabled needs the Kubernetes runner' || { echo 'chart no longer refuses ha.enabled without k8s.enabled: wardynd exits at boot on WARDYN_HA with the docker runner'; exit 1; }; \
+	out=$$($$HA $$K8S --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with k8s.enabled, replicas=2 and the pg recording store no longer renders'; exit 1; }; \
 	echo "$$out" | grep -q 'replicas: 2$$' || { echo 'ha.enabled did not render replicas: 2'; exit 1; }; \
 	echo "$$out" | grep -q 'kind: PodDisruptionBudget' || { echo 'ha.enabled rendered no PodDisruptionBudget'; exit 1; }; \
 	echo "$$out" | grep -q 'minAvailable: 1$$' || { echo 'the PodDisruptionBudget is not minAvailable: 1'; exit 1; }; \
@@ -1216,7 +1221,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	echo "$$out" | grep -A1 'name: WARDYN_AUDIT_SPOOL$$' | grep -q 'value: "/tmp/audit-spool.jsonl"' || { echo 'ha.enabled did not render WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl'; exit 1; }; \
 	echo "$$out" | grep -A1 'name: tmp$$' | grep -q 'emptyDir: {}' || { echo 'the tmp emptyDir the audit spool lives on is gone'; exit 1; }; \
 	echo "$$out" | grep -q -- '-allow-multi-instance' && { echo 'the chart still passes -allow-multi-instance, which wardynd now refuses'; exit 1; }; \
-	out=$$($$H --set ha.enabled=true --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with the default replicas no longer renders'; exit 1; }; \
+	out=$$($$H $$K8S --set ha.enabled=true --set env.WARDYN_RECORDING_STORE=pg) || { echo 'ha.enabled with k8s.enabled and the default replicas no longer renders'; exit 1; }; \
 	echo "$$out" | grep -q 'kind: PodDisruptionBudget' && { echo 'ha.enabled at replicas: 1 renders a PodDisruptionBudget; minAvailable 1 on one pod blocks every node drain'; exit 1; }; \
 	$$H | grep -q 'kind: PodDisruptionBudget' && { echo 'the DEFAULT render has a PodDisruptionBudget; it belongs to ha.enabled'; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set serviceAccount.create=false 2>&1 | grep -q "would bind the k8s-runner privileges" || { echo "chart no longer refuses k8s.enabled with serviceAccount.create=false and no serviceAccount.name — the RBAC binding would silently fall to the namespace default ServiceAccount"; exit 1; }
@@ -1366,7 +1371,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@#   nameOverride/fullnameOverride — the assertions above grep the RENDERED name
 	@#     `wardyn`; overriding it in all-on would break about ten of them.
 	@#   replicas/ha                   — exercised by their own refusal and render cases above
-	@#     (`--set replicas=5` is refused; `--set ha.enabled=true --set replicas=2` renders).
+	@#     (`--set replicas=5` is refused; `--set ha.enabled=true --set replicas=2` renders with k8s.enabled=true).
 	@#   readinessProbe                — exercised by its own render (`readinessProbe.path=/healthz`).
 	@#   basePath                      — exercised by its own render (`--set basePath=/wardyn`).
 	@#   service                       — exercised by the two port-collision refusals
