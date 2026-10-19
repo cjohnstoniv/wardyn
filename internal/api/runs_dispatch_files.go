@@ -95,7 +95,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 			} else {
 				delivered[file] = true
 				files = append(files, runner.ManagedFile{
-					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true,
+					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true,
 					Content: []byte(placement.ResidentPlaceholder(row.ID)),
 				})
 				resident = append(resident, v)
@@ -116,7 +116,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 			default:
 				delivered[file] = true
 				files = append(files, runner.ManagedFile{
-					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: val,
+					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true, Content: val,
 				})
 			}
 		}

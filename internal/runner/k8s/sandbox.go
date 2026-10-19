@@ -421,6 +421,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// any container starts, so there's no window where the agent runs without them.
 	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
 	addMainContainerVolumes(agentPod, managedVols, managedMounts)
+	secretVols, stage, secretMount, wipe := agentSecretVolumes(spec.RunID, spec.ManagedFiles, spec.Image, resourceRequirements(spec.Resources))
+	if stage != nil {
+		agentPod.Spec.Volumes = append(agentPod.Spec.Volumes, secretVols...)
+		agentPod.Spec.InitContainers = append(agentPod.Spec.InitContainers, *stage)
+		main := &agentPod.Spec.Containers[0]
+		main.VolumeMounts = append(main.VolumeMounts, secretMount)
+		main.Command = wipeAfterReadCommand(main.Command, wipe)
+	}
 	applyAgentSecretFSGroup(agentPod, spec.ManagedFiles)
 	// The drives, only when the pod has one, so a drive-less pod keeps its nil
 	// pod-level SecurityContext unchanged.

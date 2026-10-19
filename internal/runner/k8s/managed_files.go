@@ -67,11 +67,13 @@ func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.V
 		return nil, nil
 	}
 	items := map[string][]corev1.KeyToPath{}
+	var plain []runner.ManagedFile
 	for i, f := range files {
-		mode := int32(f.FileMode().Perm())
 		if f.AgentOwned {
-			mode = agentSecretItemMode
+			continue // staged onto tmpfs instead (agentSecretVolumes)
 		}
+		plain = append(plain, f)
+		mode := int32(f.FileMode().Perm())
 		dir := path.Dir(f.Path)
 		items[dir] = append(items[dir], corev1.KeyToPath{
 			Key:  managedFileDataKey(i),
@@ -79,7 +81,7 @@ func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.V
 			Mode: &mode,
 		})
 	}
-	dirs := runner.ManagedFileDirs(files) // sorted: a deterministic pod spec
+	dirs := runner.ManagedFileDirs(plain) // sorted: a deterministic pod spec
 	vols := make([]corev1.Volume, 0, len(dirs))
 	mounts := make([]corev1.VolumeMount, 0, len(dirs))
 	for i, dir := range dirs {
@@ -103,17 +105,12 @@ func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.V
 // a managed drive and a delivered secret asks for one fsGroup, not two.
 const agentFSGroup int64 = 1000
 
-// agentSecretItemMode is what an AgentOwned file is projected at. A Secret
-// volume cannot set a file's OWNER (always root), so runner's 0400 would leave
-// the agent unable to read its own secret; 0440 with the pod's fsGroup as the
-// file's group is the nearest this substrate comes to "the agent's user only".
-//
-// Stated plainly, since the mode reads narrower than it is: fsGroup is a
-// supplementary group of EVERY container in the pod, so the reach is every
-// process in the agent pod. Those all run as uid 1000 (agentSecurityContext on
-// the main container and on each ephemeral exec container, RunAsNonRoot, no
-// capabilities, no privilege escalation), so no second uid is there to read
-// it. The proxy is a separate pod and never mounts this volume.
+// agentSecretItemMode is what an AgentOwned file is projected at in its
+// Secret volume, which only the stage-secrets init container mounts. A Secret
+// volume cannot set a file's owner (always root), so 0440 with the pod's
+// fsGroup is how that container, running as the agent's uid, reads it; it
+// then writes the copy the agent sees, 0400 and owned by that uid
+// (agentSecretVolumes).
 const agentSecretItemMode = int32(0o440)
 
 // errAgentSecretBesideShare refuses a delivered secret on a pod that mounts a

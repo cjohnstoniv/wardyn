@@ -17,6 +17,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -304,25 +305,39 @@ func TestCreateSandbox_DeliversASecretFileToTheAgentPodOnly(t *testing.T) {
 	if mount == nil || !mount.ReadOnly || mount.SubPath != "" {
 		t.Fatalf("main container mount at %s = %+v, want one read-only, subPath-free mount", runner.ComponentSecretDir, mount)
 	}
-	var vol *corev1.Volume
-	for i := range pod.Spec.Volumes {
-		if pod.Spec.Volumes[i].Name == mount.Name {
-			vol = &pod.Spec.Volumes[i]
-		}
+	vol := podVolume(pod, mount.Name)
+	if vol == nil || vol.EmptyDir == nil || vol.EmptyDir.Medium != corev1.StorageMediumMemory {
+		t.Fatalf("volume %q = %+v, want the in-memory emptyDir the init container stages into", mount.Name, vol)
 	}
-	if vol == nil || vol.Secret == nil || vol.Secret.SecretName != secretName(spec.RunID) {
-		t.Fatalf("volume %q = %+v, want a projection of the run Secret", mount.Name, vol)
+	// The run Secret's projection is the init container's alone, and it writes
+	// the agent's copy 0400 as the agent's uid: no group read is left.
+	if len(pod.Spec.InitContainers) != 1 || pod.Spec.InitContainers[0].Name != stageAgentSecretsName {
+		t.Fatalf("init containers = %+v, want the one %s", pod.Spec.InitContainers, stageAgentSecretsName)
 	}
-	if len(vol.Secret.Items) != 1 {
-		t.Fatalf("the secret volume projects %d items, want only the one secret: %+v", len(vol.Secret.Items), vol.Secret.Items)
+	stage := pod.Spec.InitContainers[0]
+	if sc := stage.SecurityContext; sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 1000 {
+		t.Fatalf("%s runs as %+v, want uid 1000 so the copy is the agent's own", stage.Name, sc)
 	}
-	it := vol.Secret.Items[0]
-	if it.Key != managedFileDataKey(1) || it.Path != "api-token" || it.Mode == nil || *it.Mode != 0o440 {
+	if got := stage.Command; len(got) != 5 || got[2] != stageAgentSecretsScript || got[4] != "api-token" || !strings.Contains(got[2], "chmod 0400") {
+		t.Fatalf("%s command = %q, want the staging script over api-token", stage.Name, got)
+	}
+	src := podVolume(pod, agentSecretsSourceVolume)
+	if src == nil || src.Secret == nil || src.Secret.SecretName != secretName(spec.RunID) || len(src.Secret.Items) != 1 {
+		t.Fatalf("source volume = %+v, want a projection of the run Secret's one secret", src)
+	}
+	if it := src.Secret.Items[0]; it.Key != managedFileDataKey(1) || it.Path != "api-token" || it.Mode == nil || *it.Mode != 0o440 {
 		t.Errorf("secret item = key %q path %q mode %v, want %q api-token 0440", it.Key, it.Path, it.Mode, managedFileDataKey(1))
+	}
+	for _, c := range pod.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == agentSecretsSourceVolume {
+				t.Errorf("container %s mounts the Secret projection; only %s may", c.Name, stageAgentSecretsName)
+			}
+		}
 	}
 	// The ceiling beside it is untouched: its own volume, its own modes.
 	for _, v := range pod.Spec.Volumes {
-		if v.Secret == nil || v.Name == mount.Name {
+		if v.Secret == nil || v.Name == agentSecretsSourceVolume {
 			continue
 		}
 		for _, it := range v.Secret.Items {
@@ -382,6 +397,48 @@ func TestCreateSandbox_DeliversASecretFileToTheAgentPodOnly(t *testing.T) {
 		if sc := c.SecurityContext; sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 1000 {
 			t.Errorf("container %s does not run as uid 1000 (%+v); a second uid in the pod could read the 0440 fsGroup file", c.Name, sc)
 		}
+	}
+}
+
+func podVolume(pod *corev1.Pod, name string) *corev1.Volume {
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == name {
+			return &pod.Spec.Volumes[i]
+		}
+	}
+	return nil
+}
+
+// A file_secret marked WipeAfterRead is deleted after its first read: the
+// main container's command is wrapped by the watcher over that file alone, and
+// the tmpfs is writable so it can unlink it. A platform file beside it is kept.
+func TestCreateSandbox_WipesAFileSecretAfterItsFirstRead(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+	spec := secretSandboxSpec()
+	spec.ManagedFiles[1].WipeAfterRead = true
+	spec.ManagedFiles = append(spec.ManagedFiles, runner.ManagedFile{Path: runner.ComponentSecretDir + "/wardyn-toolgate-claude-code", Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("tg")})
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, _ := findContainer(pod.Spec.Containers, mainContainerName)
+	want := []string{"sh", "-c", wipeAfterReadScript, "wardyn-agent", runner.ComponentSecretDir, "1", "api-token", "sh", "-c", runner.AgentIdleScript}
+	if !slices.Equal(main.Command, want) {
+		t.Fatalf("main command = %q, want the watcher over api-token, then the idle script", main.Command)
+	}
+	for _, m := range main.VolumeMounts {
+		if m.MountPath == runner.ComponentSecretDir && m.ReadOnly {
+			t.Fatal("the tmpfs is read-only, so the watcher could not delete the file")
+		}
+	}
+	if got := pod.Spec.InitContainers[0].Command[4:]; !slices.Equal(got, []string{"api-token", "wardyn-toolgate-claude-code"}) {
+		t.Fatalf("staged %q, want both files", got)
 	}
 }
 

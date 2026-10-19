@@ -36,6 +36,11 @@ type ManagedFile struct {
 	// it is refused in ManagedFileDir. What each substrate delivers is stated on
 	// its driver (docker: managedFilesTar; Kubernetes: managedFileVolumes).
 	AgentOwned bool
+	// WipeAfterRead (an AgentOwned file only) asks the substrate to delete the
+	// file once it has been read. Kubernetes honours it (agentSecretVolumes);
+	// Docker delivers it as any AgentOwned file. Optional on the runner wire: a
+	// runner that predates it delivers the file and keeps it.
+	WipeAfterRead bool `json:",omitempty"`
 	// Content is the exact file body. Delivered byte for byte; no trailing
 	// newline is added.
 	Content []byte
@@ -98,6 +103,8 @@ func ValidateManagedFiles(files []ManagedFile) error {
 			return fmt.Errorf("managed file %q: a managed file must sit directly in %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir)
 		case f.AgentOwned != (path.Dir(f.Path) == ComponentSecretDir):
 			return fmt.Errorf("managed file %q: an agent-owned file is a delivered secret and sits in %s, and nothing else does; in %s it would be a ceiling its own subject can rewrite", f.Path, ComponentSecretDir, ManagedFileDir)
+		case f.WipeAfterRead && !f.AgentOwned:
+			return fmt.Errorf("managed file %q: only a delivered secret is wiped after its first read", f.Path)
 		case f.AgentOwned && f.FileMode() != ComponentSecretFileMode:
 			return fmt.Errorf("managed file %q: an agent-owned file is delivered at mode %04o and no other, so only its owner can read it", f.Path, ComponentSecretFileMode.Perm())
 		case seen[f.Path]:
