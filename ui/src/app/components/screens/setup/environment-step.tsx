@@ -37,7 +37,7 @@ import {
   CC_MATRIX_WHERE,
   CONFINEMENT_CONSTANT_NOTE,
 } from "../../wardyn/cc-meta";
-import { RESIDUAL_PREFIX, BTN, type StatusKind } from "../../wardyn/copy";
+import { RESIDUAL_PREFIX, BTN, NO_BARRIER, type StatusKind } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { MarkCell } from "../../wardyn/mark-cell";
 import { TIER_GUIDES, K8S_TIER_GUIDES, type SetupGuide } from "./setup-guide";
@@ -91,7 +91,7 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
       <div className="flex items-start gap-3">
         <AlertOctagon data-testid="no-runner-icon" className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
         <div>
-          <div className="text-foreground">No sandbox runner — runs can't launch.</div>
+          <div className="text-foreground">{NO_BARRIER.TITLE}</div>
           <p className="mt-1 text-sm text-muted-foreground">
             {noDriver ? (
               <>

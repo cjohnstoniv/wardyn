@@ -470,7 +470,9 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
     await noBarrierProbe(context);
     await gotoConsole(page);
 
-    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE).first()).toBeVisible();
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
+    // #3050: no link and no command, but a next step: whom to ask.
+    await expect(page.getByText(NO_BARRIER.BANNER_BODY_ASK)).toBeVisible();
   });
 });

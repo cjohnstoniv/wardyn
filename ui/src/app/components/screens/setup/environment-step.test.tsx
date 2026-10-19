@@ -174,7 +174,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   it("(9) no runner: shows the danger card and still renders all three tier names", () => {
     const status = baseStatus({ runner: { driver: "none", confinement_classes: [] } });
     renderStep({ status });
-    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/can't run sandboxes yet/)).toBeInTheDocument();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     // The three friendly names still render inside the read-only matrix.
     const group = screen.getByRole("radiogroup", { name: "Barrier tier" });
@@ -186,7 +186,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // #2875, #2877: the danger icon keeps its size in a narrow flex row, and both build flags read as commands.
   it("(9b) no runner without a driver: the icon cannot shrink and both flags are mono", () => {
     renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: [] } }) });
-    const card = screen.getByText(/No sandbox runner/).closest("div.rounded-xl") as HTMLElement;
+    const card = screen.getByText(/can't run sandboxes yet/).closest("div.rounded-xl") as HTMLElement;
     expect(card.querySelector("svg")).toHaveClass("shrink-0");
     expect(within(card).getByText("-runner docker")).toHaveClass("font-mono");
     expect(within(card).getByText("-tags docker")).toHaveClass("font-mono");
@@ -391,7 +391,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     // ticket: HIGH-4
     const status = baseStatus({ runner: { driver: "", confinement_classes: [] } });
     renderStep({ status });
-    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/can't run sandboxes yet/)).toBeInTheDocument();
     expect(screen.getByText(/-runner docker/)).toBeInTheDocument();
     expect(screen.queryByText(/start the Docker daemon/)).not.toBeInTheDocument();
   });
@@ -399,14 +399,14 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // X3-F1: the HIGH-4 fold above is right only when the classes list is ALSO
   // empty. A member's redacted body carries Driver:"" WITH the real
   // confinement_classes, so folding "" into no-driver read a hidden runner as
-  // an absent one: the red "No sandbox runner" card, an operator-only fix they
+  // an absent one: the red no-barrier card, an operator-only fix they
   // cannot run, and — the third symptom — a dead picker, because `selectable`
   // is gated on the same `noRunner`. Unknown, not broken.
   it("an empty driver WITH live classes is unknown, not absent: no card, picker still selectable", async () => {
     // ticket: X3-F1
     const status = baseStatus({ runner: { driver: "", confinement_classes: ["CC1", "CC2"] } });
     const { onSelect } = renderStep({ status });
-    expect(screen.queryByText(/No sandbox runner/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/can't run sandboxes yet/)).not.toBeInTheDocument();
     expect(screen.queryByText(/-runner docker/)).not.toBeInTheDocument();
     const wall = screen.getByRole("radio", { name: /Wall/ });
     expect(wall).not.toBeDisabled();
@@ -422,7 +422,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   it('an explicit "none" driver keeps the card even with classes present', () => {
     // ticket: X3-F1
     renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: ["CC1"] } }) });
-    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/can't run sandboxes yet/)).toBeInTheDocument();
     expect(screen.getByText(/-runner docker/)).toBeInTheDocument();
   });
 });

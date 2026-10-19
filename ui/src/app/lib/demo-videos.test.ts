@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { DEFAULT_DEMO_VIDEO_BASE_URL, EPISODES, MEMBER_SECTION_IDS, episodeUrl, releasePageUrl, episodesFor, recordedOnly } from "./demo-videos";
+import { DEFAULT_DEMO_VIDEO_BASE_URL, EPISODES, MEMBER_SECTION_IDS, episodeUrl, releasePageUrl, episodesFor, recordedOnly, type Episode } from "./demo-videos";
 import { STEP_LABEL } from "../components/screens/setup/steps";
 
 describe("demo-videos", () => {
@@ -134,12 +134,12 @@ describe("demo-videos", () => {
 
 describe("recordedOnly", () => {
   it("drops episodes with no video, keeps order", () => {
-    const rows = [
+    const rows: Episode[] = [
       { id: "a", title: "A", audience: "member", path: "any", tag: null, file: "a.mp4", steps: [] },
       { id: "b", title: "B", audience: "member", path: "any", tag: "v1", file: "b.mp4", steps: [] },
       { id: "c", title: "C", audience: "member", path: "any", tag: "v1", file: "c.mp4", steps: [] },
-    ] as const;
-    expect(recordedOnly([...rows]).map((e) => e.id)).toEqual(["b", "c"]);
+    ];
+    expect(recordedOnly(rows).map((e) => e.id)).toEqual(["b", "c"]);
     expect(recordedOnly([rows[0]])).toEqual([]);
   });
 });

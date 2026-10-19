@@ -49,6 +49,8 @@ export const RUN = {
 // enforce says so, rather than leaving Launch clickable for a run that can
 // only fail after the click. LAUNCH_REASON/FINISH_GATE_* are stated beside
 // the control they block, never in a tooltip.
+const NO_BARRIER_TITLE = "This host can't run sandboxes yet — no barrier is installed.";
+
 export const NO_BARRIER = {
   CTA: "Set up a barrier",
   // #1328 review round 2, R2-1 — the Environment step lives ONLY under
@@ -77,10 +79,16 @@ export const NO_BARRIER = {
   // /admin/setup — a query-only link resolves against whichever one is
   // already current, so it can never itself switch the view.
   RELATIVE_ROUTE: "?step=environment",
-  LAUNCH_REASON: "No barrier can be built on this host, so no run can be confined.",
-  BANNER_TITLE: "No barrier can be built on this host — runs can't launch.",
+  // #3050: the one sentence every surface uses to state the condition (the shell banner, the Runs
+  // first-run alert, the New Run launch reason, the Environment and Host cards, the barrier picker).
+  TITLE: NO_BARRIER_TITLE,
+  LAUNCH_REASON: NO_BARRIER_TITLE,
+  BANNER_TITLE: NO_BARRIER_TITLE,
+  // One body per audience: whoever can open the Environment step gets the reason and the CTA; everyone
+  // else is told whom to ask, with no command to run.
   BANNER_BODY:
     "Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with.",
+  BANNER_BODY_ASK: "Ask a Wardyn admin to set one up.",
   FINISH_GATE_HEAD: "Setup can't finish without a barrier.",
   FINISH_GATE_REASON: "Wardyn confines every run.",
 } as const;

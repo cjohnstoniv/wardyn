@@ -92,6 +92,8 @@ import { APPROVAL_NOTIFY } from "../../wardyn/copy/approval-notify";
 import { SCIM } from "../../../lib/scim-copy";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
+import { NO_BARRIER } from "../../wardyn/copy/run-clone";
+import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
 
@@ -321,7 +323,7 @@ describe("AdminSettingsScreen — the Host card's barrier picker offers only wha
 // The Host card is a SECOND mount of EnvironmentStep's own no-runner/k8s
 // facts, and must keep them byte-identical rather than a compact-picker-only
 // fallback with no fix line.
-// DONE WHEN: a test fails if the canon "No sandbox runner" card, its fix
+// DONE WHEN: a test fails if the canon no-barrier card, its fix
 // line, or the k8s rows disappear from this card again.
 describe("AdminSettingsScreen — the Host card keeps the canon no-runner card and the k8s rows", () => {
   it("a driver:'none' host gets the canon card and the operator fix line, and no TierPicker fallback", async () => {
@@ -332,10 +334,10 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
     const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
     await expandCard("Host");
-    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(hostCard.getByText(NO_BARRIER.TITLE)).toBeInTheDocument();
     expect(hostCard.getByText(/-runner docker/)).toBeInTheDocument();
     // Never the compact-picker's own generic fallback beside the real card.
-    expect(hostCard.queryByText(/no barrier is installed/i)).toBeNull();
+    expect(hostCard.queryByText(TIER_PICKER.NONE_INSTALLED)).toBeNull();
   });
 
   it("a real Docker daemon that is simply down gets the daemon fix line, not the operator one", async () => {
@@ -346,7 +348,7 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
     const heading = await screen.findByRole("heading", { name: startsWith("Host"), level: 3 });
     const hostCard = within(heading.closest("section")!);
     await expandCard("Host");
-    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(hostCard.getByText(NO_BARRIER.TITLE)).toBeInTheDocument();
     expect(
       hostCard.getByText(/start the Docker daemon.*so Wardyn can build a barrier/),
     ).toBeInTheDocument();
@@ -364,7 +366,7 @@ describe("AdminSettingsScreen — the Host card keeps the canon no-runner card a
     expect(hostCard.getByText("Kubernetes")).toBeInTheDocument();
     expect(hostCard.getByText("Egress containment")).toBeInTheDocument();
     // Zero classes on a k8s driver is still "no runner" by the shared rule.
-    expect(hostCard.getByText("No sandbox runner — runs can't launch.")).toBeInTheDocument();
+    expect(hostCard.getByText(NO_BARRIER.TITLE)).toBeInTheDocument();
   });
 });
 

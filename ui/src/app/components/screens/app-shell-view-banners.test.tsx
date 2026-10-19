@@ -203,7 +203,9 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
       true,
     );
     expect(await screen.findByText(NO_BARRIER.BANNER_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(NO_BARRIER.BANNER_BODY)).toBeInTheDocument();
+    // #3050: someone who cannot open setup is told whom to ask, not given a dead end.
+    expect(screen.getByText(NO_BARRIER.BANNER_BODY_ASK)).toBeInTheDocument();
+    expect(screen.queryByText(NO_BARRIER.BANNER_BODY)).toBeNull();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
 
@@ -214,6 +216,8 @@ describe("the #214 no-barrier banner: present in both views, CTA gated on who ca
       "href",
       "/admin/setup?step=environment",
     );
+    expect(screen.getByText(NO_BARRIER.BANNER_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(NO_BARRIER.BANNER_BODY_ASK)).toBeNull();
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 

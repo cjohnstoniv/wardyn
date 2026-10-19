@@ -6,6 +6,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { GOVERNED_ADMIN_BANNER } from "../src/app/lib/access-posture-copy";
+import { NO_BARRIER } from "../src/app/components/wardyn/copy/run-clone";
 
 // Constrained-admin mode (WARDYN_GOVERN_ADMIN_RUNS, mock M10). The hermetic
 // backend signs in with the admin token, which is no signed-in person, so the
@@ -63,7 +64,7 @@ test.describe("constrained-admin mode (mock M10)", () => {
 
   test("no band with the switch off", async ({ page }) => {
     await gotoConsole(page, "admin");
-    await expect(page.getByText("No barrier can be built on this host")).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE).first()).toBeVisible();
     await expect(page.getByText(GOVERNED_ADMIN_BANNER.TITLE)).toHaveCount(0);
   });
 
@@ -80,7 +81,7 @@ test.describe("constrained-admin mode (mock M10)", () => {
     await gotoConsole(page, "admin");
     // Positive control: the shell's other Admin-view band rendered, so the
     // absence below is the rule and not a band still in flight.
-    await expect(page.getByText("No barrier can be built on this host")).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE).first()).toBeVisible();
     await expect(page.getByText(GOVERNED_ADMIN_BANNER.TITLE)).toHaveCount(0);
   });
 
