@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -68,13 +69,6 @@ func TestPG_RunLost(t *testing.T) {
 	if ok, err := pg.StampRunTokenRenewed(ctx, lapsed.ID, "jti-new", "jti-presented"); err != nil || !ok {
 		t.Fatalf("StampRunTokenRenewed = %v, %v; want true", ok, err)
 	}
-	// The stamp keeps the new token's id and the presented one's, and a run never stamped has none.
-	if got, err := pg.RunTokenJTIs(ctx, lapsed.ID); err != nil || !slices.Equal(got, []string{"jti-new", "jti-presented"}) {
-		t.Errorf("RunTokenJTIs after a stamp = %v, %v; want [jti-new jti-presented]", got, err)
-	}
-	if got, err := pg.RunTokenJTIs(ctx, fresh.ID); err != nil || len(got) != 0 {
-		t.Errorf("RunTokenJTIs of a run never renewed = %v, %v; want none", got, err)
-	}
 	if got := listed(); slices.Contains(got, lapsed.ID) {
 		t.Error("a just-renewed run is still listed as lapsed")
 	}
@@ -107,5 +101,60 @@ func TestPG_RunLost(t *testing.T) {
 
 	if got, err := pg.MarkRunLost(ctx, fresh.ID, types.LostReboot, now, 0); err != nil || !got {
 		t.Errorf("MarkRunLost(reboot) of a fresh run = %v, %v; want true — a reboot has no token condition", got, err)
+	}
+}
+
+// TestPG_RunTokenLineage: a revive's cut returns the ids the last renewal recorded and from then on
+// a renewal presenting one of them is refused (and records nothing) while the fresh token renews;
+// a restore hands the old lineage back only while the fresh token still heads it alone. A run never
+// renewed has no lineage to check.
+func TestPG_RunTokenLineage(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, run)
+
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-1", "jti-dispatch"); err != nil || !ok {
+		t.Fatalf("first renewal = %v, %v; want it recorded", ok, err)
+	}
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-2", "jti-1"); err != nil || !ok {
+		t.Fatalf("renewal presenting the last minted token = %v, %v; want it recorded", ok, err)
+	}
+	jti, prev, err := pg.RetireRunTokenLineage(ctx, run.ID, "jti-fresh")
+	if err != nil || jti != "jti-2" || prev != "jti-1" {
+		t.Fatalf("RetireRunTokenLineage = %q, %q, %v; want jti-2, jti-1", jti, prev, err)
+	}
+	for _, presented := range []string{"jti-2", "jti-1"} {
+		if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-escaped", presented); ok || !errors.Is(err, store.ErrRunTokenLineage) {
+			t.Errorf("old-lineage renewal presenting %s = %v, %v; want ErrRunTokenLineage", presented, ok, err)
+		}
+	}
+	if err := pg.RestoreRunTokenLineage(ctx, run.ID, "jti-other", jti, prev); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-escaped", "jti-2"); !errors.Is(err, store.ErrRunTokenLineage) {
+		t.Errorf("a restore naming another fresh token handed the lineage back: %v, %v", ok, err)
+	}
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-fresh-1", "jti-fresh"); err != nil || !ok {
+		t.Fatalf("the fresh token's renewal = %v, %v; want it recorded", ok, err)
+	}
+	if err := pg.RestoreRunTokenLineage(ctx, run.ID, "jti-fresh", jti, prev); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.StampRunTokenRenewed(ctx, run.ID, "jti-escaped", "jti-2"); !errors.Is(err, store.ErrRunTokenLineage) {
+		t.Errorf("a restore after the fresh token renewed handed the lineage back: %v, %v", ok, err)
+	}
+
+	kept := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, kept)
+	if _, _, err := pg.RetireRunTokenLineage(ctx, kept.ID, "kept-fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.RestoreRunTokenLineage(ctx, kept.ID, "kept-fresh", "kept-2", "kept-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.StampRunTokenRenewed(ctx, kept.ID, "kept-3", "kept-2"); err != nil || !ok {
+		t.Errorf("the kept proxy's renewal after a restore = %v, %v; want it recorded", ok, err)
 	}
 }

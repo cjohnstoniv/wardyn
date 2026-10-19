@@ -243,7 +243,7 @@ func TestResolveADOInjection_DeadCredentialDeleteEvictsTheCachedToken(t *testing
 func TestADOEntraAccessCache_ForgetIsPerOwner(t *testing.T) {
 	var c adoEntraAccessCache
 	for _, owner := range []string{"al", "alice"} {
-		c.put(owner+"\x00row\x00t\x00c\x00s", ADOEntraAccess{ExpiresAt: adoTestNow.Add(time.Hour)})
+		c.put(owner+"\x00row\x00t\x00c\x00s", adoEntraCached{ADOEntraAccess: ADOEntraAccess{ExpiresAt: adoTestNow.Add(time.Hour)}})
 	}
 	c.refused = map[string]time.Time{"al\x00row\x00t\x00c\x00s": adoTestNow, "alice\x00row\x00t\x00c\x00s": adoTestNow}
 	c.forget("al")

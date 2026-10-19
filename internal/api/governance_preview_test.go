@@ -90,7 +90,7 @@ func seedPreviewFixture(t *testing.T, st store.PG) previewFixture {
 		if err != nil {
 			t.Fatalf("seed assignment %s/%q: %v", kind, subject, err)
 		}
-		t.Cleanup(func() { _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
+		t.Cleanup(func() { _, _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
 	}
 
 	pSub := profile("aaa-sub-" + sfx)
@@ -341,7 +341,7 @@ func TestGovernancePreview_StandardTypeAssignmentNeedsTheType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed assignment: %v", err)
 	}
-	t.Cleanup(func() { _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
 
 	preview := func(userType string) governancePreviewResponse {
 		t.Helper()

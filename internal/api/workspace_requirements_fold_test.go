@@ -66,7 +66,7 @@ func TestApplyWorkspaceRequirements_EmptyRequirementsIsNoOp(t *testing.T) {
 			if _, _, code, _, err := seedLegacy(srv, ctx, &spec, &req); err != nil {
 				t.Fatalf("seed: %d %v", code, err)
 			}
-			wsRefs := srv.referencedWorkspaces(ctx, spec)
+			wsRefs := srv.referencedWorkspaces(ctx, "", spec)
 			if len(wsRefs) == 0 {
 				t.Fatalf("workspace did not resolve via referencedWorkspaces — test setup is broken")
 			}
@@ -575,7 +575,7 @@ func TestWorkspaceRequirements_PreflightLaunchAgreement(t *testing.T) {
 	if _, _, code, _, err := seedLegacy(h.srv, ctx, &spec, &req); err != nil {
 		t.Fatalf("seed: %d %v", code, err)
 	}
-	wsRefs := h.srv.referencedWorkspaces(ctx, spec)
+	wsRefs := h.srv.referencedWorkspaces(ctx, "", spec)
 	events, _ := h.srv.applyWorkspaceRequirements(ctx, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 	if len(events) != 1 || events[0].action != "run.requirement.skip" {
 		t.Fatalf("launch-side fold events = %+v, want ONE run.requirement.skip", events)

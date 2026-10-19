@@ -94,6 +94,8 @@
 # docs/ENV.md=39620 adds 84 (0.10 HYB-A): WARDYN_SYNC_DENY and WARDYN_LOCAL_FOLDER_SEED_WAIT
 # docs/ENV.md=39620 adds 30 (0.10): the placement runtime-annotation refusal and the longer member dotfile list.
 # docs/ENV.md=39650 adds 79 (0.10): the WARDYN_TRUSTED_CA_REFUSE_WRITABLE row and details section, and the writable-bundle warning on WARDYN_TRUSTED_CA_FILE.
-docs/ENV.md=40140 share=5
+# docs/ENV.md 39918 adds 298 over 39620, measured: three default-off switch rows and details sections, which the env-doc guard requires.
+# docs/ENV.md 40438 = ours 40140 + theirs 40329 - base 40031 at the 0.10.0 SEC-2c merge of main.
+docs/ENV.md=40438 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
