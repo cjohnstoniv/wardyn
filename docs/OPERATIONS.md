@@ -1516,7 +1516,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in, and back-channel only.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). Wardyn has no front-channel logout, which is what Entra ID offers, and SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.

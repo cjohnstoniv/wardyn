@@ -53,6 +53,11 @@ func (s *Server) routes() chi.Router {
 		// one refused over its user type (ambiguous or unknown) are auth.fail
 		// rows. The oidc package stays audit-agnostic.
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
+		// The identity provider's back-channel logout, authenticated by its signed logout token
+		// and absent unless WARDYN_OIDC_BACKCHANNEL_LOGOUT is on.
+		if s.cfg.OIDC.BackchannelLogoutEnabled() {
+			r.Post("/auth/backchannel-logout", s.cfg.OIDC.BackchannelLogoutHandler(s.isReservedPrincipal, s.auditIdPLogout))
+		}
 	}
 
 	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.

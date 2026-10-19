@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The auth.fail reasons the sign-in callback emits: the role map named a user
@@ -48,4 +49,15 @@ func (s *Server) auditSignInDenied(r *http.Request, reason string) {
 	case oidc.DenialIdentityDeactivated:
 		s.auditAuthFailedAs(r, oidcCallbackActor, authFailedIdentityDeactivated)
 	}
+}
+
+// auditIdPLogout records a back-channel logout from the identity provider as the session.revoke row
+// an admin's sessions-only revoke writes, marked with its source.
+func (s *Server) auditIdPLogout(r *http.Request, sub string, err error) {
+	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0, "source": "idp_back_channel_logout"}
+	outcome := "success"
+	if err != nil {
+		outcome, data["error"] = "failure", err.Error()
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, oidcCallbackActor, "session.revoke", sub, outcome, mustJSON(data)))
 }

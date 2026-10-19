@@ -300,6 +300,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_SILENT_REAUTH` | bool | `false` | a browser that signed in, and has not signed out since, first asks the identity provider with `prompt=none` (flag `-oidc-silent-reauth`). `false` changes nothing. [Details](#wardyn_oidc_silent_reauth) |
 | `WARDYN_OIDC_LOGIN_HINT` | bool | `false` | a browser that signed in sends that account as `login_hint` on its next sign-in (flag `-oidc-login-hint`). `false` changes nothing. [Details](#wardyn_oidc_login_hint) |
 | `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | bool | `false` | sends the console session cookie without an expiry, so the browser drops it when it closes (flag `-oidc-browser-session-cookie`). `false` changes nothing. [Details](#wardyn_oidc_browser_session_cookie) |
+| `WARDYN_OIDC_BACKCHANNEL_LOGOUT` | bool | `false` | serves `POST /auth/backchannel-logout`, where the provider's signed logout token ends that person's console sessions (flag `-oidc-backchannel-logout`). `false` changes nothing. [Details](#wardyn_oidc_backchannel_logout) |
 | `WARDYN_UI_SANDBOX_LISTEN` | string | (unset) | UI-sandbox gateway listen address, e.g. `:8081` (flag `-ui-sandbox-listen`); empty means off, with no listener. It must differ from `WARDYN_LISTEN` and boot refuses if it does not. [Details](#wardyn_ui_sandbox_listen) |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | string | (unset) | externally-reachable base URL of that gateway, e.g. `https://wardyn-ui.example.com` (flag `-ui-sandbox-advertise`); purely advisory copy, the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset logs a boot warning. [Details](#wardyn_ui_sandbox_advertise) |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | string | (unset) | optional per-run origin for the UI-sandbox gateway, e.g. `https://run-{run}.ui.example.com` (flag `-ui-sandbox-origin-template`); needs wildcard DNS and a wildcard certificate. [Details](#wardyn_ui_sandbox_origin_template) |
@@ -1651,6 +1652,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Off by default; it spares an Entra browser holding several accounts the account picker.
 - The account rides in an `HttpOnly` cookie for 30 days; signing out clears it.
 - The hint only preselects an account: the identity provider still authenticates.
+
+### `WARDYN_OIDC_BACKCHANNEL_LOGOUT`
+
+- Serves `POST /auth/backchannel-logout` for OpenID Connect Back-Channel Logout (flag `-oidc-backchannel-logout`); off, the route does not exist.
+- Register `https://<your Wardyn host>/auth/backchannel-logout` as the client's back-channel logout URI at the identity provider.
+- A logout token the provider signed for this client ends that person's console sessions as their sign-out does; tokens, keys and runs keep working.
+- It needs the logout event, a `sub`, a `jti`, no `nonce` and an `iat` within five minutes.
+- Anything else, including a `sid` without a `sub`, gets `400`; a cut that cannot be written gets `503`.
+- Each cut is a `session.revoke` row with `source` `idp_back_channel_logout`.
+- Front-channel logout, which Entra ID offers, is not supported, and a person set up by Entra object id before first sign-in is not reached by `sub`.
 
 ### `WARDYN_OIDC_BROWSER_SESSION_COOKIE`
 
