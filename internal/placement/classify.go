@@ -120,6 +120,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "the person's model-provider key or own Claude sign-in", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO, credential_source per_user", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "Injection", Variant: "captured AWS SSO shared", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassAWSSSOBearer, Reason: ReasonPlacementCredential},
+	{Struct: StructProxyConfig, Field: "Injection", Variant: "Azure DevOps minted PAT; runner_resident: the runner's proxy fetches it per request and holds it in memory only", Class: ClassBrokered, Rule: RuleDelivery, Delivery: ClassADOMintedPAT, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "GitGrants", Variant: "GitHub App installation token; via_org keeps the repo allowlist and routes /wardyn/gh/ to the organisation", Class: ClassBrokered, Rule: RuleViaOrgRefuse, Delivery: ClassGitHubToken, Reason: ReasonPlacementCredential, ViaOrg: true},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "per_user stored PAT", Class: ClassOwn, Rule: RuleAllow},
 	{Struct: StructProxyConfig, Field: "PATGrants", Variant: "shared CredentialSource", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassGitPATBroker, Reason: ReasonPlacementCredential},

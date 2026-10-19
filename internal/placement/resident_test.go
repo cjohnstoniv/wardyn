@@ -109,17 +109,23 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 }
 
 // The 2026-10-10 ruling: an Azure DevOps minted token is resident only on a
-// connection an admin opted in, even when the class policy says resident. An
-// opted-in connection passes that gate and is then held at the deliver step,
-// which is not built: an intent has no dispatched value to replace.
+// connection an admin opted in, even when the class policy says resident; the
+// 2026-10-19 ruling (option L) admits an opted-in connection's token, which the
+// runner's proxy fetches per request and holds in memory only. Off by default:
+// with no policy row, or no opt-in, it refuses.
 func TestLocalEligibility_ADOResidentIsOffByDefault(t *testing.T) {
 	_, r := LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT}))
 	if r == nil || r.Reason != ReasonPlacementCredential || r.Field != adoPath || !strings.Contains(r.Detail, "opted in") {
 		t.Fatalf("no opt-in: %+v, want the opt-in refusal", r)
 	}
-	_, r = LocalEligibility(adoResidentPlan(CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}))
-	if r == nil || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, "not built") {
-		t.Fatalf("opted-in connection: %+v, want past the opt-in and held at delivery", r)
+	optedIn := CredentialOrigin{Class: ClassBrokered, Delivery: ClassADOMintedPAT, ResidentOptIn: true}
+	if _, r = LocalEligibility(adoResidentPlan(optedIn)); r != nil {
+		t.Fatalf("opted-in connection: %+v, want admitted", r)
+	}
+	unset := adoResidentPlan(optedIn)
+	unset.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{}}
+	if _, r = LocalEligibility(unset); r == nil || r.Reason != ReasonPlacementCredential || !strings.Contains(r.Detail, "delivery policy: refuse") {
+		t.Fatalf("opted-in connection, no policy row: %+v, want the default refusal", r)
 	}
 }
 

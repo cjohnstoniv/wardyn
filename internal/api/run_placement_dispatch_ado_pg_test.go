@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -223,5 +224,66 @@ func assertADOGrantWriteRefused(t *testing.T, e *placementEnv, run types.AgentRu
 	}
 	if stored, err := e.pg.GetRun(ctx, run.ID); err != nil || stored.State != types.RunFailed {
 		t.Errorf("run state = %q (%v), want FAILED", stored.State, err)
+	}
+}
+
+// Option L at create: a minted_pat run the pool places on a personal runner is admitted with the
+// connection's opt-in and a delivery policy that sends ado_minted_pat runner_resident. Off by default:
+// with no opt-in or no policy row it is refused at create, as before. The admitted run's dispatch then
+// fails closed here, because the person has no captured sign-in to mint from.
+func TestPG_LocalRun_ADOMintedPATResidentAtCreate(t *testing.T) {
+	const resident = `{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}`
+	for name, tc := range map[string]struct {
+		optIn  bool
+		policy string
+		want   int
+	}{
+		"opted in, resident policy": {true, resident, http.StatusCreated},
+		"no opt-in":                 {false, resident, http.StatusUnprocessableEntity},
+		"no policy row":             {true, "", http.StatusUnprocessableEntity},
+	} {
+		t.Run(name, func(t *testing.T) {
+			row := ownPATTestRow()
+			row.Entra.TokenMode, row.Entra.RunnerResident = types.ADOTokenModeMintedPAT, tc.optIn
+			e, _ := adoLocalEnv(t, row)
+			if tc.policy != "" {
+				e.deliveryPolicy(tc.policy)
+			}
+			laptops := e.createPool("Laptops", types.RunnerPoolUser)
+			awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+			e.addToPool(e.person, laptops.ID, awake)
+			e.stream(awake, types.CC1, types.CC2, types.CC3)
+			e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, laptops.ID))
+
+			w := e.call(e.person, http.MethodPost, "/api/v1/runs", `{"agent":"claude-code","repo":"`+adoTestRepo+`","task":"t"}`)
+			if w.Code != tc.want {
+				t.Fatalf("create = %d %s, want %d", w.Code, w.Body, tc.want)
+			}
+			if tc.want != http.StatusCreated {
+				if !strings.Contains(w.Body.String(), string(placement.ReasonPlacementCredential)) {
+					t.Errorf("refusal %s, want %s", w.Body, placement.ReasonPlacementCredential)
+				}
+				return
+			}
+			var created types.AgentRun
+			if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			if created.Placement != types.PlacementLocal || created.RunnerID == nil || *created.RunnerID != awake {
+				t.Fatalf("row = placement %q runner %v, want local on %s", created.Placement, created.RunnerID, awake)
+			}
+			for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+				run, err := e.pg.GetRun(context.Background(), created.ID)
+				if err == nil && run.State == types.RunFailed {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("run state %q (%v), want FAILED without a sign-in; audit: %s", run.State, err, auditDump(e.h.audit.snapshot(), created.ID))
+				}
+			}
+			if got := adoLaneGrants(t, e, created.ID); len(got) != 0 {
+				t.Errorf("%d grants recorded with no token minted, want none", len(got))
+			}
+		})
 	}
 }

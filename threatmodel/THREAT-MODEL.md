@@ -420,7 +420,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Laptop proxy → organisation internal listener | End-to-end TLS through an opaque relay; run token; `runner_id` binding; a closed relayed-route list | #71 |
 | Organisation → laptop (dispatch) | The dispatch-plan classification refuses or strips org-held material | #72 |
 | Laptop → organisation (evidence) | The organisation writes every row; the content is `runner_asserted` | #73, #74 |
-| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort | #75, #76 |
+| An org credential used from a laptop run | `via_org`: the value never leaves the organisation. `runner_resident` (0.9.3): four classes, held in the OS keystore for the run, erased best effort; since 0.10 an Azure DevOps minted token, in proxy memory | #75, #76 |
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
@@ -2656,7 +2656,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 76. **`runner_resident` puts an organisation's value on the runner host for the run, where whoever controls the host can read it, and its erasure is best effort [0.9.3].**
     - A security operator may set a class to `runner_resident` with `PUT /governance/credential-delivery`, optionally requiring posture and per trust class (#90); under `WARDYN_GOVERNANCE_SECOND_HUMAN` the change waits for a second person.
-    - Four classes are delivered: `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` (`residentBuilt`, [`internal/placement/resident_lift.go`](../internal/placement/resident_lift.go)). Any other class set to it is still refused `placement_credential`.
+    - Five classes are delivered: `env_secret`, `file_secret`, `ssh_key`, `git_pat_helper` and, since 0.10, `ado_minted_pat` (`residentBuilt`, [`internal/placement/resident_lift.go`](../internal/placement/resident_lift.go)). Any other class set to it is still refused `placement_credential`.
     - Never resident: a grant that requires approval, a `git_pat` while the PAT broker is on, an Azure DevOps git token (`residentGrantRefusal`, [`internal/api/run_resident_delivery.go`](../internal/api/run_resident_delivery.go)), a brokered `github_token`, which would bypass branch, push and REST rules, and `cloud_sts`.
     - A run with a blast-radius floor never takes one, because a runner-asserted class never meets it (`ResidentAdmits`, `runner_posture_unmet`, #74).
     - **Delivery fence.** The organisation opens the run's erase obligation and a delivery lease before any value is sent. It does so only while the run is `STARTING` on a claimed, unrevoked runner bound to it, with no erase begun (`BeginResidentDelivery`, [`internal/store/store_runner_resident.go`](../internal/store/store_runner_resident.go)).
@@ -2669,7 +2669,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A busy or stuck keystore call, a failing delete, a stopped runnerd or an offline runner delays the delete past the cap. Nothing proves the bytes are gone.
       - Root on the host can copy a value while it is held. A value already in the sandbox or proxy stays until the run ends, and a key or token already used stays valid at the forge until rotated.
     - Posture is the runner's own report (`posture_source: runner_asserted`, audited `runner.posture.record`). It tells a lost or unmanaged laptop from a healthy one; it does not constrain the developer.
-    - An Azure DevOps minted token is resident only on a connection that opted in, and its resident delivery is not built yet.
+    - **Azure DevOps minted token [0.10].** Only on an opted-in connection, never in the keystore: the runner's proxy fetches it over the relay and holds it in memory, at most `pat_max_hours` (`relayedResidentADO`, [`internal/api/internal_relay.go`](../internal/api/internal_relay.go)).
+      - Each fetch is re-judged; a held token works until near expiry, and run end, kill and pause revoke it. Root on the host can read the proxy's memory. It is minted in the owner's name, within the run's capabilities.
 
 77. **Offline, a laptop run keeps egress on its cached policy until the lapse, spooling self-reported decisions behind a fail-closed bound [0.9, client mode].**
     - No governed run is created while a runner's link is down (`runner_offline`), and a run in flight is never torn down by a drop.
@@ -2974,7 +2975,7 @@ exactly these terms.
 **On a runner (client mode, 0.9) the laptop is a second place a value lands.**
 
 - Placement changes none of the rows above, which list the SANDBOX. A local run's laptop proxy also holds its run token, MITM CA key and the owner's own credentials, all developer-readable (residual #69).
-- `via_org` keeps an org-held value at the organisation (residual #75). Since 0.9.3 `runner_resident` puts four classes on the runner host for the run: the OS keystore on a laptop, a Secret on an organisation runner, then the sandbox or proxy (residual #76).
+- `via_org` keeps an org-held value at the organisation (residual #75). Since 0.9.3 `runner_resident` puts four classes on the runner host for the run: the OS keystore on a laptop, a Secret on an organisation runner, then the sandbox or proxy; since 0.10 an Azure DevOps minted token in proxy memory (residual #76).
 
 **The AWS CLI component's sign-in (0.9) is not resident.**
 
