@@ -725,7 +725,7 @@ jq -r '"manifest: \(.git_sha) dirty=\(.worktree_dirty_files) inject=\(.aws_sso_p
 step "opening the read-only port-forward to the fake's /_seen (127.0.0.1:${SEEN_PORT})"
 seen_pf_pid=""
 pod_watch_pid=""
-# ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
+# ALSO the taint: this EXIT trap replaces the early registry-only one set near REGISTRY_NAME, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
 # a leftover one causes on the NEXT walk). ALSO the registry, its rate-limited
 # front and the derived cold image (step 1c): removed here, so a fresh, empty

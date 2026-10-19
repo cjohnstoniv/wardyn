@@ -158,7 +158,7 @@ kubectl --context kind-wardyn-entra -n wardyn logs \
 > This is the same shared-host discipline `docker ps` above is for, just at the k8s-context layer instead of the daemon layer.
 
 - **Confinement floor:** the chart's baked-in default policy floors confinement at `CC1` (since 0.7.8), which is what this kind cluster can enforce: it registers no gVisor/Kata `RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex overlay).
-- `--set-file defaultPolicy=deploy/kind/sso/default-policy.json` rides along only to state that floor explicitly; it is redundant, and the walk below does not depend on it.
+- `--set-file defaultPolicy=deploy/kind/sso/default-policy.json` rides along but is SHADOWED: the quickstart sets `env.WARDYN_DEFAULT_POLICY`, and an explicit env value wins over `defaultPolicy`. The floor is `CC1` either way, and the walk below does not depend on it.
 
 - **`auth.adminToken` is deliberately NOT emptied.**
   - `values-entra.yaml` never sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline admin token forward from Step 3 —
