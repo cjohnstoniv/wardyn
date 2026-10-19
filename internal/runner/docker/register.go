@@ -43,6 +43,7 @@ func buildConfig(d substrate.Deps, recordingMount string) Config {
 		// a warn. cliutil.EnvBool so a garbage value exits 2 at boot instead of
 		// silently staying off.
 		AllowUnenforceableCaps: cliutil.EnvBool("WARDYN_ALLOW_UNENFORCEABLE_CAPS", false),
+		ProxySandboxPeersOnly:  cliutil.EnvBool(EnvProxySandboxPeersOnly, false),
 		ConfinementRuntimes:    d.ConfinementRuntimes,
 		// The deployment's host_path user-drive ceiling, parsed once at boot.
 		UserDriveHostRoots: d.UserDriveHostRoots,

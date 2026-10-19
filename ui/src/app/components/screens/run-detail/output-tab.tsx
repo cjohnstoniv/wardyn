@@ -18,6 +18,9 @@ import { Chip } from "../../wardyn/primitives";
 import { EmptyState, ErrorState } from "../../wardyn/states";
 
 const POLL_MS = 4000;
+// After a good read, a failed poll is retried this many times, backing off up to MAX_BACKOFF_MS, before it is shown.
+const MAX_BLIPS = 4;
+const MAX_BACKOFF_MS = 30_000;
 // A not-kept answer this soon after the run ended is the final row still
 // being written (design §3, read order 5), not a verdict. So is an interactive
 // answer this soon after a Wardyn stop: the pane snapshot row is written a
@@ -88,13 +91,22 @@ export function OutputTab({
     return () => clearTimeout(t);
   }, [loaded]);
 
+  // Whether this run's output has been read at least once: after that, one failed poll is a blip, not a verdict.
+  const hadRead = React.useRef(false);
+  React.useEffect(() => {
+    hadRead.current = false;
+  }, [runId]);
+
   React.useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     const tick = async () => {
       try {
         const o = await runOutput.get(runId);
         if (cancelled) return;
+        hadRead.current = true;
+        failures = 0;
         setOut(o);
         setRefusal(null);
         setSaving(false);
@@ -103,8 +115,15 @@ export function OutputTab({
         if (!o.complete) timer = setTimeout(tick, POLL_MS);
       } catch (e) {
         if (cancelled) return;
-        setOut(null);
         const r = e instanceof HttpError ? (REFUSALS[e.reason] ?? "error") : "error";
+        // A 502 or a network blip while polling a healthy run: keep the output on screen and look again, backing
+        // off. A mapped reason (not kept, interactive, ...) is an answer and still replaces it.
+        if (r === "error" && hadRead.current && failures < MAX_BLIPS) {
+          failures += 1;
+          timer = setTimeout(tick, Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS));
+          return;
+        }
+        setOut(null);
         setRefusal(r);
         setRetrying(false);
         setLoaded(true);

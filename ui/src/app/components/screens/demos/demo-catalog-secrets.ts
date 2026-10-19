@@ -146,8 +146,9 @@ export const SECRETS_DEMOS: Demo[] = [
   // teach that the mechanism CHANGES with the credential kind, because it is
   // the consuming protocol — not a Wardyn preference — that decides how far
   // out of the sandbox a credential can be kept. Read them as a ladder:
-  // header-injected (never enters) → piped (enters, never rests) → resident
-  // (rests, briefly) → re-originated (cannot even be asked for) → refused.
+  // header-injected (never enters) → piped (enters, never rests) → signed at
+  // the proxy (never enters, used through an agent) → re-originated (cannot
+  // even be asked for) → refused.
   {
     id: "rest-api-token",
     section: "secrets",
@@ -254,14 +255,14 @@ export const SECRETS_DEMOS: Demo[] = [
     ],
   },
   {
-    id: "ssh-briefly-resident",
+    id: "ssh-at-the-proxy",
     section: "secrets",
-    title: "The one that touches disk — briefly",
+    title: "The SSH key that stays at the proxy",
     needsSecret: "wardyn-demo-ssh-key",
     teaches:
-      "git's SSH transport has NO credential-helper seam, so an SSH key cannot be brokered without becoming resident — Wardyn narrows the window instead of pretending it isn't there.",
+      "git's SSH transport has no credential helper, so the proxy signs instead: it holds the key and answers as the SSH agent, and the sandbox never gets a key file.",
     overview:
-      "This is the documented exception, and the reason it is a demo rather than a footnote: the ssh client reads a private key from a FILE, so unlike every kind above there is no way to keep this one out of the sandbox. Wardyn's answer is a window instead of a wall — the key is written 0400 just before the clone and shredded right after. THIS IS A RE-ENACTMENT, and narrated as one: on a real run that whole window opens and closes during startup, before attach is even allowed, so the file is gone by the time you can attach. You will find an empty ~/.ssh and the startup mint already on the record, then re-play the window by hand — the same local mint route, the same node one-liner, the same 0400 file — and shred it yourself. Fake keypair; nothing authenticates.",
+      "SSH can't take a header, so Wardyn keeps the key at the proxy and lets ssh ask it for a signature. A start-up clone signs in that way, through a socket that exists only while that one ssh runs, and the agent closes before you get the terminal. Below, each way in is tried from inside the sandbox, and each is refused.",
     policy: {
       ...SHARED,
       allowed_domains: [],
@@ -277,34 +278,27 @@ export const SECRETS_DEMOS: Demo[] = [
     steps: [
       {
         cmd: "ls -la ~/.ssh",
-        text: "Empty — and that is the first half of the lesson. The key WAS here: startup minted it, wrote it 0400, and shredded it before the attach gate opened. You are looking at the after.",
+        text: "Empty, and it always was: no key file is written for a clone.",
       },
       {
-        text: "Now look at the Audit panel below: credential.mint, stamped at STARTUP. That row is the window you could never have watched. Everything from here on is an honest re-enactment of it, run by hand at the same mint route.",
+        cmd: "curl -sS -w '  [HTTP %{http_code}]\\n' --noproxy '*' -X POST -H 'Content-Type: application/json' -d '{\"grant_id\":\"{grant_id}\"}' \"$WARDYN_PROXY_URL/wardyn/v1/credentials/mint\"",
+        text: "403: ask the mint route for the key by its grant id and the proxy withholds it. The Audit panel shows the credential.mint: the control plane issued it to the proxy, which kept it. The grant is issued once per run, so that was its one issue.",
       },
       {
-        cmd: "curl -fsS --noproxy '*' -X POST -H 'Content-Type: application/json' -d '{\"grant_id\":\"{grant_id}\"}' \"$WARDYN_PROXY_URL/wardyn/v1/credentials/mint\" | (mkdir -p ~/.ssh; node -e 'let d=\"\";process.stdin.on(\"data\",c=>d+=c).on(\"end\",()=>{const o=JSON.parse(d);require(\"fs\").writeFileSync(process.env.HOME+\"/.ssh/id_wardyn_demo\",o.token.endsWith(\"\\n\")?o.token:o.token+\"\\n\",{mode:0o400})})') && chmod 0400 ~/.ssh/id_wardyn_demo",
-        text: "The re-play. A value-bearing grant is re-mintable BY DESIGN (single-use only binds an APPROVED mint), so the same route hands the key back. node does the extraction because this image ships no jq and no python — that is exactly the one-liner startup itself uses.",
+        cmd: "curl -sS -w '  [HTTP %{http_code}]\\n' --noproxy '*' \"$WARDYN_PROXY_URL/wardyn/v1/ssh-agent/{grant_id}/known_hosts\"",
+        text: "403: the agent closed when the start-up clones finished. Nothing in this sandbox can have the proxy sign with the key now.",
       },
       {
-        cmd: "ls -l ~/.ssh/id_wardyn_demo",
-        text: "-r-------- , agent-owned. THIS is the window: for the length of a clone, and only then, a private key is a real file in a real sandbox. Wardyn does not claim otherwise.",
-      },
-      {
-        cmd: "P=\"${WARDYN_PROXY_URL#*//}\"; ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o \"ProxyCommand corkscrew ${P%%:*} ${P##*:} %h %p\" -i ~/.ssh/id_wardyn_demo -p 443 git@ssh.github.com",
-        text: "Refused — the stored key is fake, so GitHub rejects it. The CONNECT itself was allowed: creating a run with an ssh_key grant unions ssh.github.com:443 into allowed_domains, because a key you cannot reach the host with governs nothing. Note what is NOT open: github.com:22, and every other host.",
-      },
-      {
-        cmd: "shred -u ~/.ssh/id_wardyn_demo 2>/dev/null || rm -f ~/.ssh/id_wardyn_demo; ls -la ~/.ssh",
-        text: "Gone — and this is agent-run's own wipe verbatim, `|| rm -f` included. shred needs to WRITE the file it overwrites, and a 0400 key is not writable even by its owner, so shred declines and the rm behind it does the work: the file is unlinked, not scrubbed. Startup's wipe has always behaved exactly this way; the demo shows it rather than tidying it up. The lesson isn't that this kind is safe — it's that the exception is bounded, documented, and the only one.",
+        cmd: "P=\"${WARDYN_PROXY_URL#*//}\"; ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o \"ProxyCommand corkscrew ${P%%:*} ${P##*:} %h %p\" -p 443 git@ssh.github.com",
+        text: "Refused: ssh reaches GitHub, but there is no key here to offer. The CONNECT itself was allowed: creating a run with an ssh_key grant unions ssh.github.com:443 into allowed_domains. Note what is NOT open: github.com:22, and every other host.",
       },
     ],
     setupUi: [
-      "New Run → pick the Fence (CC1) barrier. An ssh_key grant does not raise the confinement floor (same reasoning as git_pat), but it IS the one kind that puts a credential on disk — pick your barrier with that in mind on a real run.",
-      "On /secrets, add a secret named \"wardyn-demo-ssh-key\" — the private key PEM. A fake one is enough to prove the window; only the clone needs a real one.",
-      "In Policy, add an eligible grant: kind \"ssh_key\", host \"github.com\", key_secret_ref \"wardyn-demo-ssh-key\". The host must be a supported SSH-over-443 provider (github.com / dev.azure.com) — anything else is refused at policy write, and would skip the startup mint entirely.",
+      "New Run → pick the Fence (CC1) barrier. An ssh_key grant does not raise the confinement floor (same reasoning as git_pat).",
+      "On /secrets, add a secret named \"wardyn-demo-ssh-key\" — the private key PEM. A fake one is enough for this demo; only a real clone needs a real one.",
+      "In Policy, add an eligible grant: kind \"ssh_key\", host \"github.com\", key_secret_ref \"wardyn-demo-ssh-key\". The host must be a supported SSH-over-443 provider (github.com / dev.azure.com) — anything else is refused at policy write.",
       "Leave allowed_domains empty and set \"first_use_approval\": \"always_deny\" — run-create adds ssh.github.com:443 for you, and only that.",
-      "Launch interactive and attach. On a real run you would never type any of this: startup mints, clones and shreds before the attach gate opens.",
+      "Launch interactive and attach. On a real run you would never type any of this: the start-up clone signs in through the proxy before the attach gate opens.",
     ],
   },
   {

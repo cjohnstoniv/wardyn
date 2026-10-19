@@ -16,6 +16,7 @@ import { HttpError, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
 import { weekdayClock } from "./run-ends-row";
+import { shortTime } from "../../../lib/format";
 
 const reviveRunMock = vi.fn();
 const setRunEndAndWaitMock = vi.fn();
@@ -188,7 +189,7 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
   // The ended run is read just after it ended, so kept_until is the grace less a
   // minute away. weekday + clock alone would repeat the moment it ended.
   const DAY = 24 * 3600_000;
-  const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const clock = shortTime;
   const keptRun = (graceDays: number) => {
     const keptUntil = new Date(NOW + graceDays * DAY - 60_000).toISOString();
     return { keptUntil, run: detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, kept_until: keptUntil }) };

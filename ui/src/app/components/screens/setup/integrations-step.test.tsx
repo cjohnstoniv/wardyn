@@ -13,9 +13,9 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { IntegrationsStep, STEP_LEDE_LINK, STEP_LEDE_PREFIX, STEP_LEDE_SUFFIX } from "./integrations-step";
 
-function renderStep() {
+function renderStep(path = "/setup") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <IntegrationsStep />
     </MemoryRouter>,
   );
@@ -40,6 +40,12 @@ describe("IntegrationsStep", () => {
     renderStep();
     const link = screen.getByRole("link", { name: STEP_LEDE_LINK });
     expect(link).toHaveAttribute("href", "/secrets");
+  });
+
+  // #2577: in the admin view the funnel mounts at /admin/setup, and /secrets there is the User view's page.
+  it("the lede's Secrets page link stays in the admin view when the funnel is read there", () => {
+    renderStep("/admin/setup");
+    expect(screen.getByRole("link", { name: STEP_LEDE_LINK })).toHaveAttribute("href", "/admin/secrets");
   });
 
   // The retired Model provider card (its pointer sentence was never approved

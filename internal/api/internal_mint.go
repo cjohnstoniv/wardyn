@@ -100,7 +100,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 				"host":     host,
 				"reason":   reasonBrokeredForgeSingleLane,
 			})))
-		second := "a resident SSH key gives the same run a second push path SSH makes unparseable"
+		second := "an SSH key gives the same run a second push path SSH makes unparseable"
 		alt := "your own key"
 		if kind == types.GrantGitPAT {
 			second = "a resident PAT gives the same run a second push path that is an opaque CONNECT tunnel no parser can read"

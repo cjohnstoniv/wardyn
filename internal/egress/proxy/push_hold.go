@@ -308,6 +308,16 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), hold)
 	defer cancel()
+	if id != uuid.Nil {
+		// A retry rejoining the held push: the console reads the row as held for this hold too.
+		if body, err := json.Marshal(struct {
+			Kind           types.ApprovalKind     `json:"kind"`
+			RequestedScope types.PushContentScope `json:"requested_scope"`
+			RejoinID       uuid.UUID              `json:"rejoin_id"`
+		}{types.ApprovalPushContent, scope, id}); err == nil {
+			_, _ = p.approval.raiseBytes(ctx, body)
+		}
+	}
 	if id == uuid.Nil {
 		body, err := json.Marshal(struct {
 			Kind           types.ApprovalKind     `json:"kind"`

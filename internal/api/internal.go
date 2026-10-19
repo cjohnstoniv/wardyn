@@ -350,6 +350,15 @@ type internalApprovalRequest struct {
 	// PathList is a push_content raise's complete path list; a previous-release
 	// sidecar sends none. Refused on any other kind.
 	PathList *types.PushPathList `json:"path_list"`
+	// RejoinID names the PENDING approval a held request is re-entering the hold on; the raise then
+	// stamps that row (approval.Rejoin) instead of creating or deduplicating one. A previous-release
+	// sidecar sends none.
+	RejoinID *uuid.UUID `json:"rejoin_id"`
+}
+
+// approvalRejoiner is the optional ApprovalService method behind a raise's rejoin_id.
+type approvalRejoiner interface {
+	Rejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
 }
 
 // handleInternalRequestApproval raises (or dedups to an existing) approval on
@@ -394,6 +403,26 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	if scopeNamesLane(body.RequestedScope) {
 		s.auditAuthFailedAs(r, internalApprovalActor, reasonReservedScopeKey)
 		writeErrorReason(w, http.StatusBadRequest, reasonReservedScopeKey, "requested_scope may not name a lane")
+		return
+	}
+	if body.RejoinID != nil {
+		// A rejoin creates nothing, so neither the push admission nor the per-run cap applies; only a
+		// PENDING row of this run and kind is stamped.
+		rj, can := s.cfg.Approvals.(approvalRejoiner)
+		if !can {
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "no pending approval to rejoin")
+			return
+		}
+		ap, found, err := rj.Rejoin(r.Context(), *body.RejoinID, claims.RunID, body.Kind)
+		if err != nil {
+			writeServerError(w, r, "rejoin approval", err)
+			return
+		}
+		if !found {
+			writeErrorReason(w, http.StatusNotFound, reasonApprovalNotFound, "no pending approval to rejoin")
+			return
+		}
+		writeJSON(w, http.StatusOK, ap)
 		return
 	}
 	if body.Kind == types.ApprovalPushContent {

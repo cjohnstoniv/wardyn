@@ -604,7 +604,9 @@ func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 // port-stripped entry while a port-qualified one ships, or the reverse.
 func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	src := readSrc(t, "internal", "api", "workspace_egress.go")
-	if !strings.Contains(src, "entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))") {
+	helper := readSrc(t, "internal", "api", "artifact_redirect.go")
+	if !strings.Contains(src, "entry := redirectToEntry(to, r.To)") ||
+		!strings.Contains(helper, "return net.JoinHostPort(host, strconv.Itoa(redirectPort(rawTo)))") {
 		t.Fatal("substituteArtifactEgress no longer writes a net.JoinHostPort-qualified entry — re-derive the doc claim before trusting this guard")
 	}
 	policy := readSrc(t, "internal", "egress", "proxy", "policy.go")

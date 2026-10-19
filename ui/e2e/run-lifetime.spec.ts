@@ -17,6 +17,8 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
+import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 async function seedRun(page: Page, task: string): Promise<string> {
   const created = await consoleAPI(page, "POST", "/api/v1/runs", { agent: "claude-code", task });
@@ -88,6 +90,24 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
       })
       .toBeGreaterThan(Date.parse(setEndsAt));
     expect(Math.abs(Date.parse(extendedEndsAt) - Date.parse(setEndsAt) - 24 * 3600_000)).toBeLessThan(60_000);
+  });
+});
+
+test.describe("Run lifetime — the Change dialog's date", () => {
+  // A cleared date used to reach Save and fail with a toast reading "Invalid time value".
+  test("clearing the date holds Save back, and a real date releases it", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e empty date " + randomUUID().slice(0, 8));
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByTestId("run-ends-row").getByRole("button", { name: "Set an end…" }).click();
+    const dialog = page.getByRole("dialog", { name: "When this run ends" });
+    const input = dialog.locator('input[type="datetime-local"]');
+    const save = dialog.getByRole("button", { name: "Save" });
+    await expect(save).toBeEnabled();
+    await input.fill("");
+    await expect(save).toBeDisabled();
+    await input.fill(toDatetimeLocalValue(new Date(aheadByHours(9600))));
+    await expect(save).toBeEnabled();
   });
 });
 

@@ -86,11 +86,13 @@ export function Chip({
   // (which double-matches getByText) and without leaking the value into the
   // DOM text content — so an internal-only string (a confinement wire code)
   // stays out of accessible content entirely (D4). Use only for AT-safe copy.
+  // aria-label is not allowed on a role-less span, so setting it also gives the span role="img".
   srLabel?: string;
 }) {
   return (
     <span
       title={title}
+      role={srLabel ? "img" : undefined}
       aria-label={srLabel}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium leading-5 whitespace-nowrap w-fit",
@@ -513,7 +515,7 @@ export function SectionCard({
         <div className="mb-3 flex items-center gap-2">
           {Icon && <Icon className="size-4 text-muted-foreground" />}
           {title && (
-            <h2 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>
+            <h2 className="label-eyebrow">{title}</h2>
           )}
           {right && <div className="ml-auto">{right}</div>}
         </div>

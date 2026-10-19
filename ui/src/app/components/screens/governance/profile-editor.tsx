@@ -31,8 +31,8 @@ import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
+import { DurationField } from "../../wardyn/duration-field";
 import { Input } from "../../ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { makeMono, Mono } from "../../wardyn/code-block";
 import { safeRequestHref } from "../../wardyn/policy-remedy";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
@@ -695,38 +695,22 @@ function LimitDurationRow({
   return (
     <div className="mt-3 border-t border-border pt-3 first-of-type:border-t-0" data-testid={id}>
       <Field label={label} htmlFor={id} hint={hint} className="max-w-[28rem]">
-        <div className="flex items-center gap-2">
-          <Input
-            id={id}
-            aria-describedby={hint ? fieldHintId(id) : undefined}
-            type="number"
-            min={0}
-            className="max-w-[8rem] font-mono"
-            disabled={disabled}
-            value={numberField(count)}
-            onChange={(e) => onChange(nonNegativeInt(e.target.value) * unit)}
-          />
-          {/* Changing the unit keeps the number typed: "30", then minutes. */}
-          <Select
-            value={String(unit)}
-            disabled={disabled}
-            onValueChange={(v) => {
-              setUnit(Number(v));
-              if (count) onChange(count * Number(v));
-            }}
-          >
-            <SelectTrigger aria-label={RL.UNIT_PICKER_LABEL(label)} className="w-[8rem]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {RUN_LIMIT_UNITS.filter((u) => u.sec > 1 || offerSeconds).map((u) => (
-                <SelectItem key={u.sec} value={String(u.sec)}>
-                  {u.many}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <DurationField
+          id={id}
+          count={String(numberField(count))}
+          unit={String(unit)}
+          units={RUN_LIMIT_UNITS.filter((u) => u.sec > 1 || offerSeconds).map((u) => ({ value: String(u.sec), label: u.many }))}
+          onCount={(raw) => onChange(nonNegativeInt(raw) * unit)}
+          onUnit={(v) => {
+            setUnit(Number(v));
+            if (count) onChange(count * Number(v));
+          }}
+          unitLabel={RL.UNIT_PICKER_LABEL(label)}
+          disabled={disabled}
+          describedBy={hint ? fieldHintId(id) : undefined}
+          inputClassName="max-w-[8rem] font-mono"
+          selectClassName="w-[8rem]"
+        />
       </Field>
     </div>
   );

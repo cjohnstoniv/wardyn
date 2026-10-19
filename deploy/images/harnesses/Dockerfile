@@ -36,10 +36,17 @@ ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CODEX_INSTALL=npm
 ARG CODEX_VERSION=0.149.1
+# A staged binary built for the other arch (see stage-agent-binary.sh --arch) is refused by its ELF
+# machine type (byte 18: 0x3e amd64, 0xb7 arm64), as claude-code's is. Anything else (not ELF, such as
+# a launcher script, or another machine type) installs as before.
+ARG TARGETARCH
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
         [ -f /codex-stage/codex-bin ] || { echo "CODEX_INSTALL=native but deploy/images/codex-cli/codex-bin is not staged — stage it first (see deploy/images/README.md)" >&2; exit 1; }; \
+        want="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+        case "$(od -An -tx1 -j18 -N1 /codex-stage/codex-bin | tr -d ' ')" in 3e) have=amd64;; b7) have=arm64;; *) have=unknown;; esac; \
+        [ "$have" = unknown ] || [ "$have" = "$want" ] || { echo "staged codex-bin is $have but this image builds for $want; restage with: scripts/stage-agent-binary.sh codex-cli --arch $want" >&2; exit 1; }; \
         install -m 0755 /codex-stage/codex-bin /usr/local/bin/codex; \
         echo "installed host-staged native codex"; \
     else \

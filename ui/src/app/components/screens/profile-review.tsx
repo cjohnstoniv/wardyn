@@ -294,9 +294,7 @@ function ProfileBody({
 
       {/* --- proposed inline_policy, verbatim --- */}
       <div>
-        <Label className="text-meta uppercase tracking-wide text-muted-foreground">
-          inline_policy (proposed)
-        </Label>
+        <SectionLabel>inline_policy (proposed)</SectionLabel>
         <YamlBlock value={inline_policy} className="mt-1.5" />
       </div>
 
@@ -562,7 +560,7 @@ function RiskRow({ item }: { item: RiskItem }) {
 function Summary({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-meta uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="label-eyebrow">{label}</div>
       <div className="mt-0.5 text-foreground">{value}</div>
     </div>
   );
@@ -570,7 +568,7 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-1.5 text-meta uppercase tracking-wide text-muted-foreground">{children}</div>
+    <div className="mb-1.5 label-eyebrow">{children}</div>
   );
 }
 

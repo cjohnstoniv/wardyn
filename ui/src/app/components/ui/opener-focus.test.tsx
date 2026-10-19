@@ -9,13 +9,14 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "./alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "./sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./dropdown-menu";
 import { holdExitAnimation } from "../../../test/exit-animation";
 
 afterEach(cleanup);
 
 // A dialog opened from state has no DialogTrigger, so Radix had nowhere to return focus: it fell to <body>.
-function Harness({ kind, onCloseAutoFocus, removeOpener }: { kind: "dialog" | "alert"; onCloseAutoFocus?: (e: Event) => void; removeOpener?: boolean }) {
+function Harness({ kind, onCloseAutoFocus, removeOpener }: { kind: "dialog" | "alert" | "sheet"; onCloseAutoFocus?: (e: Event) => void; removeOpener?: boolean }) {
   const [open, setOpen] = React.useState(false);
   const [gone, setGone] = React.useState(false);
   const body = (
@@ -35,6 +36,14 @@ function Harness({ kind, onCloseAutoFocus, removeOpener }: { kind: "dialog" | "a
             {removeOpener && body}
           </DialogContent>
         </Dialog>
+      ) : kind === "sheet" ? (
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetContent onCloseAutoFocus={onCloseAutoFocus}>
+            <SheetTitle>Title</SheetTitle>
+            <SheetDescription>Body</SheetDescription>
+            {removeOpener && body}
+          </SheetContent>
+        </Sheet>
       ) : (
         <AlertDialog open={open} onOpenChange={setOpen}>
           <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
@@ -49,7 +58,7 @@ function Harness({ kind, onCloseAutoFocus, removeOpener }: { kind: "dialog" | "a
   );
 }
 
-describe.each(["dialog", "alert"] as const)("a state-opened %s", (kind) => {
+describe.each(["dialog", "alert", "sheet"] as const)("a state-opened %s", (kind) => {
   it("returns focus to the element that opened it on Escape", async () => {
     const user = userEvent.setup();
     render(<Harness kind={kind} />);

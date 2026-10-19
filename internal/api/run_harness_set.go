@@ -295,7 +295,7 @@ func (s *Server) harnessSetRefusalFor(r *http.Request, req createRunRequest, wsR
 	if refusal != nil {
 		return nil, nil, refusal
 	}
-	if custom || len(wsRefs) > 0 {
+	if custom || s.workspaceBuildsImage(wsRefs) {
 		return set, nil, nil
 	}
 	return set, &image, nil

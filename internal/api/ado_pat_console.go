@@ -76,9 +76,9 @@ func (s *Server) adoPATAccessFor(ctx context.Context, pr perUserADORow, subject 
 // handleADODisconnect is DELETE /scm/azure-devops/connection: the caller
 // disconnects their own Azure DevOps sign-in. It revokes every live run token
 // created in their name, forgets the stored sign-in, audits
-// ado_pat.disconnect and answers 204, also when nothing was stored. With no
-// row the caller may use, it forgets what they stored under any Azure DevOps
-// row, disabled or withdrawn from them; when they hold nothing either, it
+// ado_pat.disconnect and answers 204, also when nothing was stored. It
+// forgets what they stored under every Azure DevOps row, the usable one and
+// any disabled or withdrawn from them; with no usable row and nothing held, it
 // answers the same 404 as a deployment with no per-user row (D-6).
 //
 // A sign-in captured at console login (source "org") is captured again at the

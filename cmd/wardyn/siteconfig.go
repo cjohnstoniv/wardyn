@@ -21,11 +21,14 @@ import (
 // siteConfigFieldsAfter066 names the SiteConfig keys added after 0.6.6 (mirrors
 // internal/api/site_config.go's siteConfigFieldsAfter066 — kept as a separate
 // literal because this package cannot import an internal/api unexported var;
-// nothing enforces the two lists staying in sync beyond this comment). A key
+// TestSiteConfigFieldsAfter066MatchesServer fails when the two lists differ). A key
 // here that this file's JSON does not MENTION is exactly the shape
 // carryForwardUnnamedSiteConfigFields preserves server-side; add a key here
 // when you add one to internal/api's list.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
+var siteConfigFieldsAfter066 = []string{
+	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
+	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
+}
 
 // omittedPostV066Fields reports which of siteConfigFieldsAfter066 raw (the
 // file's own bytes, not the decoded struct) never MENTIONS — an absent key,

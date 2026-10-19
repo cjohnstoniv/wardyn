@@ -85,7 +85,7 @@ function laneMeta(l: Lane, patBrokerEnabled: boolean) {
 
 // Only the kinds a stored credential can actually produce (deriveProviders
 // only pushes a lane when its secret/App flag is real) — brokered for the App,
-// resident for a written key/token.
+// proxy-injected for a PAT on its broker or an SSH key, resident for a PAT handed to git.
 function scmResidency(lanes: Lane[], patBrokerEnabled: boolean): ResidencyKind {
   const kinds = new Set(lanes.map((l) => laneMeta(l, patBrokerEnabled).residency));
   return kinds.size === 1 ? [...kinds][0] : "varies";

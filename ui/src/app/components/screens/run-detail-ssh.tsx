@@ -181,7 +181,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     setAppError(null);
     setOpeningApp(app.name);
     try {
-      const ticket = await runsApi.attachTicket(run.id);
+      const ticket = await runsApi.attachTicket(run.id, "ui");
       // #1241: the gateway refuses a ticket this browser did not bind first,
       // so a ticket minted elsewhere cannot be pushed into this browser.
       if (uiSandbox?.bind_url) {

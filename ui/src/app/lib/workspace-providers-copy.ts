@@ -351,6 +351,9 @@ export const PROVIDERS_EXTRA = {
   // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
   // Corporate-network save toast — an ADDITIONAL warning beside whatever
   // success toast the saving step already shows, never a replacement for it.
+  // Disconnect on a stored git credential asks first: the value is write-only, so it cannot be shown again.
+  DISCONNECT_CREDENTIAL_BODY:
+    "The stored value is deleted from Wardyn and can't be shown again. Runs that clone with it stop working until you connect a new one. This cannot be undone.",
   SAVED_DANGLING_REFS: (refs: string[]) =>
     `Saved, but ${refs.length === 1 ? "this secret isn't" : "these secrets aren't"} stored: ${refs.join(", ")}.`,
 } as const;

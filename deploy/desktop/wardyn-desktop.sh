@@ -257,6 +257,18 @@ if [ -z "${WARDYN_OIDC_INTERNAL_ISSUER+x}" ] && [ -z "$(env_get "${ENV_FILE}" WA
   esac
 fi
 
+# Docker Compose 2.24.4 is the first release where the `!override` in
+# docker-compose.ports.yaml replaces a published-port list; 2.24.0 merges it and
+# still publishes 5432, 5010 and 8081 (#2165). Succeeds when the installed plugin
+# is older. A version string it cannot parse is not treated as too old.
+compose_too_old() {
+  _cv="$(docker compose version --short 2>/dev/null)"; _cv="${_cv#v}"
+  case "${_cv}" in [0-9]*.[0-9]*.[0-9]*) ;; *) return 1 ;; esac
+  _cr="${_cv#*.}"; _cp="${_cr#*.}"
+  [ $(( ${_cv%%.*} * 1000000 + ${_cr%%.*} * 1000 + ${_cp%%[!0-9]*} )) -lt 2024004 ]
+}
+compose_too_old && die "wardyn-desktop.sh: Docker Compose $(docker compose version --short) is older than 2.24.4, which the desktop stack needs to drop the Postgres, registry and relay port publishes — upgrade the Compose plugin"
+
 log "Bringing up the desktop compose stack (image ${WARDYN_WARDYND_IMAGE})"
 compose up -d --no-build --pull missing
 

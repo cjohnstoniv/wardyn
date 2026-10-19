@@ -131,6 +131,10 @@ type Config struct {
 	// Expires, so the browser drops it when it closes. The server-side expiry is unchanged.
 	BrowserSessionCookie bool
 
+	// BackchannelLogout is WARDYN_OIDC_BACKCHANNEL_LOGOUT: mount the identity provider's back-channel
+	// logout endpoint (backchannel.go). Off by default, and then the route does not exist.
+	BackchannelLogout bool
+
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
 	OnLogin func(ctx context.Context, facts LoginFacts)
@@ -686,6 +690,9 @@ const (
 	// authErrorSignInRefused: a refusal (DenialReservedPrincipal) the sign-in screen shows a generic
 	// sentence for; the cause is in the log, not shown to the person.
 	authErrorSignInRefused = "sign_in_refused"
+	// authErrorSignInExpired: the callback's state cookie is gone or belongs to a newer login in this
+	// browser (more than ten minutes at the IdP, or a second sign-in started meanwhile).
+	authErrorSignInExpired = "sign_in_expired"
 )
 
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code>, a real page it can act

@@ -222,7 +222,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - Both read one set: Wardyn's built-in public hosts (the vendor model APIs, the public code hosts and the package registries, `safeBaselineDomains` in [`internal/composer/risk.go`](../../internal/composer/risk.go)), plus what the operator declares.
   - An operator declares hosts with `PUT /governance/egress-baseline`, or in the console under Governance, Baseline hosts.
     - `baseline_hosts` are exact hostnames.
-    - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that suffix and every host under it.
+    - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that host only, never a host under it (list those as `baseline_hosts`).
   - Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
   - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
   - Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
