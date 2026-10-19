@@ -250,3 +250,20 @@ func TestADONames_CloneDirectoryCollisionIsAWarning(t *testing.T) {
 		t.Errorf("warnings = %q, want one naming the dropped %s and the %s that kept the directory", warns, dashed, spaced)
 	}
 }
+
+// A repo dropped for an unsafe ref or locator is said on the 201 as well as in the log, like the other drops.
+func TestBuildRepoRecords_UnsafeRefOrLocatorWarns(t *testing.T) {
+	records, warns := buildRepoRecords("", []types.WorkspaceRepo{
+		{Repo: "acme/one", Ref: "bad\tref"},
+		{Repo: "acme/two\nthree"},
+	})
+	if records != "" || len(warns) != 2 {
+		t.Fatalf("records %q, warnings %q; want nothing cloned and one warning per dropped repo", records, warns)
+	}
+	if !strings.Contains(warns[0], "acme/one") || !strings.Contains(warns[0], "ref") || strings.Contains(warns[0], "bad") {
+		t.Errorf("ref warning = %q, want it to name the repo and the ref, and not echo the unsafe value", warns[0])
+	}
+	if !strings.Contains(warns[1], "locator") || strings.Contains(warns[1], "three") {
+		t.Errorf("locator warning = %q, want it to name the locator, and not echo the unsafe value", warns[1])
+	}
+}

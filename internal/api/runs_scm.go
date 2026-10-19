@@ -314,11 +314,15 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		if ref != "" && !repoFieldSafe(ref) {
 			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
 				slog.String("slug", redactRepoURL(slug)), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
+			// Said on the 201 too, as the other drops below are; the unsafe value itself is not echoed.
+			warnings = append(warnings, fmt.Sprintf(
+				"repository %s was NOT cloned: its ref is not a safe clone field — fix the ref and launch again", redactRepoURL(slug)))
 			return
 		}
 		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
 			slog.Warn("wardynd: repo locator is not a safe clone field; dropping the repo",
 				slog.String("err", fmt.Sprintf(repoField400Charset, "repo")))
+			warnings = append(warnings, "a repository was NOT cloned: its locator is not a safe clone field — fix the repository and launch again")
 			return
 		}
 		slug, url, dest, ok := repoCloneSpec(slug, dest)
