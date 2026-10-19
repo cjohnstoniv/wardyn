@@ -47,6 +47,8 @@ services:
   registry:
     image: registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
     container_name: ${WARDYN_NS:-wardyn}-registry
+    # No raw sockets: local mode trusts the published port's source address on this network.
+    cap_drop: [NET_RAW]
     restart: unless-stopped
     ports:
       # Host-port parameterized like WARDYN_PG_PORT above so concurrent stacks
@@ -73,6 +75,8 @@ services:
     # so the digest freezes the exact image; bump both together on a version move.
     image: postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
     container_name: ${WARDYN_NS:-wardyn}-postgres
+    # No raw sockets: local mode trusts the published port's source address on this network.
+    cap_drop: [NET_RAW]
     # Survive a host reboot (e.g. a MacBook's weekly MDM window) — otherwise only
     # the registry came back and the stack was down until a manual `up` (D18).
     restart: unless-stopped
@@ -101,6 +105,8 @@ services:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
     image: ghcr.io/dexidp/dex:v2.40.0@sha256:3e35d5d0f7dbd33fbadc36a71ff58cf4097ab98d73d22f6cb9a6471a32e028af
     container_name: ${WARDYN_NS:-wardyn}-dex
+    # No raw sockets: local mode trusts the published port's source address on this network.
+    cap_drop: [NET_RAW]
     # Opt-in: human SSO is OFF by default (`make setup` / `scripts/up.sh up`
     # starts only postgres+wardynd with WARDYN_LOCAL_MODE=true and an empty
     # OIDC issuer). Bring dex up explicitly with `docker compose --profile sso
@@ -157,6 +163,8 @@ services:
     # other caller.
     image: ${WARDYN_WARDYND_IMAGE:-wardyn/wardynd:local}
     container_name: ${WARDYN_NS:-wardyn}-api
+    # No raw sockets: local mode trusts the published port's source address on this network.
+    cap_drop: [NET_RAW]
     # Survive a host reboot alongside postgres/registry (D18); a per-run proxy
     # sidecar is launched by the docker runner (not a compose service), so its
     # restart posture is set container-side, not here.
@@ -721,6 +729,8 @@ services:
         GOPROXY: "${GOPROXY:-}"
     image: wardyn/wardyn-tetragon-ingest:local
     container_name: ${WARDYN_NS:-wardyn}-tetragon-ingest
+    # No raw sockets: local mode trusts the published port's source address on this network.
+    cap_drop: [NET_RAW]
     profiles: ["groundtruth"]
     environment:
       WARDYN_TETRAGON_EXPORT: "/var/log/tetragon/tetragon.log"

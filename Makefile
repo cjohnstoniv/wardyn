@@ -678,6 +678,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
+	./scripts/test-compose-cap-drop.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
