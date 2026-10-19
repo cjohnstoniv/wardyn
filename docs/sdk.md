@@ -909,7 +909,7 @@ The rest reach the wire only through
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN`'s own gate (and `WARDYN_CAPABILITY_SECOND_HUMAN`'s, for an Azure DevOps capability escalation): the deciding principal is the same one who raised the approval. |
 | `user_view_type_deleted` | An admin viewing through a user type that has since been deleted. `admin_view` (below) is the launch-door row this same cause answers with on `POST /runs`/`/runs/preflight`/`/runs/policy-preview`. |
 | `admin_view` | An admin in the user view launched a run after the type the view looks through was deleted — the launch-door twin of `user_view_type_deleted` just above; the underlying cause is audited under that reason, this one is not audited on its own. |
-| `user_view_preview` | With `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose user view looks through a type other than their own sent a write; the view is a read-only preview, so `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview` and every other non-read request answer `409` (sign-out, `POST /me/view` and `POST /policies/grade` still pass). Audited as `authz.denied`. |
+| `user_view_preview` | A security admin, or a super admin with `WARDYN_GOVERN_ADMIN_RUNS` on, whose user view looks through a type other than their own sent a write; the view is a read-only preview, so `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview` and every other non-read request answer `409` (sign-out, `POST /me/view` and `POST /policies/grade` still pass). Audited as `authz.denied`. |
 
 The UI-sandbox relay session's own re-check (`uigateway_session.go`, the
 `ui.authorize`/`denied` audit row) refuses a still-open connection with one of

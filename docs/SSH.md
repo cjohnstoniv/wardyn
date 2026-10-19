@@ -634,9 +634,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - A failure reply counts as an answer; OpenSSH, PuTTY, paramiko and `wardyn sync` all give one.
   - A client suspended or asleep for more than 30 seconds can lose its session, where TCP alone would have kept it for minutes.
   - The close writes no audit row and no log line.
-- **Connections.** At most 64 connections handshake at once (each within 15 seconds) and, counted apart, 64 authenticated ones stay open.
-  - Over the handshake bound a connection is closed before any byte; over the other, once it authenticates.
-  - Either refusal logs a `connection refused at a cap` warning, at most once a minute.
+- **Connections.** At most 64 connections handshake at once (each within 15 seconds), at most 16 of them from one source address, and, counted apart, 64 authenticated ones stay open.
+  - `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` and `WARDYN_SSH_MAX_CONNECTIONS` set them. Behind a NAT, raise the per-source one.
+  - Over a handshake bound a connection is closed before any byte; over the authenticated one, once it authenticates.
+  - Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and logs a `connection refused at a cap` warning, at most once a minute.
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
@@ -750,8 +751,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   surface, not a nuisance:
   - a per-connection handshake deadline (cleared once auth succeeds — an
     established session is never killed by it);
-  - a bounded total concurrent-connection count (a connection over the cap is
-    closed immediately, before any handshake byte is exchanged);
+  - bounded concurrent-connection counts, total and per source (a connection
+    over either is closed before any handshake byte);
   - a small, documented cap on concurrent SSH channels — `session` (shell/
     exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
     counter. So one run cannot exhaust the daemon's own resources by opening

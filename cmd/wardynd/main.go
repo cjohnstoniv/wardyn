@@ -438,6 +438,8 @@ func run() error {
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
 
+		// The runner stream's anonymous in-flight bound per client address.
+		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
 		GovernAdminRunsExempt: knobs.governAdminRunsExempt,
 
@@ -509,6 +511,7 @@ func run() error {
 		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:             lm.loopback,
 		LocalTrustForwarder:       *f.localTrustFwd,
+		LocalTrustedPeers:         lm.trustedPeers,
 		OIDCRoleMapConfigured:     strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:           *f.oidcRedirectURL,
 		OIDCSecureCookies:         posture.secureCookies,
@@ -525,6 +528,9 @@ func run() error {
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
+		// The SSH gateway's established-connection ceiling and per-source handshake bound.
+		SSHMaxConnections:         *f.sshMaxConns,
+		SSHMaxHandshakesPerSource: *f.sshPerSource,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,

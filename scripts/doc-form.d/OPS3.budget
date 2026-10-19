@@ -115,7 +115,8 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 5186 adds 7 over 5179, measured: the node-loss containment wording after merging the runner sweep.
 # 0.9.4 W4-DOCS-1: docs/operations/denials.md 5188 adds 2 over 5186, measured: #2370 #2372: audited always-scope 403, admin_view causes.
 # docs/operations/denials.md 5191 adds 3 (0.9.4 final review): node_record_human_only also names the API token, as the code and docs/sdk.md do.
-docs/operations/denials.md=5191 share=35
+# 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
+docs/operations/denials.md=5200 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

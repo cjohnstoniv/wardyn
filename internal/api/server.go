@@ -143,6 +143,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerStreamHandshakesPerAddress caps one address's runner-stream handshakes
+	// in progress (WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS); 0 is the default.
+	RunnerStreamHandshakesPerAddress int
 	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
 	// token mint answers carry it; empty omits it.
 	ProxyImage string
@@ -522,11 +525,14 @@ type Config struct {
 	// publishes the port loopback-only (127.0.0.1:PORT), so a host UI/CLI request
 	// arrives at wardynd from the docker bridge gateway, not loopback. The LAN
 	// protection in that topology is the loopback PUBLISH (a LAN peer cannot reach a
-	// 127.0.0.1-bound host port at all), not the peer check — so the peer gate is a
-	// false positive there. The DNS-rebinding Host gate still applies. NEVER set this
-	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
-	// no-auth exposure the peer gate closes. Default false; set by compose only.
+	// 127.0.0.1-bound host port at all). Only peers inside LocalTrustedPeers pass,
+	// so another member of wardynd's network does not. The DNS-rebinding Host gate
+	// still applies. NEVER set this for a directly-bound host-mode wardynd on
+	// 0.0.0.0. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// LocalTrustedPeers are the non-loopback peers LocalTrustForwarder trusts, resolved
+	// at boot (WARDYN_LOCAL_TRUSTED_PEERS, else the gateway and own addresses).
+	LocalTrustedPeers []netip.Prefix
 	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
 	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
@@ -636,6 +642,10 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections and
+	// SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE) one address's handshakes; 0 is the default.
+	SSHMaxConnections         int
+	SSHMaxHandshakesPerSource int
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.

@@ -58,6 +58,11 @@ type Config struct {
 	Injection []InjectionConfig `json:"injection,omitempty"`
 	// Listen is the proxy listen address (default ":3128").
 	Listen string `json:"listen,omitempty"`
+	// AllowedPeers, when set, are the only source networks the proxy serves; a
+	// connection from any other address is closed before a byte is read. The
+	// Docker runner sets the run's own network here under
+	// WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY. Empty serves any peer.
+	AllowedPeers []netip.Prefix `json:"allowed_peers,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
 	// DecisionSpoolDir is a spool directory shared with runnerd, absent on org substrates. No runner

@@ -160,8 +160,8 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
 	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
 	// require a credential, so this is local-mode-only.
-	if s.cfg.LocalMode && !s.cfg.LocalTrustForwarder && !isLoopbackRemoteAddr(r.RemoteAddr) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
+	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
 		return
 	}
 	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {

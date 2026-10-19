@@ -368,7 +368,7 @@ func TestPushRulesRefuseEveryPushWhenAPatternCannotBeRead(t *testing.T) {
 
 // TestPushRulesTakeTheInspectionSlot: a push is a small body the agent chooses
 // that inflates to whatever gitpack's ceilings allow, and the sidecar has a
-// hard 256 MiB cap. Inspection therefore takes the process's one inspection
+// hard 256 MiB cap. Inspection therefore takes the engine's one inspection
 // slot — the one LLM request scanning takes — and a push that cannot get it in
 // time is refused, never forwarded unread.
 func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
@@ -378,13 +378,13 @@ func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
 		contentRulesSpec(".github/workflows/**"))
 	body := recordedPush(t, BranchNSPrefix(p.runID)+"work", map[string]string{"src/app.go": "package main\n"})
 
-	scanSlots <- struct{}{} // another inspection is in progress
+	p.scan.init().slots <- struct{}{} // another inspection is in progress
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, "/wardyn/gh/octocat/hello-world/git-receive-pack",
 		strings.NewReader(string(body))).WithContext(ctx))
 	cancel()
-	<-scanSlots
+	<-p.scan.slots
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status with the slot held = %d, want 503", rec.Code)
@@ -401,7 +401,7 @@ func TestPushRulesTakeTheInspectionSlot(t *testing.T) {
 	if rec := postPush(t, p, string(body)); rec.Code != http.StatusOK {
 		t.Fatalf("status with the slot free = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if !retainedBudgetEmpty() {
+	if !retainedBudgetEmpty(p) {
 		t.Error("bytes still charged to the retained-bytes budget after the push completed")
 	}
 }
