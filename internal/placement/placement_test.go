@@ -288,6 +288,31 @@ func TestDeliveryClassesMatchDesign(t *testing.T) {
 	}
 }
 
+// The modes a local run can be delivered under today, for every class. A class that gains a built
+// delivery (a via_org row, a residentBuilt entry) changes this table on purpose.
+func TestBuildableModes(t *testing.T) {
+	refuse := []Mode{ModeRefuse}
+	resident := []Mode{ModeRunnerResident, ModeRefuse}
+	viaOrg := []Mode{ModeViaOrg, ModeRefuse}
+	want := map[string][]Mode{
+		ClassADOMintedPAT: refuse, ClassAPIKey: viaOrg, ClassAWSSSOBearer: refuse, ClassAzureFoundryToken: refuse,
+		ClassBedrockBearer: refuse, ClassBedrockRoleCreds: refuse, ClassCloudSTS: refuse, ClassEnvSecret: resident,
+		ClassFileSecret: resident, ClassGitPATBroker: refuse, ClassGitPATHelper: resident, ClassGitHubToken: viaOrg,
+		ClassOAuthSubscription: {ModeOwn}, ClassSSHKey: resident,
+	}
+	for _, c := range DeliveryClasses() {
+		if got := BuildableModes(c); !slices.Equal(got, want[c]) {
+			t.Errorf("%s: buildable %v, want %v", c, got, want[c])
+		}
+	}
+	if len(want) != len(DeliveryClasses()) {
+		t.Errorf("table names %d classes, the policy has %d", len(want), len(DeliveryClasses()))
+	}
+	if got := BuildableModes("no_such_class"); got != nil {
+		t.Errorf("unknown class: %v, want nil", got)
+	}
+}
+
 // pathExists reports whether a dotted path of field names resolves under t.
 func pathExists(t reflect.Type, path string) bool {
 	for _, seg := range strings.Split(path, ".") {
