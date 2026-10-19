@@ -622,6 +622,8 @@ func (s *Server) auditADOOwnPAT(ctx context.Context, actor, action, rowID, outco
 // erase's advance refuses them wherever they run. A removal
 // (handleDeleteADOOwnPAT) is not an erase and is not fenced: a stamp on another
 // replica can still leave one stale informational stamp the next paste clears.
+// The GitHub own-token paste and removal (gh_own_pat.go) hold it too, on the
+// same terms.
 var adoOwnPATWriteMu sync.Mutex
 
 // stampADOOwnPATRefused records, once, that Azure DevOps refused owner's own

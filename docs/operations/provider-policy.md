@@ -11,6 +11,10 @@ and `PUT /site-config` from the CLI or MDM. This says which one wins, and what e
   - and an Azure DevOps Server row is `lanes: ["pat"]` with `credential_source: per_user`, git only.
 - A shared `pat` or `ssh` lane, and an empty `lanes` on such a row, is a 400 at both write doors.
 - See [docs/AZURE-DEVOPS.md](../AZURE-DEVOPS.md) for the app registration, the row's fields, and what a member sees.
+- A GitHub row can take each person's own token: `lanes: ["pat"]` with `credential_source: per_user`, every address on github.com.
+  - Any other GitHub row with `per_user` is a 400, and none exists until an admin writes one.
+  - A run's `git_pat` grant for github.com that such a row decides reads the run owner's own token, not the secret the grant names.
+  - The person adds a fine-grained token (`PUT /api/v1/me/scm/github/token`, expiry at most 30 days) with `Contents` and `Metadata` permissions on the repositories their runs use; see [CREDENTIALS.md](../CREDENTIALS.md).
 
 - A deployment carries at most **one enabled** row that signs a person in on the `entra` lane (`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation.
 - Both write doors refuse a second enabled one with a 400 (`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted, and enabling it later is refused the same way.

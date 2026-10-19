@@ -566,3 +566,21 @@ const reasonHostCapacityRefused = "host_capacity_refused"
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"
+
+// A person's own GitHub token (gh_own_pat.go): the doors that set and remove it, and the run it is
+// used on (gh_own_pat_run.go).
+const (
+	reasonGitHubOwnPATNoSession        = "github_own_pat_no_session"        // the caller has no browser sign-in to store the token under
+	reasonGitHubOwnPATPreviewBlocked   = "github_own_pat_preview_blocked"   // refused in the user view: the token is stored under the caller's own identity
+	reasonGitHubOwnPATUnknownRow       = "github_own_pat_unknown_row"       // no own-token GitHub row the caller may use has this address
+	reasonGitHubOwnPATTokenInvalid     = "github_own_pat_token_invalid"     // not one fine-grained token (github_pat_…), or too long, or has spaces
+	reasonGitHubOwnPATExpiryInvalid    = "github_own_pat_expiry_invalid"    // expires_on is not a date after today
+	reasonGitHubOwnPATExpiryTooLong    = "github_own_pat_expiry_too_long"   // expires_on is past the 30-day limit
+	reasonGitHubOwnPATRejected         = "github_own_pat_rejected"          // GitHub did not accept the token
+	reasonGitHubOwnPATCheckUnavailable = "github_own_pat_check_unavailable" // GitHub could not be asked; nothing is known
+	reasonGitHubOwnPATAccountMismatch  = "github_own_pat_account_mismatch"  // another GitHub account than the one linked, and no relink
+	reasonGitHubOwnTokenRequired       = "github_own_token_required"        // create: the run's owner has no usable token of their own for the row
+	reasonGitHubOwnTokenExpired        = "github_own_token_expired"         // create: the owner's token has reached the expiry they entered
+	reasonGitHubOwnTokenUndeliverable  = "github_own_token_undeliverable"   // create: the token could not stay out of the sandbox (PAT broker off, a run on a person's runner) or two rows claim the host
+	reasonGitHubOwnTokenResident       = "github_own_token_resident"        // mint: the PAT broker is off, so the token would be handed into the sandbox
+)
