@@ -85,8 +85,7 @@
       "scope",
       "ttl_seconds",
       "requires_approval",
-      "owner_only",
-      "owner_only_refs"
+      "owner_only"
     ],
     "IncludedTool": [
       "id",
@@ -214,6 +213,11 @@
     ]
   },
   "nested_excluded": [
+    {
+      "path": "GrantSpec.owner_only_refs",
+      "excluded": "origin",
+      "why": "Wardyn sets it at each launch; a template marks the grant owner_only."
+    },
     {
       "path": "LLMInspectionSpec.workspace_secret_values",
       "excluded": "secret",

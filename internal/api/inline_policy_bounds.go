@@ -210,6 +210,7 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 
 	keptGrants := spec.EligibleGrants[:0:0]
 	for _, g := range spec.EligibleGrants {
+		g.OwnerOnlyRefs = nil // Wardyn's to decide, below
 		// filterUserGrants 422s an undecodable stored-secret scope — and, since
 		// the pairing switch closed, an unknown kind too — before this runs, and
 		// it is the only order that exists. The error is still HONORED here
@@ -268,7 +269,7 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 		case knownHostsRef == "" || len(exempt) == 2:
 			g.OwnerOnly = true
 		default:
-			g.OwnerOnlyRefs = slices.Concat(g.OwnerOnlyRefs, exempt)
+			g.OwnerOnlyRefs = exempt
 		}
 		keptGrants = append(keptGrants, g)
 	}

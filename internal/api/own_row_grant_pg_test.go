@@ -104,7 +104,7 @@ func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
 		MinConfinementClass: types.CC2,
 	}
 	// The ceiling pairs every ref below, so the capSecret check is what decides.
-	for _, refs := range [][2]string{{"dev-ssh", "corp-kh"}, {"bob-ssh", "corp-kh"}, {"dev-ssh", "corp-kh-ungranted"}} {
+	for _, refs := range [][2]string{{"dev-ssh", "corp-kh"}, {"bob-ssh", "corp-kh"}, {"dev-ssh", "corp-kh-ungranted"}, {"corp-kh", ""}} {
 		e.h.srv.cfg.DefaultPolicy.EligibleGrants = append(e.h.srv.cfg.DefaultPolicy.EligibleGrants, types.GrantSpec{Kind: types.GrantSSHKey,
 			Scope: mustJSON(map[string]any{"host": "github.com", "key_secret_ref": refs[0], "known_hosts_secret_ref": refs[1]})})
 	}
@@ -127,11 +127,12 @@ func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
 	if w := doSSO(t, e.h.srv, http.MethodPut, "/api/v1/secrets/dev-ssh", member, `{"value":"alice-key"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("PUT own secret: %d %s", w.Code, w.Body.String())
 	}
-	launch := func(keyRef, khRef string) (uuid.UUID, []types.CredentialGrant) {
+	// launchWith adds extra to the grant object; launch adds nothing.
+	launchWith := func(keyRef, khRef, extra string) (uuid.UUID, []types.CredentialGrant) {
 		t.Helper()
 		created := mustCreate(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", member,
 			`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["github.com"],"eligible_grants":[`+
-				`{"kind":"ssh_key","scope":{"host":"github.com","key_secret_ref":"`+keyRef+`","known_hosts_secret_ref":"`+khRef+`"}}]}}`))
+				`{"kind":"ssh_key"`+extra+`,"scope":{"host":"github.com","key_secret_ref":"`+keyRef+`","known_hosts_secret_ref":"`+khRef+`"}}]}}`))
 		var run createRunResponse
 		if err := json.Unmarshal(created.Body.Bytes(), &run); err != nil {
 			t.Fatal(err)
@@ -141,6 +142,10 @@ func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
 			t.Fatal(err)
 		}
 		return run.ID, grants
+	}
+	launch := func(keyRef, khRef string) (uuid.UUID, []types.CredentialGrant) {
+		t.Helper()
+		return launchWith(keyRef, khRef, "")
 	}
 
 	// mint launches the mixed grant and mints it once (a mint is single-use);
@@ -175,5 +180,38 @@ func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
 		if _, grants := launch(refs[0], refs[1]); len(grants) != 0 {
 			t.Errorf("%s: grants = %+v, want the grant dropped", name, grants)
 		}
+	}
+	// A member's own owner_only_refs is never kept: the stored grant carries
+	// what Wardyn decided, the own key for the mixed grant and nothing for a
+	// grant whose one ref the capability grants.
+	if _, grants := launchWith("dev-ssh", "corp-kh", `,"owner_only_refs":["something-else"]`); len(grants) != 1 ||
+		!slices.Equal(grants[0].Spec.OwnerOnlyRefs, []string{"dev-ssh"}) {
+		t.Errorf("mixed grant with member-supplied refs = %+v, want only dev-ssh", grants)
+	}
+	if _, grants := launchWith("corp-kh", "", `,"owner_only_refs":["corp-kh"]`); len(grants) != 1 || grants[0].Spec.OwnerOnlyRefs != nil || grants[0].Spec.OwnerOnly {
+		t.Errorf("granted grant with member-supplied refs = %+v, want no owner_only binding", grants)
+	}
+}
+
+// TestPG_OwnerOnlyRefsIsNeverAuthored: a stored policy naming owner_only_refs
+// is refused at write with a message pointing at owner_only, while the run
+// path's validator accepts the field Wardyn itself sets at launch.
+func TestPG_OwnerOnlyRefsIsNeverAuthored(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	body := func(extra string) string {
+		return `{"name":"p-` + uuid.NewString()[:8] + `","spec":{"min_confinement_class":"CC2","allowed_domains":["github.com"],` +
+			`"eligible_grants":[{"kind":"ssh_key"` + extra + `,"scope":{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}}]}}`
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/policies", e.admin, body(`,"owner_only_refs":["k"]`)); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "owner_only instead") {
+		t.Fatalf("policy with owner_only_refs = %d %s, want 400 naming owner_only", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/policies", e.admin, body(`,"owner_only":true`)); w.Code != http.StatusCreated {
+		t.Fatalf("policy with owner_only = %d %s, want 201", w.Code, w.Body.String())
+	}
+	stamped := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"k"},
+		Scope: json.RawMessage(`{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}`)}}}
+	if err := validatePolicySpec(stamped); err != nil {
+		t.Errorf("run-path validation of a launch-stamped grant: %v", err)
 	}
 }

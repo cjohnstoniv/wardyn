@@ -680,8 +680,9 @@ What the check does and does not settle:
 
 ### `owner_only_refs`
 
-- `owner_only` per stored secret, for an `ssh_key` grant whose key and `known_hosts` resolve from different rows; Wardyn sets it at launch, and a policy uses `owner_only`.
+- `owner_only` per stored secret, for an `ssh_key` grant whose key and `known_hosts` resolve from different rows; Wardyn sets it at launch, and a policy, profile or preset naming it is refused (use `owner_only`).
 - A member's own ref, admitted because they hold it, reads their row alone; a ref their `secret` capability grants reads their row, then the operator's.
+- On a person's own runner such a grant is refused unless every ref is their own.
 
 ### `github_token`
 

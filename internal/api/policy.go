@@ -45,7 +45,7 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
-	if err := validatePolicySpec(spec); err != nil {
+	if err := validateAuthoredPolicySpec(spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
 	}
 	return spec, nil
@@ -71,6 +71,22 @@ func clampStoredFileSize(spec *types.RunPolicySpec, source string) {
 // satisfy before any run can be scheduled against it.
 func validatePolicySpec(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, true, true)
+}
+
+// validateAuthoredPolicySpec is validatePolicySpec for a door where a person
+// writes a policy (a stored policy, a ceiling, a profile, a preset, a policy
+// file). owner_only_refs is refused there: Wardyn sets it at launch, on a
+// spec the run path then validates with validatePolicySpec.
+func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
+	if err := validatePolicySpec(spec); err != nil {
+		return err
+	}
+	for i, g := range spec.EligibleGrants {
+		if g.OwnerOnlyRefs != nil {
+			return fmt.Errorf("eligible_grants[%d]: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead", i)
+		}
+	}
+	return nil
 }
 
 // validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount

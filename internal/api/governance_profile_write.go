@@ -158,7 +158,7 @@ func finishGovernanceProfileRequest(req governanceProfileRequest) (governancePro
 		return governanceProfileRequest{}, "name is invalid"
 	}
 	if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) {
-		if err := validatePolicySpec(req.Ceiling); err != nil {
+		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
 			return governanceProfileRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -402,7 +402,7 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 		p.BaseProfileID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
-		if err := validatePolicySpec(req.Ceiling); err != nil {
+		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
 			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceProfileRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
@@ -519,7 +519,7 @@ func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.Governanc
 			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
-		if verr := validatePolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
+		if verr := validateAuthoredPolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
 			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}

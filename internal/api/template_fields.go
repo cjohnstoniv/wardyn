@@ -293,7 +293,7 @@ var templateNestedCarried = map[string]string{
 	"ComponentSecret":     "secret_name shared delivery",
 	"DriveSelection":      "enabled read_only",
 	"GitPATOverride":      "host repos access api",
-	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only owner_only_refs",
+	"GrantSpec":           "kind scope ttl_seconds requires_approval owner_only",
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
@@ -318,6 +318,8 @@ var templateNestedCarried = map[string]string{
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
+	"GrantSpec.owner_only_refs": excludedField("owner_only_refs", templateExcludeOrigin,
+		"Wardyn sets it at each launch; a template marks the grant owner_only."),
 	"LLMInspectionSpec.workspace_secret_values": excludedField("workspace_secret_values", templateExcludeSecret,
 		"Secret values are runtime-only: the server resolves them, and a template names secrets instead."),
 	"RunLocalFolder.name": excludedField("name", templateExcludeLaunch,

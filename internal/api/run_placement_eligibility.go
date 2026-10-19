@@ -363,6 +363,12 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j
 		if ref != nil {
 			return types.RunPolicySpec{}, nil, ref
 		}
+		// A ref bound to its owner's row (owner_only_refs) is never delivered
+		// from the organisation's namespace, which is where an org-held grant
+		// on this path is read from.
+		if len(g.OwnerOnlyRefs) > 0 && origin.Class != placement.ClassOwn {
+			return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
+		}
 		if placement.ViaOrgGrant(origin, j.policy, j.trust) {
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
 			continue
