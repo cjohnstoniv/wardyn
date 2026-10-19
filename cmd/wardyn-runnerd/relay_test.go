@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
@@ -264,24 +265,21 @@ func TestRunnerRelayForwardsOverItsOwnStream(t *testing.T) {
 	}
 }
 
-// A connection that sends nothing opens no relay stream and is closed after the first-byte wait;
-// one past the cap is closed at once.
-func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	opened := make(chan struct{}, 4)
+// onlineRelay serves a local relay on a loopback listener, online on a session whose org end
+// accepts every relay stream and sends it on opened.
+func onlineRelay(ctx context.Context, t *testing.T, firstByte time.Duration, opened chan<- *runnerwire.Stream) (*localRelay, string) {
+	t.Helper()
 	orgConn, runConn := runnerwire.Loopback()
-	org := runnerwire.NewPeer(orgConn, runnerwire.PeerConfig{Org: true, OnOpen: func(*runnerwire.Stream, runnerwire.Open) error {
-		opened <- struct{}{}
+	org := runnerwire.NewPeer(orgConn, runnerwire.PeerConfig{Org: true, OnOpen: func(s *runnerwire.Stream, _ runnerwire.Open) error {
+		opened <- s
 		return nil
 	}})
 	run := runnerwire.NewPeer(runConn, runnerwire.PeerConfig{})
 	go func() { _ = org.Run(ctx) }()
 	go func() { _ = run.Run(ctx) }()
-
 	r := &localRelay{ctx: ctx, pair: pair("127.0.0.1", "host-gateway"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{},
-		firstByte: 100 * time.Millisecond}
-	defer r.Close()
+		firstByte: firstByte}
+	t.Cleanup(func() { _ = r.Close() })
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -289,8 +287,18 @@ func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
 	r.listeners[1] = ln
 	go r.serve(ln)
 	r.Online(run)
+	return r, ln.Addr().String()
+}
 
-	silent, err := net.Dial("tcp", ln.Addr().String())
+// A connection that sends nothing opens no relay stream and is closed after the first-byte wait;
+// one past the cap on connections yet to send a byte is closed at once, with a warning.
+func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opened := make(chan *runnerwire.Stream, 4)
+	_, addr := onlineRelay(ctx, t, 100*time.Millisecond, opened)
+
+	silent, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,20 +312,49 @@ func TestRunnerRelayBoundsSilentAndExcessConnections(t *testing.T) {
 	default:
 	}
 
-	for range maxLocalRelays {
-		a, b := net.Pipe()
-		defer a.Close()
-		defer b.Close()
-		r.mu.Lock()
-		r.conns[a] = run
-		r.mu.Unlock()
-	}
-	extra, err := net.Dial("tcp", ln.Addr().String())
+	var logs strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
+	full, fullAddr := onlineRelay(ctx, t, 0, opened)
+	full.mu.Lock()
+	full.waiting = maxLocalRelays
+	full.mu.Unlock()
+	extra, err := net.Dial("tcp", fullAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = extra.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	_ = extra.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, err := extra.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("a connection past the cap was held open: %v", err)
+	}
+	full.mu.Lock() // the warning is written under it
+	defer full.mu.Unlock()
+	if !strings.Contains(logs.String(), "closed at the cap") {
+		t.Fatalf("no warning for a connection closed at the cap: %q", logs.String())
+	}
+}
+
+// Established relays do not count against the cap: with maxLocalRelays relays open, a new
+// connection that sends bytes still opens its own stream.
+func TestRunnerRelayCapCountsOnlyConnectionsYetToSpeak(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opened := make(chan *runnerwire.Stream, maxLocalRelays+1)
+	_, addr := onlineRelay(ctx, t, 0, opened)
+	for i := range maxLocalRelays + 1 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if _, err := c.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-opened:
+		case <-ctx.Done():
+			t.Fatalf("relay %d of %d opened no stream", i+1, maxLocalRelays+1)
+		}
 	}
 }
