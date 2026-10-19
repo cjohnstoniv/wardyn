@@ -840,7 +840,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// ONLY when inspection was expected, so audit never implies coverage we
 		// don't have (an injection-only run with no scanner is not "blind").
 		if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
-			p.emitLLMBlindOnce(host)
+			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
 
