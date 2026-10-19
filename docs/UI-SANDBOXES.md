@@ -24,7 +24,7 @@
   `uiEnsureWaitSecs` budget.
 - If a change pushes size past ~1.4 GB, drop `xterm`
   then `openbox` before raising the ceiling — a relayed app needs neither.
-- **Publishes from the next tagged release**, like `agent-vscode` (#141).
+- **Published with every release**, like `agent-vscode` (#141).
 - The trivy matrix, a per-image SBOM assertion and a GPL source offer for a whole
   desktop turned out to be exactly the supply-chain workstream predicted here,
   now landed.
@@ -64,8 +64,9 @@
 - **The relayed app's JavaScript runs in the operator's own browser**, which
   Wardyn does not confine at all — outside `wardyn-proxy` and outside any egress
   policy. A desktop is a larger surface for that than an editor.
-- **The relay cookie is valid for 8 hours and never re-checks the principal.**
-  A desktop session is exactly the kind of thing left open all day.
+- **The relay cookie is valid for 8 hours by default** (`WARDYN_UI_SANDBOX_SESSION_TTL`).
+  The relay re-checks role, ownership and revocation before every new connection, but an open
+  connection runs on. A desktop session is exactly the kind of thing left open all day.
 
 - None of these is new in 0.7 — they are properties of the relay, documented in
   [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
@@ -332,7 +333,7 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 ## 4. Deployment
 
 > [!NOTE]
-> **Not available on the desktop tier.** The relay is built and tested, and `agent-vscode`/`agent-novnc` publish starting with the next tagged release (#141), but neither is wired into `WARDYN_AGENT_IMAGES` by default.
+> **Not available on the desktop tier.** The relay is built and tested, and `agent-vscode`/`agent-novnc` publish with every release (#141), but neither is wired into `WARDYN_AGENT_IMAGES` by default.
 >
 > They are opt-in — and a managed laptop has no repo and no build path anyway — `wardyn-desktop.sh` runs `--no-build` on purpose.
 >
@@ -542,9 +543,8 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     domain is the console's too.
   - Keep nothing else whose non-HttpOnly cookies matter
     on it.
-  - The console's own cookies (`wardyn_session`, `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so a relayed page can plant a `Domain=` cookie of the same name,
-    - which the console reads whenever the browser holds no live one of its own (signed out, expired, or mid-login):
-    - login CSRF onto the console, open as #1258.
+  - The console's own cookies (`wardyn_session`, `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry the `__Host-` prefix when secure cookies are on, so a relayed page cannot plant a `Domain=` cookie of the same name.
+    - Over plain HTTP a browser refuses every `__Host-` cookie, so the plain names are used and a relayed page can plant them: the login-CSRF gap (#1258) stays open there only.
   - Host mode keeps each run on a host
     of its own under that site.
   - `X-Forwarded-*` is removed and deliberately not

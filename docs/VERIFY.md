@@ -15,11 +15,12 @@
 | `ghcr.io/cjohnstoniv/wardynd` | the control plane (distroless) |
 | `ghcr.io/cjohnstoniv/wardynd-fips` | the control plane built against a pinned Go cryptographic module snapshot (distroless); see [Secrets and keys](operations/secrets-and-keys.md) |
 | `ghcr.io/cjohnstoniv/wardyn-proxy` | the egress proxy (distroless) |
+| `ghcr.io/cjohnstoniv/wardyn-runnerd` | the Kubernetes runner daemon (`deploy/helm/wardyn-runnerd`) |
 | `ghcr.io/cjohnstoniv/agent-base` | the agent runner contract, **no coding agent** |
 | `ghcr.io/cjohnstoniv/agent-codex-cli` | agent-base + OpenAI Codex CLI (Apache-2.0) |
 | `ghcr.io/cjohnstoniv/agent-aws-sso` | agent-base + AWS CLI v2, for the SSO login flow |
-| `ghcr.io/cjohnstoniv/agent-vscode` | agent-base + code-server, for the UI-sandbox relay (publishes from the next tagged release) |
-| `ghcr.io/cjohnstoniv/agent-novnc` | agent-base + a minimal X/noVNC desktop, for the UI-sandbox relay (publishes from the next tagged release) |
+| `ghcr.io/cjohnstoniv/agent-vscode` | agent-base + code-server, for the UI-sandbox relay |
+| `ghcr.io/cjohnstoniv/agent-novnc` | agent-base + a minimal X/noVNC desktop, for the UI-sandbox relay |
 | `ghcr.io/cjohnstoniv/charts/wardyn` | the Helm chart, as an OCI artifact |
 
 > [!NOTE]
@@ -176,7 +177,7 @@ cosign verify-blob \
 
 ## The continuous lane
 
-- Everything above is about **release** images — the five `vX.Y.Z`-tagged images `release.yml` publishes.
+- Everything above is about **release** images — the nine `vX.Y.Z`-tagged images `release.yml` publishes.
 - A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
 
 Those tags are **signed but not attested**, and their signature is under a different identity:
