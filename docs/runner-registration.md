@@ -201,7 +201,7 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 
 ## A runner behind a corporate proxy
 
-Several settings keep a runner working behind a proxy that inspects TLS. `setup` writes the first five of the table into the service; the runner's own proxy variables it does not write, because a service started by systemd or launchd does not inherit the shell's exports.
+Several settings keep a runner working behind a proxy that inspects TLS. `setup` writes the four settings marked `setup` in the table into the service; the runner's own proxy variables it does not write, because a service started by systemd or launchd does not inherit the shell's exports.
 
 | Setting | For | Written by | Without it |
 |---|---|---|---|
@@ -217,7 +217,7 @@ To give the service its proxy:
 1. On Linux, write `~/.config/wardyn/runnerd-proxy.env`, mode `0600`, holding `HTTPS_PROXY=http://proxy.example:3128` (and `NO_PROXY` if needed).
 2. Run `systemctl --user edit wardyn-runnerd` and add `[Service]` with `EnvironmentFile=%h/.config/wardyn/runnerd-proxy.env`. A drop-in survives a rerun of `setup`, which rewrites the unit and `runnerd.env`.
 3. Run `systemctl --user restart wardyn-runnerd`.
-4. On macOS, add `HTTPS_PROXY` to the LaunchAgent's `EnvironmentVariables`, then `launchctl kickstart -k gui/$(id -u)/com.wardyn.runnerd`. A rerun of `setup` rewrites the agent, so add it again.
+4. On macOS, add `HTTPS_PROXY` to the LaunchAgent's `EnvironmentVariables`, then run `launchctl bootout gui/$(id -u)/com.wardyn.runnerd && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wardyn.runnerd.plist`, which re-reads the plist. A rerun of `setup` rewrites the agent, so add it again.
 
 - Never put a proxy URL that holds a credential in the LaunchAgent: the plist is mode `0644`, readable by every local account.
 - Every runner behind one proxy shares one address at the organisation's ingress: see [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).
