@@ -86,12 +86,13 @@ const brokerRefreshMargin = 30 * time.Second
 // acquisition: the first mint call, the approval wait, and every poll inside
 // it (WARDYN_GIT_APPROVAL_TIMEOUT, default defaultGitApprovalTimeout).
 //
-// Trust boundary: nothing else bounds the underlying HTTP calls (server.go's
-// timeouts are 0, p.localClient has none), so against a control plane that
-// never answers a clone would otherwise block FOREVER. The budget is derived
-// once at the top of brokeredToken and passed down so the documented timeout
-// is a real bound; the human's approval window shrinks by however long the
-// first mint round trip took.
+// Trust boundary: each underlying HTTP call is bounded only by
+// controlPlaneCallTimeout (p.localClient, 130s) and server.go's timeouts are 0,
+// so a control plane that keeps answering each call near that bound could
+// stretch a clone to many times it. The budget is derived once at the top of
+// brokeredToken and passed down so the documented timeout is a real bound
+// over the whole acquisition; the human's approval window shrinks by however
+// long the first mint round trip took.
 func gitApprovalBudget() time.Duration {
 	if v := os.Getenv(envGitApprovalTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
