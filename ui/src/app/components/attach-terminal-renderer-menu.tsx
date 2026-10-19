@@ -56,7 +56,7 @@ export function RendererMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuLabel className="text-meta font-medium uppercase tracking-wide text-muted-foreground">
+        <DropdownMenuLabel className="label-eyebrow">
           {TERMINAL_RENDERER.LABEL}
         </DropdownMenuLabel>
         <DropdownMenuRadioGroup value={pref} onValueChange={(v) => onPick(v as RendererPref)}>

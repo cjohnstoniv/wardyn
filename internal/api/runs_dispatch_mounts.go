@@ -464,11 +464,10 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 			sandboxEnv["WARDYN_GIT_PAT_GRANTS"] = string(b)
 		}
 	}
-	// ssh_key grants: surface the {host: grant_id} map so agent-run can mint the
-	// resident SSH private key at clone time (SSH has NO credential-helper seam,
-	// so the key is written to a 0400 file and wiped after the clone). Non-secret
-	// (grant ids, not the key); the key material is returned only via the brokered
-	// mint and never touches env. See GrantSSHKey.
+	// ssh_key grants: surface the {host: grant_id} map so agent-run can wire the
+	// clone onto the proxy's ssh agent (SSH has NO credential-helper seam, so the
+	// proxy signs the SSH sign-in with the key it holds). Non-secret (grant ids,
+	// not the key); the key never enters the sandbox. See GrantSSHKey.
 	sshGrants, droppedSSH := dropBrokeredGrants(p.SSHGrants, p.GitGrants, brokeredForgeSSHHost)
 	if len(sshGrants) > 0 {
 		if b, merr := json.Marshal(sshGrants); merr == nil {

@@ -256,6 +256,20 @@ func (f *fakeApprovals) cancelledCalls() []cancelCall {
 	return append([]cancelCall(nil), f.cancelled...)
 }
 
+// Rejoin is approval.Rejoin over the map: only a PENDING row of runID and kind is stamped.
+func (f *fakeApprovals) Rejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.byID[id]
+	if !ok || a.RunID != runID || a.Kind != kind || a.State != types.ApprovalPending {
+		return types.ApprovalRequest{}, false, nil
+	}
+	now := time.Now().UTC()
+	a.LastRejoinedAt = &now
+	f.byID[id] = a
+	return a, true, nil
+}
+
 func (f *fakeApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -758,6 +772,10 @@ func TestAdminAuthDisabledWhenNoToken(t *testing.T) {
 	// Public route must fail closed (401) when no admin token is configured.
 	if w := do(t, srv, http.MethodGet, "/api/v1/runs", "anything", ""); w.Code != http.StatusUnauthorized {
 		t.Errorf("disabled admin: code = %d, want 401", w.Code)
+	}
+	// Without single sign-on there is nothing to sign in to: the admin-token answer stays.
+	if w := do(t, srv, http.MethodGet, "/api/v1/runs", "", ""); decodeErrorBody(t, w).Reason != reasonAdminTokenNotConfigured {
+		t.Errorf("no token, no SSO: body = %s, want reason %s", w.Body, reasonAdminTokenNotConfigured)
 	}
 	// healthz still works.
 	if w := do(t, srv, http.MethodGet, "/healthz", "", ""); w.Code != http.StatusOK {

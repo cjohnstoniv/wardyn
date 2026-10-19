@@ -734,7 +734,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		return blob, awsSSOExpiredFailure(err)
 	}
 	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
-	s.clearAWSSSORefused(fingerprint)
+	s.clearAWSSSORefused(ctx, fingerprint)
 
 	next := blob
 	next.AccessToken = resp.AccessToken

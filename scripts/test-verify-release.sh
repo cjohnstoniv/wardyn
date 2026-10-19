@@ -108,7 +108,7 @@ for form in bundle sigpem; do
   # 1. the signer IS the requested tag: passes, exactly, for every image and the blob.
   run 0.8.3 v0.8.3 "${form}"
   [ "${rc}" = 0 ] || fail "V=0.8.3 signed by v0.8.3 (${form}) exited ${rc}, want 0: $(printf '%s' "${out}" | tail -5)"
-  printf '%s' "${out}" | grep -q '^fails=0$' || fail "V=0.8.3 signed by v0.8.3 (${form}) did not report fails=0"
+  printf '%s' "${out}" | grep '^fails=0$' >/dev/null || fail "V=0.8.3 signed by v0.8.3 (${form}) did not report fails=0"
   id='https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v0.8.3'
   nimg="$(wc -l < "${dir}/images.txt")"
   nverify="$(grep -c "^cosign verify .*--certificate-identity ${id} --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" "${dir}/log" || true)"
@@ -129,9 +129,9 @@ for form in bundle sigpem; do
   [ "${rc}" != 0 ] || fail "V=0.8.3 signed by v0.7.0 (${form}) exited 0: the requested tag plays no part in the identity check"
   nfail="$(printf '%s' "${out}" | grep -c '^FAIL .* cosign verify$' || true)"
   [ "${nfail}" = "$((nimg + 1))" ] || fail "(${form}) ${nfail} of $((nimg + 1)) images and charts were refused for the wrong signer tag"
-  printf '%s' "${out}" | grep -q '^FAIL helm chart cosign verify$' || fail "(${form}) the chart was accepted from the wrong signer tag"
-  printf '%s' "${out}" | grep -q '^FAIL verify-blob' || fail "(${form}) the checksum blob was accepted from the wrong signer tag"
-  printf '%s' "${out}" | grep -q '^fails=[1-9]' || fail "(${form}) fails was not > 0 for the wrong signer tag"
+  printf '%s' "${out}" | grep '^FAIL helm chart cosign verify$' >/dev/null || fail "(${form}) the chart was accepted from the wrong signer tag"
+  printf '%s' "${out}" | grep '^FAIL verify-blob' >/dev/null || fail "(${form}) the checksum blob was accepted from the wrong signer tag"
+  printf '%s' "${out}" | grep '^fails=[1-9]' >/dev/null || fail "(${form}) fails was not > 0 for the wrong signer tag"
 done
 pass "verify-release binds the signer to the requested tag (images, bundle blob, sig+pem blob)"
 
@@ -151,9 +151,9 @@ run 0.9.3-rc.2 v0.9.3-rc.2 bundle
 run 0.9.3-rc.3 v0.9.3-rc.3 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.3-rc.3 with the package exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 NO_PKG=1 run 0.9.3-rc.3 v0.9.3-rc.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3-rc.3 without wardyn-runnerd.pkg was accepted"
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null || fail "V=0.9.3-rc.3 without wardyn-runnerd.pkg was accepted"
 NO_PKG=1 run 0.9.3 v0.9.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL missing asset: wardyn-runnerd.pkg' || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runnerd.pkg' >/dev/null || fail "V=0.9.3 without wardyn-runnerd.pkg was accepted"
 run 0.9.2 v0.9.2 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.2 (no package in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-runnerd.pkg is required from 0.9.3 on"
@@ -163,7 +163,7 @@ pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q 'FAIL wardynd: no index digest' && printf '%s' "${out}" | grep -q 'unknown command: docker buildx' \
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL wardynd: no index digest' >/dev/null && printf '%s' "${out}" | grep 'unknown command: docker buildx' >/dev/null \
   || fail "a failed imagetools call did not surface its stderr: $(printf '%s' "${out}" | head -4)"
 pass "an imagetools failure reports its cause"
 

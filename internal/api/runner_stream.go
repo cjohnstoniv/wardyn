@@ -44,19 +44,25 @@ type runnerStreamState struct {
 	beganSession map[uuid.UUID]string
 	connectOwed  map[uuid.UUID]string
 
-	// handshakes counts connections admitted and not yet proved or closed.
+	// handshakes counts connections admitted and not yet proved or closed;
+	// inflight is the same count per address, under inflightMu.
 	handshakes    atomic.Int32
 	maxHandshakes int32
+	inflightMu    sync.Mutex
+	inflight      map[string]int
+	maxPerAddress int
 }
 
-// Anonymous admission, before a runner proves its key, is two buckets and a
-// cap, all per replica (an HA install's limits are these times the replica
+// Anonymous admission, before a runner proves its key, is two buckets and two
+// caps, all per replica (an HA install's limits are these times the replica
 // count): the address bucket (enrolBurst, then enrolRatePerSec, per client
-// address), one global bucket shared by every address, and at most
-// runnerStreamMaxHandshakes connections between arrival and proof. A runner
-// that proves its key is refunded both buckets and frees its slot, so only
-// failed and unfinished handshakes spend them; runnerwire's handshake deadline
-// bounds how long one slot is held.
+// address), one global bucket shared by every address, at most
+// runnerStreamMaxHandshakes connections between arrival and proof, and at most
+// WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS of them from one address. An
+// arrival needs a token in both buckets but spends none: a handshake that ends
+// without proof (failed or abandoned) spends one from each, and a runner that
+// proves its key spends nothing. runnerwire's handshake deadline bounds how
+// long one slot is held.
 //
 // Memory, per replica: a keyed bucket entry is under 128 bytes (measured about
 // 90 with map overhead), so each keyed limiter stays under 512 KiB at
@@ -67,6 +73,8 @@ const (
 	runnerStreamGlobalBurst      = 512.0
 	runnerStreamGlobalRatePerSec = 10.0
 	runnerStreamMaxHandshakes    = 256
+	// DefaultRunnerStreamHandshakesPerAddress is WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS's default.
+	DefaultRunnerStreamHandshakesPerAddress = 32
 )
 
 // This route has its own proof-of-possession handshake. Human sessions and
@@ -78,6 +86,7 @@ func (s *Server) mountRunnerStreamRoutes(r chi.Router) {
 	s.runnerStreams.limiter = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
 	s.runnerStreams.global = principalLimiter{rate: runnerStreamGlobalRatePerSec, burst: runnerStreamGlobalBurst, max: 1}
 	s.runnerStreams.maxHandshakes = runnerStreamMaxHandshakes
+	s.runnerStreams.maxPerAddress = cmp.Or(s.cfg.RunnerStreamHandshakesPerAddress, DefaultRunnerStreamHandshakesPerAddress)
 	s.runnerStreams.runners = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
 	r.Get("/runners/{id}/stream", s.handleRunnerStream)
 }
@@ -87,32 +96,63 @@ type runnerAdmissionKey struct{}
 
 // runnerAdmission is what one connection holds until its runner proves its key.
 type runnerAdmission struct {
-	peer    string
-	release func()
+	// release frees the connection's slots; proved false spends the buckets.
+	release func(proved bool)
 	// refuse closes the socket with a reason the runner can read in its connection error.
 	refuse func(reason string)
 }
 
 var errRunnerStreamRateLimited = errors.New("runner stream connection rate exceeded")
 
-// admitRunnerHandshake charges the anonymous budgets. ok false names the refusal.
-func (s *Server) admitRunnerHandshake(peer string) (release func(), refusal string, ok bool) {
+// admitRunnerHandshake checks the anonymous budgets and takes the
+// connection's slots. ok false names the refusal. The first release call wins.
+func (s *Server) admitRunnerHandshake(peer string) (release func(proved bool), refusal string, ok bool) {
 	rs, now := &s.runnerStreams, s.cfg.Now()
-	if !rs.limiter.allow(peer, now) {
+	if !rs.limiter.has(peer, now) || !rs.global.has("", now) {
 		return nil, errRunnerStreamRateLimited.Error(), false
 	}
-	// A refusal past the address bucket hands its token back, so a runner
-	// retrying through a global or cap refusal keeps its own burst.
-	if !rs.global.allow("", now) {
-		rs.limiter.refund(peer, now)
-		return nil, errRunnerStreamRateLimited.Error(), false
+	if !rs.enter(peer) {
+		return nil, "too many runner stream handshakes in progress from this address", false
 	}
 	if rs.handshakes.Add(1) > rs.maxHandshakes {
 		rs.handshakes.Add(-1)
-		rs.limiter.refund(peer, now)
+		rs.leave(peer)
 		return nil, "too many runner stream handshakes in progress", false
 	}
-	return sync.OnceFunc(func() { rs.handshakes.Add(-1) }), "", true
+	var once sync.Once
+	return func(proved bool) {
+		once.Do(func() {
+			rs.handshakes.Add(-1)
+			rs.leave(peer)
+			if !proved {
+				now := s.cfg.Now()
+				rs.limiter.allow(peer, now)
+				rs.global.allow("", now)
+			}
+		})
+	}, "", true
+}
+
+// enter takes one of peer's in-flight slots; false when it holds them all.
+func (rs *runnerStreamState) enter(peer string) bool {
+	rs.inflightMu.Lock()
+	defer rs.inflightMu.Unlock()
+	if rs.inflight[peer] >= rs.maxPerAddress {
+		return false
+	}
+	if rs.inflight == nil {
+		rs.inflight = map[string]int{}
+	}
+	rs.inflight[peer]++
+	return true
+}
+
+func (rs *runnerStreamState) leave(peer string) {
+	rs.inflightMu.Lock()
+	defer rs.inflightMu.Unlock()
+	if rs.inflight[peer]--; rs.inflight[peer] <= 0 {
+		delete(rs.inflight, peer)
+	}
 }
 
 func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +162,7 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerStreamRateLimited, refusal)
 		return
 	}
-	defer release()
+	defer release(false)
 	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
@@ -149,7 +189,7 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	// until nonce, stored key, route id and the admitted Substrate all agree.
 	// A refused authentication (a lapsed, swept or rebound registration reads as one) is logged with its
 	// cause: the runner is told nothing but a close, so this line is the only place an operator sees why.
-	admission := runnerAdmission{peer: peer, release: release, refuse: func(reason string) { _ = conn.Close(websocket.StatusTryAgainLater, reason) }}
+	admission := runnerAdmission{release: release, refuse: func(reason string) { _ = conn.Close(websocket.StatusTryAgainLater, reason) }}
 	if err := hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, admission), runnerwire.NewWebSocket(conn), id); errors.Is(err, runnerwire.ErrAuth) {
 		slog.WarnContext(r.Context(), "wardynd: runner authentication refused", slog.String("runner", id.String()), slog.Any("cause", err))
 	}
@@ -226,19 +266,18 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		cfg := s.cfg.RunnerHub
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
+			admission, _ := ctx.Value(runnerAdmissionKey{}).(runnerAdmission)
+			if admission.release != nil {
+				admission.release(true)
+			}
 			if !s.runnerStreams.runners.allow(id.String(), s.cfg.Now()) {
 				slog.WarnContext(ctx, "wardynd: runner stream reconnect refused by the per-runner rate limit", slog.String("runner_id", id.String()))
 				// A WebSocket close status, not a runnerwire frame: a GOAWAY would make every runner clear its
 				// session, and a new frame type would be unknown to an older runner.
-				if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok && a.refuse != nil {
-					a.refuse(reasonRunnerStreamRateLimited + ": this runner reconnected too often; it retries on its own")
+				if admission.refuse != nil {
+					admission.refuse(reasonRunnerStreamRateLimited + ": this runner reconnected too often; it retries on its own")
 				}
 				return errRunnerStreamRateLimited
-			}
-			if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok {
-				s.runnerStreams.limiter.refund(a.peer, s.cfg.Now())
-				s.runnerStreams.global.refund("", s.cfg.Now())
-				a.release()
 			}
 			return nil
 		}

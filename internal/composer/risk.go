@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -98,29 +99,27 @@ var safeBaselineDomains = map[string]bool{
 }
 
 // Baseline is the operator's extension of safeBaselineDomains: exact hosts, and
-// suffixes (an internal_hosts entry marked baseline matches itself and any
-// subdomain, by label). The zero value is the built-in set alone, so a
-// deployment that declares nothing grades exactly as before. Pure data: the API
-// layer reads the site config and hands it in.
+// the internal_hosts entries marked baseline. A mark covers that entry's own host
+// only, never its subdomains (the approved design: a host the operator vouched
+// for, not every host under it), so Suffixes match exactly too. The zero value
+// is the built-in set alone, so a deployment that declares nothing grades
+// exactly as before. Pure data: the API layer reads the site config and hands it in.
 type Baseline struct {
 	Hosts    []string
 	Suffixes []string
 }
 
-// Has reports whether host is a baseline host: built-in, declared, or under a
-// declared suffix. Wildcard allowlist entries never match: a pattern is wider
-// than any single host the operator vouched for.
+// Has reports whether host is a baseline host: built-in, declared, or a marked
+// internal host. Wildcard allowlist entries never match: a pattern is wider
+// than any single host the operator vouched for. The entry is read the way the
+// proxy reads it (domainmatch.Classify), so "github.com:443" and "github.com."
+// are judged by their host.
 func (b Baseline) Has(host string) bool {
-	host = strings.ToLower(strings.TrimSpace(host))
 	if strings.Contains(host, "*") {
 		return false
 	}
-	if safeBaselineDomains[host] || slices.Contains(b.Hosts, host) {
-		return true
-	}
-	return slices.ContainsFunc(b.Suffixes, func(sfx string) bool {
-		return host == sfx || strings.HasSuffix(host, "."+sfx)
-	})
+	host, _, _ = domainmatch.Classify(host)
+	return safeBaselineDomains[host] || slices.Contains(b.Hosts, host) || slices.Contains(b.Suffixes, host)
 }
 
 // Grade computes the deterministic risk assessment of a proposed run setup

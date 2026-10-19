@@ -62,18 +62,19 @@ func (c *Client) GetDefaultPolicy(ctx context.Context) (types.RunPolicySpec, err
 }
 
 // CreatePolicy validates and persists a new policy.
-// Returns the created RunPolicy (status 201) on success; 400 on an invalid
-// name or spec.
-func (c *Client) CreatePolicy(ctx context.Context, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
+// Returns the created policy (status 201) with the stored secrets its grants
+// name; 400 on an invalid name or spec.
+func (c *Client) CreatePolicy(ctx context.Context, req PolicyRequest) (PolicySaved, error) {
+	var out PolicySaved
 	err := c.do(ctx, http.MethodPost, "/api/v1/policies", req, &out)
 	return out, err
 }
 
 // UpdatePolicy validates and replaces an existing policy's name and spec.
-// Returns the updated RunPolicy on success; 404 when unknown; 400 when invalid.
-func (c *Client) UpdatePolicy(ctx context.Context, id uuid.UUID, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
+// Returns the updated policy with the stored secrets its grants name; 404 when
+// unknown; 400 when invalid.
+func (c *Client) UpdatePolicy(ctx context.Context, id uuid.UUID, req PolicyRequest) (PolicySaved, error) {
+	var out PolicySaved
 	err := c.do(ctx, http.MethodPut, "/api/v1/policies/"+id.String(), req, &out)
 	return out, err
 }

@@ -18,8 +18,9 @@ import { GitTab } from "./git-tab";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 
 const setSecretMock = vi.fn();
+const deleteSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
-  secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: vi.fn() },
+  secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: (...a: unknown[]) => deleteSecretMock(...a) },
 }));
 
 // An Azure DevOps Services row as the console writes it: the entra lane, per
@@ -153,7 +154,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["ssh"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).toBeDisabled();
     expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
   });
 
@@ -162,7 +163,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["pat"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).not.toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeDisabled();
     expect(screen.queryByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).not.toBeInTheDocument();
   });
 
@@ -369,7 +370,7 @@ describe("GitTab", () => {
       render(<Harness initial={[adoServices]} />);
       const row = screen.getByTestId("provider-row-azure_devops");
       expect(within(row).queryByRole("checkbox", { name: /PAT · brokered/ })).not.toBeInTheDocument();
-      expect(within(row).queryByRole("checkbox", { name: /SSH · resident/ })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeInTheDocument();
       expect(within(row).getByLabelText(E.FIELD_TENANT)).toBeInTheDocument();
     });
 
@@ -450,9 +451,9 @@ describe("GitTab", () => {
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(
-      screen.getByText(/The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy/),
+      screen.getByText(/The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/an approval-gated grant is delivered once\. Public/)).toBeInTheDocument();
+    expect(screen.getByText(/closes its agent after the start-up clone\. Public/)).toBeInTheDocument();
   });
 
   it("Remove opens a confirm dialog naming the kind, and clears the row on confirm", async () => {
@@ -508,7 +509,7 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-github");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ }));
       expect(latest[0].lanes).toEqual([]);
     });
   });
@@ -674,6 +675,40 @@ describe("GitTab", () => {
       expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
         "https://github.com/acme\nhttps://git.corp.example/team",
       );
+    });
+  });
+
+  // Disconnect deletes a write-only value that cannot be shown or recovered: it asks first, like every other delete.
+  describe("Disconnect asks before it deletes the stored credential", () => {
+    const stored = () => (
+      <CredHarness
+        initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+        present={["git-pat-github-com"]}
+        githubApp={false}
+      />
+    );
+
+    it("deletes nothing on the first click, and nothing after Cancel", async () => {
+      deleteSecretMock.mockReset().mockResolvedValue(undefined);
+      render(stored());
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/git-pat-github-com/)).toBeInTheDocument();
+      expect(deleteSecretMock).not.toHaveBeenCalled();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(deleteSecretMock).not.toHaveBeenCalled();
+    });
+
+    it("deletes the secret once the confirm is pressed", async () => {
+      deleteSecretMock.mockReset().mockResolvedValue(undefined);
+      render(stored());
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.click(within(row).getByRole("button", { name: "Disconnect" }));
+      await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete credential" }));
+      await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com"));
+      expect(deleteSecretMock).toHaveBeenCalledTimes(1);
     });
   });
 

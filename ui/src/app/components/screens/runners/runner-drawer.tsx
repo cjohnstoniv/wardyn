@@ -12,7 +12,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { runners as runnersApi } from "../../../lib/api/runners";
-import { absoluteTime, relativeTime } from "../../../lib/format";
+import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
 import { RES, RUNNER_TRUST, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
@@ -24,7 +24,7 @@ import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine } from "./resource
 import { amountsText, runnerRes } from "./resources";
 import { ArchText, MachineText, PoolLinks } from "./runner-card";
 import { RunnerChip, TrustChip } from "./runner-chip";
-import { barrierNames, postureLines, shortDate } from "./runner-display";
+import { barrierNames, postureLines } from "./runner-display";
 import { ConfirmDialog } from "./confirm-dialog";
 import { RunnerTrust } from "./runner-trust";
 

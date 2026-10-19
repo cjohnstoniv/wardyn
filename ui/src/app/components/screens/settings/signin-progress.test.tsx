@@ -8,7 +8,7 @@
 // BEFORE that move (captured from the pre-change component, provider "AWS").
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import { SignInSteps, type SignInStep } from "./signin-progress";
+import { SignInSteps, signInStepOf, type SignInStep } from "./signin-progress";
 
 const BEFORE: Record<SignInStep, string> = {
   "start":
@@ -27,5 +27,17 @@ describe("SignInSteps markup is unchanged by the shared step list", () => {
   it.each(Object.keys(BEFORE) as SignInStep[])("step %s", (step) => {
     const { container } = render(<SignInSteps step={step} provider="AWS" />);
     expect(container.innerHTML).toBe(BEFORE[step]);
+  });
+});
+
+describe("signInStepOf follows the signals the audit rows come from", () => {
+  it.each([
+    [{ pulling: false, interactiveStarted: false }, "start"],
+    [{ pulling: true, interactiveStarted: false }, "download"],
+    [{ pulling: false, interactiveStarted: true }, "wait"],
+    // run.interactive.start outranks a pull reason the last state read still carried.
+    [{ pulling: true, interactiveStarted: true }, "wait"],
+  ] as const)("%j -> %s", (facts, step) => {
+    expect(signInStepOf(facts)).toBe(step);
   });
 });

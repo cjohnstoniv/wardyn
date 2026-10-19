@@ -28,8 +28,8 @@
 //     - rest-api-token  api_key, the realistic SaaS shape (Authorization: Bearer)
 //     - pat-stdout-only git_pat — git-over-HTTPS is an opaque CONNECT tunnel with
 //                       no header to inject, so the PAT is minted into a PIPE
-//     - ssh-briefly-resident  ssh_key — the documented resident exception (no
-//                       credential-helper seam exists in ssh at all)
+//     - ssh-at-the-proxy      ssh_key — no credential-helper seam exists in
+//                       ssh, so the proxy holds the key and signs as the agent
 //     - github-app-broker     github_token — TEACH+GATE (`needsGitHubApp`)
 //     - sts-fail-closed       cloud_sts — the CREATE refusal IS the demo
 //   Every demo referencing a stored secret carries `needsSecret` (api_key,
@@ -101,7 +101,7 @@ export const DEMO_IDS = [
   "authorized-not-issued",
   "rest-api-token",
   "pat-stdout-only",
-  "ssh-briefly-resident",
+  "ssh-at-the-proxy",
   "github-app-broker",
   "sts-fail-closed",
 ] as const;

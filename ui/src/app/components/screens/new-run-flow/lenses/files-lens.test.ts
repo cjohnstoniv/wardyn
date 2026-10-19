@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { RunIntent } from "../draft/run-intent";
 import { intentToWire } from "../draft/intent-to-wire";
 import {
-  attachDrive, attachFolder, attachWorkspace, chooseNothing, commitSize, detachDrive, excludeRepo, filesIssues, includeRepo, liftLegacyDrive,
+  attachDrive, attachFolder, attachWorkspace, chooseNothing, clearNothing, commitSize, detachDrive, excludeRepo, filesIssues, includeRepo, liftLegacyDrive,
   mainDriveMiB, mibToGibText, parseGiB, parseSize, sizeField, repoIncluded, setDriveReadOnly, setMainDrive, setRepoRef, setStartsAtDrive, setStartsHere,
   setStartSubpath, setWorkspaceReadOnly, setWorkspaceTarget, startsAt,
 } from "./files-lens";
@@ -175,6 +175,13 @@ describe("drives[] from the catalogue", () => {
     expect(gone.drives).toBeUndefined();
     expect(gone.start_folder).toBeUndefined();
     expect(setStartsAtDrive(BASE, SHARE, undefined).drives).toBeUndefined();
+  });
+
+  it("taking No extra files back leaves the step unsettled until something is added", () => {
+    const chosen = chooseNothing(BASE);
+    expect(filesIssues(chosen, {})).toEqual([]);
+    expect(clearNothing(chosen).no_repositories_or_drives).toBeUndefined();
+    expect(filesIssues(clearNothing(chosen), {}).map((i) => i.code)).toEqual(["files_choice_required"]);
   });
 
   it("counts toward the step's choice, and No extra files clears them", () => {

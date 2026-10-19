@@ -67,7 +67,8 @@ func TestComponentDefinitionValidate_ReservedEnvironmentNamesAreExact(t *testing
 	ok := []string{
 		"PATHS", "MY_PATH", "APP_HOME", "HOMEPAGE", "ENVIRONMENT", "NODE_ENV", "PYTHONUNBUFFERED",
 		"LDFLAGS", "GIT_AUTHOR_NAME", "GIT_CONFIG", "CLAUDE_MODEL_HINT", "PROXY_URL", "SSL_MODE", "REGION",
-		// Editor and pager choices are the person's own preference, not reserved.
+		// Editor and pager choices are the person's own preference, reserved only
+		// with WARDYN_COMPONENT_ENV_RESERVE_EDITORS on.
 		"EDITOR", "VISUAL", "PAGER", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR",
 	}
 	config := map[string]string{}
@@ -88,6 +89,34 @@ func TestComponentDefinitionValidate_ReservedEnvironmentNamesAreExact(t *testing
 			Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryFile, File: file}}}}
 		if err := byFile.Validate(proxy.ValidDomainEntry, true); err != nil {
 			t.Errorf("file delivery named %q: Validate = %v, want it accepted (a file name is not a variable)", file, err)
+		}
+	}
+}
+
+// With WARDYN_COMPONENT_ENV_RESERVE_EDITORS on, the editor and pager variables
+// join the closed list, as config keys and as delivered variables alike.
+func TestComponentDefinitionValidate_ReserveEditorsSwitch(t *testing.T) {
+	editors := []string{"EDITOR", "VISUAL", "PAGER", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR"}
+	for _, v := range []string{"true", "1", "on"} {
+		t.Setenv("WARDYN_COMPONENT_ENV_RESERVE_EDITORS", v)
+		for _, name := range editors {
+			for where, def := range map[string]types.ComponentDefinition{
+				"config key":   {Config: map[string]string{name: "vi"}},
+				"env variable": {Secrets: []types.ComponentSecret{env("token", name)}},
+			} {
+				if err := def.Validate(proxy.ValidDomainEntry, true); err == nil || !strings.Contains(err.Error(), `"`+name+`" is reserved`) {
+					t.Errorf("switch %q, %s %s: Validate = %v, want a refusal naming it as reserved", v, where, name, err)
+				}
+			}
+		}
+	}
+	for _, v := range []string{"false", "off", ""} {
+		t.Setenv("WARDYN_COMPONENT_ENV_RESERVE_EDITORS", v)
+		for _, name := range editors {
+			def := types.ComponentDefinition{Config: map[string]string{name: "vi"}}
+			if err := def.Validate(proxy.ValidDomainEntry, true); err != nil {
+				t.Errorf("switch %q, %s: Validate = %v, want it accepted", v, name, err)
+			}
 		}
 	}
 }

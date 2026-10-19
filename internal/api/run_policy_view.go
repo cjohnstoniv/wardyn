@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -62,6 +63,9 @@ type policySourceRecord struct {
 	edits *overrideEdits
 	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
 	overlaid *types.RunPolicySpec
+	// knobs stays in memory: which layer set each value as the policy resolved,
+	// carried to the run.policy.resolve row (run_policy_provenance.go).
+	knobs knobProvenance
 	// applyAudits stays in memory: the policy.*.apply rows a create writes once the run's row is
 	// inserted (recordPolicyApplyAudits), so a refusal before that leaves no row for a run that never began.
 	applyAudits []types.AuditEvent
@@ -97,6 +101,9 @@ type runPolicyResponse struct {
 	Complete bool                 `json:"complete"` // policy_source was recorded
 	// StoredPolicyNow is set for a saved-policy source only.
 	StoredPolicyNow *storedPolicyNow `json:"stored_policy_now,omitempty"`
+	// Provenance is which layer set each top-level value as create resolved it,
+	// with the contact as of this read. Absent for a run with none recorded.
+	Provenance map[string]policyref.Provenance `json:"provenance,omitempty"`
 }
 
 type runPolicySource struct {
@@ -200,6 +207,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "api: run policy view without the site config", "run_id", run.ID, "err", err)
 	}
 	resp.Changes = explainRunPolicy(base, served, ev, sc, run)
+	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	secOp := s.isSecurityOperator(ctx)

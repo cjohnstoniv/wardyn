@@ -233,7 +233,7 @@ launched() { grep -q -- '--wait' "$WCALLS"; }
 # refused NAME RC OUT PATTERN: a non-zero exit, the reason in OUT, no launch.
 refused() {
     local name="$1" rc="$2" out="$3" pat="$4"
-    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qE -- "$pat" && ! launched; then
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -E -- "$pat" >/dev/null && ! launched; then
         ok "$name"
     else
         bad "$name — rc=$rc, launched=$(launched && echo yes || echo no), wanted /$pat/. Got: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
@@ -254,7 +254,7 @@ if grep -q -- '--wait.*--model-provider corp-bedrock\|--model-provider corp-bedr
 else
     bad "the launch does not pass --model-provider corp-bedrock: $(grep -- '--wait' "$WCALLS")"
 fi
-if grep -o 'ARGV=.*' "$WCALLS" | grep -qF 'wdn_ci-principal-token'; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
+if grep -o 'ARGV=.*' "$WCALLS" | grep -F 'wdn_ci-principal-token' >/dev/null; then bad "WARDYN_CI_TOKEN reached the CLI argv"; else ok "the CI token never reaches argv"; fi
 if grep -q 'compose' "$CALLS"; then bad "remote mode touched docker compose: $(head -2 "$CALLS" | tr '\n' ' ')"; else ok "remote mode starts no stack"; fi
 
 # 4a'. (#2185) a --wait that times out (124) does not stop the run: ci-run.sh must kill it, and still exit 124.
@@ -283,7 +283,7 @@ else bad "remote mode killed a run that completed (rc=$rc)"; fi
 # 4b. expiring is usable (the server counts it), with a warning.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"expiring"}]}'
 out="$(run_remote)"; rc=$?
-if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep -q 'expiring'; then ok "an expiring credential launches with a warning"; else bad "an expiring credential was refused or unwarned (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
+if [ "$rc" -eq 0 ] && launched && printf '%s' "$out" | grep 'expiring' >/dev/null; then ok "an expiring credential launches with a warning"; else bad "an expiring credential was refused or unwarned (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; fi
 
 # 4c-4g: every refusal names the provider or the real cause, and launches nothing.
 status '{"provider_access":[{"provider":"corp-bedrock","state":"not_configured"}]}'
@@ -300,7 +300,7 @@ status '{"provider_access":[{"provider":"corp-bedrock","state":"not_applicable"}
 out="$(run_remote)"; refused "the admin token's not_applicable says a person's token is needed" $? "$out" "admin token"
 status '' 2
 out="$(run_remote)"; refused "a failed status call is reported as one, not as a missing grant" $? "$out" "setup status"
-if printf '%s' "$out" | grep -q 'not one this CI identity may use'; then bad "a failed status call was misreported as a missing grant"; fi
+if printf '%s' "$out" | grep 'not one this CI identity may use' >/dev/null; then bad "a failed status call was misreported as a missing grant"; fi
 status '' 0
 out="$(run_remote)"; refused "an empty status answer is reported as one, not as a missing grant" $? "$out" "setup status"
 
@@ -321,7 +321,7 @@ if grep -q 'secret set' "$WCALLS"; then bad "WARDYN_CI_SECRETS still reached 'wa
 : > "$CALLS"
 out="$(env PATH="$STUB:$PATH" STUB="$STUB" CALLS="$CALLS" WARDYN_CI_PROJECT=wardyn-ci-selftest WARDYN_CI_TASK="fix it" \
     WARDYN_CI_SKIP_BUILD=1 DOCKER_HOST="unix:///nonexistent.sock" ./scripts/ci-run.sh 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'WARDYN_URL' && ! grep -q 'compose' "$CALLS"; then
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep 'WARDYN_URL' >/dev/null && ! grep -q 'compose' "$CALLS"; then
     ok "a harness run on the throwaway stack is refused before any stack starts"
 else
     bad "a harness run on the throwaway stack was not refused up front (rc=$rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"

@@ -59,6 +59,13 @@ const openCard = async () => {
 const sent = () => fetchMock.mock.calls.map(([p, i]) => `${i?.method} ${p}`);
 
 describe("MyComponentsCard", () => {
+  // The three account cards word "nothing yet" alike: No components, No pools, No keys.
+  it("says No components when nothing is saved", async () => {
+    mine = reply({ mine: [] });
+    mount();
+    expect(await screen.findByText("No components")).toBeInTheDocument();
+  });
+
   it("summarises the saved count, then lists each row with its hosts and secrets", async () => {
     mount();
     await openCard();

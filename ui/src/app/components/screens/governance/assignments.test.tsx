@@ -8,7 +8,7 @@
 // is scoped to the one behaviour below, kept separate to avoid a
 // file-ownership collision with whatever owns governance-screen.tsx).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -92,6 +92,19 @@ describe("AssignmentsBlock — the resolved preview", () => {
     expect(await screen.findByText(GOV.PREVIEW_RESULT("Platform", GOV.MATCHED_GROUP))).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
+    expect(screen.queryByText(GOV.PREVIEW_RESULT("Platform", GOV.MATCHED_GROUP))).not.toBeInTheDocument();
+  });
+
+  // #2437: a request already in flight when the claims change must not paint its answer under the new text.
+  it("an answer to claims that were edited while it was in flight is dropped", async () => {
+    let resolve!: (v: unknown) => void;
+    previewGovernanceMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    renderBlock();
+
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "wardyn.platform");
+    await userEvent.click(screen.getByRole("button", { name: GOV.PREVIEW_RUN_CTA }));
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
+    await act(async () => resolve({ profile_id: "p1", profile_name: "Platform", matched_tier: "group" }));
     expect(screen.queryByText(GOV.PREVIEW_RESULT("Platform", GOV.MATCHED_GROUP))).not.toBeInTheDocument();
   });
 

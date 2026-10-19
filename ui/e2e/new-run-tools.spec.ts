@@ -18,7 +18,7 @@ import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
-import { SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
+import { BEDROCK_SSO_SWITCH_OFF, SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_ATTENDED, CLAUDE_UNGATED, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
 import { MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
 import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
@@ -230,6 +230,12 @@ test.describe("New Run, step 5: what an organisation component says of itself", 
 });
 
 test.describe("New Run, step 5: the harness card", () => {
+  test("a Bedrock SSO credential total names the resident sign-in token and says neither credential ends with the run (#2541)", async ({ page }) => {
+    await openToolsFor(page, ENV_CLAUDE, BEDROCK_SSO_SWITCH_OFF);
+    await expect(page.getByText(NR_TOOLS.SSO_TOKEN, { exact: false })).toHaveCount(1);
+    await expect(page.getByText(NR_TOOLS.EXPIRES_OWN)).toHaveCount(2);
+  });
+
   test("a harness that is only available is not labelled as starting with the run (DR-0230)", async ({ page }) => {
     await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED]));
     await expect(card(page, "Claude Code").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeVisible();

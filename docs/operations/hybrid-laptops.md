@@ -289,7 +289,7 @@ Three routes are open to callers with no credential yet. Each has its own rate-l
 | `/api/v1/runners/register` | `429` `runner_registration_rate_limited` |
 | `/api/v1/devices/enrol` | `429` `device_enrol_rate_limited` |
 
-- A runner that proves its key, or a registration that redeems a valid token, is refunded. Anonymous traffic and failed attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
+- The runner stream charges its bucket only when a handshake ends unproved; a registration that redeems a valid token is refunded. Failed and abandoned attempts still drain the bucket, so without trusted proxies one peer can lock every runner out.
 - Reconnecting runners stay reliable only if you do one of these. Set `WARDYN_TRUSTED_PROXIES` to your ingress addresses so each client gets its own bucket. Or allow-list your runners' source networks on `/api/v1/runners/*/stream` and the other two paths. Or give runners a dedicated ingress or hostname. Per-client limits at the ingress do not close it on their own.
 - The buckets are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 
@@ -297,7 +297,8 @@ The runner stream has two more anonymous limits and one per-runner limit, all pe
 
 | Limit | Value | Spent by |
 | --- | --- | --- |
-| Global handshake bucket | 512, then 10 a second, shared by every address | Failed and unfinished handshakes; a runner that proves its key is refunded |
+| Global handshake bucket | 512, then 10 a second, shared by every address | Handshakes that end unproved |
+| Handshakes in progress per address | 32 (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`) | As below, from one address |
 | Handshakes in progress | 256 connections between arrival and proof | A connection until it proves its key or closes; the 15-second handshake deadline bounds each |
 | Per-runner reconnects | 10, then one every 10 seconds, per runner | Only a runner that has proved its key, so a caller naming a runner it cannot prove never spends that runner's budget |
 

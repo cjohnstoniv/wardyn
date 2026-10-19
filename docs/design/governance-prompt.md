@@ -845,6 +845,14 @@ is always "rows" regardless of `n`.
 | Key | String |
 |---|---|
 | `LIMITS_CHIP.AUTONOMY(label)` | Autonomy: {label} at the strictest |
+| `LIMITS_CHIP.UI_APPS` | Deny UI apps |
+| `LIMITS_CHIP.PLACEMENT(placement)` | No {placement} runs |
+| `LIMITS_CHIP.CPU` | Max CPU (millicores) |
+| `LIMITS_CHIP.MEMORY` | Max memory (MiB) |
+
+The last four rows (#2111, #2506) are proposed wording awaiting approval. Each chip is drawn
+only when its limit is set, so a profile that bounds only one of them no longer reads "None".
+`{placement}` is `remote` or `local`; the numeric chips read "Max CPU (millicores): 2000".
 
 Ruling 2 (#96 review): the chip names the **strictest cap** a set rubric row resolves to, not
 merely that a rubric exists — `{label}` is that level's `AUTONOMY_META` label (e.g. "Attended"),

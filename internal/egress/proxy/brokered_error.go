@@ -230,6 +230,8 @@ func faultHint(host, reason, ruleSource string, err error) string {
 		switch {
 		case ruleSource == "policy:method":
 			return "the run's policy does not allow this HTTP method"
+		case kind == blockOwnNetwork || kind == blockExclusionUnknown:
+			return "its address is on the proxy's own network or could not be checked against it, which nothing lifts"
 		case ruleSource == "builtin:private-ip" || kind == blockPrivate:
 			return "declare it in internal_hosts"
 		case kind != blockNone:

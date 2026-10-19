@@ -11,7 +11,8 @@
 # docs/USERS.md 4681 adds 28 over 4653, measured: the renewal bullet: use keeps the session going and a terminal reconnects across a renewal (0.9.3 console session lifetime).
 # 0.9.4 L4a +24: docs/USERS.md 4705 adds 24 over 4681, measured by hosted lint: the drive_subject_unsupported token in the GET /me drive-state list.
 # 0.9.4 W4-DOCS-1: docs/USERS.md 4720 adds 15 over 4705, measured: #2369: runner trust class and run node record in the approver list.
-docs/USERS.md=4748 share=35
+# API-5: USERS.md 4761 adds 13 over 4748 (back-channel logout in the sign-out bullet), measured.
+docs/USERS.md=4761 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -31,7 +32,10 @@ docs/USERS.md=4748 share=35
 # docs/SSH.md 5813 = 5808 + 5, measured: keepalive bound stated as 30 to 60 seconds
 # docs/SSH.md 5849 = 5813 + 36, measured: the never-reap bullet names the shipped ceiling.
 # docs/SSH.md 5865 adds 52 over 5813, measured: 0.9.4 L4b, the connection bounds.
-docs/SSH.md=5901 share=35
+# 0.10: docs/SSH.md 5925 adds 24, measured: the per-source handshake bound, the connection knobs and the refusal metric.
+# docs/SSH.md=5901 adds 297 (0.10 HYB-A): sync ignore files, deletes and renames, --git, and the local-folder hold
+# docs/SSH.md=6198 adds 14 (0.10 HYB-A r2): the sandbox never writes the laptop's ignore files
+docs/SSH.md=6236 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
@@ -40,7 +44,8 @@ docs/SSH.md=5901 share=35
 # docs/UI-SANDBOXES.md 5544 adds 21 (0.9.3 DR-0255): the audit-refusal message form and the shared-gateway plain answer.
 # docs/UI-SANDBOXES.md 5558 adds 14 (0.9.3 lane B round 5): a plain request straight to a shared gateway is uninspected_channel.
 # docs/UI-SANDBOXES.md 5566 adds 8 (0.9.3 DR-0265): which methods the shared-gateway refusal covers.
-docs/UI-SANDBOXES.md=5584 share=35
+# docs/UI-SANDBOXES.md 5626 adds 42 (0.10 API-2): the UI-app ticket purpose and an expired approval asked again.
+docs/UI-SANDBOXES.md=5626 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

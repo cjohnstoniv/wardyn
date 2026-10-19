@@ -351,9 +351,9 @@ if [ "$DECLARE_FLOOR" = "1" ] && [ -s "$OUT/test-output.json" ]; then
     PASSES="$(outcome pass)"
     echo ">> SKIP FLOOR: these probes did not pass through testfloor.Mark(t, \"$SUITE\"):" >&2
     while IFS= read -r probe; do
-      if echo "$SKIPS" | grep -qxF "$probe"; then why="SKIPPED"
-      elif echo "$FAILS" | grep -qxF "$probe"; then why="FAILED"
-      elif echo "$PASSES" | grep -qxF "$probe"; then why="passed without reaching its Mark line"
+      if echo "$SKIPS" | grep -xF "$probe" >/dev/null; then why="SKIPPED"
+      elif echo "$FAILS" | grep -xF "$probe" >/dev/null; then why="FAILED"
+      elif echo "$PASSES" | grep -xF "$probe" >/dev/null; then why="passed without reaching its Mark line"
       else why="did not run"
       fi
       echo ">>   $probe — $why" >&2

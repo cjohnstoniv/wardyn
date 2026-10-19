@@ -197,6 +197,8 @@ type fakeDocker struct {
 	execPIDZeroedOnExit bool
 	// execInspects counts the exec inspects served.
 	execInspects int
+	// networkCreateErr fails every NetworkCreate.
+	networkCreateErr error
 	// execGone is an exec id ExecInspectRaw reports as not-found (the authoritative
 	// "it is really gone", as opposed to the transient execInspectErrs blip).
 	execGone string
@@ -450,6 +452,9 @@ func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.networkCreateErr != nil {
+		return client.NetworkCreateResult{}, f.networkCreateErr
+	}
 	var subnet netip.Prefix
 	if opts.IPAM != nil && len(opts.IPAM.Config) > 0 {
 		subnet = opts.IPAM.Config[0].Subnet

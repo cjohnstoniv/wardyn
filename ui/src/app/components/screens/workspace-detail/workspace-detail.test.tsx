@@ -744,7 +744,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
     // Disabled because the SECOND write is operatorOnly — not because the card
     // is closed to this caller: the sibling row proves the card is live.
     expect(blocked).toBeDisabled();
-    expect(blocked).toHaveAttribute("title", OPERATOR_ONLY_REASON);
+    expect(blocked).toHaveAccessibleDescription(OPERATOR_ONLY_REASON);
     expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
   });
 
@@ -844,7 +844,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
 
     const parked = await screen.findByRole("button", { name: "Remove proxy.golang.org" });
     expect(parked).toBeDisabled();
-    expect(parked).toHaveAttribute("title", EGRESS.SCAN_SEEDED_REASON);
+    expect(parked).toHaveAccessibleDescription(EGRESS.SCAN_SEEDED_REASON);
     expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
   });
 
@@ -878,8 +878,8 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
 
     const parked = await screen.findByRole("button", { name: "Remove corp.internal" });
     expect(parked).toBeDisabled();
-    expect(parked).toHaveAttribute("title", EGRESS.INHERITED_REASON);
-    expect(parked).not.toHaveAttribute("title", EGRESS.SCAN_SEEDED_REASON);
+    expect(parked).toHaveAccessibleDescription(EGRESS.INHERITED_REASON);
+    expect(parked).not.toHaveAccessibleDescription(EGRESS.SCAN_SEEDED_REASON);
     // The row's own sentence and its parked reason agree.
     expect(screen.getByText("required by this workspace")).toBeInTheDocument();
   });
@@ -889,7 +889,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     renderDetail("ws-1", false, false);
     const parked = await screen.findByRole("button", { name: "Remove pypi.org" });
     expect(parked).toBeDisabled();
-    expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
+    expect(parked).toHaveAccessibleDescription(SECURITY_ONLY_REASON);
   });
 
   // The Denied twin renders the same HostList behind the same securityOperator
@@ -900,7 +900,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     renderDetail("ws-1", false, false);
     const parked = await screen.findByRole("button", { name: "Remove evil.example.com" });
     expect(parked).toBeDisabled();
-    expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
+    expect(parked).toHaveAccessibleDescription(SECURITY_ONLY_REASON);
   });
 });
 

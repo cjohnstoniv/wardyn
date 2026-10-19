@@ -597,7 +597,8 @@ func TestRelayStripsHopByHopResponseHeaders(t *testing.T) {
 			// run was already allowed to reach — but the strip is NOT the
 			// unconditional one the code reads like. If relay ever learns to
 			// consult resp.Close (or strips before the transport folds it), flip
-			// this row to "" rather than deleting it.
+			// this row to "" rather than deleting it. Tracked as #2685: a fix
+			// needs the raw response head, read below the transport.
 			name:       "connection close eats the token list",
 			connection: "close, X-Hop",
 			wantXHop:   "1",

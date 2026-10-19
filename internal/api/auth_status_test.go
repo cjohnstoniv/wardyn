@@ -34,25 +34,31 @@ import (
 // Postgres incident, reported to the operator as a credential problem.
 func TestSessionRejectionResponse(t *testing.T) {
 	cases := []struct {
-		reason     string
-		wantStatus int
-		wantBody   string
-		wantOK     bool
+		reason       string
+		noAdminToken bool
+		wantWire     string
+		wantStatus   int
+		wantBody     string
+		wantOK       bool
 	}{
-		{sessionRevocationUnavailable, http.StatusServiceUnavailable, sessionUnavailableMsg, true},
-		{sessionExpired, http.StatusUnauthorized, sessionExpiredMsg, true},
-		{sessionRevoked, http.StatusUnauthorized, sessionRevokedMsg, true},
-		{sessionInvalid, http.StatusUnauthorized, sessionInvalidMsg, true},
-		// No cookie at all is not a rejection: the bearer lane must keep its
+		{sessionRevocationUnavailable, false, sessionRevocationUnavailable, http.StatusServiceUnavailable, sessionUnavailableMsg, true},
+		{sessionExpired, false, sessionExpired, http.StatusUnauthorized, sessionExpiredMsg, true},
+		{sessionExpired, true, sessionExpired, http.StatusUnauthorized, sessionExpiredMsg, true},
+		{sessionRevoked, false, sessionRevoked, http.StatusUnauthorized, sessionRevokedMsg, true},
+		{sessionInvalid, false, sessionInvalid, http.StatusUnauthorized, sessionInvalidMsg, true},
+		{"identity_deactivated", false, "identity_deactivated", http.StatusUnauthorized, "Your access to Wardyn has been turned off — ask your Wardyn admin", true},
+		// No cookie at all is not a rejection where an admin token exists: the bearer lane must keep its
 		// generic answer, or every CLI call would start claiming a session.
-		{"", 0, "", false},
-		{"something_new_upstream", 0, "", false},
+		{"", false, "", 0, "", false},
+		// With single sign-on and no admin token, signing in is the only way in, and that is the answer.
+		{"", true, "sign_in_required", http.StatusUnauthorized, "Sign-in required — sign in to Wardyn with single sign-on", true},
+		{"something_new_upstream", true, "", 0, "", false},
 	}
 	for _, tc := range cases {
-		status, msg, ok := sessionRejectionResponse(tc.reason)
-		if ok != tc.wantOK || status != tc.wantStatus || msg != tc.wantBody {
-			t.Errorf("sessionRejectionResponse(%q) = (%d, %q, %v), want (%d, %q, %v)",
-				tc.reason, status, msg, ok, tc.wantStatus, tc.wantBody, tc.wantOK)
+		wire, status, msg, ok := sessionRejectionResponse(tc.reason, tc.noAdminToken)
+		if ok != tc.wantOK || wire != tc.wantWire || status != tc.wantStatus || msg != tc.wantBody {
+			t.Errorf("sessionRejectionResponse(%q, %v) = (%q, %d, %q, %v), want (%q, %d, %q, %v)",
+				tc.reason, tc.noAdminToken, wire, status, msg, ok, tc.wantWire, tc.wantStatus, tc.wantBody, tc.wantOK)
 		}
 	}
 	if !strings.Contains(sessionExpiredMsg, "expired") {
@@ -124,6 +130,18 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		}
 		if !strings.Contains(w.Body.String(), "missing bearer token") {
 			t.Errorf("body = %s, want the generic \"missing bearer token\"", w.Body.String())
+		}
+	})
+
+	// Single sign-on and no admin token: a request with no session is told to sign in, not that the
+	// admin token is unset. Without single sign-on the admin-token answer stays (TestAdminAuthDisabledWhenNoToken).
+	t.Run("no cookie on a single-sign-on deployment with no admin token is told to sign in", func(t *testing.T) {
+		cfg := baseTestConfig(newHarness(t), rbacStore{})
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.AdminToken = ""
+		w := doSSO(t, New(cfg), http.MethodGet, "/api/v1/runs", nil, "")
+		if w.Code != http.StatusUnauthorized || decodeErrorBody(t, w).Reason != "sign_in_required" {
+			t.Fatalf("status = %d, body=%s; want 401 sign_in_required", w.Code, w.Body.String())
 		}
 	})
 

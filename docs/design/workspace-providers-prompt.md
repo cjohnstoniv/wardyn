@@ -106,7 +106,7 @@ product ignored my input" (§4c C5).
   "Private key", "App ID", "Private key (PEM)", the store note) are byte-for-byte the card's.
 - **The lane honesty is `CAPABILITY.brokerLine / gitPatLine / sshKeyLine`** (`wardyn/copy.ts`), the
   tooltips `LANE_META` (`scm-provider.ts`) already carries under the chip labels `App · brokered` /
-  `PAT · in-sandbox` / `SSH · resident` — the permitted-lanes checkboxes render those three chips.
+  `PAT · in-sandbox` / `SSH · at the proxy` — the permitted-lanes checkboxes render those three chips.
 - **The tab's honesty line is `S.GIT_FOOTER`** (`connection-cards.tsx`), quoted in §7.1 and rendered
   verbatim under the Git tab. No `HONESTY` key exists in this module (§5 #1).
 - **The kind labels are `brandFor`'s** (`scm-provider.ts`): "GitHub" and "Azure DevOps" — frozen in
@@ -224,8 +224,8 @@ only, `CEILING`.
 
 Nothing about where a credential lives changes. The three chips and their tooltips are the
 product's honesty canon, imported: `App · brokered` (`CAPABILITY.brokerLine` — the token stays in
-Wardyn), `PAT · in-sandbox` (`gitPatLine` — handed to git inside the sandbox), `SSH · resident`
-(`sshKeyLine` — a private key file the sandbox can read). `S.GIT_FOOTER` under the tab owns the
+Wardyn), `PAT · in-sandbox` (`gitPatLine` — handed to git inside the sandbox), `SSH · at the proxy`
+(`sshKeyLine` — the proxy holds the key and signs Git's SSH sign-in). `S.GIT_FOOTER` under the tab owns the
 split so no lane overclaims. The `app` lane is **unavailable on Azure DevOps** (the App broker mints
 repository-scoped GitHub tokens on github.com only) — drawn disabled WITH its reason, never hidden
 (Q3). The `ssh` lane is available on `github.com` / `dev.azure.com` (SSH-over-443); port-22 SSH to a
@@ -371,7 +371,7 @@ card, and on the security admin's door.**
 Colour, stated per rule:
 
 - **A lane chip keeps its own tone** — `App · brokered` success, `PAT · in-sandbox` info,
-  `SSH · resident` warning (`LANE_META`, the residency honesty) — never recoloured by the checkbox.
+  `SSH · at the proxy` success (`LANE_META`, the residency honesty) — never recoloured by the checkbox.
 - **Off is neutral** — a disabled row, an absent row, an unavailable lane, a disabled agent are facts
   with the word on them, never red.
 - **Amber and red carry genuine risk and error only:** write refusals, the 412, the narrowed-sources
@@ -494,16 +494,16 @@ the thing refused — and the console renders them verbatim under its own headin
 
 | Key | Lives in | String |
 |---|---|---|
-| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all. |
+| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy; for SSH the proxy signs the clone's sign-in and closes its agent after the start-up clone. Public repos clone with no credential at all. |
 | `S.MODEL_FOOTER` | `settings/connection-cards.tsx` | The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it. |
 | `S.STORE_NOTE` | `settings/connection-cards.tsx` | Wardyn stores this — it doesn't dial the provider to check it. |
-| `Lane` titles / hints (git) | `settings/connection-cards.tsx` | Personal access token / The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time. · SSH key / A per-run key file is written inside the sandbox for the clone and shredded after; an approval-gated grant is delivered once. · GitHub App / Repo-scoped tokens brokered at the proxy — the token never enters the sandbox. |
+| `Lane` titles / hints (git) | `settings/connection-cards.tsx` | Personal access token / The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time. · SSH key / The proxy holds the key and signs the clone's SSH sign-in; no key file enters the sandbox. An approval-gated grant is issued once. · GitHub App / Repo-scoped tokens brokered at the proxy — the token never enters the sandbox. |
 | `Lane` titles / hints (model) | `settings/connection-cards.tsx` | Claude subscription / Sign in through a throwaway sandbox — the token never touches disk. · API key / ANTHROPIC_API_KEY or OPENAI_API_KEY. · AWS Bedrock / A bearer key, or an SSO device-code sign-in. |
 | `SecretLane` labels | `settings/connection-cards.tsx` | Access token · Private key · App ID · Private key (PEM) · Connected · Disconnect |
-| `LANE_META.*.label` | `lib/scm-provider.ts` | App · brokered / PAT · in-sandbox / SSH · resident |
+| `LANE_META.*.label` | `lib/scm-provider.ts` | App · brokered / PAT · in-sandbox / SSH · at the proxy |
 | `CAPABILITY.brokerLine` | `wardyn/copy.ts` | The run works through a short-lived, scoped credential — your stored key stays in Wardyn. |
 | `CAPABILITY.gitPatLine` | `wardyn/copy.ts` | A git access token is handed to git inside the sandbox — the process running there can read it. |
-| `CAPABILITY.sshKeyLine` | `wardyn/copy.ts` | A private SSH key is written to disk in the sandbox — the process running there can read it. |
+| `CAPABILITY.sshKeyLine` | `wardyn/copy.ts` | The proxy holds the SSH key and signs Git's SSH sign-in; no key file enters the sandbox. |
 | `OPERATOR_ONLY_REASON` | `wardyn/copy.ts` | Requires the admin role. |
 | `PERM.REMOVE` | `permissions-copy.ts` | Remove |
 | `PERM.SUBJECT_USER / SUBJECT_GROUP / SUBJECT_ALL` | `permissions-copy.ts` | User / Group / Everyone signed in |

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -41,6 +42,13 @@ func runSizing(kind string, res runner.Resources, azure bool) store.RunSizing {
 		z.AgentCPURequestMillis, z.AgentMemoryRequestMiB = z.AgentCPULimitMillis, z.AgentMemoryLimitMiB
 	}
 	return z
+}
+
+// runProxyAzure reports whether a run with these model-provider choices gets an Azure route gate on its
+// proxy: dispatch authors one for a chosen Azure Foundry provider on any of its harnesses.
+func runProxyAzure(primary runProviderChoice, harnesses []harnessChoice) bool {
+	azure := func(c runProviderChoice) bool { return c.chosen && c.provider.Kind == types.ModelProviderAzureFoundry }
+	return azure(primary) || slices.ContainsFunc(harnesses, func(h harnessChoice) bool { return azure(h.choice) })
 }
 
 // runOnDeployment reports whether run's bound placement is one of this deployment's own substrates, the

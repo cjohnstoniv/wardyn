@@ -6,9 +6,11 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
-import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON, UNTIL_PAST } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
+import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -396,6 +398,52 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
       await expect(page.getByText(markerRe(marker))).toHaveCount(1);
       await expect(page.getByText("Approved", { exact: true }).first()).toBeVisible();
       await expect(page.getByText(/^until\s/i).first()).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("the decision scope is one Tab stop the arrow keys move, and an Until preset shows as chosen in the date field", async ({ page }) => {
+    clearPending();
+    const marker = uniqueMarker("scope-keys");
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 } });
+
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      await expect(page.getByText(markerRe(marker)).first()).toBeVisible();
+      await page.getByRole("button", { name: "Approve" }).first().click();
+      const dialog = page.getByRole("dialog");
+      const scopeGroup = dialog.getByRole("radiogroup", { name: "Decision scope" });
+      const run = scopeGroup.getByRole("radio", { name: /^This run\b/ });
+      const until = scopeGroup.getByRole("radio", { name: /^Until…/ });
+
+      // Roving tabindex: the checked radio is the only Tab stop; arrows move and check.
+      await expect(run).toHaveAttribute("tabindex", "0");
+      await expect(scopeGroup.getByRole("radio", { name: /^Once\b/ })).toHaveAttribute("tabindex", "-1");
+      await run.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(until).toBeFocused();
+      await expect(until).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("Home");
+      await expect(scopeGroup.getByRole("radio", { name: /^Once\b/ })).toBeFocused();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowRight");
+      await expect(until).toBeFocused();
+
+      // A preset reads as chosen and its time shows in the one date field; picking another moves both.
+      const field = dialog.getByLabel("Pick a time");
+      await expect(field).toHaveValue("");
+      const hour = dialog.getByRole("button", { name: "1 hour" });
+      await expect(hour).toHaveAttribute("aria-pressed", "false");
+      await hour.click();
+      await expect(hour).toHaveAttribute("aria-pressed", "true");
+      const first = await field.inputValue();
+      expect(first).not.toBe("");
+      await dialog.getByRole("button", { name: "24 hours" }).click();
+      await expect(hour).toHaveAttribute("aria-pressed", "false");
+      await expect(dialog.getByRole("button", { name: "24 hours" })).toHaveAttribute("aria-pressed", "true");
+      expect(await field.inputValue()).not.toBe(first);
     } finally {
       deleteApproval(id);
     }
@@ -807,6 +855,65 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await expect(row).toHaveCount(0, { timeout: 10_000 });
       await expect(page.getByTestId("live-approvals-idle")).toBeVisible();
       expect(sql(`SELECT state || ':' || decided_by FROM approvals WHERE id = '${id}'`)).toBe(`APPROVED:${MEMBER_PRINCIPAL}`);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("a capability_egress_host refusal turns the row's buttons off and the strip names the admin", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("f12-cap");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    // The grant is withheld by an admin; the refusal is the daemon's envelope, stubbed because the e2e install
+    // has no capability enforcement to switch on.
+    await page.route(`**/api/v1/approvals/${id}/approve`, (route) =>
+      route.fulfill({
+        status: 403,
+        json: { error: `you are not granted egress host ${marker} — an admin decides this one, or can grant it to you`, reason: "capability_egress_host" },
+      }),
+    );
+    try {
+      await page.goto(`/runs/${runId}`);
+      const row = page.getByTestId("live-approval-row").filter({ hasText: markerRe(marker) });
+      const panel = page.getByTestId("live-approvals");
+      await expect(row.getByRole("button", { name: "Approve" })).toBeEnabled();
+      await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toHaveCount(0);
+
+      await row.getByRole("button", { name: "Approve" }).click();
+      await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
+      await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("the Until picker refuses a time that has passed, and a card's hover reads as a date, not raw ISO", async ({ page }) => {
+    clearPending();
+    const marker = uniqueMarker("until-past");
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 }, runId: runningRunId() });
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      const card = page.getByText(markerRe(marker)).first();
+      await expect(card).toBeVisible();
+
+      // #3173: the requested-at hover is formatted, never the wire string.
+      const hovers = await page.locator("[title]").evaluateAll((els) => els.map((el) => el.getAttribute("title") ?? ""));
+      expect(hovers.filter((t) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(t))).toEqual([]);
+
+      await page.getByRole("button", { name: "Approve" }).first().click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("radiogroup", { name: "Decision scope" }).getByRole("radio", { name: /^Until…/ }).click();
+      const field = dialog.getByLabel("Pick a time");
+      const approve = dialog.getByRole("button", { name: "Approve", exact: true });
+      await field.fill(toDatetimeLocalValue(new Date(aheadByHours(-9600))));
+      await expect(dialog.getByRole("alert")).toHaveText(UNTIL_PAST);
+      await expect(approve).toBeDisabled();
+      await field.fill(toDatetimeLocalValue(new Date(aheadByHours(9600))));
+      await expect(dialog.getByRole("alert")).toHaveCount(0);
+      await expect(approve).toBeEnabled();
     } finally {
       deleteApproval(id);
     }

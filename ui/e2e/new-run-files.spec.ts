@@ -135,7 +135,7 @@ const press = (page: Page, name: string) => page.getByRole("button", { name, exa
 const next = (page: Page, step: string) => press(page, NR_SHARED.CONTINUE_TO(step));
 const sizeInput = (page: Page) => page.locator("#nr-main-drive-size");
 const dialog = (page: Page) => page.getByRole("dialog");
-const noExtra = (page: Page) => page.getByRole("radio", { name: NR_FILES.NO_EXTRA });
+const noExtra = (page: Page) => page.getByRole("checkbox", { name: NR_FILES.NO_EXTRA });
 const startFolder = (page: Page) => page.locator("#nr-starts-here");
 const cards = (page: Page) => page.getByTestId("nr-attach-card");
 
@@ -345,8 +345,8 @@ test.describe("New Run, Files: repositories", () => {
     await expect(page.getByRole("status").filter({ hasText: summary })).toBeVisible();
   });
 
-  for (const how of ["a real click", "Space on the focused radio"]) {
-    test(`the lone No extra files radio shows checked after ${how}`, async ({ page }) => {
+  for (const how of ["a real click", "Space on the focused checkbox"]) {
+    test(`the No extra files checkbox shows checked after ${how}`, async ({ page }) => {
       await stub(page, { branches: ["main"] });
       await toFiles(page);
       await expect(noExtra(page)).not.toBeChecked();
@@ -359,6 +359,17 @@ test.describe("New Run, Files: repositories", () => {
   test("No extra files is a choice: only the main drive, and a repository added later replaces it", async ({ page }) => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);
+    await noExtra(page).check();
+    await expect.poll(() => last(sent).no_repositories_or_drives).toBe(true);
+    // A checkbox, not a group of one: no radio semantics ("1 of 1") anywhere on the step.
+    await expect(page.getByRole("radio", { name: NR_FILES.NO_EXTRA })).toHaveCount(0);
+    await expect(noExtra(page)).toHaveAttribute("name", "nr-files-choice");
+    // Unchecking takes the choice back, and Continue is held with today's message.
+    await noExtra(page).uncheck();
+    await expect.poll(() => last(sent).no_repositories_or_drives).toBeUndefined();
+    await next(page, NR_SHARED.STEP_TOOLS);
+    await expect(page.getByText(NR_FILES.CHOOSE_FILES).first()).toBeVisible();
+    await expect(page).toHaveURL(/step=files/);
     await noExtra(page).check();
     await expect.poll(() => last(sent).no_repositories_or_drives).toBe(true);
     const nothing = NR_FILES.SUMMARY_NO_EXTRA("10 GiB", NR_FILES.SUMMARY_DELETED);

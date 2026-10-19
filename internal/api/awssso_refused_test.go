@@ -302,7 +302,7 @@ func TestAWSSSOCredentialState_RefusedInsideTheSkewIsExpiring(t *testing.T) {
 func TestAWSSSORefusedMarksAreBounded(t *testing.T) {
 	s := &Server{}
 	for i := range awsSSORefusedMax + 10 {
-		s.markAWSSSORefused(fmt.Sprintf("fp-%d", i), "invalid_request")
+		s.markAWSSSORefused(context.Background(), fmt.Sprintf("fp-%d", i), "", "invalid_request")
 	}
 	if n := len(s.ssoRefreshRefused); n != awsSSORefusedMax {
 		t.Fatalf("refused marks = %d, want the bound %d", n, awsSSORefusedMax)
@@ -311,7 +311,7 @@ func TestAWSSSORefusedMarksAreBounded(t *testing.T) {
 	if s.ssoRefreshRefused[last] != "invalid_request" {
 		t.Error("the newest refusal was evicted")
 	}
-	s.markAWSSSORefused(last, "access_denied")
+	s.markAWSSSORefused(context.Background(), last, "", "access_denied")
 	if n := len(s.ssoRefreshRefused); n != awsSSORefusedMax || s.ssoRefreshRefused[last] != "access_denied" {
 		t.Errorf("re-marking a known token: %d marks, detail %q; want no eviction and the new detail", n, s.ssoRefreshRefused[last])
 	}

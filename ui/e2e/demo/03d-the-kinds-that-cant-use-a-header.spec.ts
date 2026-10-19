@@ -10,14 +10,15 @@
  * WHERE IT SITS. A detour off 03a (the core "What it stops"), watched after 03c,
  * handing straight back to 04 — nothing in the core path depends on it. Driven
  * by `scripts/record-demo.sh --video 03d`, which globs this exact filename. It
- * finishes the ladder 03c started: header-injected -> piped -> RESIDENT ->
- * RE-ORIGINATED -> REFUSED.
+ * finishes the ladder 03c started: header-injected -> piped -> SIGNED AT THE
+ * PROXY -> RE-ORIGINATED -> REFUSED.
  *
  * WHAT THIS FILMS — the three credential kinds a header cannot carry:
- *   ACT 1 ssh-briefly-resident — the documented exception, RE-ENACTED and
- *     narrated as one: git's SSH transport has no credential-helper seam, so the
- *     key is written 0400 and shredded. The real window opens and closes at
- *     startup before attach is allowed, so nobody can watch it live.
+ *   ACT 1 ssh-at-the-proxy — git's SSH transport has no credential-helper
+ *     seam, so the proxy holds the key and signs the clone's sign-in as an ssh
+ *     agent. The agent closes after the start-up clones, before attach; every
+ *     way in from the sandbox (a key file, the mint route, the agent) is shown
+ *     refused.
  *   ACT 2 github-app-broker — TEACH+GATE: its installation token is minted from
  *     the LIVE GitHub API, so it cannot be faked locally. Start stays disabled
  *     behind the `needsGitHubApp` gate copy and the card teaches the lane.
@@ -34,7 +35,7 @@
  * untracked stanza-check script fails if a spec string and a stanza drift.
  *
  * STAGING THIS FILE OWNS (off camera): sweepStaleState(), then
- * wardyn-demo-ssh-key, because ssh-briefly-resident carries `needsSecret` and
+ * wardyn-demo-ssh-key, because ssh-at-the-proxy carries `needsSecret` and
  * stepOrder(status) DROPS a demo whose secret is missing — a `?step=` to a
  * dropped card silently re-corrects to a neighbour and films the wrong thing.
  * The MASKED ENTRY of a secret is taught once on camera in 03a with
@@ -78,114 +79,93 @@ test.beforeAll(async () => {
   // S6: deny stale pending approvals / kill stale runs first — otherwise the
   // Approvals badge carries a prior take's number through the whole video.
   await sweepStaleState();
-  // ssh-briefly-resident carries `needsSecret`. Its masked entry is the same
+  // ssh-at-the-proxy carries `needsSecret`. Its masked entry is the same
   // lesson 03a teaches once on camera with wardyn-demo-key, so staging it here
   // off camera is what lets 03d re-take alone, in any order.
   await putSecret(page, SSH_SECRET, SSH_VALUE);
 });
 
 // ---------------------------------------------------------------------------
-// Act 1 — the one that touches disk, briefly (ssh-briefly-resident). git's SSH
-// transport has no credential-helper seam, so the key must become resident.
-// The real window opens and closes at startup before attach, so this is an
-// honest RE-ENACTMENT — narrated as one. Commands off the card's pills (the
-// node re-mint carries a {grant_id}); the stored key is fake, so ssh is
-// rejected — the load-bearing proof is the 0400 file appearing then gone. As the
-// FIRST demo of its episode it walks the whole policy, not just the line that
-// changed — a viewer who started here saw no baseline to diff against.
+// Act 1 — the SSH key that stays at the proxy (ssh-at-the-proxy). git's SSH
+// transport has no credential-helper seam, so the proxy signs instead: it holds
+// the key and answers as the ssh agent, and closes the agent after the start-up
+// clones. Commands off the card's pills (two carry a {grant_id}); the
+// load-bearing proof is that no key file exists and both proxy routes refuse.
+// As the FIRST demo of its episode it walks the whole policy, not just the line
+// that changed — a viewer who started here saw no baseline to diff against.
 // ---------------------------------------------------------------------------
-test("V03d act 1 — the one that touches disk", async () => {
+test("V03d act 1 — the SSH key that stays at the proxy", async () => {
   test.setTimeout(900_000);
   const page = stage();
 
-  const card = await openEpisode(page, "ssh-briefly-resident", "The one that touches disk — briefly");
+  const card = await openEpisode(page, "ssh-at-the-proxy", "The SSH key that stays at the proxy");
 
-  await chapter(page, "The kinds that can't use a header", "Resident briefly, brokered, or refused");
+  await chapter(page, "The kinds that can't use a header", "Signed at the proxy, brokered, or refused");
   // [OWNER SLOT — drafted] The detour's own opener.
   await caption(page, "Three credential kinds that can't be injected as a header — and what Wardyn does instead.");
   await beat(page, PACE.read);
-  await caption(page, "One we can replay here; one stays gated until you configure a GitHub App; one is refused before a sandbox exists — and that refusal is the lesson.");
+  await caption(page, "One we can try here; one stays gated until you configure a GitHub App; one is refused before a sandbox exists — and that refusal is the lesson.");
   await beat(page, BEAT_SHORT);
 
-  await spotlight(page, page.getByTestId("demo-policy-ssh-briefly-resident"));
-  await caption(page, "One kind can't be kept out of the box at all — the ssh client reads its key from a file.");
+  await spotlight(page, page.getByTestId("demo-policy-ssh-at-the-proxy"));
+  await caption(page, "SSH can't take a header, and git's SSH has no credential helper.");
   await beat(page, PACE.read);
-  await caption(page, "So Wardyn narrows the window instead of pretending it isn't there: written just before the clone, removed right after.");
+  await caption(page, "So the proxy holds the key and signs the sign-in for ssh, as its agent. The key never comes into the box.");
   await beat(page, PACE.read);
-  await walkPolicyKey(page, card, "ssh-briefly-resident", "min_confinement_class",
+  await walkPolicyKey(page, card, "ssh-at-the-proxy", "min_confinement_class",
     "Same barrier as the core — Fence.");
-  await walkPolicyKey(page, card, "ssh-briefly-resident", "auto_stop_after_sec",
+  await walkPolicyKey(page, card, "ssh-at-the-proxy", "auto_stop_after_sec",
     "Same fifteen-minute idle stop.");
-  await walkPolicyKey(page, card, "ssh-briefly-resident", "eligible_grants",
+  await walkPolicyKey(page, card, "ssh-at-the-proxy", "eligible_grants",
     "The eligible grants section is back; the kind is what's different.");
-  await walkPolicyKey(page, card, "ssh-briefly-resident", "kind",
-    "kind: SSH key — the one kind that is ever written to a file.",
-    "No other kind is ever written down. This one is written owner-read-only — mode 0400, agent-owned — and removed the moment the clone is done.");
+  await walkPolicyKey(page, card, "ssh-at-the-proxy", "kind",
+    "kind: SSH key — signed for at the proxy, never written into the sandbox.",
+    "A start-up clone reaches the proxy's agent through a socket that exists only while that one ssh runs.");
   await spotlight(page, null);
 
-  const screen = await startAndBoot(page, card, "ssh-briefly-resident");
+  const screen = await startAndBoot(page, card, "ssh-at-the-proxy");
 
-  // Step 0: ls ~/.ssh — already empty. The window closed at startup.
+  // Step 0: ls ~/.ssh — empty. No key file was ever written.
   await typeInTerminal(page, await pillCmd(card, 0), card);
   await beat(page, PACE.read);
-  await caption(page, "This is a re-enactment, and narrated as one.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "On a real run the whole window opens and closes at startup, before you can attach.");
+  await caption(page, "This listing is empty, and it always was: no key file is written for a clone.");
   await beat(page, PACE.read);
-  await caption(page, "This listing is empty on purpose. At startup Wardyn issued a key, wrote it here, and removed it — before anyone could attach. You're looking at the after.");
+
+  // Step 1: the raw mint by grant id — withheld.
+  await typeInTerminal(page, await pillCmd(card, 1), card);
+  await pollScreen(screen, /never enters the sandbox/, "the mint route did not refuse the ssh key");
+  await caption(page, "Ask the mint route for the key by its grant id: refused. The proxy withholds it.");
   await beat(page, PACE.read);
 
   const auditRows = card.getByTestId("demo-audit-rows");
-  await expect(auditRows, "no startup credential.mint row for the ssh key").toContainText("credential.mint", {
+  await expect(auditRows, "no credential.mint row for the ssh key").toContainText("credential.mint", {
     timeout: 60_000,
   });
   await centerInFrame(auditRows);
   await spotlight(page, auditRows);
-  await caption(page, "That startup mint is the window you could never have watched.");
-  await beat(page, PACE.read);
-  await caption(page, "From here, it's replayed by hand — the same local route, the same kind of file, in the same place.");
+  await caption(page, "The record shows that mint: issued to the proxy, which kept it. The grant is issued once per run.");
   await beat(page, PACE.read + 400);
   await spotlight(page, null);
 
   // Cockpit re-pin: the audit beat above centered the record and pushed the
   // policy off the top; put policy + terminal + audit back in one frame before typing.
-  await frameRun(page, "ssh-briefly-resident");
-  // Step 2 (pill index 1): the node re-mint → 0400 file.
-  await typeInTerminal(page, await pillCmd(card, 1), card);
-  await beat(page, PACE.read);
-  await caption(page, "This kind of grant can be requested again — there's no cap on that.");
-  await beat(page, PACE.read);
-  await caption(page, "So the real bound isn't the window: anything running as the agent can ask for another key — and each ask costs it a row in the record.");
-  await beat(page, BEAT_SHORT);
-
-  // Step 3 (pill index 2): ls -l — the resident 0400 file.
+  await frameRun(page, "ssh-at-the-proxy");
+  // Step 2: the agent itself — closed after the start-up clones.
   await typeInTerminal(page, await pillCmd(card, 2), card);
-  await pollScreen(screen, /id_wardyn_demo/, "the re-minted key file never appeared");
-  await caption(page, "There it is: read-only, agent-owned.");
+  await pollScreen(screen, /start-up clone finished/, "the ssh agent did not answer closed");
+  await caption(page, "And the agent itself closed when the start-up clones finished.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "For the length of a clone, a private key is a real file — and code running as the agent can read it. Wardyn doesn't claim otherwise.");
+  await caption(page, "Nothing in this sandbox can have the proxy sign with the key now.");
   await beat(page, PACE.read);
 
-  // Step 4 (pill index 3): the ssh attempt — refused (fake key), narrow reach.
+  // Step 3: ssh straight to the host — nothing to offer, narrow reach.
   await typeInTerminal(page, await pillCmd(card, 3), card);
   await beat(page, PACE.read + 800);
-  await caption(page, "Now try the clone. The key is fake, so the host rejects it.");
+  await caption(page, "Now try SSH directly. There is no key in here to offer, so the host refuses.");
   await beat(page, BEAT_SHORT);
-  await caption(page, "But notice what the connection was even allowed to reach: one SSH host, on 443.");
+  await caption(page, "And notice what the connection was even allowed to reach: one SSH host, on 443.");
   await beat(page, PACE.read);
-
-  // Step 5 (pill index 4): shred → gone.
-  await typeInTerminal(page, await pillCmd(card, 4), card);
-  await pollScreen(screen, /\.ssh/, "the shred step never echoed the empty listing");
-  await caption(page, "And gone — removed, with a cleanup that runs even if the clone dies halfway.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "And honestly: the removal isn't a row in the record. The window is bounded by the clone, not by an audit entry.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "This is the one exception to 'nothing enters the box', and it's documented.");
-  await beat(page, PACE.read + 400);
-  await caption(page, "What you actually get: nothing persists between clones, the network is one SSH host on 443, and every ask is a row.");
-  await beat(page, BEAT_SHORT);
-  await caption(page, "Abuse is detectable, not impossible.");
+  await caption(page, "What you get: no key file, no key on the mint route, and an agent open only for the start-up clone.");
   await beat(page, BEAT_SHORT);
   await act(page, card.getByRole("button", { name: "End demo" }));
 });
@@ -295,7 +275,7 @@ test("V03d conclusion", async () => {
   await chapter(page, "Back to the main path", "");
   await caption(page, "That's the last credential kind — five in all, each with its own boundary, because the protocol decides what safe use can even look like.");
   await beat(page, PACE.read);
-  await caption(page, "One we replayed, one we could only explain, and one refused before it started — that refusal was the demonstration.");
+  await caption(page, "One we tried from inside, one we could only explain, and one refused before it started — that refusal was the demonstration.");
   await beat(page, BEAT_SHORT);
   await caption(page, "Next: a workspace — something real for a run to work on.");
   await beat(page, BEAT_SHORT);

@@ -474,6 +474,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		name           string
 		uiListen       string
 		listen         string
+		internalListen string
 		sshListen      string
 		originTemplate string
 		stripCookies   string
@@ -532,6 +533,14 @@ func TestValidateUISandboxConfig(t *testing.T) {
 		{
 			name: "origin template with a run placeholder", uiListen: ":8081", listen: ":8080",
 			originTemplate: "https://run-{run}.ui.example.com",
+		},
+		{
+			// The proxy-facing TLS listener defaults to :8443; a UI gateway there lost the bind
+			// race and left the daemon serving with every Open failing (#2331).
+			name:     "UI gateway on the internal listener's address is refused",
+			uiListen: ":8443", listen: ":8080", internalListen: ":8443",
+			posture: tlsPosture{tlsEnabled: true, secureCookies: true},
+			wantErr: "-internal-listen",
 		},
 		{
 			// The console's plaintext gate has to cover THIS listener too: the
@@ -606,7 +615,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.sshListen, tc.originTemplate, tc.stripCookies, tc.posture, tc.allowPlaintext)
+			err := validateUISandboxConfig(tc.uiListen, tc.listen, tc.internalListen, tc.sshListen, tc.originTemplate, tc.stripCookies, tc.posture, tc.allowPlaintext)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want accepted, got %v", err)

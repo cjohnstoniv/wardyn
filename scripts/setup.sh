@@ -563,7 +563,7 @@ if $healthy; then
     info "Safest → least safe for agent repo access:"
     info "  1. GitHub App          — Wardyn mints a fresh ≤1h read-scoped token per run; the only rung Wardyn can expire"
     info "  2. Fine-grained PAT    — one repo, Contents: Read-only, short expiry (brokered; you revoke on the provider)"
-    info "  3. Read-only deploy key — one repo; resident seconds-only for the clone, then shredded (offer below)"
+    info "  3. Read-only deploy key — one repo; held by the run's proxy, which signs the clone and then closes (offer below)"
     info "  4. Classic PAT / gh CLI token — brokered, but your WHOLE account"
     info "  5. Personal id_ed25519/id_rsa — resident private key + full account access (riskiest)"
     if $scm_gh_cli; then
