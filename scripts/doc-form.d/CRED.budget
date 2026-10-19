@@ -4,4 +4,5 @@
 # delivered-inside residual +32, "withheld at these doors" +3.
 # 3549 adds 7: the ssh_key bullet names the key file as what is wiped and the grant as what stays.
 # 0.9.4 L8: docs/CREDENTIALS.md 3684 adds 135 over 3549: the tool-approval credential row and the SigV4 wording.
-docs/CREDENTIALS.md=3684 share=35
+# 0.10 MDL: docs/CREDENTIALS.md 3696 adds 12 over 3684, measured: #2957 local_model joins the token kinds row.
+docs/CREDENTIALS.md=3696 share=35

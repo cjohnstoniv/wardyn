@@ -23,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -371,10 +373,22 @@ func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
 // target); this is a different trust class entirely. Resolution failure or a
 // refused answer returns errGatewayVet — the caller's request 502s; the run
 // is otherwise unaffected.
+//
+// The one lift: a registered local model server (localModelAt — exactly the
+// host and port the control plane wrote) may answer on the first address of
+// one of this proxy's own subnets, which on a Docker bridge network is the
+// Docker host itself. No other own-subnet address, and never the control plane.
 func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	local := p.localModelAt(h, port) != nil
+	refused := func(ip net.IP) bool {
+		if local && p.ownSubnetGateway(ip) && !p.onControlPlane(ip) {
+			return ipguard.GatewayIPRefused(ip)
+		}
+		return ipguard.GatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip)
+	}
 	if ip := net.ParseIP(h); ip != nil {
-		if ipguard.GatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
+		if refused(ip) {
 			return "", errGatewayVet
 		}
 		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
@@ -388,7 +402,7 @@ func (p *Proxy) vetTrustedHost(host string, port int) (string, error) {
 		return "", errGatewayVet
 	}
 	for _, ip := range ips {
-		if ipguard.GatewayIPRefused(ip) || p.onOwnSubnetOrControlPlane(ip) {
+		if refused(ip) {
 			return "", errGatewayVet
 		}
 	}
@@ -472,6 +486,46 @@ func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// onControlPlane is onOwnSubnetOrControlPlane's control-plane half, failing
+// closed the same way.
+func (p *Proxy) onControlPlane(ip net.IP) bool {
+	return p.exclusionUnknown || slices.ContainsFunc(p.controlPlaneIPs, ip.Equal)
+}
+
+// ownSubnetGateway reports whether ip is the first host address of one of
+// this proxy's own subnets: a Docker bridge network's gateway, which is the
+// Docker host. Unknown subnets answer false.
+func (p *Proxy) ownSubnetGateway(ip net.IP) bool {
+	if p.exclusionUnknown {
+		return false
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, n := range p.localSubnets {
+		pfx, ok := netipPrefix(n)
+		if ok && pfx.Masked().Addr().Next() == addr {
+			return true
+		}
+	}
+	return false
+}
+
+// netipPrefix is n as a netip.Prefix.
+func netipPrefix(n *net.IPNet) (netip.Prefix, bool) {
+	addr, ok := netip.AddrFromSlice(n.IP)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ones, bits := n.Mask.Size()
+	if addr = addr.Unmap(); addr.Is4() && bits == 8*net.IPv6len {
+		ones -= 8 * (net.IPv6len - net.IPv4len)
+	}
+	return netip.PrefixFrom(addr, ones), true
 }
 
 // parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR

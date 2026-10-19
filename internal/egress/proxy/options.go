@@ -98,6 +98,8 @@ type Options struct {
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
 	LLMUnavailableDetail string
+	// LocalModels is Config.LocalModels, forwarded verbatim. See Proxy.localModels.
+	LocalModels map[string]types.LocalModelSettings
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.

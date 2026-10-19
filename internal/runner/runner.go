@@ -201,6 +201,9 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
+
+	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
+	LocalModels map[string]types.LocalModelSettings
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

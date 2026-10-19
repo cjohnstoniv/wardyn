@@ -236,6 +236,13 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// LocalModels maps a local_model provider's base URL (always also an
+	// LLMUpstreams value) to the model allowlist and request bounds the
+	// brokered route holds every request to it to (local_model.go).
+	// Control-plane-authored, same trust boundary as LLMUpstreams; omitempty
+	// because an older proxy refuses a key it does not know. Empty (the
+	// default) => no local model route, byte-identical to today.
+	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
 	// Unattended marks a run nobody is driving (a non-interactive task run).
 	// A push that touches a push_rules.require_review_paths entry is then
 	// refused outright rather than held for a decision nobody is waiting to
@@ -540,6 +547,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 		if _, err := url.Parse(raw); err != nil {
 			return fmt.Errorf("config: llm_upstreams[%q]: %w", vendor, err)
 		}
+	}
+	if err := c.validateLocalModels(); err != nil {
+		return err
 	}
 	return c.validateChannelHosts()
 }
