@@ -61,8 +61,8 @@ test.describe("Workspaces — search", () => {
         kind: "local_dir",
         source: "",
         status: "scanned",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         sources: [{ type: "local_dir", path: "/srv/api" }, { type: "repo", source: "org/lib" }],
       };
       await route.fulfill({ response, json: [...(await response.json()), mono] });
