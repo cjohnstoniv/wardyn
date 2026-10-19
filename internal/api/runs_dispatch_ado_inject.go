@@ -53,7 +53,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -561,27 +560,6 @@ func adoEntraHosts(org string) []string {
 func isADOEntraHost(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
-}
-
-// countReauthTimeout counts a credential hold that ran out on its OWN series,
-// at the one moment the control plane learns of it (handlePostDecision): the
-// expiry happens in the sidecar, and the approval row deliberately stays
-// PENDING (the sign-in is still wanted), so this decision row is the only
-// signal that reaches here. An Azure DevOps hold writes the same rule source;
-// isADOEntraHost says why it is excluded.
-func (s *Server) countReauthTimeout(ctx context.Context, dl egress.DecisionLog) {
-	if dl.Decision != egress.Deny || dl.RuleSource != ruleSourceCredentialReauthTimeout || isADOEntraHost(dl.Request.Host) {
-		return
-	}
-	// An Azure DevOps Server own-token hold stamps the Server host, which no name
-	// rule can tell from another forge: the configured azure_devops rows can (#2801).
-	if sc, ok := s.siteConfigSnapshot(ctx); ok {
-		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(dl.Request.Host), "."))
-		if slices.Contains(adoServerHosts(sc), host) {
-			return
-		}
-	}
-	s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
 }
 
 // adoEntraGitHosts are the broker entries for the hosts git is served from in
