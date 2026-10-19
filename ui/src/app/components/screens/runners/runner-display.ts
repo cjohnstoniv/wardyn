@@ -6,6 +6,7 @@
 // How a runner reads, shared by the Admin -> Runners page and the My runner card: the one state word,
 // the posture lines, the barrier names and the waiting runner's remaining time. Every posture, barrier
 // and folder fact is what the runner reported; absent is "Not reported yet", never a guess.
+import { formatDuration } from "../../../lib/format";
 import { BARRIER_LABEL } from "../../../lib/runner-pool-refusals";
 import type { RunnerPosture, RunnerView } from "../../../lib/types/runners";
 import { RUNNER } from "../../wardyn/copy/runners";
@@ -50,12 +51,5 @@ export function barrierNames(classes?: RunnerView["classes"]): string {
 /** The time left of a waiting runner's claim window or of a token, in the largest whole unit: "23 hours", "40 minutes". */
 export function timeLeft(iso: string, now = Date.now()): string {
   const mins = Math.max(0, Math.round((new Date(iso).getTime() - now) / 60000));
-  if (mins >= 60) {
-    const hours = Math.round(mins / 60);
-    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  return `${mins} ${mins === 1 ? "minute" : "minutes"}`;
+  return formatDuration((mins >= 60 ? Math.round(mins / 60) * 60 : mins) * 60000, "words");
 }
-
-/** "12 Oct": the day a runner was registered, claimed or revoked; the full time is the title. */
-export const shortDate = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
