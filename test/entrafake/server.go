@@ -735,6 +735,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	presented := r.Form.Get("refresh_token")
 	s.mu.Lock()
 	grant, known := s.refresh[presented]
+	retired := known && grant.retired
 	invalidGrant, consentRequired, interactionRequired := s.invalidGrant, s.consentRequired, s.interactionRequired
 	s.mu.Unlock()
 
@@ -748,7 +749,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 			"AADSTS50076: a Conditional Access policy requires interactive authentication")
 		return
 	}
-	if !known || grant.retired {
+	if !known || retired {
 		writeTokenError(w, http.StatusBadRequest, ErrInvalidGrant,
 			"AADSTS700082: the refresh token has expired or has been revoked")
 		return
@@ -787,9 +788,16 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Retire the presented token BEFORE the new pair is minted, so there is no
-	// instant in which both are redeemable.
+	// instant in which both are redeemable. The check and the retirement are one
+	// critical section: two concurrent redemptions of the same token cannot both pass.
 	s.mu.Lock()
-	s.refresh[presented].retired = true
+	if grant.retired {
+		s.mu.Unlock()
+		writeTokenError(w, http.StatusBadRequest, ErrInvalidGrant,
+			"AADSTS700082: the refresh token has expired or has been revoked")
+		return
+	}
+	grant.retired = true
 	s.mu.Unlock()
 
 	s.issueTokens(w, granted, consented, "", false, true, grant.who)
@@ -918,24 +926,6 @@ func (s *Server) signIDToken(nonce string, who *Identity) (string, error) {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-
-// firstUnconsented names the first requested scope that is neither in the
-// consented set nor one of the OIDC scopes every app holds. ok=true means every
-// requested scope is covered.
-func firstUnconsented(requested, consented []string) (string, bool) {
-	for _, want := range requested {
-		if slices.Contains(alwaysConsented, want) || slices.Contains(consented, want) {
-			continue
-		}
-		return want, false
-	}
-	return "", true
-}
-
-// splitScope splits an OAuth scope string on whitespace, dropping empties.
-func splitScope(raw string) []string {
-	return strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\t' || r == '+' })
-}
 
 // s256 is the PKCE S256 transformation: base64url(SHA-256(verifier)), unpadded.
 func s256(verifier string) string {
