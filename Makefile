@@ -726,6 +726,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
 	./scripts/test-setup-launch.sh
+	./scripts/test-third-party-notices.sh
 	./scripts/test-up-seed-host-proxy.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
