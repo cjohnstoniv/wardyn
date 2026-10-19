@@ -4,7 +4,7 @@
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
 | `dex`      | OIDC IdP for human SSO; details below. |
-| `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
+| `wardynd`  | Control plane, **built with `-tags docker,k8s`** so the docker runner can launch real governed sandboxes. |
 
 ## Overview
 
@@ -211,10 +211,9 @@ remains the source of truth.
 # 2. (OPTIONAL — the rotator above supersedes this.) Mint a static host-sensor token
 #    (aud=wardyn-groundtruth; audit-write-only — it can
 #    never mint credentials or decide approvals). The exec'd wardynd inherits
-#    WARDYN_AGE_KEY from the container env, so it loads the same keys:
+#    WARDYN_AGE_KEY and WARDYN_PG_DSN from the container env:
 export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
-  /usr/local/bin/wardynd -print-groundtruth-token \
-  -dsn "postgres://wardyn:wardyn-dev@postgres:5432/wardyn?sslmode=disable")
+  /wardynd -print-groundtruth-token)
 # 3. Build + start the tier:
 docker compose --profile groundtruth build
 docker compose --profile groundtruth up -d tetragon wardyn-tetragon-ingest

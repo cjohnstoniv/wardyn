@@ -34,6 +34,8 @@ WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quick
 #    exercisable with no AWS tenant (docs/OPERATIONS.md, "Testing AWS SSO
 #    without an AWS tenant"). It impersonates AWS with no signing at all —
 #    throwaway clusters only.
+docker build -f test/awsssofake/cmd/Dockerfile -t wardyn/awsssofake:local .
+kind load docker-image wardyn/awsssofake:local --name wardyn-quickstart
 kubectl --context kind-wardyn-quickstart apply -f deploy/kind/sso/dex.yaml
 kubectl --context kind-wardyn-quickstart apply -f deploy/kind/sso/awsssofake.yaml
 helm --kube-context kind-wardyn-quickstart upgrade wardyn deploy/helm/wardyn \

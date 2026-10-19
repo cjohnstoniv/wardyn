@@ -157,10 +157,8 @@ kubectl --context kind-wardyn-entra -n wardyn logs \
 > A context-less command falls back to `kubectl`'s current-context, which may be a *different* cluster in `~/.kube/config` (a live demo cluster, a real cluster from another project).
 > This is the same shared-host discipline `docker ps` above is for, just at the k8s-context layer instead of the daemon layer.
 
-- **The confinement-floor trap:** the chart's baked-in default policy floors confinement at `CC2`, but this kind cluster registers no gVisor/Kata `RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex overlay);
-  - every **member** run would be refused at launch, clamped to a floor the cluster can't actually satisfy.
-- `--set-file defaultPolicy=deploy/kind/sso/default-policy.json` rides along for exactly this reason: it sets `min_confinement_class: CC1`, matching what this cluster can really enforce, without touching `k8s.runtimeClasses`.
-- Skip this flag and the People-step run in the walk below fails closed with a confinement-floor refusal, not an auth error — don't mistake it for one.
+- **Confinement floor:** the chart's baked-in default policy floors confinement at `CC1` (since 0.7.8), which is what this kind cluster can enforce: it registers no gVisor/Kata `RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex overlay).
+- `--set-file defaultPolicy=deploy/kind/sso/default-policy.json` rides along only to state that floor explicitly; it is redundant, and the walk below does not depend on it.
 
 - **`auth.adminToken` is deliberately NOT emptied.**
   - `values-entra.yaml` never sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline admin token forward from Step 3 —
