@@ -333,12 +333,8 @@ export function RecordingScreen() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     className="pl-9"
-                    disabled={recordingDisabled}
                   />
                 </div>
-                {recordingDisabled && (
-                  <p className="mt-1 text-xs text-muted-foreground">{RECORDINGS.SEARCH_DISABLED_HINT}</p>
-                )}
               </div>
               {agentOptions.length > 1 && (
                 <Select value={agentFacet} onValueChange={setAgentFacet}>

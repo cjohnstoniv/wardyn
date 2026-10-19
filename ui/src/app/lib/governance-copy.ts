@@ -654,6 +654,13 @@ export const LIMITS_CHIP = {
   // that a rubric exists, and not behind a tooltip. `label` is the strictest
   // level's AUTONOMY_META label (e.g. "Attended"), looked up by the caller.
   AUTONOMY: (label: string) => `Autonomy: ${label} at the strictest`,
+  // #2111/#2506: the limits the list had no chip for, so a profile bounding only
+  // one of them no longer reads "None". New wording (the editor shows these four
+  // as mono wire keys); frozen in governance-prompt.md §7.11, awaiting approval.
+  UI_APPS: "Deny UI apps",
+  PLACEMENT: (placement: string) => `No ${placement} runs`,
+  CPU: "Max CPU (millicores)",
+  MEMORY: "Max memory (MiB)",
 } as const;
 
 // RL-14 (0.8, #579) — the profile editor's Run limits section

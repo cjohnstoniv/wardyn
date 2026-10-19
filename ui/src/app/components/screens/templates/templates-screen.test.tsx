@@ -80,6 +80,8 @@ describe("Templates screen: rows", () => {
   it("says so when the sign-in cannot confirm the person's groups, even over an empty list, and says nothing otherwise", async () => {
     const view = mount({ templates: [], publish: { ...MEMBER, groups_unverified: true } });
     expect(await screen.findByText(T.GROUPS_UNVERIFIED)).toBeInTheDocument();
+    // #2830: a token session has no snapshot to refresh, so signing in again is promised only to an SSO sign-in.
+    expect(T.GROUPS_UNVERIFIED).toContain("If you signed in with SSO, sign in again to see them.");
     expect(screen.getByText(T.EMPTY_TITLE)).toBeInTheDocument();
     view.unmount();
     mount({ templates: [MINE], publish: MEMBER });
