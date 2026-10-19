@@ -295,6 +295,21 @@ run_lane() {
   if [[ -n "${label}" ]]; then
     log() { printf '\033[1;34m[e2e-ui:%s]\033[0m %s\n' "${label}" "$*"; }
   fi
+  # The backend-up retry below must not reuse the ports that just failed: an
+  # "address in use" failure would repeat identically. Re-pick this lane's
+  # ports (the same pick-then-bind way the lane setup above does) and rebuild
+  # the base URL from them. Lane-local: exports are invisible to siblings.
+  repick_lane_ports() {
+    export WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)" WARDYN_E2E_UI_ADDR="127.0.0.1:$(pick_free_port)"
+    export WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:$(pick_free_port)"
+    if [[ -z "${LIVE_BASE_URL}" ]]; then
+      export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
+      if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+        export WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port)"
+        export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
+      fi
+    fi
+  }
   # Per-lane, not per-$$ ("${work}/up-${lane}.log" is unique per lane; "$$"
   # is NOT — bash keeps $$ pinned to the top-level shell's PID inside a
   # background subshell, so every concurrent lane sees the SAME $$ and would
@@ -329,6 +344,7 @@ run_lane() {
       log "backend up failed for ${base} — retrying once"
       tail -20 "${up_log}" >&2 || true
       ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
+      repick_lane_ports
       if ! WARDYN_E2E_TOKEN="${TEST_TOKEN}" ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
         log "backend up failed for ${base} (twice) — this is the backend, not the spec"
         tail -30 "${up_log}" >&2 || true

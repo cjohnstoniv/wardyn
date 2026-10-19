@@ -98,6 +98,12 @@ cp "${tmp}/repo/.e2e-bin/wardynd" "${tmp}/repo/.e2e-bin/basepathproxy"
 cat > "${tmp}/bin/docker" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${E2E_TEST_EVENTS}/docker.log"
+# One refused start on request: records the address the lane tried, then fails the readiness probe.
+if [[ "$1" == exec && "$*" == *pg_isready* && -n "${E2E_TEST_FAIL_ONCE:-}" && -e "${E2E_TEST_FAIL_ONCE}" ]]; then
+  rm -f "${E2E_TEST_FAIL_ONCE}"
+  echo "${WARDYN_E2E_ADDR}" > "${E2E_TEST_EVENTS}/first-addr"
+  exit 1
+fi
 if [[ "$1" == port ]]; then
   echo '127.0.0.1:55432'
 elif [[ "$*" == *' -i '* && "$*" != *' -c '* && "$*" != *' -tAc '* ]]; then
@@ -288,6 +294,20 @@ log "an empty, malformed or out-of-range shard refuses before any work"
 run_wrapper one two
 check_events 2 1 '' 127.0.0.1
 log "per-up rotation, private token handoff and effective default loopback binds"
+
+# A backend that fails to come up is retried once, and the retry must not reuse the ports that just
+# failed (an "address in use" refusal would repeat). The first start is refused by the readiness probe.
+: > "${tmp}/fail-once"
+E2E_TEST_FAIL_ONCE="${tmp}/fail-once" run_wrapper one
+grep -q 'retrying once' "${tmp}/wrapper.log" || { cat "${tmp}/wrapper.log"; die "the refused first start was not retried"; }
+python3 - "${E2E_TEST_EVENTS}" <<'PY' || die "the retry reused the ports of the start that failed"
+import json, pathlib, sys
+events = pathlib.Path(sys.argv[1])
+first = (events / "first-addr").read_text().strip().rsplit(":", 1)[1]
+used = {str(addr[1]) for p in events.glob("bind-*.json") for addr in json.loads(p.read_text())["listeners"]}
+assert used and first not in used, (first, used)
+PY
+log "a refused first start is retried on freshly picked ports"
 
 export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)"
 export WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port)"
