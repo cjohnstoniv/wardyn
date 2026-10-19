@@ -135,18 +135,18 @@ func TestJudgeFit_Sentences(t *testing.T) {
 
 func TestRunFit_RunnerWithoutAFitToCheckSaysNothing(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	if v := (&Server{}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{}).runFit(context.Background(), spec, 0, false, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("nil runner: %+v", v)
 	}
-	if v := (&Server{cfg: Config{Runner: &fakeRunner{}}}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{cfg: Config{Runner: &fakeRunner{}}}).runFit(context.Background(), spec, 0, false, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("runner without a FitChecker: %+v", v)
 	}
 	unsupported := &fitRunner{fakeRunner: &fakeRunner{}, err: runner.ErrFitUnsupported}
-	if v := (&Server{cfg: Config{Runner: unsupported}}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{cfg: Config{Runner: unsupported}}).runFit(context.Background(), spec, 0, false, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("ErrFitUnsupported: %+v", v)
 	}
 	broken := &fitRunner{fakeRunner: &fakeRunner{}, err: context.DeadlineExceeded}
-	v := (&Server{cfg: Config{Runner: broken}}).runFit(context.Background(), spec, 0, false)
+	v := (&Server{cfg: Config{Runner: broken}}).runFit(context.Background(), spec, 0, false, false)
 	if v.refusal != "" || len(v.warnings) != 1 || !strings.Contains(v.warnings[0], "(unavailable)") {
 		t.Fatalf("a failed check must be an advisory, never a refusal: %+v", v)
 	}
@@ -260,11 +260,11 @@ func TestCreateRun_QuotaBreachRefusesBeforeDispatch(t *testing.T) {
 func TestRunFit_AsksAboutTheRunsLifetimeCap(t *testing.T) {
 	fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped}}
 	s := &Server{cfg: Config{Runner: fr}}
-	s.runFit(context.Background(), types.RunPolicySpec{}, 3*time.Hour, false)
+	s.runFit(context.Background(), types.RunPolicySpec{}, 3*time.Hour, false, false)
 	if fr.asked.LifetimeCap != 3*time.Hour {
 		t.Errorf("fit asked about a cap of %v, want 3h", fr.asked.LifetimeCap)
 	}
-	s.runFit(context.Background(), types.RunPolicySpec{}, 0, false)
+	s.runFit(context.Background(), types.RunPolicySpec{}, 0, false, false)
 	if fr.asked.LifetimeCap != 0 {
 		t.Errorf("fit asked about a cap of %v for a run with none, want 0", fr.asked.LifetimeCap)
 	}
@@ -281,5 +281,34 @@ func TestJudgeFit_WaitingRunOverTheLeftoverGetsNoNearFullWarning(t *testing.T) {
 	}
 	if v := judgeFit(fit, false); v.refusal == "" {
 		t.Fatal("the same ask from a run that does not wait stays refused")
+	}
+}
+
+// An Azure-gated run's proxy gets runner.AzureProxyMemoryMiB, so the fit is asked about that proxy:
+// a chosen Azure Foundry provider on the run or on any of its harnesses marks it, and nothing else does.
+func TestRunFit_AsksAboutAnAzureGatedProxy(t *testing.T) {
+	fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped}}
+	s := &Server{cfg: Config{Runner: fr}}
+	s.runFit(context.Background(), types.RunPolicySpec{}, 0, true, false)
+	if !fr.asked.ProxyAzure {
+		t.Error("the fit was not told the run's proxy is Azure-gated")
+	}
+	azure := runProviderChoice{chosen: true, provider: types.ModelProvider{Kind: types.ModelProviderAzureFoundry}}
+	key := runProviderChoice{chosen: true, provider: types.ModelProvider{Kind: types.ModelProviderAnthropicSubscription}}
+	unchosen := runProviderChoice{provider: types.ModelProvider{Kind: types.ModelProviderAzureFoundry}}
+	for _, tc := range []struct {
+		name      string
+		primary   runProviderChoice
+		harnesses []harnessChoice
+		want      bool
+	}{
+		{"azure primary", azure, nil, true},
+		{"azure on an included harness", key, []harnessChoice{{harness: "codex", choice: azure}}, true},
+		{"no azure", key, []harnessChoice{{harness: "codex", choice: key}}, false},
+		{"azure not chosen", unchosen, nil, false},
+	} {
+		if got := runProxyAzure(tc.primary, tc.harnesses); got != tc.want {
+			t.Errorf("%s: runProxyAzure = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
