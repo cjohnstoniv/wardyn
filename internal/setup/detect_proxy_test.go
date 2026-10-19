@@ -251,10 +251,7 @@ func TestDetectShellProxyCandidates_TempProfileAndCredentialMasking(t *testing.T
 // is reported with the current (second) value.
 func TestDetectShellProxyCandidates_LastDeclarationInAFileWins(t *testing.T) {
 	home := t.TempDir()
-	mustWrite(t, filepath.Join(home, ".bashrc"), "export http_proxy=http://old.proxy:3128
-export https_proxy=http://s.proxy:3128
-export http_proxy=http://new.proxy:3128
-")
+	mustWrite(t, filepath.Join(home, ".bashrc"), "export http_proxy=http://old.proxy:3128\nexport https_proxy=http://s.proxy:3128\nexport http_proxy=http://new.proxy:3128\n")
 	got := map[string]string{}
 	for _, c := range detectShellProxyCandidates(home) {
 		if strings.HasSuffix(c.detail, filepath.Join(home, ".bashrc")) {
