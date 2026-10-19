@@ -64,7 +64,8 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 4668 = 4625 + 43, measured: the pre-0.9.3 containment-only run loop and why preserving spools/ and offline/ was not enough
 # 0.9.4 L8: docs/operations/hybrid-laptops.md 4682 adds 14 over 4668: the reliable-reconnect guidance for a shared ingress.
 # 0.10: docs/operations/hybrid-laptops.md 4717 adds 8, measured: the per-address handshake row and the charge-at-end bucket wording.
-docs/operations/hybrid-laptops.md=4717 share=35
+# 0.9.6: docs/operations/hybrid-laptops.md 4729 adds 12, measured: the pointer to a runner behind a corporate proxy.
+docs/operations/hybrid-laptops.md=4729 share=35
 # docs/operations/hybrid-laptops.md 4024 adds 2 over 4022, measured: the control-plane restart row says the next restart kills an agent kept only for containment.
 # docs/operations/hybrid-laptops.md 4195 = 3926 + 269, measured: the reset section and the recording default.
 # docs/operations/hybrid-laptops.md 4380 = 4195 + 185, measured: how audit decisions reach the organisation (the decision sink), less the removed state-directory check.
