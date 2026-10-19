@@ -63,17 +63,4 @@ test.describe("Design consistency", () => {
     expect(box.height).toBeLessThan(220);
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
-
-  // The run's Audit tab reads the Audit screen's sentences, keeps the raw key in the tooltip, and does not
-  // print the viewed run's own id on every row.
-  test("Run Audit tab: sentences, raw key in the tooltip, no repeated run id", async ({ page }) => {
-    await gotoConsole(page);
-    const id = await seedRun(page);
-    await navToRoute(page, `/runs/${id}`);
-    await page.getByRole("tab", { name: /^Audit/ }).click();
-    const created = page.getByTestId("run-audit-action").filter({ hasText: "Created the run" }).first();
-    await expect(created).toBeVisible();
-    await expect(created).toHaveAttribute("title", "run.create");
-    await expect(page.getByTestId("run-audit-row").filter({ hasText: id })).toHaveCount(0);
-  });
 });

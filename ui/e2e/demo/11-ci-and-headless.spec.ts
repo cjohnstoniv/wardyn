@@ -229,10 +229,10 @@ test("beat 6 — same trail, no human", async () => {
 
   // Assert the trail the narration is about to describe. `run.create` through
   // `run.complete` is the claim; both are real actions on the success path
-  // (internal/api/runs.go, internal/api/runs_lifecycle.go) and the tab reads them
-  // as sentences, with the raw dotted key in each row's tooltip.
-  await expect(page.locator('[data-testid="run-audit-action"][title="run.create"]').first()).toBeVisible({ timeout: 60_000 });
-  await expect(page.locator('[data-testid="run-audit-action"][title="run.complete"]').first()).toBeVisible({ timeout: 60_000 });
+  // (internal/api/runs.go, internal/api/runs_lifecycle.go) and the tab prints
+  // them raw and dotted.
+  await expect(page.getByText("run.create", { exact: true }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("run.complete", { exact: true }).first()).toBeVisible({ timeout: 60_000 });
   // And "append-only" is the tab's own words, not ours — spotlight the header
   // that says it while the line is spoken. Substring-matched, not anchored: the
   // row that carries the count also carries the "open full Audit" link, so its
