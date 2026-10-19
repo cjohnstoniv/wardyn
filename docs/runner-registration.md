@@ -199,6 +199,10 @@ Both restart `serve` after a crash. On Linux the unit runs while you are logged 
 
 `./install.sh --uninstall` stops the service and removes the unit or agent, the settings file and the installed binary. It keeps `runner.json` and `runner.key`. Revoke the runner itself in *My runner*.
 
+### Upgrading a runner
+
+Upgrade the organisation before its runners. Then either run the new release's `wardyn-runnerd setup` with the same flags (it renames a new file over the installed copy and restarts the service), or install the new `wardyn-runnerd.pkg`, which stops the service first. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
+
 ## A runner behind a corporate proxy
 
 Several settings keep a runner working behind a proxy that inspects TLS. `setup` writes the four settings marked `setup` in the table into the service; the runner's own proxy variables it does not write, because a service started by systemd or launchd does not inherit the shell's exports.
