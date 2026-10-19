@@ -557,11 +557,8 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 	// The lane's hosts are the ones dispatch stored on the grant, which the
 	// revived proxy carries: no repository is re-resolved, so revive cannot
 	// disagree with dispatch about the lane.
-	// The launch-time operator bit is not kept on the run, so it is asked again
-	// as dispatch asks it (runUngoverned) of the owner's own revive request:
-	// their role now. A revive by anyone else reads only OperatorOwned (the
-	// admin token, local mode), so there an SSO admin's run is refused as a
-	// member's would be.
+	// The operator bit is not kept on the run: the owner's own revive asks their role now, as dispatch does
+	// (runUngoverned); anyone else's reads OperatorOwned (the admin token, local mode) alone.
 	operator := run.OperatorOwned || (actor != "" && actor == run.CreatedBy && s.runUngoverned(ctx))
 	env := s.patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, operator, cfg.GitGrants, site, adoEntraRun{}, false)
 	if cfg.ADOGrant != nil {

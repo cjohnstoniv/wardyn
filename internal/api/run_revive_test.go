@@ -942,11 +942,22 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 	})
 
 	// On the owner's own revive the operator bit is their session role now, as
-	// dispatch reads it, so an SSO admin's run (OperatorOwned false) revives.
-	for role, want := range map[string]int{oidc.RoleAdmin: http.StatusOK, oidc.RoleUser: http.StatusConflict} {
-		t.Run("broker off on the owner's own revive as "+role, func(t *testing.T) {
+	// dispatch reads it, so an SSO admin's run (OperatorOwned false) revives
+	// unless GovernAdminRuns governs it.
+	for _, c := range []struct {
+		name, role string
+		govern     bool
+		want       int
+	}{
+		{"admin", oidc.RoleAdmin, false, http.StatusOK},
+		{"user", oidc.RoleUser, false, http.StatusConflict},
+		{"admin under GovernAdminRuns", oidc.RoleAdmin, true, http.StatusConflict},
+	} {
+		role, want := c.role, c.want
+		t.Run("broker off on the owner's own revive as "+c.name, func(t *testing.T) {
 			f := newReviveFixture(t)
 			f.srv.cfg.DisableGitPATBroker = true
+			f.srv.cfg.GovernAdminRuns = c.govern
 			f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", nil)
 			rctx := chi.NewRouteContext()
