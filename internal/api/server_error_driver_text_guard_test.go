@@ -617,6 +617,10 @@ func exprSourceLine(src []byte, n int) string {
 // driver-text free (#2121 the run owner's authority re-check on revive, #2147 the Azure grant write):
 // a reviveRefused 5xx in run_owner_authority.go, or a refuse(...) in provider_azure.go, built from
 // err.Error() fails here. The wider package keeps its older reviveRefused sites; they are not in scope.
+// readFixedSite reads one source file for the guard below. A revert proof swaps this one line (through
+// go test -overlay) for a reader of a planted copy, since an overlay changes what compiles, not the files on disk.
+var readFixedSite = os.ReadFile
+
 func TestFixedDriverTextSitesStayFixed(t *testing.T) {
 	forwarders := map[string]serverErrorForwarder{
 		"reviveRefused": {statusArg: 0, msgArg: 2},  // reviveRefused(status, reason, msg)
@@ -627,7 +631,7 @@ func TestFixedDriverTextSitesStayFixed(t *testing.T) {
 	allowed := map[string]bool{"provider_azure.go:Server.authorAzureInjection:refuse": true}
 	fset := token.NewFileSet()
 	for _, name := range []string{"run_owner_authority.go", "provider_azure.go"} {
-		src, err := os.ReadFile(name)
+		src, err := readFixedSite(name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
