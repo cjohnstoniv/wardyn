@@ -224,7 +224,17 @@ class ImageRecipes(unittest.TestCase):
     def test_claude_npm_channel(self):
         result = self.run_recipe("claude-code", CLAUDE_INSTALL="npm", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.events, [["npm", "install", "-g", "@anthropic-ai/claude-code@stable"]])
+        self.assertEqual(self.events, [["npm", "install", "-g", "@anthropic-ai/claude-code@stable"], ["npm", "config", "delete", "proxy", "https-proxy"]])
+
+    def test_claude_npm_build_proxy_not_kept(self):
+        # The build proxy reaches the install, then leaves the image user's npm config in the same RUN.
+        result = self.run_recipe("claude-code", CLAUDE_INSTALL="npm", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="", HTTPS_PROXY="http://proxy.invalid:3128")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.events, [
+            ["npm", "config", "set", "https-proxy", "http://proxy.invalid:3128"],
+            ["npm", "install", "-g", "@anthropic-ai/claude-code@stable"],
+            ["npm", "config", "delete", "proxy", "https-proxy"],
+        ])
 
     def test_aws_override_keeps_gpg(self):
         result = self.run_recipe("aws-sso")
