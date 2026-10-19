@@ -187,7 +187,8 @@
 # docs/AUDIT-ACTIONS.md 48307 = 48304 + 3, measured: the two citations renamed for sweepTerminalSandboxRun and agentActivityDecision.
 # docs/AUDIT-ACTIONS.md 48313 adds 9 over 48304, measured: 0.9.4 L4b, the build door in the host_capacity.refuse row.
 # 0.9.4 L3 +20: docs/AUDIT-ACTIONS.md 48324 adds 20 over 48304 (the runner.inventory.hold row now says it is audited when a hold begins and at most once an hour per runner per server, #2123).
-docs/AUDIT-ACTIONS.md=48457 share=8
+# 0.9.4 W4-DOCS-1: docs/AUDIT-ACTIONS.md 48595 adds 138 over 48457, measured: #2347: the push-entry-underivable, spool-full and spool-lost rule_source rows.
+docs/AUDIT-ACTIONS.md=48595 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
