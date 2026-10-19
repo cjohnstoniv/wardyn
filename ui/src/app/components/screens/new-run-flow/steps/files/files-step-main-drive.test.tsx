@@ -255,7 +255,7 @@ describe("main drive", () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive") };
     show();
     await screen.findByText(NR_FILES.ENFORCED);
-    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    await userEvent.click(screen.getByRole("checkbox", { name: NR_FILES.NO_EXTRA }));
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
     expect(within(map).getByText(NR_FILES.MAIN_TITLE)).toBeInTheDocument();
     expect(within(map).queryByText(/GiB/)).toBeNull();
