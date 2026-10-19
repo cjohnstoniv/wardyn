@@ -179,7 +179,7 @@ else
         [ -n "$svc" ] || continue
         # Case-insensitive whole-word: the doc writes the product name (Dex) for
         # some services and the compose key (`registry`) for others.
-        printf '%s' "$section" | tr 'A-Z' 'a-z' | grep -qw -- "$svc" \
+        printf '%s' "$section" | tr 'A-Z' 'a-z' | grep -w -- "$svc" >/dev/null \
             || bad "$ARCH: compose service '$svc' (profiles: ${profiles:-<default>}) is not named in the compose-stack section"
     done <<EOF
 $(yq -r '.services | to_entries[] | .key + "|" + ((.value.profiles // []) | join(","))' "$COMPOSE")

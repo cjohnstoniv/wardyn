@@ -622,7 +622,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates + console ESLint
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + actionlint gates + console ESLint
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -642,6 +642,9 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-image-pins.sh
 	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
 	./scripts/check-workflow-artifacts.sh
+	@echo "Running script-hazard gate (scripts/check-script-hazards.sh)..."
+	./scripts/check-script-hazards.sh --selftest
+	./scripts/check-script-hazards.sh
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd

@@ -383,7 +383,7 @@ pane_wait() {
   # are visible, and `local a=1 b=$((a))` dies with "a: unbound variable".
   local end=$((SECONDS + secs))
   while ((SECONDS < end)); do
-    pane_text "${pane}" | grep -qE "${want}" && return 0
+    pane_text "${pane}" | grep -E "${want}" >/dev/null && return 0
     sleep 0.4
   done
   return 1
@@ -501,9 +501,9 @@ drive() {
   # THE STAGING CHECK THAT CANNOT BE MADE ANY OTHER WAY. If the operator left
   # the run's Overview tab open, the web terminal already holds this session and
   # the owner lands read-only — beat 2 would then have nothing to contrast.
-  pane_text "${P_OWNER}" | grep -q 'read-only' \
+  pane_text "${P_OWNER}" | grep 'read-only' >/dev/null \
     && die "the owner attached READ-ONLY — something already holds this terminal. Close the run's Overview tab in the console and re-shoot"
-  pane_text "${P_OWNER}" | grep -q 'Permission denied' \
+  pane_text "${P_OWNER}" | grep 'Permission denied' >/dev/null \
     && die "the owner's own key was refused — this run is not owned by ${PRINCIPAL}"
   # DIALOG-NEW-BEAT (dialog review, P10c): the episode is titled "Audit &
   # attach" and the browser half never says the word — the attach is HERE, and
@@ -543,7 +543,7 @@ drive() {
   # The notice names WHO holds it, which is what makes "same person" true on
   # screen: "wardyn: read-only — <principal> (ssh) holds this terminal; take it
   # over from the run page" (internal/api/sshgateway_channels.go).
-  pane_text "${P_OBS}" | grep -qF "${PRINCIPAL}" \
+  pane_text "${P_OBS}" | grep -F "${PRINCIPAL}" >/dev/null \
     || die "the read-only notice does not name the holder's principal (${PRINCIPAL})"
   say "Wardyn lets the second session in read-only — it can watch, not type — and it says whose session it is."
   # One session: what is typed on the left lands on the right.
@@ -553,7 +553,7 @@ drive() {
   say "And the first session doesn't have to do anything differently."
   say "The watcher gets another authenticated view of the same run."
   if [[ -n "${anchor}" ]]; then
-    pane_text "${P_OWNER}" | grep -qF -- "${anchor}" \
+    pane_text "${P_OWNER}" | grep -F -- "${anchor}" >/dev/null \
       || die "the holder's frame was rewritten when the observer arrived — the shared terminal was disturbed (see internal/api/attach_holder_test.go)"
   fi
   beat 900

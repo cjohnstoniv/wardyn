@@ -70,7 +70,7 @@ ORG_PORT="${WARDYN_LAPTOP_WALK_ORG_PORT:-18543}"
 ORG_URL="https://${ORG_HOST}:${ORG_PORT}"
 RELAY_PORT=8443 # the port of compose's WARDYN_CONTROL_PLANE_URL
 [[ -n "${ORG_HOST}" && "${ORG_HOST}" != 127.* ]] || die "the org engine's bridge gateway '${ORG_HOST}' is not a non-loopback address"
-if ss -Hltn "sport = :${RELAY_PORT}" | grep -q .; then die "something already listens on :${RELAY_PORT}, the relay's port"; fi
+if ss -Hltn "sport = :${RELAY_PORT}" | grep . >/dev/null; then die "something already listens on :${RELAY_PORT}, the relay's port"; fi
 
 ADMIN_TOKEN="demo-admin-token" # compose's own default
 MEMBER="laptop-walk-member"

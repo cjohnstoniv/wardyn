@@ -43,7 +43,7 @@ docker network create --internal "$NETWORK" >/dev/null
 out="$(./scripts/up.sh reset-all --dry-run 2>&1)"
 
 check() {  # $1=pattern $2=description
-    if echo "$out" | grep -qE "$1"; then
+    if echo "$out" | grep -E "$1" >/dev/null; then
         echo "ok: $2"
     else
         echo "FAIL: $2 — manifest did not match /$1/" >&2
