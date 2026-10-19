@@ -473,6 +473,17 @@ result for them is evidence only for the tip somebody actually ran it on.
   Resize/Write, every one of them listed in the K8S-gated bucket above.
 - `make test-conformance-k8s` — the containment conformance suite against a
   NetworkPolicy-enforcing CNI.
+
+### Test arms no CI lane runs
+
+- **PostgreSQL 12 refusal** (#2683): every CI Postgres lane runs 17, so `TestMigratePG13Floor`'s
+  refuse-and-record-nothing arm (`internal/db/migrate_pg13_floor_test.go`) never executes there. To run it, start a
+  `postgres:12` container, point `WARDYN_TEST_PG` at it and run only that test: every other migrating test fails on
+  PG12 by design.
+- **Credential-reauth hold timing out, live** (#2716): the `test.fixme` walk `negative (credential-reauth-hold): a
+  hold nobody answers times out, and the request stays open` (`ui/e2e/walk/sso-reauth-hold.spec.ts`) asserts too
+  early to drive the row. The proxy's own credhold tests (`internal/egress/proxy/credhold_test.go`) pin that path
+  hermetically; no live walk covers it.
 K8SGATED
 } > "$OUT"
 
