@@ -236,7 +236,7 @@ export function AddWorkspaceDialog({
               failing at launch. */}
           <div
             className={cn("grid gap-2", k8s ? "grid-cols-2" : "grid-cols-3")}
-            role="radiogroup"
+            role="group"
             aria-label="Source"
           >
             <OptionCard selected={kind === "repo"} onClick={() => setKind("repo")} title="Repository" />
@@ -332,7 +332,7 @@ export function AddWorkspaceDialog({
           </div>
 
           <Disclosure summary={`${summaryImage}, ${mountPathOrDefault}`}>
-            <div className="space-y-2" role="radiogroup" aria-label="Container image">
+            <div className="space-y-2" role="group" aria-label="Container image">
               <OptionCard
                 selected={imageChoice === "auto"}
                 onClick={() => setImageChoice("auto")}

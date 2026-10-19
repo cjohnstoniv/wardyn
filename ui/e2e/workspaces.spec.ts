@@ -50,6 +50,14 @@ test.describe("Workspaces — the four-column list", () => {
 });
 
 test.describe("Add workspace dialog", () => {
+  // The Source cards are aria-pressed toggle buttons: a radiogroup would announce radios the buttons are not.
+  test("the Source choices are a group of toggle buttons, not a radiogroup", async ({ page }) => {
+    const dlg = await openAddWorkspaceDialog(page);
+    const source = dlg.getByRole("group", { name: "Source" });
+    await expect(source.getByRole("button", { name: /^Repository/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(dlg.getByRole("radiogroup")).toHaveCount(0);
+  });
+
   test("Add workspace is disabled until a Repository URL is entered", async ({ page }) => {
     const dlg = await openAddWorkspaceDialog(page);
     const add = dlg.getByRole("button", { name: "Add workspace" });

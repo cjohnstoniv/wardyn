@@ -32,6 +32,9 @@ export function CopyOfferToast({
 }) {
   const [error, setError] = React.useState("");
   const [left, setLeft] = React.useState(OFFER_TTL_MS / 1000);
+  // A polite live region is announced only when its text changes after it is in the page, so it mounts empty
+  // and is filled by the effect below. Focus stays in the terminal, so this is the only announcement.
+  const [announce, setAnnounce] = React.useState("");
   const cardRef = React.useRef<HTMLDivElement>(null);
   const previewRef = React.useRef<HTMLPreElement>(null);
   const mac = isMacPlatform();
@@ -42,6 +45,10 @@ export function CopyOfferToast({
     const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
   }, []);
+
+  React.useEffect(() => {
+    setAnnounce(`${TERMINAL_COPY.OFFER_TITLE}. ${TERMINAL_COPY.OFFER_SIZE(offer.chars)}. ${TERMINAL_COPY.OFFER_KEYS(mac)}.`);
+  }, [offer.id, offer.chars, mac]);
 
   const copy = async () => {
     try {
@@ -80,6 +87,9 @@ export function CopyOfferToast({
       }}
       className="absolute bottom-3 right-3 z-10 flex w-[min(28rem,calc(100%-1.5rem))] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-xs text-popover-foreground shadow-floating focus:outline-none"
     >
+      <div role="status" aria-live="polite" data-testid="terminal-copy-offer-live" className="sr-only">
+        {announce}
+      </div>
       <div className="flex items-baseline gap-2">
         <span className="font-medium text-foreground">{TERMINAL_COPY.OFFER_TITLE}</span>
         <span className="text-meta text-muted-foreground">{TERMINAL_COPY.OFFER_SIZE(offer.chars)}</span>

@@ -15,18 +15,13 @@ import * as React from "react";
 import { toast } from "sonner";
 import type { RunDetail } from "../../../lib/types";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { toDatetimeLocalValue } from "../../../lib/datetime-local";
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-// <input type=datetime-local> wants local wall-clock time with no offset.
-function toDatetimeLocalValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export function ChangeEndDialog({
   open,

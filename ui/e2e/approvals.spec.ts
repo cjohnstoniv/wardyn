@@ -401,6 +401,52 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
     }
   });
 
+  test("the decision scope is one Tab stop the arrow keys move, and an Until preset shows as chosen in the date field", async ({ page }) => {
+    clearPending();
+    const marker = uniqueMarker("scope-keys");
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 } });
+
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      await expect(page.getByText(markerRe(marker)).first()).toBeVisible();
+      await page.getByRole("button", { name: "Approve" }).first().click();
+      const dialog = page.getByRole("dialog");
+      const scopeGroup = dialog.getByRole("radiogroup", { name: "Decision scope" });
+      const run = scopeGroup.getByRole("radio", { name: /^This run\b/ });
+      const until = scopeGroup.getByRole("radio", { name: /^Until…/ });
+
+      // Roving tabindex: the checked radio is the only Tab stop; arrows move and check.
+      await expect(run).toHaveAttribute("tabindex", "0");
+      await expect(scopeGroup.getByRole("radio", { name: /^Once\b/ })).toHaveAttribute("tabindex", "-1");
+      await run.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(until).toBeFocused();
+      await expect(until).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("Home");
+      await expect(scopeGroup.getByRole("radio", { name: /^Once\b/ })).toBeFocused();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowRight");
+      await expect(until).toBeFocused();
+
+      // A preset reads as chosen and its time shows in the one date field; picking another moves both.
+      const field = dialog.getByLabel("Pick a time");
+      await expect(field).toHaveValue("");
+      const hour = dialog.getByRole("button", { name: "1 hour" });
+      await expect(hour).toHaveAttribute("aria-pressed", "false");
+      await hour.click();
+      await expect(hour).toHaveAttribute("aria-pressed", "true");
+      const first = await field.inputValue();
+      expect(first).not.toBe("");
+      await dialog.getByRole("button", { name: "24 hours" }).click();
+      await expect(hour).toHaveAttribute("aria-pressed", "false");
+      await expect(dialog.getByRole("button", { name: "24 hours" })).toHaveAttribute("aria-pressed", "true");
+      expect(await field.inputValue()).not.toBe(first);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
   test("deny commits with a reason and shows a success toast", async ({ page }) => {
     clearPending();
     const marker = uniqueMarker("deny-flow");

@@ -19,9 +19,11 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { cn } from "../ui/utils";
+import { toDatetimeLocalValue } from "../../lib/datetime-local";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { useUnsavedGuard } from "../../lib/use-unsaved-guard";
 import { useSecurityOperator } from "./operator-context";
+import { useRovingRadio } from "./use-roving-radio";
 import {
   ALWAYS_NEEDS_WORKSPACE,
   APPROVAL_SCOPE_HINT,
@@ -77,11 +79,14 @@ export function ReasonDialog({
   const [scope, setScope] = React.useState<ApprovalScope>("run");
   // ISO string once chosen; null until the operator picks a preset or a time.
   const [until, setUntil] = React.useState<string | null>(null);
+  // The preset that set `until`, so it reads as selected; null once a time is typed.
+  const [preset, setPreset] = React.useState<string | null>(null);
   React.useEffect(() => {
     setReason("");
     setBusy(false);
     setScope("run");
     setUntil(null);
+    setPreset(null);
   }, [prompt]);
 
   // DR-0021: a typed reason is work the page would lose on a reload or a navigation, so it is guarded like the other editors.
@@ -100,6 +105,9 @@ export function ReasonDialog({
   // Rule 2 (server-side): until demands an expiry. Mirrored here so the
   // confirm button can't submit a scope the server will 400.
   const untilMissing = scope === "until" && !until;
+  // One Tab stop for the scope radios, arrows move between them; the disabled "always" is skipped.
+  const choosable = APPROVAL_SCOPE_ORDER.filter((s) => !(s === "always" && alwaysDisabled));
+  const scopeGroup = useRovingRadio(choosable.length, Math.max(0, choosable.indexOf(scope)), (i) => setScope(choosable[i]));
 
   // Always reset busy in finally so a failed approve/deny doesn't leave the
   // button spinning forever — the user can retry or cancel after the toast
@@ -130,37 +138,49 @@ export function ReasonDialog({
         </DialogHeader>
 
         {showScope && (
-          <div className="space-y-2 py-1" role="radiogroup" aria-label="Decision scope">
-            {APPROVAL_SCOPE_ORDER.map((s) => {
-              const disabled = s === "always" && alwaysDisabled;
-              const label = approve ? APPROVAL_SCOPE_LABEL[s] : DENY_SCOPE_LABEL[s];
-              const hint = disabled ? alwaysReason : approve ? APPROVAL_SCOPE_HINT[s] : DENY_SCOPE_HINT[s];
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  role="radio"
-                  aria-checked={scope === s}
-                  disabled={disabled}
-                  onClick={() => setScope(s)}
-                  className={cn(
-                    "flex w-full flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                    scope === s ? "border-primary bg-primary/5" : "border-border hover:border-border-strong",
-                  )}
-                >
-                  <span className="font-medium text-foreground">{label}</span>
-                  <span className="text-meta text-muted-foreground">{hint}</span>
-                </button>
-              );
-            })}
+          <div className="space-y-2 py-1">
+            <div className="space-y-2" role="radiogroup" aria-label="Decision scope" {...scopeGroup.containerProps}>
+              {APPROVAL_SCOPE_ORDER.map((s) => {
+                const disabled = s === "always" && alwaysDisabled;
+                const item = disabled ? null : scopeGroup.itemProps(choosable.indexOf(s));
+                const label = approve ? APPROVAL_SCOPE_LABEL[s] : DENY_SCOPE_LABEL[s];
+                const hint = disabled ? alwaysReason : approve ? APPROVAL_SCOPE_HINT[s] : DENY_SCOPE_HINT[s];
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    role="radio"
+                    aria-checked={scope === s}
+                    disabled={disabled}
+                    tabIndex={item?.tabIndex}
+                    ref={item?.radioRef}
+                    onClick={() => setScope(s)}
+                    className={cn(
+                      "flex w-full flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                      scope === s ? "border-primary bg-primary/5" : "border-border hover:border-border-strong",
+                    )}
+                  >
+                    <span className="font-medium text-foreground">{label}</span>
+                    <span className="text-meta text-muted-foreground">{hint}</span>
+                  </button>
+                );
+              })}
+            </div>
             {scope === "until" && (
               <div className="flex flex-wrap items-center gap-1.5 pl-1 pt-0.5">
                 {UNTIL_PRESETS.map((p) => (
                   <button
                     key={p.label}
                     type="button"
-                    onClick={() => setUntil(new Date(Date.now() + p.ms).toISOString())}
-                    className="rounded-full border border-border px-2.5 py-1 text-xs text-foreground hover:border-border-strong"
+                    aria-pressed={preset === p.label}
+                    onClick={() => {
+                      setPreset(p.label);
+                      setUntil(new Date(Date.now() + p.ms).toISOString());
+                    }}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs text-foreground",
+                      preset === p.label ? "border-primary bg-primary/5" : "border-border hover:border-border-strong",
+                    )}
                   >
                     {p.label}
                   </button>
@@ -169,7 +189,11 @@ export function ReasonDialog({
                   type="datetime-local"
                   aria-label="Pick a time"
                   className="h-7 w-auto flex-1 min-w-[10rem] text-xs"
-                  onChange={(e) => setUntil(e.target.value ? new Date(e.target.value).toISOString() : null)}
+                  value={until ? toDatetimeLocalValue(new Date(until)) : ""}
+                  onChange={(e) => {
+                    setPreset(null);
+                    setUntil(e.target.value ? new Date(e.target.value).toISOString() : null);
+                  }}
                 />
               </div>
             )}
