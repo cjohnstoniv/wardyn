@@ -314,7 +314,10 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	if err != nil {
 		// An outage or a revoked access is not a verdict on the wrap: say what failed, keeping the cause
 		// for errors.Is, and leave the "does not unwrap" wording to a key service that answered about it.
-		if errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrService) {
+		// ErrRefused first: Transit wraps a refused decrypt in ErrService as well, and that IS a verdict
+		// on the wrap, so it keeps the "does not unwrap" wording below.
+		if !errors.Is(err, kek.ErrRefused) &&
+			(errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrService)) {
 			return nil, fmt.Errorf("subjectkey: the key service could not unwrap generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, err)
 		}
 		return nil, fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q) does not unwrap (moved, forged, corrupted, or its key version retired): %w", id.version, id.owner, id.purpose, err)

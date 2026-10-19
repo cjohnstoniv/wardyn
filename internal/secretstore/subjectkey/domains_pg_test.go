@@ -252,13 +252,15 @@ func TestManager_UnwrapOutageIsNotReportedAsACorruptWrap(t *testing.T) {
 		"unreachable":    {fmt.Errorf("vault: %w", secretstore.ErrUnavailable), "could not unwrap"},
 		"access revoked": {fmt.Errorf("vault: %w", kek.ErrAccess), "could not unwrap"},
 		"wrap refused":   {fmt.Errorf("vault: %w", kek.ErrRefused), "does not unwrap"},
+		// Transit's own shape: the refusal is wrapped in ErrService too (#2815).
+		"transit refused": {fmt.Errorf("transit KEK a: %w: %w: %w", kek.ErrService, kek.ErrRefused, errors.New("vault 400")), "does not unwrap"},
 	} {
 		m := subjectkeytest.Manager(pool, outageTransit{a, tc.cause})
 		_, err := m.Key(t.Context(), "in-a", subjectkey.PurposeCred, 1)
 		if !errors.Is(err, tc.cause) || !strings.Contains(err.Error(), tc.wantMsg) {
 			t.Errorf("%s: Key = %v, want the cause kept and %q in the text", name, err, tc.wantMsg)
 		}
-		if name != "wrap refused" && strings.Contains(err.Error(), "does not unwrap") {
+		if !strings.Contains(name, "refused") && strings.Contains(err.Error(), "does not unwrap") {
 			t.Errorf("%s: an outage reads as a corrupt wrap: %v", name, err)
 		}
 	}
