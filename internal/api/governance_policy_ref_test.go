@@ -125,15 +125,22 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 			}
 			audit.mu.Lock()
 			defer audit.mu.Unlock()
+			sawTarget := false
 			for _, ev := range audit.events {
 				if ev.Action != authz.AuditAction {
 					continue
+				}
+				if ev.Target == tc.wantTarget {
+					sawTarget = true
 				}
 				for _, secret := range []string{want.Owner, want.Email} {
 					if strings.Contains(string(ev.Data), secret) {
 						t.Errorf("authz.denied row carries %q: %s", secret, ev.Data)
 					}
 				}
+			}
+			if !sawTarget {
+				t.Errorf("no authz.denied row names target %q: the refusal came from a different door", tc.wantTarget)
 			}
 		})
 	}
