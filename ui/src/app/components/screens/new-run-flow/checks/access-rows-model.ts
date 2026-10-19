@@ -119,7 +119,8 @@ export function accessRow(f: ComponentFact): AccessRow {
     disclosures: disclosuresOf(f),
     requirements: f.requirements ?? [],
     hosts: f.hosts ?? [],
-    secrets: f.secrets ?? [],
+    // Listed field by field: the fact says "never its name", and a wire field added later must not reach a row by passing through.
+    secrets: (f.secrets ?? []).map((x) => ({ delivery: x.delivery, shared: x.shared, ...(x.local_delivery ? { local_delivery: x.local_delivery } : {}) })),
     configKeys: f.config_keys ?? [],
     org: f.org,
     repos: f.repos ?? [],

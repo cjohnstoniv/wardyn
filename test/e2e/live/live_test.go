@@ -56,30 +56,37 @@ func TestLive_TierMatrix(t *testing.T) {
 }
 
 // TestLive_GradersRejectBadWorkspace proves the graders aren't rubber stamps in
-// the FAIL direction: each task shipping a bad-workspace/ fixture (plausible-but-
-// wrong final state) must be scored a graded FAILURE (exit 1) — not a pass, and
-// not a docker infra error masquerading as a rejection. Needs docker, no stack.
+// the FAIL direction: each task shipping a bad-workspace*/ fixture (plausible-but-
+// wrong final state, or code that exits 0 before any test runs) must be scored a
+// graded FAILURE (exit 1) — not a pass, and not a docker infra error masquerading
+// as a rejection. Needs docker, no stack.
 func TestLive_GradersRejectBadWorkspace(t *testing.T) {
 	h := newHarness(t)
 	ran := 0
 	for _, task := range h.loadTasks() {
 		task := task
-		bad := filepath.Join(task.dir, "bad-workspace")
-		if _, err := os.Stat(bad); err != nil {
-			continue // no negative fixture for this task
+		fixtures, err := filepath.Glob(filepath.Join(task.dir, "bad-workspace*"))
+		if err != nil {
+			t.Fatal(err)
 		}
-		ran++
-		t.Run(task.Name, func(t *testing.T) {
-			code, out := h.gradeExit(task.GraderImage, task.dir, bad)
-			switch {
-			case code == 0:
-				t.Fatalf("grader PASSED the bad-workspace fixture — it is a rubber stamp:\n%s", out)
-			case code >= 125:
-				t.Fatalf("grader exited %d (docker infra error, not a graded rejection):\n%s", code, out)
-			default:
-				t.Logf("grader correctly REJECTED bad-workspace (exit %d): %s", code, strings.TrimSpace(lastLine(out)))
+		for _, bad := range fixtures {
+			bad := bad
+			if fi, err := os.Stat(bad); err != nil || !fi.IsDir() {
+				continue
 			}
-		})
+			ran++
+			t.Run(task.Name+"/"+filepath.Base(bad), func(t *testing.T) {
+				code, out := h.gradeExit(task.GraderImage, task.dir, bad)
+				switch {
+				case code == 0:
+					t.Fatalf("grader PASSED the %s fixture — it is a rubber stamp:\n%s", filepath.Base(bad), out)
+				case code >= 125:
+					t.Fatalf("grader exited %d (docker infra error, not a graded rejection):\n%s", code, out)
+				default:
+					t.Logf("grader correctly REJECTED %s (exit %d): %s", filepath.Base(bad), code, strings.TrimSpace(lastLine(out)))
+				}
+			})
+		}
 	}
 	if ran == 0 {
 		t.Fatal("no bad-workspace fixtures found — the negative-fixture guard is not being exercised")

@@ -26,9 +26,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestPG_AuditDDLBypassRoutesNamesTheRouteThatFired(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 

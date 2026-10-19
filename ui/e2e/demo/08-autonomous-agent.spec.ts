@@ -171,6 +171,9 @@ const MOUNT_TARGET = "/home/agent/work";
 // ---------------------------------------------------------------------------
 
 test.beforeAll(async () => {
+  // File-level test.skip skips the tests, not this hook: it deletes and recreates workspaces, so it
+  // must not run outside a recording (the sibling episodes re-guard the same way).
+  if (!process.env.WARDYN_DEMO) return;
   const page = stage();
 
   // (a) The fixture must not already contain the agent's work. If a previous

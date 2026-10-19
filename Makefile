@@ -512,12 +512,12 @@ test-envbuild-integration: ## Real-daemon envbuild push/pull smoke test (needs D
 	echo "==> starting throwaway registry $(ENVBUILD_REGISTRY_IMAGE) on :5000"; \
 	docker rm -f wardyn-envbuild-registry >/dev/null 2>&1 || true; \
 	docker run -d --name wardyn-envbuild-registry -p 5000:5000 $(ENVBUILD_REGISTRY_IMAGE) >/dev/null; \
-	echo "==> running the real-daemon envbuild tests (git-clone smoke + agent-CLI bake proof)"; \
+	echo "==> running the real-daemon envbuild tests (git-clone smoke + agent-CLI bake proof + build-stream image ID proof)"; \
 	WARDYN_TEST_DOCKER=1 \
 	WARDYN_TEST_CACHE_REPO=localhost:5000/wardyn-envbuild-test \
 	WARDYN_TEST_TOOLS_DIR="$$tools_dir" \
 	WARDYN_TEST_REPORT_COVER=0 \
-	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI' -timeout 40m ./internal/envbuild/
+	./scripts/test-report.sh envbuild -tags docker -run 'TestBuild_SmokeDockerd|TestBuildFromDevcontainerFiles_BakesAgentCLI|TestFinalizeBase_IDEqualsTheDaemonsAuxID' -timeout 40m ./internal/envbuild/
 
 # Live full-stack security e2e (L0 egress, metadata block, kill cascade,
 # brokered creds, recording). Heavy: stands up the compose stack. Guarded by

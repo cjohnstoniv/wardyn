@@ -24,6 +24,7 @@ import {
   type BrowserContextOptions,
   type Page,
 } from "@playwright/test";
+import { VIEW_REFUSAL } from "../../src/app/components/wardyn/copy/console-view";
 import { SIGNIN } from "../../src/app/lib/sign-in-copy";
 import { identities, missing, whereIs } from "./harness";
 
@@ -88,7 +89,8 @@ test("the admin signs in by redirect and sees the admin nav", async ({
     (await meStatus(page)).operator,
     "the admin identity did not resolve as an operator",
   ).toBe(true);
-  await page.goto(new URL("/runs", BASE).toString());
+  // /runs is the User view, where an admin sees the member nav; the admin nav is the Admin view's.
+  await page.goto(new URL("/admin/runs", BASE).toString());
   await expect(page.locator('nav a[href="/admin/permissions"]')).toBeVisible();
 });
 
@@ -103,6 +105,9 @@ test("a member signs in by redirect and does not see the admin nav", async ({
   );
   await page.goto(new URL("/runs", BASE).toString());
   await expect(page.locator('nav a[href="/runs"]')).toBeVisible();
+  // The Admin view is where the two identities differ: it refuses the member and shows no admin nav.
+  await page.goto(new URL("/admin/runs", BASE).toString());
+  await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
   await expect(page.locator('nav a[href="/admin/permissions"]')).toHaveCount(0);
 });
 

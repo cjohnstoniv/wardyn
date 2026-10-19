@@ -709,6 +709,14 @@ jobs:
         env:
           WARDYN_GOVERNANCE_SECOND_HUMAN: "true"
         run: scripts/run-ui-e2e.sh governance-changes
+      - name: Run Playwright UI e2e, console served under a base path
+        # The step above runs base-path.spec.ts at the root, where its proxy-only assertions are off.
+        # WARDYN_BASE_PATH is only exercised with the backend under a sub-path behind
+        # test/basepathproxy, which run-ui-e2e.sh sets up for this variable. Once per run: shard 1.
+        if: matrix.shard == 1
+        env:
+          WARDYN_E2E_BASE_PATH: /wardyn
+        run: scripts/run-ui-e2e.sh base-path
       - name: Upload Playwright report
         id: upload_playwright_report
         if: always()

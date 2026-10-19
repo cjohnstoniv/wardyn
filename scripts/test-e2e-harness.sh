@@ -98,6 +98,12 @@ cp "${tmp}/repo/.e2e-bin/wardynd" "${tmp}/repo/.e2e-bin/basepathproxy"
 cat > "${tmp}/bin/docker" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${E2E_TEST_EVENTS}/docker.log"
+# One refused start on request: records the address the lane tried, then fails the readiness probe.
+if [[ "$1" == exec && "$*" == *pg_isready* && -n "${E2E_TEST_FAIL_ONCE:-}" && -e "${E2E_TEST_FAIL_ONCE}" ]]; then
+  rm -f "${E2E_TEST_FAIL_ONCE}"
+  echo "${WARDYN_E2E_ADDR}" > "${E2E_TEST_EVENTS}/first-addr"
+  exit 1
+fi
 if [[ "$1" == port ]]; then
   echo '127.0.0.1:55432'
 elif [[ "$*" == *' -i '* && "$*" != *' -c '* && "$*" != *' -tAc '* ]]; then
@@ -154,6 +160,10 @@ else:
 Path(os.environ["PLAYWRIGHT_JSON_OUTPUT_NAME"]).write_text(json.dumps({
     "stats": stats, "suites": suites,
 }))
+# E2E_TEST_INTERRUPT=<file>: tell the test the lane is up, then hang until the wrapper is signalled.
+if os.environ.get("E2E_TEST_INTERRUPT"):
+    Path(os.environ["E2E_TEST_INTERRUPT"]).write_text("up\n")
+    time.sleep(60)
 time.sleep(0.5)
 PY
 chmod +x "${tmp}/bin/"* "${tmp}/repo/.e2e-bin/"*
@@ -288,6 +298,45 @@ log "an empty, malformed or out-of-range shard refuses before any work"
 run_wrapper one two
 check_events 2 1 '' 127.0.0.1
 log "per-up rotation, private token handoff and effective default loopback binds"
+
+# A backend that fails to come up is retried once, and the retry must not reuse the ports that just
+# failed (an "address in use" refusal would repeat). The first start is refused by the readiness probe.
+: > "${tmp}/fail-once"
+E2E_TEST_FAIL_ONCE="${tmp}/fail-once" run_wrapper one
+grep -q 'retrying once' "${tmp}/wrapper.log" || { cat "${tmp}/wrapper.log"; die "the refused first start was not retried"; }
+python3 - "${E2E_TEST_EVENTS}" <<'PY' || die "the retry reused the ports of the start that failed"
+import json, pathlib, sys
+events = pathlib.Path(sys.argv[1])
+first = (events / "first-addr").read_text().strip().rsplit(":", 1)[1]
+used = {str(addr[1]) for p in events.glob("bind-*.json") for addr in json.loads(p.read_text())["listeners"]}
+assert used and first not in used, (first, used)
+PY
+log "a refused first start is retried on freshly picked ports"
+
+# The retry keeps the caller's bind host: only the ports change.
+export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)" WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port)"
+export WARDYN_E2E_INTERNAL_ADDR="127.0.0.2:$(pick_free_port)"
+: > "${tmp}/fail-once"
+E2E_TEST_FAIL_ONCE="${tmp}/fail-once" run_wrapper one
+grep -q 'retrying once' "${tmp}/wrapper.log" || { cat "${tmp}/wrapper.log"; die "the refused first start was not retried"; }
+check_events 1 1 '' 127.0.0.2
+unset WARDYN_E2E_ADDR WARDYN_E2E_UI_ADDR WARDYN_E2E_INTERNAL_ADDR
+log "the retry keeps the caller's bind host"
+
+# An interrupted run tears down the re-picked backend, not just the one on the original ports. The
+# stub signals through a FIFO that is awaited with a (bounded) blocking read, so no polling is involved.
+mkfifo "${tmp}/up.fifo"
+: > "${tmp}/fail-once"
+E2E_TEST_FAIL_ONCE="${tmp}/fail-once" E2E_TEST_INTERRUPT="${tmp}/up.fifo" ./scripts/run-ui-e2e.sh one > "${tmp}/interrupted.log" 2>&1 &
+wrapper_pid=$!
+exec 7<>"${tmp}/up.fifo"
+read -r -t 120 -u 7 _ || { kill "${wrapper_pid}" 2>/dev/null || true; die "the lane never came up"; }
+exec 7>&-
+kill -TERM "${wrapper_pid}"
+wait "${wrapper_pid}" || true
+[[ -z "$(find .e2e-bin -name '*.pid' -print -quit)" ]] || { find .e2e-bin -name '*.pid'; die "an interrupted run leaked the re-picked backend"; }
+[[ -z "$(find .e2e-bin -name 'token-*' -print -quit)" ]] || die "an interrupted run retained a bearer file"
+log "an interrupted run after a retry tears the re-picked backend down"
 
 export WARDYN_E2E_ADDR="127.0.0.2:$(pick_free_port)"
 export WARDYN_E2E_UI_ADDR="127.0.0.2:$(pick_free_port)"

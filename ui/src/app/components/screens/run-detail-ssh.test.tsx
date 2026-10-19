@@ -63,7 +63,7 @@ function renderCard(run: Partial<RunDetail> = {}, principal = OWNER, operator = 
 }
 
 // Every health() fixture below carries status:"ok" because a real /healthz body
-// always does (internal/api/healthz.go:61) — and the card reads exactly that
+// always does (handleHealthz in internal/api/healthz.go) — and the card reads exactly that
 // bit to tell "the daemon answered, both gateways are off" apart from "no
 // answer at all", which lib/api/health.ts reports as the same resolved `{}`.
 beforeEach(() => {
@@ -83,12 +83,10 @@ describe("ConnectSSHCard — visibility", () => {
     expect(healthMock).not.toHaveBeenCalled();
   });
 
-  // The server's three lanes are owner-OR-admin (attach_ticket.go's isOperator,
-  // uigateway.go's role check, sshgateway.go's admin arm). Hiding the card from
-  // an admin offered less than the API already serves them.
   // #1476: entry is the owner's alone on a person's run (a super admin keeps
-  // Kill/Approve/Policy, not the terminal, apps or SSH), so the card is hidden
-  // for them rather than shown with controls that cannot work.
+  // Kill/Approve/Policy, not the terminal, apps or SSH; see mayEnterRun in
+  // internal/api/run_entry.go), so the card is hidden for them rather than
+  // shown with controls that cannot work.
   it("renders NOTHING for an ADMIN on another person's run", async () => {
     healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } });
     listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: "admin@example.com", name: "k", public_key: "", created_at: "" }]);
@@ -661,7 +659,7 @@ describe("ConnectSSHCard — Sync a folder lane", () => {
 // guard is NOT a rejected promise — lib/api/health.ts swallows every non-ok
 // response and every network/parse/abort error into a resolved `{}` — so
 // these cases drive the REAL health() through a stubbed fetch, which is the
-// shape a live 5xx or blip actually produces. `status:"ok"` (healthz.go:61,
+// shape a live 5xx or blip actually produces. `status:"ok"` (handleHealthz,
 // present in every successful body) is the only thing that separates
 // "answered: both off" from "no answer".
 describe("ConnectSSHCard — a FAILED /healthz asserts nothing about the deployment", () => {

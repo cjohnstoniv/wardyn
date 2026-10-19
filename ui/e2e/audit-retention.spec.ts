@@ -17,7 +17,7 @@
 // pinned by the store's Postgres suite (internal/store/auditretention_pg_test.go).
 import { createHash, randomBytes } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
-import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, navTo, sql } from "./fixtures";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -116,8 +116,8 @@ test.describe("Audit retention (security admin)", () => {
     await asRealMember(page);
     await gotoConsole(page, "user");
     await expect(page.getByRole("tab", { name: "Retention" })).toHaveCount(0);
-    const res = await page.request.get("/api/v1/audit/retention");
-    expect([401, 403]).toContain(res.status());
+    // consoleAPI carries the member's own bearer; page.request does not, and would only prove the 401.
+    expect((await consoleAPI(page, "GET", "/api/v1/audit/retention")).status).toBe(403);
   });
 });
 

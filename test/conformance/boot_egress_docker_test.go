@@ -239,7 +239,7 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	// Give the sink's async worker a moment after the read window closes.
 	time.Sleep(3 * time.Second)
 	logs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs)
+	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs, claudeImage)
 
 	// PHASE 3 — the AUTONOMOUS shape, which meets no dialog at all and is what the
 	// live walk's case G launches. Its first-use approvals are the ones a member
@@ -255,17 +255,22 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	}
 	time.Sleep(45 * time.Second)
 	autoLogs := bootEgressProxyLogs(t, runID)
-	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs)
+	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs, claudeImage)
 }
 
 // bootEgressAssertQuiet is the whole verdict: what the sandbox dialled, and
 // whether any of it parked. Logged pass or fail — the measurement is the
-// deliverable, not just the verdict.
-func bootEgressAssertQuiet(t *testing.T, image, phase, logs string) {
+// deliverable, not just the verdict. wantHosts is set for the claude-code image,
+// which always dials its own bootstrap: no parsed decision at all means the log
+// was not read (or its format moved), and "nothing parked" over nothing proves nothing.
+func bootEgressAssertQuiet(t testing.TB, image, phase, logs string, wantHosts bool) {
 	t.Helper()
 	hosts, pending, denied := bootEgressDecisions(logs)
 	t.Logf("hosts dialled by %s (%s): %v", image, phase, hosts)
 	t.Logf("proxy decision stream (%s):\n%s", phase, bootEgressDecisionLines(logs))
+	if wantHosts && len(hosts) == 0 {
+		t.Fatalf("%s: no egress decision was parsed from the proxy log, so the quiet verdict below would be vacuous\nlog:\n%s", phase, logs)
+	}
 	if len(pending) > 0 {
 		t.Errorf("%s raised %d first-use approval(s): %v\n"+
 			"A member's first run must park on nothing before they have asked the agent for anything.", phase, len(pending), pending)
