@@ -15,23 +15,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// orderRevoker reports its revocation into the list the runner's teardown and
-// the output contract report into.
-type orderRevoker struct {
-	name  string
-	mu    *sync.Mutex
-	order *[]string
-}
-
-func (r orderRevoker) RevokeRun(context.Context, uuid.UUID) error {
-	r.mu.Lock()
-	*r.order = append(*r.order, r.name)
-	r.mu.Unlock()
-	return nil
-}
-
-// Both graceful stops, the idle stop and the max-age stop, revoke the run's
-// identity and broker credentials, then take the pane snapshot, then stop the
+// Both graceful stops, the idle stop and the max-age stop, run the revocation
+// cascade, then take the pane snapshot, then stop the
 // sandbox, then finish the output; a stop that loses its compare-and-set
 // touches none of them. Guarded by WARDYN_TEST_PG.
 func TestPG_GracefulStopsSnapshotAfterTheRevocationsAndBeforeStopSandbox(t *testing.T) {
@@ -58,18 +43,23 @@ func TestPG_GracefulStopsSnapshotAfterTheRevocationsAndBeforeStopSandbox(t *test
 			note := func(s string) func(context.Context, uuid.UUID) {
 				return func(context.Context, uuid.UUID) { mu.Lock(); order = append(order, s); mu.Unlock() }
 			}
+			revoke := func(context.Context, uuid.UUID) map[string]string {
+				mu.Lock()
+				order = append(order, "revoke")
+				mu.Unlock()
+				return nil
+			}
 			stopper := lifecycleStopper{
 				pool:         pool,
 				runner:       orderRunner{mu: &mu, order: &order},
-				identity:     orderRevoker{"revoke identity", &mu, &order},
-				broker:       orderRevoker{"revoke broker", &mu, &order},
+				revoke:       revoke,
 				snapshotPane: note("snapshot"),
 				finishOutput: note("finish"),
 			}
 			if applied, err := stop(stopper, run.ID); err != nil || !applied {
 				t.Fatalf("stop = %v, %v; want applied", applied, err)
 			}
-			want := []string{"revoke identity", "revoke broker", "snapshot", "stop", "finish"}
+			want := []string{"revoke", "snapshot", "stop", "finish"}
 			if !slices.Equal(order, want) {
 				t.Fatalf("order %v, want %v", order, want)
 			}

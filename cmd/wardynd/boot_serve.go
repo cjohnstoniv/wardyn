@@ -138,7 +138,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -162,7 +162,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		reaper := lifecycle.New(
 			lifecycleStore{pool: pool},
 			lifecycleStopper{
-				pool: pool, runner: run, identity: idp, broker: brk,
+				pool: pool, runner: run,
+				// The revocation half of the same cascade, threaded in for the
+				// same reason as cancelApprovals below.
+				revoke: srv.RevokeStoppedRun,
 				// The third terminal writer's approval cascade (V1-D1). srv owns the
 				// approvals service; the reaper owns the STOPPED transition. Threading
 				// the one method is smaller than giving the reaper its own approval
