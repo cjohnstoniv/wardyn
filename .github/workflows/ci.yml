@@ -1486,7 +1486,7 @@ jobs:
   # negative egress probe inside it, then the same probe on QEMU's own user
   # networking, which must go red (test/vmconformance). Hosted runners expose
   # /dev/kvm once GitHub's documented udev rule is applied; QEMU falls back to
-  # TCG without it. Not in `gates` and not in RELEASING.md's list.
+  # TCG without it. Not a required check and not in `gates`.
   vm-conformance:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
