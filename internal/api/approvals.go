@@ -244,9 +244,10 @@ func (s *Server) refuseIfRunEnded(
 			run, haveRun = got, true
 		}
 	}
-	// Only an approval a human already decided falls through to Decide, whose already_decided answer
-	// is the true one. Anything else (pending, or cancelled by the run's own end) answers run_ended.
-	if haveRun && isTerminalRunState(run.State) && ap.State != types.ApprovalApproved && ap.State != types.ApprovalDenied {
+	// A row still waiting, or cancelled by the run's own end, answers run_ended. A decided or expired
+	// row falls through to Decide, whose already_decided answer is the true one. (An empty state is a
+	// row no store writes; treated as open.)
+	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending || ap.State == types.ApprovalCancelled) {
 		s.cancelRunApprovals(r.Context(), ap.RunID)
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
 		return ap, run, haveAP, haveRun, false, "run_ended"

@@ -433,8 +433,8 @@ const (
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
 	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
 
-	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the deployment's drive-size ceiling (site config) could not be read
-	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard
+	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
+	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
 	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name" // the allocation resolves to no directory name, so there is no object to reclaim
 
 	// owner_ambiguous / owner_unresolved: resolveSecretOwner's (secrets.go) and

@@ -254,3 +254,18 @@ func TestCancelledApprovalOnEndedRunAnswersRunEnded(t *testing.T) {
 		t.Fatalf("decide on a cancelled approval of an ended run = %d %s, want 409 %s", w.Code, w.Body.String(), reasonApprovalRunEnded)
 	}
 }
+
+// An EXPIRED approval on an ended run was not cancelled by the run's end: it keeps the already_decided
+// answer, not the "has been cancelled" body.
+func TestExpiredApprovalOnEndedRunAnswersAlreadyDecided(t *testing.T) {
+	h, srv, runID := endedRunBypassFixture(t)
+	apID := seedEgressApproval(h, runID, "registry.npmjs.org")
+	ap := h.approvals.byID[apID]
+	ap.State = types.ApprovalExpired
+	h.approvals.byID[apID] = ap
+	h.approvals.decideErr = approval.ErrAlreadyDecided
+	w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != reasonApprovalAlreadyDecided {
+		t.Fatalf("decide on an expired approval of an ended run = %d %s, want 409 %s", w.Code, w.Body.String(), reasonApprovalAlreadyDecided)
+	}
+}
