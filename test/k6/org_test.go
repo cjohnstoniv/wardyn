@@ -749,8 +749,10 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 	note(t, "renew refused at the org %s after the run was ended: %s", time.Since(o.lapse.marked).Round(time.Second), row.Data)
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
-		out, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy").CombinedOutput()
-		if strings.Contains(string(out), "refused permanently, lapsing") {
+		out, err := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy").CombinedOutput()
+		// runnerd deletes the proxy pod as soon as the proxy lapses, so a first read can find it gone: that
+		// pod existed in the setup and is deleted only by the lapse, which is what this loop waits to see.
+		if strings.Contains(string(out), "refused permanently, lapsing") || (err != nil && strings.Contains(string(out), "NotFound")) {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -72,8 +72,17 @@ func newSinkHarness(t *testing.T) *sinkHarness {
 		t.Fatal(err)
 	}
 	h.addr = ln.Addr().String()
-	go h.sink.Serve(ln) //nolint:errcheck // ends at Close
-	t.Cleanup(func() { h.sink.Close() })
+	served := make(chan struct{})
+	go func() {
+		h.sink.Serve(ln) //nolint:errcheck // ends at Close
+		close(served)
+	}()
+	// A session goroutine logs as it ends, so the sink is not stopped until every one has returned.
+	t.Cleanup(func() {
+		h.sink.Close()
+		<-served
+		h.sink.handlers.Wait()
+	})
 	return h
 }
 
@@ -449,30 +458,34 @@ func TestSpoolSinkSucceedHandsTheRunToANewProxy(t *testing.T) {
 	}
 }
 
-// lockedLog is a log destination a logging goroutine and the test reading it can share.
-type lockedLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+// slowLog holds each record back, so a goroutine that logs after its test has returned is caught.
+type slowLog struct{ slog.Handler }
+
+func (h slowLog) Handle(ctx context.Context, r slog.Record) error {
+	time.Sleep(100 * time.Millisecond)
+	return h.Handler.Handle(ctx, r)
 }
 
-func (l *lockedLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *lockedLog) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
+// A harness leaves no session goroutine behind: the one a live proxy session leaves logs as it ends, into
+// the process's default logger, which a later test may be reading.
+func TestSinkHarnessCleanupWaitsForSessions(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slowLog{slog.NewTextHandler(&logs, nil)}))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Run("a live session", func(t *testing.T) {
+		h := newSinkHarness(t)
+		mustRead(t, h.dial(h.key, inst), proxy.FrameAccept)
+	})
+	if !strings.Contains(logs.String(), "decision sink session disconnected") {
+		t.Fatalf("the session ended after its test, not before it returned; log so far:\n%s", logs.String())
+	}
 }
 
 // Tick forgets a run whose spool was erased, with no loss-row warning on every tick, and a settled run
 // whose spool is sealed: neither keeps its handles or is read again.
 func TestSpoolSinkTickForgetsErasedAndSealedRuns(t *testing.T) {
-	// The default logger is the process's: a session of an earlier test's sink can still log into it
-	// while this test reads it, so the buffer is locked.
-	var logs lockedLog
+	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

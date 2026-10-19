@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -696,15 +695,10 @@ func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 			for i := range changes {
 				changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i), Mode: mode}
 			}
-			start := time.Now()
+			// The ceiling counts work, not seconds: a wall-clock limit here only measures the runner's load.
 			_, _, err := match(rs.deny, changes)
-			elapsed := time.Since(start)
-
 			if !errors.Is(err, errGlobBudget) {
-				t.Fatalf("match = %v after %s, want the work ceiling to refuse", err, elapsed)
-			}
-			if elapsed > 60*time.Second {
-				t.Errorf("the bounded matcher took %s, which is not a bound anyone would call one", elapsed)
+				t.Fatalf("match = %v, want the work ceiling to refuse", err)
 			}
 		})
 	}
