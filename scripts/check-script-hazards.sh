@@ -38,31 +38,50 @@ CONFORMANCE = re.compile(r'(^|/)[^/]*conformance[^/]*\.sh$')
 
 
 def code_lines(text):
-    """(lineno, line) for each line outside heredoc bodies, comments cut."""
-    pending = []
+    """(lineno, line) for each line outside heredoc bodies, comments cut, plus
+    the (marker, lineno) of each heredoc still open at the end of the text.
+    A `<<WORD` counts only outside quotes and $(( )) arithmetic."""
+    lines, pending = [], []
     for no, raw in enumerate(text.splitlines(), 1):
         if pending:
-            if raw.strip() == pending[0]:
+            if raw.strip() == pending[0][0]:
                 pending.pop(0)
             continue
-        line, quote = [], None
+        # Open contexts, innermost last: ' or " (quotes), ( for $( ) or a
+        # subshell, A for $(( )) arithmetic. Quotes reopen inside $( ).
+        line, stack, esc = [], [], False
         for i, ch in enumerate(raw):
-            if quote:
-                if ch == quote and raw[i - 1] != '\\':
-                    quote = None
-            elif ch in '"\'':
-                quote = ch
+            top = stack[-1] if stack else ''
+            if esc:
+                esc = False
+            elif top == "'":
+                if ch == "'":
+                    stack.pop()
+            elif ch == '\\':
+                esc = True
+            elif ch == '(' and raw[i - 1:i] == '$' and raw[i - 2:i - 1] != '\\':
+                stack.append('A' if raw[i + 1:i + 2] == '(' else '(')
+            elif top == '"':
+                if ch == '"':
+                    stack.pop()
+            elif ch in '"\'(':
+                stack.append(ch)
+            elif ch == ')':
+                if top in ('(', 'A'):
+                    stack.pop()
             elif ch == '#' and (i == 0 or raw[i - 1] in ' \t;'):
                 break
+            elif ch == '<' and 'A' not in stack and (m := HEREDOC.match(raw, i)):
+                pending.append((m.group(2), no))
             line.append(ch)
-        line = ''.join(line)
-        pending.extend(m.group(2) for m in HEREDOC.finditer(line))
-        yield no, line
+        lines.append((no, ''.join(line)))
+    return lines, pending
 
 
 def check_text(path, text):
-    found = []
-    lines = list(code_lines(text))
+    lines, unclosed = code_lines(text)
+    found = [f"{path}:{no}: heredoc `<<{word}` never closes, so the lines after it go unchecked"
+             for word, no in unclosed]
     if any(PIPEFAIL.match(line) for _, line in lines):
         for no, line in lines:
             if GREP_Q.search(line):
@@ -99,6 +118,9 @@ def selftest():
                  "# ps | grep -q foo", "ps | grep -c foo", "ps | grep -e foo"]:
         expect("scripts/x.sh", pf + line + "\n", False, f"clean `{line}`")
     expect("scripts/x.sh", pf + "cat <<'EOF'\nps | grep -q foo\nEOF\n", False, "heredoc body")
+    expect("scripts/x.sh", pf + "v=\"$(awk '/x\" <<EOF/{print}' f)\"\nps | grep -q foo\n", True, "`<<EOF` inside quotes")
+    expect("scripts/x.sh", pf + "x=$((1<<FOO))\nps | grep -q foo\n", True, "`<<` in arithmetic")
+    expect("scripts/x.sh", "cat <<EOF\nno end marker\n", True, "heredoc open at end of file")
     expect("scripts/x.sh", "set -eu\nps | grep -q foo\n", False, "no pipefail")
     expect("scripts/x.sh", "set -o pipefail\nps | grep -q foo\n", True, "set -o pipefail")
 

@@ -312,7 +312,7 @@ if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in script
 #      how the original trap was born. Grepping the SCRIPT SOURCE, not a
 #      render, so an edit that strips the line fails here rather than in CI.
 quickstart_values_heredoc="$(awk '/values\.yaml" <<EOF/{f=1;next} f&&/^EOF$/{exit} f{print}' deploy/kind/quickstart.sh)"
-if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' ; then
+if printf '%s' "$quickstart_values_heredoc" | grep -E 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' >/dev/null ; then
     ok "deploy/kind/quickstart.sh's generated values state their own confinement floor"
 else
     bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the cluster then inherits the image's floor instead of stating its own (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the shape"
@@ -413,7 +413,7 @@ for wf in .github/workflows/*.yml; do
             *) continue ;;
         esac
         job_block="$(awk -v j="  $job:" '$0==j{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$wf")"
-        printf '%s' "$job_block" | grep -qF 'GH_REPO: ${{ github.repository }}' \
+        printf '%s' "$job_block" | grep -F 'GH_REPO: ${{ github.repository }}' >/dev/null \
             || { bad "$wf: $job calls gh without GH_REPO (no checkout)"; notify_gh_repo_fail=1; }
     done
 done
@@ -470,7 +470,7 @@ else
     # to `|| true`, and one review round found it untested.
     preflight_block="$(awk '$0=="  preflight-green:"{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$REL")"
     [ -n "$preflight_block" ] || { bad "$REL: no 'preflight-green:' job found — guard 13 is pointing at nothing"; preflight_fail=1; }
-    if printf '%s' "$preflight_block" | grep -qE '\|\| *true|\|\| *:([[:space:]]|$)|continue-on-error'; then
+    if printf '%s' "$preflight_block" | grep -E '\|\| *true|\|\| *:([[:space:]]|$)|continue-on-error' >/dev/null; then
         bad "$REL: preflight-green contains \`|| true\`, \`|| :\`, or \`continue-on-error\` — its gate can be satisfied without actually being green"
         preflight_fail=1
     fi
@@ -485,9 +485,9 @@ else
         # Every nightly job named "multi-arch build (...)" is matched by that name
         # PREFIX in release.yml, never listed in watched=.
         nightly_multiarch="$(yq -r '.jobs | to_entries[] | select((.value.name // "") | test("^multi-arch build \\(")) | .key' "$NIGHTLY" 2>/dev/null)"
-        printf '%s\n' "$nightly_multiarch" | grep -qx 'buildx-smoke' \
+        printf '%s\n' "$nightly_multiarch" | grep -x 'buildx-smoke' >/dev/null \
             || { bad "$NIGHTLY: buildx-smoke no longer has a \`multi-arch build (...)\` name — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
-        printf '%s\n' "$nightly_needs_raw" | grep -qx 'buildx-smoke' \
+        printf '%s\n' "$nightly_needs_raw" | grep -x 'buildx-smoke' >/dev/null \
             || { bad "$NIGHTLY: notify-new-lanes.needs no longer lists buildx-smoke — release.yml's separate matrix-row handling for it is now pointing at nothing"; preflight_fail=1; }
         nightly_watched_sorted="$(printf '%s\n' "$nightly_needs_raw" | grep -vxF -f <(printf '%s\n' "$nightly_multiarch") | sort)"
         rel_watched_sorted="$(printf '%s\n' $rel_watched | sort)"
@@ -558,11 +558,11 @@ else
     for n in $published; do
         want="$(printf '%s\n' "$rel_pairs" | grep -E "^$n " || true)"
         [ -n "$want" ] || { bad "$REL: published image '$n' has no matrix row with a dockerfile — guard 16 cannot compare it"; stage_fail=1; continue; }
-        printf '%s\n' "$staged_pairs" | grep -qxF "$want" \
+        printf '%s\n' "$staged_pairs" | grep -xF "$want" >/dev/null \
             || { bad "$NIGHTLY: published image '$n' has no staged row with release.yml's dockerfile ('$want') in buildx-smoke (stage: \"true\") or buildx-smoke-ui-sandbox — a release would have nothing to promote"; stage_fail=1; }
     done
     for n in $(printf '%s\n' "$staged_pairs" | awk '{print $1}'); do
-        printf '%s\n' "$published" | grep -qx "$n" \
+        printf '%s\n' "$published" | grep -x "$n" >/dev/null \
             || { bad "$NIGHTLY: staged image '$n' is not in $REL's publish set — a local-only or vendor-CLI image must never be pushed to staging"; stage_fail=1; }
     done
     for n in $(yq -r '.jobs.images.strategy.matrix.include[].name' "$REL"); do
@@ -599,7 +599,7 @@ else
     [ "$got_base" = "$want_base" ] \
         || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's build-args must be exactly '$want_base' (the staged agent-base digest), not '$got_base'"; stage_fail=1; }
     base_run="$(yq -r '.jobs["buildx-smoke-ui-sandbox"].steps[] | select(.id == "base") | .run' "$NIGHTLY")"
-    printf '%s' "$base_run" | grep -qF '@sha256:[0-9a-f]{64}$' \
+    printf '%s' "$base_run" | grep -F '@sha256:[0-9a-f]{64}$' >/dev/null \
         || { bad "$NIGHTLY: buildx-smoke-ui-sandbox's base step no longer checks the ref is an @sha256 digest"; stage_fail=1; }
     # The promote job copies these digests, so its rows are the build jobs' rows
     # (name, dockerfile, float-latest) and preflight-green's staging step keeps
@@ -620,16 +620,16 @@ else
     nocomment() { sed -E '/^[[:space:]]*#/d'; }
     staging_run="$(yq -r '.jobs["preflight-green"].steps[] | select(.id == "staging") | .run' "$REL" | nocomment)"
     for pat in '^[[:space:]]*gh attestation verify ' '^[[:space:]]*--signer-workflow ' '^[[:space:]]*--source-digest ' 'org\.opencontainers\.image\.revision' '\-gt 86400 \]'; do
-        printf '%s' "$staging_run" | grep -qE -- "$pat" \
+        printf '%s' "$staging_run" | grep -E -- "$pat" >/dev/null \
             || { bad "$REL: preflight-green's staging step no longer has a command matching '$pat' — a promoted digest would lose part of its proof (attestation call, signer workflow, source commit, revision label, 86400-second age limit)"; stage_fail=1; }
     done
     # The age is the run's created_at: updated_at moves on `gh run rerun --failed`
     # while the image jobs it keeps stay as old as they were.
-    printf '%s' "$staging_run" | grep -qE -- '--jq \.created_at' && ! printf '%s' "$staging_run" | grep -q 'updated_at' \
+    printf '%s' "$staging_run" | grep -E -- '--jq \.created_at' >/dev/null && ! printf '%s' "$staging_run" | grep 'updated_at' >/dev/null \
         || { bad "$REL: preflight-green's staging step must read the nightly run's .created_at for its age and never updated_at (a rerun refreshes updated_at, so stale images would pass)"; stage_fail=1; }
     promote_copy="$(yq -r '.jobs.promote.steps[] | select(.name | test("^Copy the verified digest")) | .run' "$REL" | nocomment)"
-    printf '%s' "$promote_copy" | grep -qE '^[[:space:]]*cosign copy --force ' \
-        && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
+    printf '%s' "$promote_copy" | grep -E '^[[:space:]]*cosign copy --force ' >/dev/null \
+        && printf '%s' "$promote_copy" | grep -F 'test "$got" = "$DIGEST"' >/dev/null \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
@@ -661,7 +661,7 @@ missing="$(comm -23 <(printf '%s\n' "$from_keys") <(printf '%s\n' "$listed_keys"
 # A workflow naming the GHCR copy directly (the Postgres service containers)
 # must name a digest the mirror actually copies.
 for d in $(git grep -hoE 'ghcr\.io/cjohnstoniv/base-images[^[:space:]"'\'']*@sha256:[0-9a-f]{64}' -- .github/workflows | sed -E 's/.*@//' | sort -u); do
-    printf '%s\n' "$listed_keys" | grep -qF "@$d" \
+    printf '%s\n' "$listed_keys" | grep -F "@$d" >/dev/null \
         || { bad ".github/workflows names ghcr.io/cjohnstoniv/base-images@$d, which $BASE_LIST does not list (so it is never mirrored)"; mirror_fail=1; }
 done
 if [ "$mirror_fail" = 0 ]; then ok "every Docker Hub FROM pin ($(printf '%s\n' "$from_keys" | wc -l | tr -d ' ')) and every base-images digest a workflow names is in $BASE_LIST"; fi
@@ -684,7 +684,7 @@ else
     for job in $jobs; do
         has_if="$(yq -r ".jobs[\"$job\"].if // \"\"" "$NIGHTLY")"
         case "$job" in notify-*) want_skip=no ;; *) want_skip=yes ;; esac
-        printf '%s\n' "$scope_needs" | grep -qx "$job" && want_skip=no
+        printf '%s\n' "$scope_needs" | grep -x "$job" >/dev/null && want_skip=no
         if [ "$want_skip" = yes ] && [ "$has_if" != "$scope_if" ]; then
             bad "$NIGHTLY: job '$job' is not watched (not in notify-new-lanes.needs) so it must carry \`if: $scope_if\`, or scope=candidate runs it for nothing"; scope_fail=1
         fi
@@ -725,7 +725,7 @@ RELEASE_YML="${RELEASE_YML:-.github/workflows/release.yml}"
 if ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*licenses/texts' "$RELEASE_YML" \
     || ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*THIRD-PARTY-NOTICES\.md' "$RELEASE_YML"; then
     bad "$RELEASE_YML: 'Assemble the asset set' does not build assets/wardyn-licenses.tar.gz from licenses/texts and THIRD-PARTY-NOTICES.md"
-elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep -q 'wardyn-licenses\.tar\.gz'; then
+elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep 'wardyn-licenses\.tar\.gz' >/dev/null; then
     bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
 else
     ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"

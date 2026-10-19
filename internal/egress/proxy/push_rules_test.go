@@ -680,7 +680,8 @@ func TestPushRulesGlobMatching(t *testing.T) {
 // deny_paths count cap left reachable: a member authoring a deny list as long
 // as a 1 MiB policy body allows, against a push carrying as many changed paths
 // as the inspector allows. The matcher must refuse rather than grind — an
-// unevaluated rule may not read as a pass — and it must do so in bounded time.
+// unevaluated rule may not read as a pass — and the refusal is its work count
+// (errGlobBudget) running out.
 func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 	deny := make([]string, 131_000)
 	for i := range deny {

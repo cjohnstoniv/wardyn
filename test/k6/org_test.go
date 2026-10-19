@@ -55,9 +55,10 @@ type orgEnv struct {
 
 // lapseRun is self-lapse-end-to-end's run: renewed once, then ended at the org behind runnerd's back.
 type lapseRun struct {
-	id     string
-	marked time.Time
-	err    string
+	id       string
+	marked   time.Time
+	err      string
+	proxyLog <-chan string // the proxy container's log, streamed since before the mark
 }
 
 // fencedProxy is fence-live-http2's run, fenced while its node's kubelet is stopped so its proxy lives on.
@@ -720,6 +721,10 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 			}
 			time.Sleep(3 * time.Second)
 		}
+		// Streamed from before the mark, so the lapse line survives the pod's deletion. Killed at the
+		// suite's end, like the run.
+		o.lapse.proxyLog = lines(parent, exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS,
+			"logs", "-f", "pod/wardyn-proxy-"+id, "-c", "wardyn-proxy"))
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",
 			"UPDATE agent_runs SET state = 'FAILED', sandbox_ref = '' WHERE id = '"+id+"'")
 		o.lapse.marked = time.Now()
@@ -747,18 +752,19 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		return r.Action == "identity.renew" && r.Outcome == "denied"
 	})
 	note(t, "renew refused at the org %s after the run was ended: %s", time.Since(o.lapse.marked).Round(time.Second), row.Data)
-	deadline := time.Now().Add(2 * time.Minute)
-	for {
-		out, err := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy").CombinedOutput()
-		// runnerd deletes the proxy pod as soon as the proxy lapses, so a first read can find it gone: that
-		// pod existed in the setup and is deleted only by the lapse, which is what this loop waits to see.
-		if strings.Contains(string(out), "refused permanently, lapsing") || (err != nil && strings.Contains(string(out), "NotFound")) {
-			break
+	// Only the proxy's own line proves the lapse: runnerd deletes the proxy pod once the proxy lapses, but
+	// the org's orphan sweep of a terminal run deletes it too, so a missing pod proves nothing.
+	timer := time.After(2 * time.Minute)
+	for last := ""; !strings.Contains(last, "refused permanently, lapsing"); {
+		select {
+		case l, ok := <-o.lapse.proxyLog:
+			if !ok {
+				t.Fatalf("proxy log ended without the lapse line (the pod went before the proxy lapsed); last line: %s", last)
+			}
+			last = l
+		case <-timer:
+			t.Fatalf("proxy log shows no lapse 2 min after the refusal; last line: %s", last)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("proxy log shows no lapse 2 min after the refusal: %s", tail(string(out), 600))
-		}
-		time.Sleep(2 * time.Second)
 	}
 	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-proxy-"+id, "--timeout=300s")
 	if got := o.connect(t, id, "example.com:443"); got == "status 200" {
