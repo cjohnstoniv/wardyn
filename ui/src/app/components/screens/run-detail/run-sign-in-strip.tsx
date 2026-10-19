@@ -6,6 +6,7 @@
 // The waiting-sign-in strip above the login-sandbox note (approved 088 mock,
 // M2 section A): the code, the one link that finishes it, and what each state
 // of the read looks like. Nothing here takes focus; there is no dismiss.
+import * as React from "react";
 import { ExternalLink, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "../../ui/button";
 import { CopyButton } from "../../wardyn/copy-button";
@@ -28,9 +29,14 @@ function Opens({ url }: { url: string }) {
   );
 }
 
-export default function RunSignInStrip({ runId, createdAt }: { runId: string; createdAt: string }) {
+// onWaiting runs each time a waiting answer (a device code and its link) is put
+// on screen: the sign-in pane moves its step list on it (#3235).
+export default function RunSignInStrip({ runId, createdAt, onWaiting }: { runId: string; createdAt: string; onWaiting?: () => void }) {
   const read = useRunSignIn(runId, createdAt, true);
   const w = read.waiting;
+  React.useEffect(() => {
+    if (w) onWaiting?.();
+  }, [w, onWaiting]);
   return (
     <>
       {!w && !read.ended && !read.failed && read.checking && (
