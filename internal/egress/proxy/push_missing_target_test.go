@@ -204,3 +204,51 @@ func TestPushRulesPassAPushThatAddsNoNewCommits(t *testing.T) {
 		}
 	})
 }
+
+// TestPushRulesTagAtAVouchedCommit: under git_push_any_branch a tag push is not
+// confined to the run's branch. A lightweight tag at a commit the default branch
+// holds sends no object, so the forge lookup clears it. An annotated tag at the
+// same commit carries its tag object, so the request is not object-free and the
+// commit it peels to is not carried: it is refused, naming the tag.
+func TestPushRulesTagAtAVouchedCommit(t *testing.T) {
+	spec := contentRulesSpec(".github/workflows/**")
+	spec.GitPushAnyBranch = true
+	forgeHasTag := func(r *forgeRun, tag string) bool {
+		return exec.Command("git", "-C", r.bare, "rev-parse", "-q", "--verify", "refs/tags/"+tag).Run() == nil
+	}
+	pushTag := func(r *forgeRun, tag string) (string, error) {
+		cmd := exec.Command("git", "push", "origin", "refs/tags/"+tag)
+		cmd.Dir, cmd.Env = r.work, gitEnv()
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	t.Run("a lightweight tag passes", func(t *testing.T) {
+		r := newForgeRunSpec(t, "", spec, ordinaryRepo, nil)
+		runGit(t, r.work, "tag", "v1")
+		if out, err := pushTag(r, "v1"); err != nil {
+			t.Fatalf("lightweight tag push refused: %v\n%s\nrefusal: %s", err, out, r.lastRefusal())
+		}
+		if !forgeHasTag(r, "v1") {
+			t.Error("the forge does not hold refs/tags/v1")
+		}
+		if n, _ := r.forge.reads(); n == 0 {
+			t.Error("the tag passed without asking the forge")
+		}
+	})
+	t.Run("an annotated tag is refused", func(t *testing.T) {
+		r := newForgeRunSpec(t, "", spec, ordinaryRepo, nil)
+		runGit(t, r.work, "tag", "-a", "-m", "release", "v1")
+		out, err := pushTag(r, "v1")
+		if err == nil {
+			t.Fatalf("annotated tag push succeeded, want a refusal\n%s", out)
+		}
+		if got := r.lastRefusal(); !strings.Contains(got, "does not carry the commit these refs point to") ||
+			!strings.Contains(got, "refs/tags/v1") {
+			t.Errorf("refusal = %q, want the missing-target wording naming refs/tags/v1", got)
+		}
+		if forgeHasTag(r, "v1") {
+			t.Error("BYPASS: the forge holds the refused tag")
+		}
+	})
+}
