@@ -75,7 +75,7 @@ export function ModelProvidersList({
             <TableSkeleton rows={3} cols={3} />
           ) : data === "error" ? (
             <EmptyState
-              as="h4"
+              size="compact"
               icon={AlertTriangle}
               title={M.FETCH_FAILED_TITLE}
               description={M.FETCH_FAILED_BODY}

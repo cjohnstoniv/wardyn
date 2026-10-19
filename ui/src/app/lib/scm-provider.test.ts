@@ -107,7 +107,7 @@ describe("LANE_META — honesty canon", () => {
       "A stored git access token is attached to the request by the proxy on the outbound leg — it never enters the sandbox.",
     );
     expect(LANE_META.ssh.tooltip).toBe(
-      "A private SSH key is written to disk in the sandbox — the process running there can read it.",
+      "The proxy holds the SSH key and signs Git's SSH sign-in; no key file enters the sandbox.",
     );
   });
 
@@ -120,7 +120,7 @@ describe("LANE_META — honesty canon", () => {
   it("pins the chip labels verbatim (U+00B7 middle dot, not a hyphen)", () => {
     expect(LANE_META.app.label).toBe("App · brokered");
     expect(LANE_META.pat.label).toBe("PAT · brokered");
-    expect(LANE_META.ssh.label).toBe("SSH · resident");
+    expect(LANE_META.ssh.label).toBe("SSH · at the proxy");
   });
 
   it("pins each lane's chip tone", () => {
@@ -129,13 +129,13 @@ describe("LANE_META — honesty canon", () => {
     // lane, so it earns the same reassuring tone — "info" is the OFF
     // (in-sandbox) tone, pinned in the patLaneMeta describe block below.
     expect(LANE_META.pat.tone).toBe("success");
-    expect(LANE_META.ssh.tone).toBe("warning");
+    expect(LANE_META.ssh.tone).toBe("success");
   });
 
   it("pins each lane's residency — the fact a stored credential can actually produce", () => {
     expect(LANE_META.app.residency).toBe("brokered_mint");
     expect(LANE_META.pat.residency).toBe("proxy_injected");
-    expect(LANE_META.ssh.residency).toBe("resident_mount");
+    expect(LANE_META.ssh.residency).toBe("proxy_injected");
   });
 
   // #381: the PAT lane's label/tooltip/residency are chosen from the

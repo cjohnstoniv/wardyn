@@ -96,7 +96,14 @@ var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from it
 // pack at all. A push can miss one target and carry another, so it names every
 // ref that misses. It is not set for a target that is present but cannot be
 // read as a commit (wrong type, malformed tag, peel limit).
-type MissingObjectError struct{ Refs []string }
+type MissingObjectError struct {
+	Refs []string
+	// Commands is set only when the request carries no object at all (no
+	// pack, or a pack of none): the push adds nothing, and every ref it sets
+	// names an object the receiving side must already hold. A caller that can
+	// show the forge holds each one may read the push as carrying no content.
+	Commands []Command
+}
 
 func (e *MissingObjectError) Error() string {
 	return fmt.Sprintf("%v: the request does not carry the object these refs point to: %s",
@@ -247,7 +254,7 @@ func Inspect(body []byte) (Result, error) {
 			}
 		}
 		if len(missing) > 0 {
-			return Result{}, &MissingObjectError{Refs: missing}
+			return Result{}, &MissingObjectError{Refs: missing, Commands: cmds}
 		}
 		return res, nil
 	}
@@ -256,6 +263,10 @@ func Inspect(body []byte) (Result, error) {
 		return Result{}, err
 	}
 	if err := idx.coverCommands(cmds); err != nil {
+		var m *MissingObjectError
+		if errors.As(err, &m) && len(idx.byOID) == 0 {
+			m.Commands = cmds
+		}
 		return Result{}, err
 	}
 	if res.Changes, res.Bases, err = idx.changes(nil); err != nil {

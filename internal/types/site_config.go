@@ -202,8 +202,8 @@ type InternalHost struct {
 	// fc00::/7, or 100.64.0.0/10 (ipguard.Liftable) — never loopback/
 	// link-local/metadata/multicast/NAT64. Empty lifts the full Liftable set.
 	CIDRs []string `json:"cidrs,omitempty"`
-	// Baseline grades this host and EVERY subdomain as baseline egress, where
-	// SiteEgress.BaselineHosts names exact hosts. Default false, so declaring an
+	// Baseline grades this entry's own host as baseline egress, the exact host
+	// only and never a subdomain of it, as SiteEgress.BaselineHosts does. Default false, so declaring an
 	// internal host never changes a grade unless the operator says so. Set only
 	// through PUT /governance/egress-baseline (or the boot seed on an empty
 	// document): PUT /site-config refuses a changed set of marks.

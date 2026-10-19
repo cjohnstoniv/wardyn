@@ -389,10 +389,14 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 // userViewPreviewGate refuses a write in a preview (see userViewGate). It
 // compares typeID with the STAMPED type, not the view-aware one, which would
 // compare the view with itself. Written like the gate's other refusal rather
-// than through refuse: the api's human is not published yet.
+// than through refuse: the api's human is not published yet. A security admin
+// is governed whatever the switch says (runUngoverned), so their stamped type
+// bounds their view with it off too.
 func (s *Server) userViewPreviewGate(w http.ResponseWriter, r *http.Request, ctx context.Context, viewed string) *http.Request {
 	if !s.cfg.GovernAdminRuns {
-		return r
+		if superAdmin, ok := s.cfg.OIDC.UserViewSuperAdmin(r); !ok || superAdmin {
+			return r
+		}
 	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:

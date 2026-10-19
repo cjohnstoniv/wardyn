@@ -119,7 +119,6 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	if lerr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedUnreadable, fmt.Errorf("list workspaces: %w", lerr))
 	}
-	byPolicy := referencedWorkspacesIn(all, *spec)
 	sels := resolveWorkspaceSelections(*req)
 	var newMounts []types.WorkspaceMount
 	var newRepos []types.WorkspaceRepo
@@ -133,6 +132,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		// workspace_id keeps its older rule and seeds every source; a workspaces[]
 		// entry the policy already attaches only adds its options (the console's
 		// custom policy carries the sources itself).
+		// The policy attaches ws when it names a source ws carries: an attached
+		// workspace is the carrier the run uses for its own sources (runCarrierRule).
+		byPolicy := referencedWorkspacesBy(runCarrierRule{attached: []types.Workspace{ws}}.index(all), *spec)
 		if (req.WorkspaceID == nil || *req.WorkspaceID != id) && slices.ContainsFunc(byPolicy, func(p types.Workspace) bool { return p.ID == id }) {
 			if sel.Target != "" || sel.Repos != nil {
 				return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf(

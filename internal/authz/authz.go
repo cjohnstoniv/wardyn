@@ -120,7 +120,8 @@ type Decision struct {
 	WireReason Reason `json:"wire_reason,omitempty"`
 	// Policy names the policy whose ceiling caused the refusal and how to ask for
 	// a change. Set only by a ceiling door, and written to the wire by the HTTP
-	// refusal emitter, never into the audit datum (Datum reads none of it). The
+	// refusal emitter. The audit datum reads only its layer and the leaf's name
+	// (Datum), never the contact. The
 	// emitter leaves it off a decision with a WireReason and off an EffectHidden
 	// one: a hidden door must stay byte-identical to a missing resource.
 	Policy      *policyref.Ref    `json:"policy,omitempty"`
@@ -165,10 +166,12 @@ func (d Decision) AsIf(reason Reason) Decision {
 	return d
 }
 
-// WithPolicy is d naming ref as the policy that bound the person. A nil ref
-// leaves d unchanged.
+// WithPolicy is d naming ref as the policy that bound the person, stamped with
+// the layer kind it names (policyref.Layered), so every ceiling
+// refusal says which layer refused it, on the wire and in its audit row. A nil
+// ref leaves d unchanged.
 func (d Decision) WithPolicy(ref *policyref.Ref) Decision {
-	d.Policy = ref
+	d.Policy = policyref.Layered(ref)
 	return d
 }
 
@@ -203,7 +206,7 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type", "dry_run"}
+var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type", "dry_run", "layer", "layer_name"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no request
 // carried it). A detail never stands in for a reserved key, so it can never forge the
@@ -228,6 +231,14 @@ func Datum(d Decision, p Principal, method string) map[string]any {
 	}
 	if p.Origin.DeviceID != nil {
 		m["device_channel"] = map[string]any{"device_id": p.Origin.DeviceID.String()}
+	}
+	// The layer a ceiling refusal names, and the leaf profile's name; never its
+	// contact, which is a person's.
+	if ref := policyref.Layered(d.Policy); ref != nil && ref.Layer != "" {
+		m["layer"] = ref.Layer
+		if ref.Layer == policyref.LayerProfile && ref.Name != "" {
+			m["layer_name"] = ref.Name
+		}
 	}
 	var dropped []string
 	for _, o := range d.Obligations {

@@ -11,6 +11,7 @@ import {
   ACTIVITY_HEADER,
   ACTIVITY_WINDOW_MS,
   listenForInput,
+  noteSessionExpiry,
   onSessionExpiry,
   SESSION_EXPIRES_HEADER,
   sessionExpiry,
@@ -90,5 +91,22 @@ describe("wfetch and the session expiry the server names", () => {
     expect(sessionExpiry()).toBe(renewed.getTime());
     expect(heard).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+// A slower, older answer arrives after a newer one: it must not move the expiry back, or an attached terminal
+// closing with the auth-ended code would refuse to reconnect on a live cookie. A LATER request that names an
+// earlier expiry (a sign-out, a revoke) is still the truth and still applies.
+describe("noteSessionExpiry ordering", () => {
+  it("ignores an answer to a request that started before the one the current value came from", () => {
+    const t = Date.now() + 120_000;
+    const newer = t + 3_600_000;
+    noteSessionExpiry(new Date(newer).toISOString(), t + 2);
+    noteSessionExpiry(new Date(t + 1_800_000).toISOString(), t + 1);
+    expect(sessionExpiry()).toBe(newer);
+
+    const shortened = t + 600_000;
+    noteSessionExpiry(new Date(shortened).toISOString(), t + 3);
+    expect(sessionExpiry()).toBe(shortened);
   });
 });

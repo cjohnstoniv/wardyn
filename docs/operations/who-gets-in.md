@@ -118,13 +118,14 @@ A console session is a signed cookie: nothing re-contacts the identity provider 
 - A sliding session never asks the identity provider. A person disabled there keeps it until the cap, or until an admin runs `wardyn session revoke`; `WARDYN_OIDC_SILENT_REAUTH` acts only at the next sign-in.
 - Pair a long session with `WARDYN_ROLE_STAMP_TTL`, or a person disabled only at the identity provider keeps the console until the session ends.
 - The console never renews a session with the provider's refresh token; `WARDYN_OIDC_SILENT_REAUTH` signs a returning browser in without interaction instead, where the provider allows `prompt=none`.
-- Three more knobs change how a session feels; all default off, so the default stays the identity-provider-bound shape above.
+- Four more knobs change how a session feels or ends; all default off, so the default stays the identity-provider-bound shape above.
 
   | Setting | Effect |
   |---|---|
   | `WARDYN_OIDC_LOGIN_HINT` | A browser that signed in sends that account as `login_hint` on its next sign-in, so a renewal prompt skips the account picker |
   | `WARDYN_OIDC_BROWSER_SESSION_COOKIE` | The session cookie carries no expiry, so the browser drops it when it closes; by default the cookie persists until the session ends |
   | `WARDYN_OIDC_SILENT_REAUTH` | A returning browser signs in without interaction where the provider allows `prompt=none` |
+  | `WARDYN_OIDC_BACKCHANNEL_LOGOUT` | The provider's back-channel logout token ends that person's console sessions |
 
 - The trade-off: by default an active person meets a renewal prompt about every hour, and closing a browser on a shared machine does not end the session.
   - A sliding session removes the interruptions, but a person disabled only at the identity provider keeps console access until the cap.

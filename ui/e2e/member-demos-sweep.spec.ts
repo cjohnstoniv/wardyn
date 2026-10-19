@@ -52,7 +52,7 @@ const UNWALKABLE = [
   "authorized-not-issued",
   "rest-api-token",
   "pat-stdout-only",
-  "ssh-briefly-resident",
+  "ssh-at-the-proxy",
 ] as const;
 
 // The catalog's own titles, not re-typed here — a row renders `demo.title`

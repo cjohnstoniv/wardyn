@@ -183,7 +183,7 @@ export function SignInHelpCard() {
           {!previewText && !previewUrl && <p className="text-xs text-muted-foreground">{SIGNIN_HELP.EMPTY_NOTE}</p>}
 
           <div className="rounded-lg border border-border bg-surface-2 p-4">
-            <p className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="label-eyebrow">
               {SIGNIN_HELP.PREVIEW_HEADING}
             </p>
             <div className="mt-2 flex items-start gap-2 rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger">

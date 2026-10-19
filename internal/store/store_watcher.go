@@ -89,6 +89,16 @@ func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter 
 	return collect(ctx, s.Pool, "claim", "stale run watchers", q, []any{owner, staleAfter.String()}, scanRun)
 }
 
+// ReleaseUncreatedRunWatcher clears id's lease owner while no sandbox is recorded for it: the
+// dispatch that held it returned without creating one, so nothing is in flight for
+// MemberDriveOwnerStarting to count. The heartbeat is left as it is.
+func (s PG) ReleaseUncreatedRunWatcher(ctx context.Context, id uuid.UUID) error {
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET watcher_owner = '' WHERE id = $1 AND sandbox_ref = ''`, id); err != nil {
+		return fmt.Errorf("store: release an uncreated run's watcher lease: %w", err)
+	}
+	return nil
+}
+
 // HeartbeatRunWatcher refreshes the lease on id for owner: the "still
 // watching" write every watcher goroutine repeats while alive; its silence
 // lets another replica's ClaimStaleRunWatchers take over.

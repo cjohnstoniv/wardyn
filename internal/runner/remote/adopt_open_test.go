@@ -34,6 +34,9 @@ func TestHandleOpenDefersAnOpenAheadOfTheRecovery(t *testing.T) {
 		recovering, capped bool
 	}{
 		{"ahead while recovering", 0, 1, true, true},
+		// The recovery resumes at the first retained part's start while the runner's Ack sits inside
+		// that part: the OPEN from the Ack is ahead by bytes, whatever the part boundaries.
+		{"from an Ack inside the first retained part", 1 << 20, 1<<20 + 100, true, true},
 		{"ahead once recovered", 0, 1, false, false},
 		{"at the sink while recovering", 5, 5, true, false},
 		{"behind the sink while recovering", 5, 3, true, false},

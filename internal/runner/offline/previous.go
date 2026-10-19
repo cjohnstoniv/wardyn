@@ -11,11 +11,16 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/google/uuid"
 )
+
+// setAsideCallBound bounds one run's proof and proxy stop in SetAsidePrevious, the per-call safety
+// bound this package gives an engine call; a var so a test can shorten it.
+var setAsideCallBound = 30 * time.Second
 
 // SetAsidePrevious moves the run state an earlier registration left in stateDir (its offline state,
 // spools and output) into stateDir/previous/<its runner id>, once the proxy of every run that state
@@ -56,16 +61,26 @@ func SetAsidePrevious(ctx context.Context, stateDir string, runnerID uuid.UUID, 
 		}
 		// A container under the run's name that the earlier registration did not create is left alone:
 		// names are unique on an engine, so none of that registration's is running under it.
+		// Each run's proof and stop has its own bound, so a hung engine cannot hold the serve start.
+		call, cancel := context.WithTimeout(ctx, setAsideCallBound)
 		err := fmt.Errorf("substrate cannot prove a sandbox is this runner's: %w", runner.ErrNotRunnerSandbox)
 		if prover != nil {
-			err = prover.ProveRunnerSandbox(ctx, r.Ref, old.RunnerID.String())
+			err = prover.ProveRunnerSandbox(call, r.Ref, old.RunnerID.String())
 		}
 		if errors.Is(err, runner.ErrNotRunnerSandbox) {
+			cancel()
 			slog.WarnContext(ctx, "runner: could not prove a container is one the earlier registration created; left it alone", "ref", r.Ref, "runner", old.RunnerID, "err", err)
 			continue
 		}
 		if err == nil {
-			err = stopper.StopProxy(ctx, r.Ref)
+			err = stopper.StopProxy(call, r.Ref)
+		}
+		timedOut := call.Err() != nil && ctx.Err() == nil
+		cancel()
+		if timedOut {
+			// The engine did not answer for this container; the rest would wait the same way.
+			failed = append(failed, fmt.Errorf("the container engine did not answer within %s for %s: %w", setAsideCallBound, r.Ref, err))
+			break
 		}
 		if err != nil {
 			failed = append(failed, err)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -52,10 +53,24 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 				if !hostrules.ValidApprovedHost(d) {
 					return nil, reasonWorkspaceApprovedEgressInvalid, "invalid domain (plain lowercase host, no scheme/port/wildcard): " + d
 				}
-				if _, dead := deadHosts[d]; dead {
+				if deadApprovedEgressHost(deadHosts, d) {
 					return nil, reasonWorkspaceApprovedEgressDeadHost, "host " + d + " is already routed specially (git broker / control plane) — a direct ApprovedEgress entry for it is never consulted"
 				}
 				set[d] = struct{}{}
+			}
+			// Deny beats allow at the proxy, so an approval of a denied host would answer 200 and change
+			// nothing. Refused, never resolved by dropping the host from the deny list: that is an undo of
+			// a deny, which belongs to PUT denied-egress. A failed read skips the check rather than the
+			// write: the proxy still applies the deny, so this check only keeps the answer honest.
+			if id, err := uuid.Parse(chi.URLParam(r, "id")); err == nil && len(set) > 0 {
+				if ws, err := s.cfg.Store.GetWorkspace(r.Context(), id); err == nil {
+					for _, d := range ws.DeniedEgress {
+						d = strings.ToLower(strings.TrimSpace(d))
+						if _, approving := set[d]; approving {
+							return nil, reasonWorkspaceApprovedEgressDenied, "host " + d + " is on this workspace's denied egress list, and a deny beats an approval — remove it from the denied list first"
+						}
+					}
+				}
 			}
 			return sortedKeys(set), "", ""
 		},

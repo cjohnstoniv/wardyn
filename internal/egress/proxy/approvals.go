@@ -39,6 +39,10 @@ const (
 	// apRefused: the control plane refused to raise this host's approval for good (a per-run cap, a
 	// request it will not accept). Settled like apCapped: the next request is refused without a re-POST.
 	apRefused
+	// apExpired: the approval EXPIRED or was CANCELLED undecided. Nobody said no, so it is never cached:
+	// Resolve forgets the host, this request is refused, and the next one raises a fresh approval that
+	// still needs a human yes. Only a request that saw the expiry gets this state.
+	apExpired
 )
 
 // approvalClient implements the first-use approval flow against the control
@@ -81,7 +85,14 @@ type hostApproval struct {
 	// once/run/always entry, or an `until` an older peer sent with no expiry —
 	// behaving like run is the honest read of that shape).
 	expiresAt time.Time
+	// holdStart is when the control plane last learned that a hold began on approvalID: the raise,
+	// or the last rejoin (see claimRejoin).
+	holdStart time.Time
 }
+
+// rejoinGap is how long after holdStart a further held request counts as re-entering the hold
+// (a rejoin the control plane is told of) rather than as a sibling of the hold under way.
+var rejoinGap = time.Second
 
 const pollInterval = 2 * time.Second
 
@@ -135,6 +146,8 @@ func approvalPendingReason(st approvalState) string {
 		return ruleSourceApprovalHostCap
 	case apRefused:
 		return ruleSourceApprovalRefused
+	case apExpired:
+		return ruleSourceApprovalExpired
 	}
 	return "approval:pending"
 }
@@ -147,6 +160,15 @@ const ruleSourceApprovalHostCap = "approval:host-cap"
 // ruleSourceApprovalRefused is the decision-log reason when the control plane refused the raise for good:
 // no approval row exists, so nobody is being asked.
 const ruleSourceApprovalRefused = "approval:refused"
+
+// ruleSourceApprovalExpired is the decision-log reason for a request refused because the host's
+// approval expired or was cancelled with nobody deciding it: not a human deny, and the next request asks again.
+const ruleSourceApprovalExpired = "approval:expired"
+
+// forget drops a host's entry back to never-seen, so the next Resolve raises a fresh approval.
+func (st *hostApproval) forget() {
+	*st = hostApproval{state: apNone}
+}
 
 // approvalCapWarnOnce keeps the cap's log line to once per process: the
 // condition is a run-long state, and a per-request ERROR would bury it.
@@ -272,7 +294,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		}
 		r = a.Resolve(ctx, host)
 	}
-	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.ApprovalID == uuid.Nil {
+	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.State == apExpired || r.ApprovalID == uuid.Nil {
 		return r
 	}
 	// Bound concurrent holds: over the cap, don't park another goroutine — fall
@@ -282,6 +304,9 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		defer func() { <-a.holdSem }()
 	default:
 		return r
+	}
+	if a.claimRejoin(host, r.ApprovalID) {
+		a.rejoin(ctx, host, r.ApprovalID)
 	}
 
 	timeout := time.NewTimer(a.holdTimeout)
@@ -318,6 +343,10 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 					// r.ApprovalID (never Nil, never st.approvalID) so evaluate's audit
 					// log names the approval this caller actually raised.
 					return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
+				}
+				if newState == apExpired {
+					st.forget()
+					return resolveResult{State: apExpired, ApprovalID: r.ApprovalID}
 				}
 				// (2) Publish the terminal decision to the shared cache so siblings
 				// see it without re-polling; harmless for once since step (3) clears
@@ -454,6 +483,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			st.state = apPending
 			st.approvalID = newID
 			st.lastPoll = time.Now()
+			st.holdStart = st.lastPoll
 		}
 		return resolveResult{State: apPending, ApprovalID: st.approvalID}
 	case needPoll:
@@ -472,6 +502,10 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			// st.approvalID may be Nil (entry reset, not yet re-raised); that
 			// costs ResolveWait's retry loop one extra iteration.
 			return resolveResult{State: apPending, ApprovalID: st.approvalID}
+		}
+		if decided && newState == apExpired {
+			st.forget()
+			return resolveResult{State: apExpired, ApprovalID: id}
 		}
 		if decided {
 			// SPLIT from the id check ABOVE ON PURPOSE: !decided is a TRANSIENT
@@ -510,18 +544,49 @@ type egressScope struct {
 type raiseBody struct {
 	Kind           string      `json:"kind"`
 	RequestedScope egressScope `json:"requested_scope"`
+	// RejoinID names the PENDING approval a held request re-enters the hold on (see rejoin).
+	RejoinID string `json:"rejoin_id,omitempty"`
 }
 
 func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, error) {
-	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
-	if a.firstUseMode == types.FirstUseWaitForReview {
-		scope.HoldSeconds = int(a.holdTimeout / time.Second)
-	}
-	body, err := json.Marshal(raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope})
+	body, err := json.Marshal(a.egressRaise(host))
 	if err != nil {
 		return uuid.Nil, err
 	}
 	return a.raiseBytes(ctx, body)
+}
+
+func (a *approvalClient) egressRaise(host string) raiseBody {
+	scope := egressScope{Host: host, Mode: string(a.firstUseMode)}
+	if a.firstUseMode == types.FirstUseWaitForReview {
+		scope.HoldSeconds = int(a.holdTimeout / time.Second)
+	}
+	return raiseBody{Kind: string(types.ApprovalEgressDomain), RequestedScope: scope}
+}
+
+// claimRejoin reports whether this hold on approval id re-enters it (rejoinGap or more after the
+// hold the control plane last learned of), claiming the rejoin so siblings held with it send none.
+func (a *approvalClient) claimRejoin(host string, id uuid.UUID) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.hosts[host]
+	if st == nil || st.approvalID != id || time.Since(st.holdStart) < rejoinGap {
+		return false
+	}
+	st.holdStart = time.Now()
+	return true
+}
+
+// rejoin tells the control plane that a held request re-entered the hold on the PENDING approval
+// id, so the console reads the row as held for this hold too (approval.Hold measures from the
+// rejoin). The raise body names the row, so the control plane stamps it and never creates one, even
+// if it was decided meanwhile. Best effort: a failure leaves only the console's reading behind.
+func (a *approvalClient) rejoin(ctx context.Context, host string, id uuid.UUID) {
+	rb := a.egressRaise(host)
+	rb.RejoinID = id.String()
+	if body, err := json.Marshal(rb); err == nil {
+		_, _ = a.raiseBytes(ctx, body)
+	}
 }
 
 // raiseRefusedError is a raise the control plane answered with a refusal that
@@ -567,7 +632,7 @@ func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID
 }
 
 // poll fetches an approval's current state. Returns decided=true only for
-// terminal states; EXPIRED is treated as denied (fail closed).
+// terminal states; EXPIRED and CANCELLED are apExpired (refused, never cached).
 //
 // Also returns the DECISION'S SCOPE and expiry for the caller to store onto
 // the cache entry — without it, every scope decided while PENDING (the normal
@@ -587,11 +652,12 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	switch ar.State {
 	case types.ApprovalApproved:
 		return true, apApproved, ar.DecisionScope, exp
-	case types.ApprovalDenied, types.ApprovalExpired, types.ApprovalCancelled:
-		// EXPIRED/CANCELLED carry no scope (not a human decision); both MUST be
-		// terminal here, else a sidecar whose run ended would hold its window
-		// open against an approval nobody can ever decide.
+	case types.ApprovalDenied:
 		return true, apDenied, ar.DecisionScope, exp
+	case types.ApprovalExpired, types.ApprovalCancelled:
+		// Terminal, so a sidecar whose run ended never holds its window open against an approval nobody
+		// can decide; but not a human decision, so apExpired, which the caller never caches.
+		return true, apExpired, "", time.Time{}
 	default:
 		return false, apPending, "", time.Time{}
 	}

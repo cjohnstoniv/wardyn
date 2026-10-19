@@ -437,6 +437,17 @@ configure_git_pat_broker_insteadof() {
     done
 }
 
+# close_ssh_agent closes the run proxy's ssh agent for the rest of the run
+# (internal/egress/proxy/ssh_agent.go): it serves an ssh_key grant's SSH sign-in
+# for the start-up clones only, so every start script calls this once they are
+# done. No-op without WARDYN_SSH_GRANTS; idempotent; never fatal.
+close_ssh_agent() {
+    [[ -n "${WARDYN_SSH_GRANTS:-}" && "${WARDYN_SSH_GRANTS}" != "{}" ]] || return 0
+    local proxy="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
+    curl -fsS --noproxy '*' -X POST "${proxy%/}/wardyn/v1/ssh-agent/close" >/dev/null 2>&1 \
+        || echo "agent-run: WARNING could not close the proxy's ssh agent" >&2
+}
+
 # ── run branch (push branch-namespace confinement) ───────────────────────────
 # name_run_branch <repo-dir> — check a freshly-cloned repo out onto THIS run's own
 # branch, `wardyn/$WARDYN_RUN_ID/work`.
@@ -549,6 +560,9 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         echo "agent-run: clone OK (${dest} @ ${ref}, via fetch)" >&2
         name_run_branch "$dest"
     else
+        # Leave dest as the attempt found it (empty): a bare .git left here would read as a
+        # populated checkout to the next start, which then never retries.
+        find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
         ado_lane_hint "${slug:-$url}" "$url"
     fi

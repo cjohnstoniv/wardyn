@@ -163,8 +163,8 @@ if [[ -n "$SB1" ]]; then
   # so; scenario 2's harness base carries curl and proves the same two
   # properties for real, so the coverage moves rather than disappearing.
   if docker exec "$SB1" sh -c 'command -v curl >/dev/null 2>&1'; then
-    check "run1 curl api.anthropic.com trusts the proxy CA" 'docker exec "$SB1" sh -c "curl -s -o /dev/null -w %{http_code} https://api.anthropic.com/ 2>/dev/null" | grep -qE "^(4|2)"'
-    check "run1 off-allowlist host is proxy-denied" 'docker exec "$SB1" sh -c "curl -s -m 5 -o /dev/null -w %{http_code} https://example.org/ 2>/dev/null" | grep -qvE "^200"'
+    check "run1 curl api.anthropic.com trusts the proxy CA" 'docker exec "$SB1" sh -c "curl -s -o /dev/null -w %{http_code} https://api.anthropic.com/ 2>/dev/null" | grep -E "^(4|2)" >/dev/null'
+    check "run1 off-allowlist host is proxy-denied" 'docker exec "$SB1" sh -c "curl -s -m 5 -o /dev/null -w %{http_code} https://example.org/ 2>/dev/null" | grep -vE "^200" >/dev/null'
   else
     skip "run1 proxy-CA trust + off-allowlist deny" "the stock base ubuntu:24.04 ships no curl; scenario 3 proves both on a live sandbox whose base has one"
   fi
@@ -210,12 +210,12 @@ if [[ -n "$SB3" ]]; then
     # proxy.golang.org is examples/policies/demo.json's allowed_domains entry —
     # the same file the desktop tier ships as its managed ceiling.
     check "run3 an allowed host reaches through the proxy" \
-      'docker exec "$SB3" sh -c "curl -s -m 15 -o /dev/null -w %{http_code} https://proxy.golang.org/" 2>/dev/null | grep -qE "^2"'
+      'docker exec "$SB3" sh -c "curl -s -m 15 -o /dev/null -w %{http_code} https://proxy.golang.org/" 2>/dev/null | grep -E "^2" >/dev/null'
     # DENY side: an off-allowlist host is refused AND says why. The reason
     # header is the sandbox's only signal for "retry after approval" vs
     # "permanently blocked" (internal/egress/proxy/egress_headers.go).
     check "run3 an off-allowlist host is refused with a reason header" \
-      'docker exec "$SB3" sh -c "curl -sv -m 8 -o /dev/null https://example.org/ 2>&1 | grep -i x-wardyn-egress" 2>/dev/null | grep -qiE "denied|approval-pending"'
+      'docker exec "$SB3" sh -c "curl -sv -m 8 -o /dev/null https://example.org/ 2>&1 | grep -i x-wardyn-egress" 2>/dev/null | grep -iE "denied|approval-pending" >/dev/null'
   else
     skip "run3 proxy allow/deny behaviour" "the hostile base carries no curl — rebuild it with one, or these two properties go unproven"
   fi

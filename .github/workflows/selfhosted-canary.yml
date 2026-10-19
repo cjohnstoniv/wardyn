@@ -1,0 +1,90 @@
+name: Self-hosted canary
+
+# One lint job, `make staticcheck` (the same target and cache key as ci.yml's
+# `gates (staticcheck)`), routed by the trust test a self-hosted job would use.
+# A runner the repository owner registers with the `wardyn-ci` label takes it
+# only for the owner's dispatch in this repository; any other dispatcher, a
+# fork's own Actions, or `hosted: true` (the paired baseline) gets ubuntu-latest.
+#
+# Dispatch only, never pull_request or push: a job routed to a label no runner
+# serves sits queued for up to 24 hours, so on a pull request it would hold the
+# checks. It references no secret, the token is read-only, and the checkout
+# keeps no credential. On a self-hosted runner the first step fails unless the
+# job is inside gVisor, memory-capped at 10 GiB or less, non-root, and sees no
+# Docker socket and no bind mount. See docs/CI.md, "Self-hosted canary".
+
+on:
+  workflow_dispatch:
+    inputs:
+      hosted:
+        description: Run on ubuntu-latest instead (baseline timing)
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  staticcheck:
+    # The trust test, in full so a ci.yml job can reuse it (less the inputs
+    # term): this repository, the owner as actor, and one of a push to main,
+    # prep/* or train/*, a pull request from a branch of this repository that
+    # the owner opened (a fork or Dependabot pull request fails here), or a
+    # dispatch. Everything else runs hosted.
+    runs-on: >-
+      ${{ github.repository == 'cjohnstoniv/wardyn' && github.actor == github.repository_owner && !inputs.hosted && (
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prep/') || startsWith(github.ref, 'refs/heads/train/')))
+      || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner)
+      || github.event_name == 'workflow_dispatch'
+      ) && fromJSON('["self-hosted","wardyn-ci"]') || 'ubuntu-latest' }}
+    # No box measurement yet: twice the hosted p90 (8.7 min) with room for gVisor.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Prove the runner's isolation (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        run: |
+          fail=0
+          no() { echo "::error title=selfhosted-canary::$1"; fail=1; }
+          grep -q 'Starting gVisor' <<<"$(dmesg 2>/dev/null)" || no "not inside gVisor (runsc)"
+          [ "$(id -u)" != 0 ] || no "the job runs as root"
+          # setpriv reads the flag with prctl; gVisor leaves NoNewPrivs out of /proc/self/status.
+          grep -q '^no_new_privs: 1$' <<<"$(setpriv --dump 2>/dev/null)" || no "no_new_privs is not set"
+          ! sudo -n true 2>/dev/null || no "sudo gives root"
+          for s in /var/run/docker.sock /run/docker.sock /var/run/wardyn-docker.sock /run/wardyn-docker.sock; do
+            [ ! -e "$s" ] || no "a Docker socket is present: $s"
+          done
+          mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+          [ "$mem_kb" -le $((10 * 1024 * 1024)) ] || no "no 10 GiB memory cap: MemTotal ${mem_kb} kB"
+          # gVisor shows every bind mount as 9p; Docker itself adds only these three.
+          binds="$(awk '$3 == "9p" && $2 !~ /^\/etc\/(hosts|hostname|resolv\.conf)$/ {print $2}' /proc/mounts)"
+          [ -z "$binds" ] || no "bind mounts present: $binds"
+          echo "runner ${RUNNER_NAME:-?}: kernel $(uname -r), $(nproc) CPUs, MemTotal ${mem_kb} kB"
+          exit "$fail"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # Restore only: ci.yml's main pushes own this entry, so the timing pairs
+      # with `gates (staticcheck)`.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/.cache/staticcheck
+          key: go-gates-staticcheck-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-gates-staticcheck-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-gates-staticcheck-
+      - name: make staticcheck
+        run: make staticcheck

@@ -218,6 +218,7 @@ export function DrivesScreen() {
                 <TableSkeleton rows={3} cols={7} />
               ) : noDrives ? (
                 <EmptyState
+                  size="compact"
                   icon={HardDrive}
                   title={DRIVES.EMPTY_TITLE}
                   description={DRIVES.EMPTY_BODY}

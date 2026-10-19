@@ -338,6 +338,29 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 			t.Errorf("owner writes %v, reassign rows %d: no row may claim a hand-over the store refused", st.ownerWrites, len(e.auditRows("workspace.reassign")))
 		}
 	})
+	t.Run("a name the operator already uses is suffixed, not a stopped purge", func(t *testing.T) {
+		st := newSCIMCovStore()
+		scimCovSeedPurgee(st)
+		st.workspaces = append(st.workspaces, types.Workspace{ID: uuid.New(), Name: "one"})
+		e := newSCIMCovEnv(t, st)
+		got, err := e.srv.reassignWorkspaces(ctx, scimCovTargets)
+		if err != nil || got["workspaces_reassigned"] != 2 {
+			t.Fatalf("got %v %v, want both of the person's workspaces reassigned", got, err)
+		}
+		want := "one (" + scimCovWsSub.String()[:8] + ")"
+		if i := slices.IndexFunc(st.workspaces, func(w types.Workspace) bool { return w.ID == scimCovWsSub }); st.workspaces[i].Name != want || st.workspaces[i].OwnedBy != "" {
+			t.Errorf("reassigned workspace = %q owned by %q, want %q owned by the operator", st.workspaces[i].Name, st.workspaces[i].OwnedBy, want)
+		}
+		renamed := 0
+		for _, ev := range e.auditRows("workspace.reassign") {
+			if strings.Contains(string(ev.Data), `"renamed_to":"`+want+`"`) {
+				renamed++
+			}
+		}
+		if renamed != 1 {
+			t.Errorf("%d reassign rows name the rename, want 1", renamed)
+		}
+	})
 	t.Run("an owner matches in any case and an unowned workspace never", func(t *testing.T) {
 		st := newSCIMCovStore()
 		scimCovSeedPurgee(st)

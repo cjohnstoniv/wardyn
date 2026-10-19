@@ -25,6 +25,8 @@ vi.mock("../../lib/api/approvals", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { LiveApprovals } from "./live-approvals";
+import { HttpError } from "../../lib/api/core";
+import { toDatetimeLocalValue } from "../../lib/datetime-local";
 
 function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return makeApproval({
@@ -455,6 +457,27 @@ describe("LiveApprovals", () => {
         until: new Date(untilLocal).toISOString(),
       });
     });
+
+  // The server refuses an expiry that is not after now (decision_expires_at in the past); the picker says so up front.
+  it("a past time in the custom picker holds 'Use this time' back and says why", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(within(panel).getAllByRole("button", { name: /more options/i })[0]);
+    await user.click(await screen.findByText("Until…"));
+
+    const input = screen.getByLabelText("Pick a time") as HTMLInputElement;
+    expect(input.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    const confirm = screen.getByRole("button", { name: /use this time/i });
+    fireEvent.change(input, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(-9600))) } });
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("That time has already passed. Pick a later one.");
+
+    fireEvent.change(input, { target: { value: toDatetimeLocalValue(new Date(aheadByHours(9600))) } });
+    expect(confirm).not.toBeDisabled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
   });
 
   // F-12 (0.7 SSO Phase 3): the inline gate must mirror server truth
@@ -481,6 +504,24 @@ describe("LiveApprovals", () => {
       const user = userEvent.setup({ pointerEventsCheck: 0 });
       await user.click(within(panel).getByRole("button", { name: /^Approve$/ }));
       expect(approveMock).toHaveBeenCalledWith("e1", expect.any(String));
+    });
+
+    // The list cannot say who holds the egress_host grant, so the first capability refusal is what closes the row.
+    it("a capability_egress_host refusal turns that row's buttons off and names the admin", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "e1", requested_scope: { host: "unlisted.example" } })]);
+      approveMock.mockRejectedValueOnce(new HttpError(403, "you are not granted egress host unlisted.example", "capability_egress_host"));
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(within(panel).getByRole("button", { name: /^Approve$/ }));
+
+      await waitFor(() => expect(within(panel).getByRole("button", { name: /^Approve$/ })).toBeDisabled());
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).toBeDisabled();
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     });
 
     it("a member CANNOT Approve/Deny an api_key credential row — stays admin-only", async () => {

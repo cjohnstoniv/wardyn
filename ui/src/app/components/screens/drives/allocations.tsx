@@ -132,7 +132,11 @@ export function AllocationsBlock({
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
   const typeName = useUserTypeName();
 
+  // Two clicks in one tick must remove once: the second would meet a 404 and toast over a removal that went through.
+  const inFlight = React.useRef(false);
   const remove = async (g: UserDriveGrant) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     try {
       await api.deleteGrant(g.id);
@@ -141,6 +145,7 @@ export function AllocationsBlock({
     } catch (e) {
       toast.error(PERM.REMOVE, { description: getErrorMessage(e) });
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -168,7 +173,7 @@ export function AllocationsBlock({
         )}
         <div className="mt-4">
           {grants.length === 0 ? (
-            <EmptyState icon={Users} title={DRIVES.EMPTY_ALLOC_TITLE} description={DRIVES.EMPTY_ALLOC_BODY} />
+            <EmptyState size="compact" icon={Users} title={DRIVES.EMPTY_ALLOC_TITLE} description={DRIVES.EMPTY_ALLOC_BODY} />
           ) : (
             <Table>
               <TableHeader>
@@ -235,17 +240,18 @@ export function AllocationsBlock({
 
       <DrivePreview />
 
-      <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && setToRemove(null)}>
+      <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && !busy && setToRemove(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{confirmHead}</AlertDialogTitle>
             <AlertDialogDescription>{confirmBody}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{PEOPLE.CANCEL}</AlertDialogCancel>
             {/* outline, never destructive: nothing on the drive is deleted. */}
             <AlertDialogAction
               className={buttonVariants({ variant: "outline" })}
+              disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toRemove) void remove(toRemove);
@@ -523,11 +529,16 @@ function DrivePreview() {
   const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: string } | null>(null);
   const { userTypes, show: showUserType } = usePreviewUserTypes();
   const [userType, setUserType] = React.useState(USER_TYPE_STANDARD);
+  // Bumped on every input edit: an answer whose request started under an older value is dropped, so it can
+  // never sit under claims or a user type it was not asked about.
+  const inputGen = React.useRef(0);
 
   const run = async () => {
+    const asked = inputGen.current;
     setBusy(true);
     try {
-      setResult({ answer: await api.previewDrive(previewClaims(claims, userType)) });
+      const answer = await api.previewDrive(previewClaims(claims, userType));
+      if (asked === inputGen.current) setResult({ answer });
     } catch (e) {
       // The SAME thing the drive editor does with a refused save. The preview
       // runs the launch path's own gates now — the governance door's 403, the
@@ -537,7 +548,7 @@ function DrivePreview() {
       // the panel for. The console contributes no string: the server's sentence
       // renders verbatim, and the canon line stays as the fallback for a
       // failure that carried no body at all.
-      setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
+      if (asked === inputGen.current) setResult({ error: e instanceof HttpError ? e.message : GOV.PREVIEW_RESULT_UNKNOWN });
     } finally {
       setBusy(false);
     }
@@ -559,6 +570,7 @@ function DrivePreview() {
               // PREVIOUS group's resolved drive sat under new, unrun input as
               // if it answered it.
               onChange={(e) => {
+                inputGen.current += 1;
                 setClaims(e.target.value);
                 setResult(null);
               }}
@@ -572,6 +584,7 @@ function DrivePreview() {
               value={userType}
               userTypes={userTypes}
               onChange={(id) => {
+                inputGen.current += 1;
                 setUserType(id);
                 setResult(null);
               }}

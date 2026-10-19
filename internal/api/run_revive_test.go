@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -777,6 +778,24 @@ func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
 			t.Errorf("a token the replaced proxy renewed still verifies (minted %v, presented %v)", verifies(f, renewed), verifies(f, presented))
 		}
 	})
+	t.Run("old proxy renews during the swap", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.st.run.LostAt, f.st.run.LostReason = nil, ""
+		renewed, presented := mint(t, f)
+		var during *httptest.ResponseRecorder
+		f.rr.onReplace = func([]byte) {
+			during = renew(t, f, renewed.Token)
+		}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive: code %d, want 200", code)
+		}
+		if during == nil || during.Code != http.StatusServiceUnavailable || strings.Contains(during.Body.String(), `"token"`) {
+			t.Fatalf("the old proxy's renewal during the swap = %v; want a retryable 503 handing out no token", during)
+		}
+		if verifies(f, renewed) || verifies(f, presented) {
+			t.Errorf("a token the replaced proxy renewed still verifies (minted %v, presented %v)", verifies(f, renewed), verifies(f, presented))
+		}
+	})
 	t.Run("kept proxy", func(t *testing.T) {
 		f := newReviveFixture(t)
 		f.st.run.LostAt, f.st.run.LostReason = nil, ""
@@ -787,6 +806,9 @@ func TestReviveRun_RevokesTheTokensTheReplacedProxyRenewed(t *testing.T) {
 		}
 		if !verifies(f, renewed) || !verifies(f, presented) {
 			t.Error("a token the kept proxy renewed was revoked; the proxy still runs on it")
+		}
+		if w := renew(t, f, renewed.Token); w.Code != http.StatusOK {
+			t.Errorf("the kept proxy's next renewal = %d %s, want 200: its lineage is handed back", w.Code, w.Body.String())
 		}
 	})
 }
@@ -1077,4 +1099,11 @@ func TestReviveRun_AConfigTheProxyWouldRefuseIsRefusedBeforeTheClaim(t *testing.
 	if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || lostAt == nil {
 		t.Errorf("replaced %d, lost_at %v; want no proxy replaced and the run still lost", len(f.rr.replaced), lostAt)
 	}
+}
+
+// renew is the proxy's token renewal, sent where the proxy sends it: the internal listener.
+func renew(t *testing.T, f *reviveFixture, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	internal := func(tb testing.TB, _ http.Handler) http.Handler { return panicFails(tb, f.srv.InternalHandler()) }
+	return doVia(t, internal, f.srv, http.MethodPost, "/api/v1/internal/token/renew", token, "")
 }

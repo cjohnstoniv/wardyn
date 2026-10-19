@@ -332,10 +332,9 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
 - Every mechanism keys on the same forge, and that non-GitHub lane is what `git_pat` is for.
 - (An `ssh_key` grant for an Azure DevOps host is dropped at dispatch with a warning, and a stored git token for one is read from the run owner's own row only.)
-- There the old shape still applies for `ssh_key`: the key file is written for the clone and wiped after, and an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases).
-- `agent-run` mints it, writes it `0400`, clones, then removes it (`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
-- It is a real narrowing and not a confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`).
-- An auto-mintable grant is re-mintable by design (`MintForGrant` — only `requires_approval: true` makes it single-use).
+- There `ssh_key` signs in through the run proxy's SSH agent: the proxy holds the key, and the sandbox's `ssh` reaches the agent through a socket `wardyn-git-helper ssh-exec` opens for each Git command ([CREDENTIALS.md](CREDENTIALS.md#a-git-credential)).
+- `agent-run` writes an ssh config naming that socket and a known-hosts command, clones, closes the agent, then removes the config and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
+- The grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), but the proxy's mint route never answers an `ssh_key` grant with the key, and the broker issues it once per run unless the grant is approval-gated.
 - The proxy's mint route refuses only *brokered GitHub* grant ids (`isBrokeredGitGrant`).
 - That forge's key is bounded by the operator who supplied it, not by Wardyn ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a) — the honest scope for a non-brokered credential, unchanged by any of the above.
 
@@ -1015,6 +1014,16 @@ So an entry a pattern matches is judged one of two ways:
 - No parent counts; or a read fails, answers other than `200`, comes back truncated, needs more than 64 reads, or takes longer than 20 seconds.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
+
+**A push that adds no commits.**
+
+- Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
+- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
+  - That includes a commit whose tree still holds a path `deny_paths` now names: the forge already has it in that history.
+  - Under `git_push_any_branch`, a lightweight tag at such a commit passes too; an annotated tag is still refused.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
 
 > [!WARNING]
 > **On a `git_pat` forge other than github.com, deny only paths the repository does not hold yet.**

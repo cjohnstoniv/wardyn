@@ -130,18 +130,13 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 }
 
 // mintSSHKey resolves a stored SSH PRIVATE KEY and returns its VALUE (plus, when
-// named, the known_hosts material) to agent-run for a git-over-SSH clone.
+// named, the known_hosts material) to the run's proxy for a git-over-SSH clone.
 //
-// SECURITY EXCEPTION (mirrors mintGitPAT's honesty ceiling): git's SSH
-// transport has no credential-helper seam (git credential.helper is
-// HTTP-only), so — unlike git_pat (goes to the helper, never on disk) or
-// api_key (never leaves the broker) — an SSH key cannot be brokered without
-// becoming resident: the ssh client reads it from a file. The key material is
-// returned here and agent-run writes it 0400, agent-owned, then wipes it right
-// after the clone (deploy/images/*/agent-run). The file is readable for the
-// clone, and within that window code running as the agent uid can read the key —
-// the same residual as WARDYN_GIT_HELPER_SECRET. This is the accepted
-// exception the owner chose enabling the SSH SCM lane; there is no way to
+// git's SSH transport has no credential-helper seam (git credential.helper is
+// HTTP-only), so the proxy cannot add the key to a request; its ssh agent signs
+// the clone's SSH sign-in with it instead, and its mint relay never hands an
+// ssh_key answer to the sandbox (internal/egress/proxy/ssh_agent.go). An
+// auto-mint grant is minted once per run (checkedMintRow). There is no way to
 // down-scope or expire an SSH private key from Wardyn's side (out of scope,
 // host SSH-key API). The returned Token is mask-registered by mint()'s
 // maskReg.Add.

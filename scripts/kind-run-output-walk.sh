@@ -63,7 +63,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
+if kind get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null; then
   die "cluster ${CLUSTER} already exists and this script did not create it; pick another WARDYN_QUICKSTART_CLUSTER"
 fi
 

@@ -117,7 +117,7 @@ export function patLaneMeta(brokered: boolean): LaneMeta {
 export const LANE_META: Record<Lane, LaneMeta> = {
   app: { label: "App · brokered", tooltip: CAPABILITY.brokerLine, tone: "success", residency: "brokered_mint" },
   pat: patLaneMeta(true),
-  ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
+  ssh: { label: "SSH · at the proxy", tooltip: CAPABILITY.sshKeyLine, tone: "success", residency: "proxy_injected" },
 };
 
 // Pre-convention secret names (github-pat, gitlab-pat, ado-pat, bitbucket-pat)

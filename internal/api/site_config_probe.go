@@ -442,11 +442,10 @@ type probeRunResult struct {
 // audited against it) and what was actually observed.
 //
 // grants are the eligible credential grants the probe run should carry (nil for
-// the two site-config probes, which authenticate to nothing). They are
-// persisted and wired proxy-side exactly as persistRunGrants does for a real
-// run, so an integration probe traverses the SAME injection path a run granted
-// that integration takes -- the whole point of testing it at all.
-func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, allowedDomains []string, grants []types.GrantSpec, extraEnv map[string]string) (uuid.UUID, probeRunResult, error) {
+// both site-config probes), persisted and wired proxy-side as persistRunGrants
+// does for a real run. redirect is the stored row the redirect Test probes (nil
+// otherwise): dispatch authors its token as for a run (dispatchParams.RedirectProbe).
+func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, allowedDomains []string, grants []types.GrantSpec, extraEnv map[string]string, redirect *types.EgressRedirect) (uuid.UUID, probeRunResult, error) {
 	start := s.cfg.Now()
 	// Detach the durable launch work from request cancellation -- a client
 	// that walks away before the mint/CreateRun lands must not abort it and
@@ -517,9 +516,10 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 			AutoStopAfterSec:    siteConfigProbeIdleCapSec,
 			EligibleGrants:      grants,
 		},
-		Injections: injections,
-		TaskMode:   "exec",
-		ExtraEnv:   extraEnv,
+		Injections:    injections,
+		TaskMode:      "exec",
+		ExtraEnv:      extraEnv,
+		RedirectProbe: redirect,
 	})
 
 	// The wait stays on the CALLER's ctx (a client disconnect stops it early)
@@ -900,7 +900,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	}
 
 	actor := principalFromRequest(r)
-	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil, nil)
+	runID, res, perr := s.runSiteConfigProbe(ctx, actor, script, hosts, nil, nil, nil)
 	if perr != nil {
 		if errors.Is(perr, errProbeNoRunner) {
 			// Same STATE as an absent runner, its own detail: "no runner
@@ -975,11 +975,11 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	toURL, connectTo := redirectProbeTo(red, toHost, fromHost)
 	actor := principalFromRequest(r)
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, redirectProbeScript,
-		[]string{toHost}, nil, map[string]string{
+		[]string{redirectToEntry(toHost, red.To)}, nil, map[string]string{
 			"WARDYN_PROBE_TO_URL":     toURL,
 			"WARDYN_PROBE_TO_CONNECT": connectTo,
 			"WARDYN_PROBE_FROM_URL":   probeTargetURL(red.From),
-		})
+		}, &red)
 	if perr != nil {
 		if errors.Is(perr, errProbeNoRunner) {
 			// Same STATE as an absent runner, its own detail: "no runner

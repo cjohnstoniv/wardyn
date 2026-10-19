@@ -50,13 +50,14 @@ func repeatableReadBrokerPool(t *testing.T) *pgxpool.Pool {
 	}
 	ctx := context.Background()
 
+	// This lane declared a server, so it must be reachable: a skip here would pass the lane vacuously.
 	base, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Skipf("connect: %v", err)
+		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(base.Close)
 	if err := base.Ping(ctx); err != nil {
-		t.Skipf("ping: %v", err)
+		t.Fatalf("ping: %v", err)
 	}
 	schema := fmt.Sprintf("wardyn_brk_iso_%d", time.Now().UnixNano()%1_000_000_000)
 	if _, err := base.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
@@ -87,7 +88,7 @@ func repeatableReadBrokerPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("read default_transaction_isolation: %v", err)
 	}
 	if iso != "repeatable read" {
-		t.Skipf("default_transaction_isolation is %q, not repeatable read; this server does not accept it as a startup parameter", iso)
+		t.Fatalf("default_transaction_isolation is %q, not repeatable read; this server does not accept it as a startup parameter, so this test would pass vacuously", iso)
 	}
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate into schema %s: %v", schema, err)
@@ -142,8 +143,9 @@ func TestPG_MintDoesNotForkTheAuditChainAtRepeatableRead(t *testing.T) {
 		var waiting int
 		if err := pool.QueryRow(ctx,
 			`SELECT count(*) FROM pg_locks
-			  WHERE locktype = 'advisory' AND NOT granted
-			    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting); err != nil {
+			  WHERE locktype = 'advisory' AND NOT granted AND objid = $1::bigint & 2147483647
+			    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+			db.AuditChainLockKey).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks: %v", err)
 		}
 		if waiting > 0 {

@@ -79,8 +79,8 @@ func (s *govCrudStore) UpsertGovernanceAssignment(_ context.Context, a types.Gov
 	return a, s.upsertAssignmentErr
 }
 
-func (s *govCrudStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) error {
-	return s.deleteAssignErr
+func (s *govCrudStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
+	return types.GovernanceAssignment{}, s.deleteAssignErr
 }
 
 func govCrudServer(t *testing.T, st *govCrudStore) (*Server, *harness) {

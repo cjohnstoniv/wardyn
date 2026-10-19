@@ -43,6 +43,9 @@ type callerSubjects struct {
 	userType      string
 	// stale is capabilitySubjects' bit: the group half is unanswerable.
 	stale bool
+	// unverifiedEmail is the email among users when sign-in does not vouch for
+	// it (unverifiedEmailSubject); "" otherwise.
+	unverifiedEmail string
 }
 
 // errUserTypeUnknown is the 403-class resolver failure: the caller's stamped
@@ -91,7 +94,8 @@ func firstUserTypeRefusal(ctx context.Context) bool {
 // DeleteUserType refuses it, so it always exists.
 func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	users, groups, stale := capabilitySubjects(ctx)
-	c := callerSubjects{users: users, groups: groups, stale: stale, userType: oidcUserTypeFromContext(ctx)}
+	c := callerSubjects{users: users, groups: groups, stale: stale, userType: oidcUserTypeFromContext(ctx),
+		unverifiedEmail: s.unverifiedEmailSubject(ctx)}
 	if len(users) == 0 {
 		c.userType = ""
 		return c, nil

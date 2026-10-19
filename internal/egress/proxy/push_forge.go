@@ -79,6 +79,11 @@ const (
 	whyNotGitHub = "this forge is not GitHub, so what the push does not carry cannot be compared with the commit it builds on"
 	whyUnread    = "the broker could not compare what this push does not carry with the commit it builds on: "
 	whyUnsettled = "the broker could not ask the forge which commits this push carries it already holds, so every one of them is read as new: "
+
+	// The reasons a push that carries no object is refused (forgeRepo.held).
+	whyHeldNotGitHub = "this forge is not GitHub, so the broker cannot ask it whether it already holds these commits"
+	whyHeldUnread    = "the broker could not ask the forge whether it already holds these commits: "
+	whyNotHeld       = "the forge holds no such commit in the history of the default branch or of a branch this push updates, for: "
 )
 
 // maxForgeReads and forgeReadWait bound what one push may cost the forge and
@@ -195,6 +200,32 @@ func (f *forgeRepo) settle(ctx context.Context, res gitpack.Result) (gitpack.Res
 	}
 	f.settled = &settled
 	return settled, ""
+}
+
+// held answers, for a push that carries no object, whether the forge already
+// holds every commit cmds set a ref to: "" when vouch counts each one, or why
+// not. A forge it cannot read (nil) cannot answer, so the push is refused.
+func (f *forgeRepo) held(ctx context.Context, cmds []gitpack.Command) string {
+	if f == nil {
+		return whyHeldNotGitHub
+	}
+	var unheld []string
+	for _, c := range cmds {
+		if strings.Trim(c.New, "0") == "" {
+			continue
+		}
+		root, err := f.vouch(ctx, c.New, cmds)
+		if err != nil {
+			return f.unread(whyHeldUnread, err)
+		}
+		if root == "" {
+			unheld = append(unheld, c.Ref)
+		}
+	}
+	if len(unheld) > 0 {
+		return whyNotHeld + strings.Join(unheld, ", ")
+	}
+	return ""
 }
 
 // vouch returns base's root tree when a branch this push updates (at the tip

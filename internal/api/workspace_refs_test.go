@@ -86,7 +86,7 @@ func TestValidateWorkspaceSources(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, reason, err := srv.validateWorkspaceSources(context.Background(), tc.spec)
+			code, reason, err := srv.validateWorkspaceSources(context.Background(), tc.spec, runCarrierRule{})
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected rejection, got ok")
@@ -116,12 +116,12 @@ func TestValidateWorkspaceSources_NilStoreFailsClosed(t *testing.T) {
 	withMount := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
 		{Source: "/home/me/project", Target: "/home/agent/work", ReadOnly: &ro},
 	}}
-	if code, reason, err := srv.validateWorkspaceSources(context.Background(), withMount); err == nil || code != http.StatusUnprocessableEntity {
+	if code, reason, err := srv.validateWorkspaceSources(context.Background(), withMount, runCarrierRule{}); err == nil || code != http.StatusUnprocessableEntity {
 		t.Fatalf("nil store + user mount must fail closed (422), got code=%d err=%v", code, err)
 	} else if reason != reasonWorkspaceSourcesStoreUnavailable {
 		t.Errorf("reason = %q, want %q", reason, reasonWorkspaceSourcesStoreUnavailable)
 	}
-	if code, _, err := srv.validateWorkspaceSources(context.Background(), types.RunPolicySpec{}); err != nil {
+	if code, _, err := srv.validateWorkspaceSources(context.Background(), types.RunPolicySpec{}, runCarrierRule{}); err != nil {
 		t.Fatalf("no user workspace must pass even with a nil store, got code=%d err=%v", code, err)
 	}
 }

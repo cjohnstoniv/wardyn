@@ -80,6 +80,8 @@ describe("Templates screen: rows", () => {
   it("says so when the sign-in cannot confirm the person's groups, even over an empty list, and says nothing otherwise", async () => {
     const view = mount({ templates: [], publish: { ...MEMBER, groups_unverified: true } });
     expect(await screen.findByText(T.GROUPS_UNVERIFIED)).toBeInTheDocument();
+    // #2830: a token session has no snapshot to refresh, so signing in again is promised only to an SSO sign-in.
+    expect(T.GROUPS_UNVERIFIED).toContain("If you signed in with SSO, sign in again to see them.");
     expect(screen.getByText(T.EMPTY_TITLE)).toBeInTheDocument();
     view.unmount();
     mount({ templates: [MINE], publish: MEMBER });
@@ -112,6 +114,17 @@ describe("Templates screen: rows", () => {
     expect(row.queryByText(T.PART_ACCESS)).toBeNull();
     expect(row.getByText(T.REVISION(2))).toBeInTheDocument();
     expect(row.queryByText(T.POLICY_BADGE)).toBeNull();
+  });
+
+  // A screen reader could not tell which value belonged to which column.
+  it("is a table: a named column header per column, and a cell under each in every row", async () => {
+    mount({ templates: [MINE, ORG], publish: MEMBER });
+    const table = await screen.findByRole("table", { name: T.LIST_ARIA });
+    const headers = within(table).getAllByRole("columnheader", { hidden: true });
+    expect(headers.map((h) => h.textContent)).toEqual([T.COL_NAME, T.COL_AVAILABLE, T.COL_INCLUDES, T.COL_UPDATED, T.COL_ACTIONS]);
+    const dataRows = within(table).getAllByRole("row", { hidden: true }).filter((r) => within(r).queryAllByRole("cell", { hidden: true }).length > 0);
+    expect(dataRows).toHaveLength(2);
+    for (const r of dataRows) expect(within(r).getAllByRole("cell", { hidden: true })).toHaveLength(headers.length);
   });
 
   it("a policy carries the Policy badge and a missing dependency says Needs setup with the field named", async () => {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -59,7 +60,7 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 		policy = nil
 	}
 	// The tool rides as itself: it is the request's own tools[].id.
-	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policy, Tool: d.Detail["tool"]})
+	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policyref.Layered(policy), Tool: d.Detail["tool"]})
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

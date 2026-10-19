@@ -340,25 +340,29 @@ func (s newestFirstStore) ListWorkspaces(ctx context.Context) ([]types.Workspace
 
 // TestRunDoors_RequirementWriteHoldsTheSupplyingWorkspace: a member's older
 // workspace M on a directory carries a required write row on it; an operator's
-// newer workspace O holds the same directory read-only. The member attaches O
-// only, the source index pulls M into the run (it keeps the oldest holder),
-// and M's row is what makes the directory writable. M's owner is held to the
-// member writable roots although M is not attached, at every door. With an
-// operator's workspace in M's place the write is granted.
+// newer workspace O holds the same directory read-only. The run's mount rule
+// comes from the workspace it attaches: attaching M holds M's write row to the
+// member writable roots at every door; attaching O only mounts the directory
+// read-only, since M's row is not the run's. With an operator's workspace in
+// M's place, attaching it grants the write.
 func TestRunDoors_RequirementWriteHoldsTheSupplyingWorkspace(t *testing.T) {
 	root, project := memberProjectRoot(t)
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	dir := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project}}
 	row := map[string]types.WorkspaceRequirement{"write:" + project: {Level: "required", Provenance: "scan_seeded"}}
-	setup := func(supplierOwner string) (*Server, *fakeRunner, string) {
+	setup := func(supplierOwner string, attachSupplier bool) (*Server, *fakeRunner, string) {
 		srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}}) // no writable roots
 		older := st.put(types.Workspace{OwnedBy: supplierOwner, Status: types.WorkspaceScanned, Sources: dir, Requirements: row})
 		newer := st.put(types.Workspace{Status: types.WorkspaceScanned, Sources: dir})
 		srv.cfg.Store = newestFirstStore{ownerStore: st, order: []uuid.UUID{newer, older}}
-		return srv, fr, `{"agent":"claude-code","task":"do the thing","workspaces":[{"workspace_id":"` + newer.String() + `"}]}`
+		attach := newer
+		if attachSupplier {
+			attach = older
+		}
+		return srv, fr, `{"agent":"claude-code","task":"do the thing","workspaces":[{"workspace_id":"` + attach.String() + `"}]}`
 	}
 
-	srv, fr, body := setup(ownerMemberSub)
+	srv, fr, body := setup(ownerMemberSub, true)
 	for _, door := range componentDoors {
 		w := doSSO(t, srv, http.MethodPost, door, member, body)
 		if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
@@ -369,7 +373,16 @@ func TestRunDoors_RequirementWriteHoldsTheSupplyingWorkspace(t *testing.T) {
 		t.Errorf("CreateSandbox calls = %d, want 0: the refusal must happen before dispatch", fr.createCalls)
 	}
 
-	srv, fr, body = setup("")
+	srv, fr, body = setup(ownerMemberSub, false)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, body); w.Code != http.StatusCreated {
+		t.Fatalf("the operator's workspace attached: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	fr.waitForSandbox(t)
+	if m := mountFor(t, fr.lastSpec, composerWorkspaceTarget); !m.ReadOnly {
+		t.Errorf("the bind %q is writable; a write row of a workspace the run does not attach reached the driver", m.Source)
+	}
+
+	srv, fr, body = setup("", true)
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, body); w.Code != http.StatusCreated {
 		t.Fatalf("control, an operator's workspace supplies the row: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
