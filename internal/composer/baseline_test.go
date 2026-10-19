@@ -45,6 +45,39 @@ func TestBaselineExtendsTheEgressGrade(t *testing.T) {
 	}
 }
 
+// A port-scoped or root-dotted entry is narrower than the bare host, so it is
+// judged by its host, the way the proxy reads it (domainmatch.Classify).
+func TestBaselineJudgesAPortOrTrailingDotEntryByItsHost(t *testing.T) {
+	b := Baseline{Hosts: []string{"llm.corp.example"}, Suffixes: []string{"svc.example"}}
+	for _, tc := range []struct {
+		entry string
+		want  bool
+	}{
+		{"github.com:443", true},
+		{"github.com.", true},
+		{"registry.npmjs.org.:443", true},
+		{"llm.corp.example:8443", true},
+		{"llm.corp.example.", true},
+		{"api.svc.example:443", true},
+		{"db.corp.example:443", false},
+		{"*.svc.example:443", false},
+		{"github.com:99999", false},
+	} {
+		if got := b.Has(tc.entry); got != tc.want {
+			t.Errorf("Has(%q) = %v, want %v", tc.entry, got, tc.want)
+		}
+	}
+	spec := types.RunPolicySpec{AllowedDomains: []string{"github.com:443", "registry.npmjs.org.", "llm.corp.example:443"}}
+	for _, it := range Grade(RunInput{Baseline: b}, spec) {
+		if it.Field == "allowed_domains" && it.Level != RiskLow {
+			t.Errorf("port-scoped baseline hosts graded %s (%s), want low", it.Level, it.Rationale)
+		}
+	}
+	if got := AutonomyPostureOf(spec, types.CC2, b).Egress; got != types.AutonomyEgressSealed {
+		t.Errorf("port-scoped baseline hosts: egress = %s, want sealed", got)
+	}
+}
+
 func TestBaselineNeverMatchesAWildcardAllowlistEntry(t *testing.T) {
 	b := Baseline{Hosts: []string{"llm.corp.example"}, Suffixes: []string{"corp.example"}}
 	if b.Has("*.corp.example") {
