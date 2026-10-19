@@ -238,7 +238,7 @@ COMPOSE_PROJECT_NAME=job-a WARDYN_NS=job-a WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 \
   - that a container on job A's network cannot reach job B's wardynd,
   - that A survives B's `down --volumes`,
   - and that each tears down independently.
-- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is a manual/pre-release check, not a CI job.
+- It needs a live daemon and `wardyn/wardynd:local` (the target builds it if absent), so it is not part of the per-push CI; the `test-e2e-concurrent` job in [.github/workflows/nightly.yml](../.github/workflows/nightly.yml) runs it nightly.
 - Its `compose_ns` helper scopes the same five ports as `ci-run.sh` above.
 
 > [!WARNING]
@@ -634,7 +634,7 @@ wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
 ## Images
 
 - `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main` ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-- every release tag publishes all seven images (`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+- every release tag publishes all nine images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc`) cosign-signed, each with an attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
 - ([.github/workflows/release.yml](../.github/workflows/release.yml) — see [RELEASING.md](../RELEASING.md) and the Helm chart's [README](../deploy/helm/wardyn/README.md)).
 - This BYOA pipeline (`ci-run.sh`) does not consume them, though: it still builds wardynd, the `wardyn-proxy` sidecar, and the agent image from source on every invocation (a few minutes per job).
 - [`scripts/up.sh`](../scripts/up.sh) now pulls the published images instead, falling back to a build when any is missing; `ci-run.sh` has not yet been switched to the same path, so a pipeline still pays the build.
