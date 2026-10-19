@@ -441,3 +441,21 @@ func TestPG_HasGroupTierAssignments(t *testing.T) {
 		}
 	}
 }
+
+// DeleteGovernanceProfileNamed answers the name of the row it removed, and the same refusals as the
+// plain delete.
+func TestPG_GovernanceProfile_DeleteNamedReturnsTheRemovedName(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	name := "test-named-" + uuid.NewString()
+	p := seedGovernanceProfile(t, st, name)
+	got, err := st.DeleteGovernanceProfileNamed(ctx, p.ID)
+	if err != nil || got != name {
+		t.Fatalf("DeleteGovernanceProfileNamed = %q, %v; want %q, nil", got, err, name)
+	}
+	if _, err := st.DeleteGovernanceProfileNamed(ctx, p.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("delete of a removed profile: err = %v, want ErrNotFound", err)
+	}
+}

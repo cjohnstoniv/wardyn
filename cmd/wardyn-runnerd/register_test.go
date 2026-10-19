@@ -141,11 +141,16 @@ func TestRegisterSurfacesRefusalAndAdvisesFreshTokenOnlyWhenSpent(t *testing.T) 
 	}
 }
 
-// A 5xx with no reason of its own, or a dropped connection, says nothing about the token: the server may
-// have spent it, so the person is sent to My runners and never told to retry with the same token.
+// A 5xx, the server's own internal_error 500 included, or a dropped connection, says nothing about the
+// token: the server may have spent it, so the person is sent to My runners and never told to retry with it.
 func TestRegisterAfterAnUnclearFailureDoesNotCallTheTokenUsable(t *testing.T) {
 	for name, handler := range map[string]http.HandlerFunc{
 		"bad-gateway": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+		"internal-error": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"register runner","reason":"internal_error"}`))
+		},
 		"dropped": func(w http.ResponseWriter, _ *http.Request) {
 			conn, _, _ := w.(http.Hijacker).Hijack()
 			_ = conn.Close()

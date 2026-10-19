@@ -98,6 +98,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "Env", Variant: "an org component's config: operator-authored, so a value there may be a secret the org never meant to send", Class: ClassOperator, Rule: RuleStrip},
 	{Struct: StructSandboxSpec, Field: "Labels", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "UserMountRoots", Class: ClassExempt, Rule: RuleExempt, Variant: "re-checked against allowed_roots"},
+	{Struct: StructSandboxSpec, Field: "UserWritable", Class: ClassExempt, Rule: RuleExempt, Variant: "narrows member binds only"},
 	{Struct: StructSandboxSpec, Field: "RunID", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "RunnerID", Class: ClassExempt, Rule: RuleExempt, Variant: "routing carrier"},
 	{Struct: StructSandboxSpec, Field: "RunnerMaxRuns", Class: ClassExempt, Rule: RuleExempt, Variant: "runner limit carrier"},
@@ -246,22 +247,4 @@ func unclassifiedIn(name string, t reflect.Type) []string {
 		}
 	}
 	return out
-}
-
-// pathExists reports whether a dotted path of field names resolves under t.
-func pathExists(t reflect.Type, path string) bool {
-	for _, seg := range strings.Split(path, ".") {
-		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
-			t = t.Elem()
-		}
-		if t.Kind() != reflect.Struct {
-			return false
-		}
-		f, ok := t.FieldByName(seg)
-		if !ok {
-			return false
-		}
-		t = f.Type
-	}
-	return true
 }

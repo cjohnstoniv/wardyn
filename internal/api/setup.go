@@ -301,11 +301,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
 	// they cannot clear. Each granted provider's own row follows LLM access.
-	checks := append([]SetupCheck{
-		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
-		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
-		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(providerAccess),
-	}, providerChecks...)
+	checks := []SetupCheck{runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages)}
+	checks = append(checks, s.claudeSignInImageRows(ctx)...)
+	checks = append(checks, envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(providerAccess))
+	checks = append(checks, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
@@ -341,7 +340,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
-	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
+	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven, rnr.capsUnreadable); ok {
 		checks = append(checks, chk)
 	}
 	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
@@ -398,7 +397,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := s.approvalNotifyCheck(ctx); ok {
 		checks = append(checks, chk)
 	}
-	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
+	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture, s.cfg.DisableGitPATBroker))
 
 	// github_ref_ruleset: the only row that leaves the machine. Gated on the App
 	// being configured, cached, short-timeout, and never worse than "warn" — see
@@ -623,8 +622,9 @@ func (s *Server) siteConfigSnapshot(ctx context.Context) (types.SiteConfig, bool
 // Capabilities() call itself just errored (the `err != nil` return below) —
 // that third case is not hypothetical, it is this very function's own
 // early-return path, which already leaves Driver "k8s" with nothing else
-// filled in. k8sEgressContainmentCheck grades all three the same honest way
-// (Indeterminate/FAIL, never a silent Enforcing).
+// filled in. k8sEgressContainmentCheck grades all three Indeterminate/FAIL, never
+// a silent Enforcing; the unreadable case (capsUnreadable) is told apart so its
+// fix points at substrate_health rather than an upgrade.
 func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string) {
 	out := SetupRunner{Driver: "none", ConfinementClasses: []string{}}
 	if rn == nil {

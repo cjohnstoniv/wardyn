@@ -106,7 +106,9 @@ func TestPG_QueueSweepEndsTheWaitingRunARevokeCouldNotEnd(t *testing.T) {
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "the queue sweep ends a run still waiting for it") {
 		t.Fatalf("revoke with a waiting run that cannot be ended = %d %s, want 500 naming the queue sweep", w.Code, w.Body)
 	}
-	e.sweep()
+	if err := e.srv.SweepRunQueue(context.Background()); err == nil || !strings.Contains(err.Error(), "waiting for a revoked runner") {
+		t.Fatalf("a sweep that cannot end the run = %v, want the failed end returned", err)
+	}
 	if got := e.run(stuck.ID); got.State != types.RunQueued {
 		t.Fatalf("the run whose end is still refused is %s, want it QUEUED for the next tick", got.State)
 	}
@@ -156,8 +158,8 @@ func TestPG_ARunWaitingForARevokedRunnerIsEndedOnce(t *testing.T) {
 	if _, err := e.pg.RevokeRunner(ctx, a, time.Now().UTC(), e.personP, ""); err != nil {
 		t.Fatal(err)
 	}
-	if !e.srv.exitQueued(ctx, expired, types.RunFailed, statusDetailQueuePrefix+string(types.RunEndQueueTimeout), "its wait ran out") {
-		t.Fatal("could not end the run as its deadline step does")
+	if ended, err := e.srv.exitQueued(ctx, expired, types.RunFailed, statusDetailQueuePrefix+string(types.RunEndQueueTimeout), "its wait ran out"); err != nil || !ended {
+		t.Fatalf("could not end the run as its deadline step does: %v", err)
 	}
 	var wg sync.WaitGroup
 	for range 8 {

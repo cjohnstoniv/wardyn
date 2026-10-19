@@ -83,11 +83,10 @@ func domainAllowedExact(domains []string, host string) bool {
 	})
 }
 
-// Claude subscription-mode credential mount targets. Dispatch detects
-// subscription mode by the FIRST of these (internal/api/runs.go:
-// specHasMountTarget(claudeCredTarget) => ANTHROPIC_BASE_URL=https://api.anthropic.com,
-// direct CONNECT tunnel gated by the run's egress allowlist). The .claude.json companion
-// carries the CLI's account config — the proven recipe needs BOTH mounted.
+// The retired Claude subscription-mode credential mount targets. A policy
+// blessed with the operator's resident ~/.claude may still name them; dispatch
+// strips both (runs_dispatch_provider.go, runs_dispatch_mounts.go) so no run
+// holds the host credential, and the model call is brokered at the proxy.
 const (
 	claudeCredTarget     = "/home/agent/.claude"
 	claudeCredJSONTarget = "/home/agent/.claude.json"
@@ -153,6 +152,19 @@ func (s *Server) isModelProviderHost(h string) bool {
 // path's strip (dropLegacyModelInjections) and the integration write's refusal
 // (handlePutIntegration).
 func (s *Server) modelServingHosts(sc types.SiteConfig) func(string) bool {
+	hosts := modelProviderRowHosts(sc)
+	return func(h string) bool {
+		if strings.TrimSpace(h) == "" {
+			return false
+		}
+		return s.isModelProviderHost(h) || slices.ContainsFunc(hosts, func(x string) bool { return x != "" && hostEqual(x, h) })
+	}
+}
+
+// modelProviderRowHosts is the half of modelServingHosts that comes from the
+// site config: every model provider row's own host and, for a Bedrock row, its
+// runtime and control hosts.
+func modelProviderRowHosts(sc types.SiteConfig) []string {
 	var hosts []string
 	for _, p := range modelProviderRows(sc) {
 		hosts = append(hosts, providerHost(p))
@@ -160,12 +172,7 @@ func (s *Server) modelServingHosts(sc types.SiteConfig) func(string) bool {
 			hosts = append(hosts, providerBedrockRuntimeHost(p), bedrockControlHost(b.Region))
 		}
 	}
-	return func(h string) bool {
-		if strings.TrimSpace(h) == "" {
-			return false
-		}
-		return s.isModelProviderHost(h) || slices.ContainsFunc(hosts, func(x string) bool { return x != "" && hostEqual(x, h) })
-	}
+	return hosts
 }
 
 // isModelProviderRejectHost is modelServingHosts over the stored site config,
@@ -179,13 +186,6 @@ func (s *Server) isModelProviderRejectHost(ctx context.Context, h string) bool {
 		}
 	}
 	return s.modelServingHosts(sc)(h)
-}
-
-// specHasMountTarget reports whether the spec already carries a mount at target.
-func specHasMountTarget(spec *types.RunPolicySpec, target string) bool {
-	return slices.ContainsFunc(spec.WorkspaceMounts, func(wm types.WorkspaceMount) bool {
-		return wm.Target == target
-	})
 }
 
 // composeLLMAccess is the structured model-access verdict for a run's resolved

@@ -34,6 +34,7 @@ describe("attentionFor", () => {
     expect(attentionFor("RUNNING")).toBe("active");
     expect(attentionFor("STARTING")).toBe("starting");
     expect(attentionFor("PENDING")).toBe("queued");
+    expect(attentionFor("QUEUED")).toBe("queued");
     expect(attentionFor("COMPLETED")).toBe("done");
     expect(attentionFor("STOPPED")).toBe("inactive");
     expect(attentionFor("ARCHIVED")).toBe("inactive");
@@ -53,6 +54,12 @@ describe("RunStateGlyph", () => {
     const el = container.querySelector("[data-attention]");
     expect(el?.getAttribute("data-attention")).toBe("permission");
     expect(el?.getAttribute("aria-label")).toBe("Needs you");
+  });
+  it("a QUEUED run reads Queued, never Stopped", () => {
+    const { container } = render(<RunStateGlyph state="QUEUED" />);
+    const el = container.querySelector("[data-attention]");
+    expect(el?.getAttribute("data-attention")).toBe("queued");
+    expect(el?.getAttribute("aria-label")).toBe("Queued");
   });
   it("never uses the accent colour for state", () => {
     for (const state of ["RUNNING", "FAILED", "KILLED", "COMPLETED", "PENDING", "STOPPED"]) {

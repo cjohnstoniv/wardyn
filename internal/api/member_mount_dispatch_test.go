@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,7 +104,7 @@ func memberOwnedWorkspace(st *ownerStore, owner, path string) uuid.UUID {
 // only from the run's model provider, never a blessed ~/.claude bind.
 func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{project + "/vendor"}})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	spec := createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, ownerMemberSub, project))
@@ -111,6 +112,9 @@ func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	if len(spec.UserMountRoots) != 1 || spec.UserMountRoots[0] != root {
 		t.Fatalf("spec.UserMountRoots = %v, want %v — without this the driver never re-resolves the bind at ContainerCreate time (design §c check 2)",
 			spec.UserMountRoots, []string{root})
+	}
+	if w := spec.UserWritable; w == nil || !slices.Equal(w.Roots, []string{root}) || !slices.Equal(w.Deny, []string{project + "/vendor"}) {
+		t.Errorf("spec.UserWritable = %+v, want the writable roots and deny, which the driver holds a read-write member bind to at bind time", w)
 	}
 	if m := mountFor(t, spec, composerWorkspaceTarget); !m.MemberAuthored {
 		t.Errorf("the member's own local_dir bind %q is not stamped MemberAuthored; the driver would skip the within-root re-check", m.Source)
@@ -136,6 +140,10 @@ func TestMemberMountPosture_OperatorRunUnstamped(t *testing.T) {
 
 	if spec.UserMountRoots != nil {
 		t.Errorf("spec.UserMountRoots = %v, want nil for an operator-owned workspace (today's driver path)", spec.UserMountRoots)
+	}
+	// The workspace bind must exist, or the loop below inspects nothing and passes.
+	if m := mountFor(t, spec, composerWorkspaceTarget); m.MemberAuthored {
+		t.Errorf("operator workspace bind %q -> %q stamped member-authored", m.Source, m.Target)
 	}
 	for _, m := range spec.Mounts {
 		if m.MemberAuthored {

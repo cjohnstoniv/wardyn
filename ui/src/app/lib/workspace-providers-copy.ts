@@ -190,7 +190,7 @@ export const PROVIDERS = {
 
   // ---- §7.5 the card, the step, and the entry points ----
   CARD_LEAD: "Which git hosts a run may clone, and the storage ceilings it works inside.",
-  CARD_EMPTY: "No providers enabled.",
+  CARD_EMPTY: "No providers enabled",
   CARD_PROVIDERS: (n: number) => `${n} git provider${n === 1 ? "" : "s"}`,
   CARD_AGENTS: (n: number) => `${n} agent${n === 1 ? "" : "s"}`,
   CARD_SUMMARY: (providers: string, agents: string) => `${providers} · ${agents}`,

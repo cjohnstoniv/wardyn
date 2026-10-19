@@ -33,7 +33,7 @@ echo "wardynd (host mode): docker daemon=${DOCKER_HOST:-unix:///var/run/docker.s
 
 # Pull the pinned age key from the gitignored compose env (so persisted secrets decrypt).
 if [ -z "${WARDYN_AGE_KEY:-}" ] && [ -f deploy/compose/.env ]; then
-  WARDYN_AGE_KEY="$(grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | head -1 | cut -d= -f2-)"
+  WARDYN_AGE_KEY="$(grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | head -1 | cut -d= -f2- || true)"
   export WARDYN_AGE_KEY
 fi
 

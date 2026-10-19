@@ -24,15 +24,18 @@ make kind-sso
 # 1. The cluster (ports chosen to coexist with a compose stack on :8080)
 WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart
 
-# 2. Dex + the SSO overlay (the default policy rides along, floored to CC1 —
-#    redundant since 0.7.8, when the baked default's own floor became CC1;
-#    kept because it states this Fence-only cluster's floor explicitly rather
-#    than inheriting whatever the image ships)
+# 2. Dex + the SSO overlay (the default policy rides along, floored to CC1,
+#    but it does not take effect here: the quickstart sets
+#    env.WARDYN_DEFAULT_POLICY=demo.json, and the chart lets an explicit env
+#    value win over defaultPolicy, so the walks run on demo.json. The floor is
+#    CC1 either way since 0.7.8, when the baked default's own floor became CC1)
 #    awsssofake.yaml rides along: fake AWS IAM Identity Center + a
 #    bedrock-runtime stub, so the AWS SSO login and a per-user Bedrock run are
 #    exercisable with no AWS tenant (docs/OPERATIONS.md, "Testing AWS SSO
 #    without an AWS tenant"). It impersonates AWS with no signing at all —
 #    throwaway clusters only.
+docker build -f test/awsssofake/cmd/Dockerfile -t wardyn/awsssofake:local .
+kind load docker-image wardyn/awsssofake:local --name wardyn-quickstart
 kubectl --context kind-wardyn-quickstart apply -f deploy/kind/sso/dex.yaml
 kubectl --context kind-wardyn-quickstart apply -f deploy/kind/sso/awsssofake.yaml
 helm --kube-context kind-wardyn-quickstart upgrade wardyn deploy/helm/wardyn \

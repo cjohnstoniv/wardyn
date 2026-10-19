@@ -12,13 +12,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -237,6 +241,10 @@ func TestPG_GovernanceChanges_RoleMappingPostureFlipIsReEvaluatedOnApproval(t *t
 	if w.Code != http.StatusBadRequest || json.Unmarshal(w.Body.Bytes(), &flip) != nil || !flip.RequiredAcknowledgement {
 		t.Fatalf("approving into a flip = %d %s, want the 400 with required_acknowledgement", w.Code, w.Body)
 	}
+	// The approve route takes no acknowledgement, so the refusal names the remedy that works.
+	if !strings.Contains(flip.Error, "propose it again with acknowledge_access_change=true") {
+		t.Fatalf("approving into a flip says %q, want it to say the change must be proposed again", flip.Error)
+	}
 	if e.changeState(ch.ID) != types.GovernanceChangePending || len(e.mappings()) != 0 {
 		t.Fatal("a refused approval applied or left pending")
 	}
@@ -309,5 +317,100 @@ func TestPG_GovernanceChanges_RoleMappingSwitchOffIsUnchanged(t *testing.T) {
 		if strings.HasPrefix(ev.Action, "governance.change.") {
 			t.Errorf("a switch-off write recorded %s", ev.Action)
 		}
+	}
+}
+
+// TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap: two held deletes of the last
+// two console rows, approved at once, are judged one after the other. Each alone leaves the other row
+// and moves nothing; whichever is applied second would empty the map, so it is judged against the map
+// the first left and refused for the flip its proposal never acknowledged. The second apply starts while
+// the first's decision transaction is still open, which is the interleaving two approvals can reach.
+func TestPG_GovernanceChanges_RoleMappingConcurrentDeletesNeverEmptyTheMap(t *testing.T) {
+	t.Setenv(envGovernanceSecondHuman, "true")
+	pool := throwawayPGPool(t)
+	pg := store.NewPG(pool)
+	auth := newAccessAuth(t, nil, "", []string{"approver@corp.example", "proposer@corp.example"}, nil, func(c *oidc.Config) {
+		c.RoleMappings, c.UserTypes = pgOIDCRoleMappings{pg}, pg
+	})
+	e := &roleMapEnv{govEnv: newGovEnvOn(t, pool, func(c *Config) { c.OIDC = auth })}
+	proposer := accessSession(t, "sub-proposer", "proposer@corp.example", oidc.RoleAdmin, nil)
+	ctx := context.Background()
+	e.seedMapping("dev-a", oidc.RoleUser)
+	e.seedMapping("dev-b", oidc.RoleUser)
+	var changes []types.GovernanceChange
+	for _, m := range e.mappings() {
+		ch := e.pending(e.call(proposer, http.MethodDelete, "/api/v1/access/mappings/"+m.ID.String(), ""))
+		full, err := pg.GetGovernanceChange(ctx, ch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changes = append(changes, full)
+	}
+	r := httptest.NewRequest(http.MethodPost, approvePath(changes[0].ID), nil).
+		WithContext(withHumanIdentity(ctx, "sub-approver", "approver@corp.example", oidc.RoleAdmin, "", nil, false))
+
+	// Each decision transaction on a pool of its own (WARDYN_TEST_POOL_GUARD).
+	begin := func() pgx.Tx {
+		t.Helper()
+		p, err := pgxpool.New(ctx, pool.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(p.Close)
+		tx, err := p.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+		return tx
+	}
+	first, second := begin(), begin()
+	if _, err := applyRoleMappingChange(e.srv, r, first, changes[0]); err != nil {
+		t.Fatalf("first delete: %v, want applied", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := applyRoleMappingChange(e.srv, r, second, changes[1])
+		done <- err
+	}()
+	// The second apply either finishes against the map the first has not committed yet, or waits on
+	// the first; only then does the first commit.
+	var secondErr error
+	finished := false
+	for deadline := time.Now().Add(30 * time.Second); !finished; time.Sleep(10 * time.Millisecond) {
+		select {
+		case secondErr = <-done:
+			finished = true
+			continue
+		default:
+		}
+		var waiting int
+		if err := first.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second apply neither finished nor waited")
+		}
+	}
+	if err := first.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !finished {
+		secondErr = <-done
+	}
+	if secondErr == nil {
+		if err := second.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var gate *govRefusal
+	if !errors.As(secondErr, &gate) || gate.why != "role mapping gate" {
+		t.Fatalf("second delete: %v, want the role mapping gate's refusal, not another failure", secondErr)
+	}
+	if left := e.mappings(); len(left) != 1 {
+		t.Fatalf("%d rows left after the refused delete; want one", len(left))
 	}
 }

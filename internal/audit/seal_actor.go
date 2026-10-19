@@ -264,6 +264,15 @@ func (s *Sealer) renderSubject(ctx context.Context, memo *keyMemo, stored string
 			if m.destroyed, m.hasKey, err = s.Subjects.AuditKeyDestroyedAt(ctx, principal); err != nil {
 				return "", err
 			}
+			// An erasure also destroys under the subject itself, so a row written before it stays
+			// erased after the subject's identity row is bound to someone else.
+			gone, ok, err := s.Subjects.AuditKeyDestroyedAt(ctx, SubjectActorPrefix+id)
+			if err != nil {
+				return "", err
+			}
+			if ok && (!m.hasKey || gone.After(m.destroyed)) {
+				m.destroyed, m.hasKey = gone, true
+			}
 		}
 		memo.actors[id] = m
 	}

@@ -8,8 +8,9 @@
 # runner tools and governs it (default-deny egress, brokered creds, audit).
 # It doesn't have to be an agent: task_mode=exec runs a plain command.
 #
-# Images build from source on each job (a few minutes; nothing is published
-# to a registry yet — see docs/CI.md "Images").
+# Images build from source on each job (a few minutes; release images are
+# published to a registry, but this job does not pull them — see docs/CI.md
+# "Images").
 name: wardyn-sandboxed-job
 
 on:
@@ -35,7 +36,7 @@ jobs:
           # that branch would run arbitrary shell in front of your secrets.
           # Bump it deliberately, to a release you verified (docs/VERIFY.md);
           # a full commit sha pins harder still.
-          ref: v0.9.3
+          ref: v0.9.4
           path: wardyn
 
       - name: Run the governed sandboxed task

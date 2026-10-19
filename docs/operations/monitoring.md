@@ -46,8 +46,8 @@ flowchart LR
 | `wardyn_runner_pool_queue_wait_seconds{outcome}` | Histogram. How long runs waited in a pool's queue, by how they left it: `started`, `timeout`, `cancelled` or `refused` | |
 | `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`/`spent`/`transport_error`/`unavailable` — the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check already make, graphable without grepping the audit trail | |
 | `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. Only here — they used to ride the anonymous `/healthz`, which handed the fleet's kernel-event volume to anyone who could reach the port. Omitted entirely when no sensor has ever beaten | `/healthz` now publishes the VERDICT only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count for an operator reading a broken correlation. |
-| `wardyn_auth_failed_suppressed_total` | Audit rows the rate limiter dropped: `auth.fail` and unattributed SSH or ticket refusals. The trail is capped near one row a second, so it stops describing the volume — **a credential-stuffing run reads quieter than a handful of typos** | **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
-| `wardyn_auth_store_errors_total` | Requests an authentication lane couldn't decide because its store read failed and answered `500` — no audit row exists for these (no authenticated principal to attribute one to) | |
+| `wardyn_auth_failed_suppressed_total` | Audit rows a rate limiter dropped: `auth.fail` and SSH or ticket refusals, from the shared limiter and the per-key SSH buckets. The trail stops describing the volume — **a credential-stuffing run reads quieter than a handful of typos** | **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
+| `wardyn_auth_store_errors_total` | Requests an authentication lane couldn't decide because its store read failed and answered `503`. The SSO lane records `auth.fail`; every other lane records nothing | |
 
 - `wardyn_sso_refresh_total{outcome="spent"}` increments ONCE per refresh token AWS retires, at the `CreateToken` call that discovers it (the `invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client` codes).
 - Every later dispatch on that same token exits at an earlier, UNCOUNTED short-circuit — the in-memory dead-mark check, before `CreateToken` is ever called again.
@@ -82,7 +82,7 @@ These are the sweeps, with the interval each ticks at:
 | `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
 | `run_watcher` | 1m | A runner exists, on every replica |
 | `orphaned_build` | 30m | The image builder can sweep orphaned builds |
-| `run_output` | 1h | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
+| `run_output` | 1m | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
 | `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
 | `aws_sso_renewal` | 1m | Always: renews a live run's captured AWS SSO session inside `WARDYN_AWS_SSO_REFRESH_SKEW` of its expiry. Runs on the sweeper leader |
 
@@ -158,7 +158,7 @@ metrics:
 
 ## No core dumps, no attaching
 
-wardynd and wardyn-proxy hold credentials in memory, so each sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as its first act.
+wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
 
 - A crash writes no core file, and a `core_pattern` handler receives nothing.
 - A process of the same user can no longer `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.

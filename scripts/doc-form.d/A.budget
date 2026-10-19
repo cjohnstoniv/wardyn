@@ -181,7 +181,18 @@
 # docs/AUDIT-ACTIONS.md 48248 adds 11: the runner.connect row says it is written when the session reports its capabilities, after that session's action receipts.
 # docs/AUDIT-ACTIONS.md 48281 = 48237 + 33 + 11, measured: both sides after the AF2 merge
 # docs/AUDIT-ACTIONS.md 48304 = 48281 + 23, measured: measured after the AF1 and AF2 merges: the runner.recovery.request row, its deferred-recovery wording, and the runner.connect ordering
-docs/AUDIT-ACTIONS.md=48304 share=8
+# docs/AUDIT-ACTIONS.md 48403 = 48304 + 99, measured: the approvals and token history an erasure reaches, the subject tombstone, and the node record projection below the security tier.
+# docs/AUDIT-ACTIONS.md 48415 = 48403 + 12, measured: the subject-tombstone note names erasures run before 0.9.4.
+# 0.9.4 L7a2 +10: the optional skipped field on workspace.egress.approve.
+# docs/AUDIT-ACTIONS.md 48307 = 48304 + 3, measured: the two citations renamed for sweepTerminalSandboxRun and agentActivityDecision.
+# docs/AUDIT-ACTIONS.md 48313 adds 9 over 48304, measured: 0.9.4 L4b, the build door in the host_capacity.refuse row.
+# 0.9.4 L3 +20: docs/AUDIT-ACTIONS.md 48324 adds 20 over 48304 (the runner.inventory.hold row now says it is audited when a hold begins and at most once an hour per runner per server, #2123).
+# 0.9.4 W4-DOCS-1: docs/AUDIT-ACTIONS.md 48595 adds 138 over 48457, measured: #2347: the push-entry-underivable, spool-full and spool-lost rule_source rows.
+# 0.9.4 W4 TESTS-1 +18: docs/AUDIT-ACTIONS.md, ui.open/ui.close Data fields gain entry, service_identity and via (#2633).
+# docs/AUDIT-ACTIONS.md 48583 adds 126 over 48457, measured: W4 API-A rows #2135 (ado.signin.capture), #2141 (harness.credential.refresh outcomes and fields), #2142 (credential.erase lock scope).
+# docs/AUDIT-ACTIONS.md=48498 adds 41 (0.9.4 W4-API-B): groups_truncated on the delegation.exchange outside_scope row (#2764) and the ADO 404 git refusal wording.
+# 0.9.4 W4 train +16: the run.revoke key list gains the cascade and reaper keys (#3134), measured.
+docs/AUDIT-ACTIONS.md=48834 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -219,9 +220,10 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 
 // QueryAuditEventsFilteredPage returns audit events narrowed by f, bounded by p.
 // A non-nil runID scopes to one run and keeps that trail's chronological seq ASC
-// order (the per-run contract in docs/sdk.md); nil is the newest-first global
-// feed. Only a request that actually sets a predicate takes this path — an
-// unfiltered read stays on the two plain queries above, whose plans are unchanged.
+// order (the per-run contract in docs/sdk.md) unless p.Newest asks for its newest
+// rows first; nil is the newest-first global feed. Only a request that actually
+// sets a predicate takes this path — an unfiltered read stays on the two plain
+// queries above, whose plans are unchanged.
 //
 // No new index: 0001 covers (time) and 0017 (action, seq DESC); a bounded LIMIT
 // query index-scans the pkey backward and filters, which is what the caps are for.
@@ -229,8 +231,18 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 // planner walks the pkey or the (time) index and filters, and the LIMIT plus a
 // Since window bound it (about 0.1 s over 2M rows in the #1449 review).
 func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f AuditFilter, p Page) ([]types.AuditEvent, error) {
+	q, args := filteredAuditQuery(auditCols, runID, f, p.Newest, 0)
+	q, args = p.appendTo(q, args)
+	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
+}
+
+// filteredAuditQuery is the filtered audit read without its LIMIT: cols from audit_events narrowed by the
+// run and f, in the order QueryAuditEventsFilteredPage documents (newest flips a run's trail to newest-first).
+// A positive afterSeq continues past that row in the same direction (below it newest-first, above it for a
+// run's trail read oldest-first).
+func filteredAuditQuery(cols string, runID *uuid.UUID, f AuditFilter, newest bool, afterSeq int64) (string, []any) {
 	q := `
-		SELECT ` + auditCols + `
+		SELECT ` + cols + `
 		FROM audit_events`
 	var args []any
 	var clauses []string
@@ -240,16 +252,51 @@ func (s PG) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, 
 	}
 	extra, args := f.where(args)
 	clauses = append(clauses, extra...)
+	dir, cmp := "DESC", "<"
+	if runID != nil && !newest {
+		dir, cmp = "ASC", ">"
+	}
+	if afterSeq > 0 {
+		args = append(args, afterSeq)
+		clauses = append(clauses, fmt.Sprintf("seq %s $%d", cmp, len(args)))
+	}
 	if len(clauses) > 0 {
 		q += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	if runID != nil {
-		q += " ORDER BY seq ASC"
-	} else {
-		q += " ORDER BY seq DESC"
-	}
-	q, args = p.appendTo(q, args)
-	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
+	return q + " ORDER BY seq " + dir, args
+}
+
+// AuditKeysetPager pages the filtered audit read by position, for the export. An OFFSET page re-walks every
+// row before it, and a row written mid-export shifts every later OFFSET window by one, so the newest-first
+// feed repeated a row at each page boundary. Optional like Pager: a store without it keeps the OFFSET loop.
+type AuditKeysetPager interface {
+	// QueryAuditEventsFilteredAfter is QueryAuditEventsFilteredPage for the rows past afterSeq, limited to
+	// limit rows. afterSeq 0 starts at the first row. It also returns the seq of the last row returned,
+	// the next call's afterSeq; the event type carries no seq, so the cursor travels beside it.
+	QueryAuditEventsFilteredAfter(ctx context.Context, runID *uuid.UUID, f AuditFilter, afterSeq int64, limit int) ([]types.AuditEvent, int64, error)
+}
+
+var _ AuditKeysetPager = PG{}
+
+// seqRow scans a row's trailing seq into *seq after the columns scanAuditEvent reads.
+type seqRow struct {
+	pgx.Row
+	seq *int64
+}
+
+func (r seqRow) Scan(dest ...any) error { return r.Row.Scan(append(dest, r.seq)...) }
+
+// QueryAuditEventsFilteredAfter walks seq, the table's primary order: each page is an index range scan
+// from the cursor, so the export costs O(rows) however long it runs, and rows committed after it began sit
+// beyond the cursor (newest-first) or past the last page, never inside one already sent.
+func (s PG) QueryAuditEventsFilteredAfter(ctx context.Context, runID *uuid.UUID, f AuditFilter, afterSeq int64, limit int) ([]types.AuditEvent, int64, error) {
+	q, args := filteredAuditQuery(auditCols+", seq", runID, f, false, afterSeq)
+	q, args = Page{Limit: limit}.appendTo(q, args)
+	last := afterSeq
+	evs, err := collect(ctx, s.Pool, "query", "audit events", q, args, func(r pgx.Row) (types.AuditEvent, error) {
+		return scanAuditEvent(seqRow{Row: r, seq: &last})
+	})
+	return evs, last, err
 }
 
 // RunAuditMatcher answers "does this run have ANY audit row matching f?" as an

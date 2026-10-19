@@ -62,19 +62,21 @@ if [ "${1:-}" = "--self-test" ]; then
 fi
 
 cd ui
-pnpm licenses list --prod --json > /tmp/ui-prod-licenses.json
+LICENSES_JSON="$(mktemp)"
+trap 'rm -f "$LICENSES_JSON"' EXIT
+pnpm licenses list --prod --json > "$LICENSES_JSON"
 
-n=$(jq '[.[][]] | length' /tmp/ui-prod-licenses.json)
+n=$(jq '[.[][]] | length' "$LICENSES_JSON")
 [ "$n" -ge 1 ] || { echo "ERROR: examined 0 production packages — is ui/node_modules installed? Failing closed."; exit 1; }
 
-bad=$(jq -r 'keys[]' /tmp/ui-prod-licenses.json | while IFS= read -r lic; do
+bad=$(jq -r 'keys[]' "$LICENSES_JSON" | while IFS= read -r lic; do
   [ -z "$(residue "$lic")" ] || printf '%s\n' "$lic"
 done || true)
 
 if [ -n "$bad" ]; then
   echo "Non-allowlisted licence(s) found in PRODUCTION dependencies:"
   echo "$bad"
-  jq . /tmp/ui-prod-licenses.json
+  jq . "$LICENSES_JSON"
   exit 1
 fi
 echo "All $n production dependency licences are on the allowlist."

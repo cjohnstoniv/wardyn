@@ -308,6 +308,9 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 		t.Errorf("POST /drives = %d, want 503 — a ceiling that could not be evaluated is a fact about the "+
 			"deployment, not a refusal of this drive: %s", w.Code, w.Body.String())
 	}
+	if got := errorReason(w); got != reasonUserDriveCeilingUnavailable {
+		t.Errorf("the 503 reason = %q, want %q: a share that did not answer is not a bad request", got, reasonUserDriveCeilingUnavailable)
+	}
 	if !strings.Contains(w.Body.String(), root) {
 		t.Errorf("the 503 body does not name the root that did not answer (%s); every /drives route is "+
 			"operator-only, and the admin's remedy is that mount: %s", root, w.Body.String())

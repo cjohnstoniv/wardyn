@@ -52,8 +52,10 @@ const runEventsReconnectDelay = time.Second
 
 // RunEvents follows a run's lifecycle feed, calling fn with each event in order,
 // starting after afterID (0 = from the first). The server closes a held stream
-// every few minutes; RunEvents reconnects with Last-Event-ID, so fn sees every
-// event exactly once. It returns nil after fn has seen RunEventEnded, fn's own
+// every few minutes; RunEvents reconnects with Last-Event-ID, so against one
+// wardynd replica fn sees every event exactly once. Event ids count within one
+// replica's ring, so a reconnect that lands on another replica may miss or repeat
+// events. It returns nil after fn has seen RunEventEnded, fn's own
 // error if fn returns one, an *APIError for a non-2xx answer (404 for a run the
 // caller cannot read), or the transport error — pass the last ID fn saw back as
 // afterID to resume.

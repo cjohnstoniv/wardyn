@@ -138,7 +138,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
           {NR_LAUNCH.VIEW_RUN}
         </Link>
       </div>
-      <KillRunDialog runId={killing} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id)} />
+      <KillRunDialog runId={killing} title={run.title?.trim() || run.task} onOpenChange={(open) => !open && setKilling(null)} onConfirm={(id) => void kill(id)} />
     </section>
   );
 }

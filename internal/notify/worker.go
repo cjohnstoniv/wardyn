@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -35,6 +36,10 @@ const (
 
 // retryBackoff is the wait after the nth failed attempt (index n-1); the fifth failure is dead.
 var retryBackoff = [maxAttempts - 1]time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute}
+
+// jitter spreads a retry wait by +-20%, so rows that failed in one burst (a chat webhook answering 429)
+// do not all come due on the same tick and burst again. A variable so a test can pin it.
+var jitter = func(d time.Duration) time.Duration { return d * time.Duration(80+rand.IntN(41)) / 100 }
 
 // Worker delivers due outbox rows. Every replica runs one: SKIP LOCKED keeps replicas off each other's
 // rows and the lease is what recovers a row whose replica died mid-send.
@@ -250,7 +255,7 @@ func (w *Worker) failed(c claimed, res result) outcome {
 	if !res.retryable || int(c.attempts) >= maxAttempts {
 		return outcome{state: types.NotifyDead, class: res.class}
 	}
-	return outcome{state: types.NotifyPending, class: res.class, wait: retryBackoff[c.attempts-1]}
+	return outcome{state: types.NotifyPending, class: res.class, wait: jitter(retryBackoff[c.attempts-1])}
 }
 
 // finalizeSQL is a compare-and-set on (id, lease_until): a replica whose lease was reclaimed cannot

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -285,4 +286,22 @@ func TestDeliveryClassesMatchDesign(t *testing.T) {
 			t.Errorf("%s: runner_resident allowed=%v", c, resident)
 		}
 	}
+}
+
+// pathExists reports whether a dotted path of field names resolves under t.
+func pathExists(t reflect.Type, path string) bool {
+	for _, seg := range strings.Split(path, ".") {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return false
+		}
+		f, ok := t.FieldByName(seg)
+		if !ok {
+			return false
+		}
+		t = f.Type
+	}
+	return true
 }

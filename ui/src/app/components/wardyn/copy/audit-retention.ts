@@ -39,6 +39,8 @@ export const RETENTION = {
   COL_DROP: "Drop",
   COVERS_LEGACY: (date: string) => `Before ${date}`,
   OPEN: "Open",
+  // A pre-created partition for a month that has not started: it holds no events and is not the one receiving them.
+  FUTURE: "Not started",
   CLOSED: "Closed",
   ELIGIBLE: "Can be dropped",
   WHY: {

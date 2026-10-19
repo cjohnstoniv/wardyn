@@ -242,6 +242,12 @@ describe("workspace client methods", () => {
     }));
   });
 
+  it("promoteRecordEgress reports the hosts the server skipped", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ws), { headers: { "X-Wardyn-Record-Skipped-Hosts": "a.example.com, b.example.com" } }));
+    await expect(workspaces.promoteRecordEgress("ws-1", "build", ["a.example.com", "b.example.com", "c.example.com"]))
+      .resolves.toEqual({ ...ws, skipped_hosts: ["a.example.com", "b.example.com"] });
+  });
+
   it.each([409, 422, 503])("recordTask returns an actionable %s refusal without claiming a run", async (status) => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "recording refused" }), { status }));
     await expect(workspaces.recordTask("ws/id", "verify", true)).resolves.toEqual({ ok: false, status, detail: "recording refused" });

@@ -151,7 +151,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		// The route has always refused on an unresolved key owner, once the
 		// cutoff has committed; only the request-free callers read it as zero keys.
 		if res.KeyUnresolved {
-			err = errors.Join(err, errors.New(res.Refusal))
+			err = errors.Join(err, keyRefusal(res.Refusal))
 		}
 	}
 	refusal, keyReason := res.Refusal, res.KeyReason
@@ -174,14 +174,37 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		// the caller gets it verbatim rather than the generic "revoke credentials"
 		// (the cutoff already committed, so the responder needs the remedy, not
 		// just the log line).
-		if refusal != "" {
-			writeErrorReason(w, http.StatusInternalServerError, keyReason, refusal)
+		// An email that names no known principal, or more than one, is the caller's input to fix,
+		// the same 422 every other owner resolver answers.
+		// A refusal that arrives with a real failure (a token sweep, a queue cancel) is still a 5xx.
+		if refusal != "" && onlyKeyRefusals(err) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, keyReason, refusal)
 			return
 		}
 		writeServerError(w, r, "revoke credentials", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// keyRefusal is the SSH key owner resolver's refusal sentence carried as an error, so the handler can
+// tell it from a real failure joined beside it.
+type keyRefusal string
+
+func (k keyRefusal) Error() string { return string(k) }
+
+// onlyKeyRefusals reports whether err is made of nothing but keyRefusals.
+func onlyKeyRefusals(err error) bool {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range j.Unwrap() {
+			if !onlyKeyRefusals(e) {
+				return false
+			}
+		}
+		return true
+	}
+	_, ok := err.(keyRefusal)
+	return ok
 }
 
 // personRevocation is what one revokePersonCredentials (or the revoke-all
@@ -244,6 +267,11 @@ func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string
 		serr = errors.Join(serr, rerr)
 	}
 	if subject != "" && subject != principal {
+		// The subject's own cutoff first, so a service token whose mint is past its late check of the
+		// sponsor and not yet inserted is ended too; the sweep below only sees tokens already there.
+		if subject != res.KeyPrincipal {
+			serr = errors.Join(serr, s.cfg.SessionRevocations.RevokeSub(ctx, subject))
+		}
 		n, kerr := s.revokeSponsoredTokens(ctx, subject)
 		res.Tokens += n
 		_, kqerr := s.cancelQueuedRunsOf(ctx, subject, queueCancelSessionRevoked)
@@ -297,7 +325,7 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string, resolv
 	if res.Refusal != "" {
 		res.KeyUnresolved = res.KeyReason == reasonOwnerUnresolved
 		if !res.KeyUnresolved {
-			keyErr = errors.New(res.Refusal)
+			keyErr = keyRefusal(res.Refusal)
 		}
 	}
 	return res, errors.Join(tokenErr, keyErr)

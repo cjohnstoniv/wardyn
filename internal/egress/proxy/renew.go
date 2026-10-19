@@ -54,6 +54,9 @@ const (
 	renewRetry       = time.Minute      // first gap after a failed renew, and the floor on every gap
 	renewMaxInterval = 30 * time.Minute // caps the gap between renews and the failure-backoff ceiling
 	renewTimeout     = 10 * time.Second // bounds one renew request
+	// renewExpiryMargin is how long before the held token expires the backoff's last attempts land, so a
+	// control plane back before then is reached while that token still authenticates.
+	renewExpiryMargin = 2 * time.Minute
 	// renewGiveUpAfter mirrors the identity provider's tokenTTL (1h), spelled here rather than imported
 	// since this sidecar never parses the JWT; past it the token being renewed is dead regardless of cause.
 	renewGiveUpAfter = identity.RunTokenTTL
@@ -78,18 +81,20 @@ func (e *renewStatusError) permanent() bool { return e.Status == http.StatusForb
 
 // renewerTuning is the loop's timing, held in one struct so tests can drive it at millisecond scale.
 type renewerTuning struct {
-	firstRetry  time.Duration
-	maxInterval time.Duration
-	giveUpAfter time.Duration
-	now         func() time.Time
+	firstRetry   time.Duration
+	maxInterval  time.Duration
+	giveUpAfter  time.Duration
+	expiryMargin time.Duration
+	now          func() time.Time
 }
 
 func defaultRenewerTuning() renewerTuning {
 	return renewerTuning{
-		firstRetry:  renewRetry,
-		maxInterval: renewMaxInterval,
-		giveUpAfter: renewGiveUpAfter,
-		now:         time.Now,
+		firstRetry:   renewRetry,
+		maxInterval:  renewMaxInterval,
+		giveUpAfter:  renewGiveUpAfter,
+		expiryMargin: renewExpiryMargin,
+		now:          time.Now,
 	}
 }
 
@@ -110,9 +115,23 @@ func runTokenRenewer(ctx context.Context, ts *tokenSource, base string, client *
 	runTokenRenewerTuned(ctx, ts, base, client, defaultRenewerTuning())
 }
 
+// retryGap is the wait before the next try after a failed renew: the backoff, except that it never
+// passes the held token's life. The gap shrinks so the last tries land in the margin before the
+// token expires, one firstRetry apart, while it still authenticates.
+func (tune renewerTuning) retryGap(backoff time.Duration, heldExp, now time.Time) time.Duration {
+	if !heldExp.After(now) {
+		return backoff
+	}
+	if left := heldExp.Sub(now) - tune.expiryMargin; left < backoff {
+		return max(left, tune.firstRetry)
+	}
+	return backoff
+}
+
 // runTokenRenewerTuned is runTokenRenewer with its timing injected; see renewerTuning.
 func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning) {
 	lastGood := tune.now() // the startup token is the first "last good token"
+	var heldExp time.Time  // the held token's expiry; unknown for the startup token
 	backoff := tune.firstRetry
 	for {
 		rctx, cancel := context.WithTimeout(ctx, renewTimeout)
@@ -131,7 +150,7 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 					slog.Duration("failing_for", held), slog.Any("err", err))
 				return
 			}
-			next = backoff
+			next = tune.retryGap(backoff, heldExp, tune.now())
 			// SECURITY: do not log the token; the error carries status + body only.
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off",
 				slog.Duration("retry_in", next), slog.Any("err", err))
@@ -140,7 +159,7 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 			}
 		} else {
 			ts.Set(tok)
-			lastGood = tune.now()
+			lastGood, heldExp = tune.now(), exp
 			backoff = tune.firstRetry
 			next = tune.maxInterval
 			if half := time.Until(exp) / 2; half < tune.firstRetry {

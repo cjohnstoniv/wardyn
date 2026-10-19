@@ -63,12 +63,17 @@ interface Draft {
 /** The draft as text: what the unsaved-changes guard compares and shows. The chosen logo file is named, not read. */
 const draftText = (d: Draft): string => JSON.stringify({ ...d, logo: d.logo && { name: d.logo.name, size: d.logo.size, type: d.logo.type } }, null, 2);
 
+// The console's own teal pair (theme.css --primary and white text): the server refuses an
+// empty colour pair, so an untouched form seeds a valid one instead of opening in error.
+const DEFAULT_PRIMARY = "#0f766e";
+const DEFAULT_PRIMARY_TEXT = "#ffffff";
+
 function draftFrom(b: Branding | null): Draft {
   return {
     orgName: b?.org_name ?? "",
     nameFormat: b?.name_format ?? "prefix",
-    primary: b?.primary ?? "",
-    text: b?.primary_text ?? "",
+    primary: b?.primary ?? DEFAULT_PRIMARY,
+    text: b?.primary_text ?? DEFAULT_PRIMARY_TEXT,
     darkOn: !!b?.dark_custom,
     darkPrimary: b?.dark_custom ? (b.dark_primary ?? "") : "",
     darkText: b?.dark_custom ? (b.dark_primary_text ?? "") : "",
@@ -263,7 +268,8 @@ export function BrandingCard() {
                   selected={draft.nameFormat === f}
                   onClick={() => set({ nameFormat: f })}
                   title={orgName ? (f === "prefix" ? BRAND_NAME.PREFIX(orgName) : BRAND_NAME.SUFFIX(orgName)) : (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT)}
-                  hint={f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT}
+                  // With no name typed the title is already the placeholder shape; saying it twice adds nothing.
+                  hint={orgName ? (f === "prefix" ? BRANDING.FORMAT_PREFIX_HINT : BRANDING.FORMAT_SUFFIX_HINT) : undefined}
                 />
               ))}
             </div>

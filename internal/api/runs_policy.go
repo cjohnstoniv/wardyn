@@ -89,7 +89,7 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 // JSON object rather than serving it as the bare page servePage writes.
 func pagedItems[T any](page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) ([]T, bool, error) {
 	if pageFn != nil {
-		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
+		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset, Newest: page.Newest})
 		if err != nil {
 			return nil, false, err
 		}

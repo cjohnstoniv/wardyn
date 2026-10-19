@@ -20,9 +20,10 @@
 #   lint, staticcheck, ui-typecheck | whole-tree guards | go test of changed packages |
 #   Postgres-gated tests of changed packages | vitest | changed Playwright specs x3.
 # The guard and Postgres test lists are built by grep (scripts/lib/candidate-tests.py), never by hand.
-# Every go/pnpm/e2e command goes through ${GATE:-/tmp/claude-1000/wardyn-gates/gate.sh} when that file
-# exists, so do NOT wrap the whole script in the gate (its e2e step takes the heavy slot itself); if you
-# must, set WARDYN_GATED=1 so the inner commands skip the gate. The script never sets it.
+# With GATE=<path> set and that file present, every go/pnpm/e2e command goes through it (a box's job
+# semaphore), so do NOT wrap the whole script in the gate (its e2e step takes the heavy slot itself); if
+# you must, set WARDYN_GATED=1 so the inner commands skip the gate. The script never sets it. A gate you
+# do not own, or one that others can write, is refused: it would run every command as you.
 # Roughly 15 minutes on a narrow diff; a wide one (BASE=v0.9.0) is far more. Still not a substitute
 # for hosted CI: no -race, no coverage floor, no tag legs, only the changed packages' Postgres tests.
 #
@@ -42,11 +43,12 @@ for arg in "$@"; do
   esac
 done
 
-# Candidate mode only: run each go/pnpm/e2e command through the box's gate semaphore when it exists.
+# Candidate mode only: run each go/pnpm/e2e command through the gate GATE names, when it exists.
 G=()
-if [ "${candidate}" = 1 ]; then
-  gate="${GATE:-/tmp/claude-1000/wardyn-gates/gate.sh}"
-  [ -x "${gate}" ] && [ "${WARDYN_GATED:-}" != 1 ] && G=("${gate}")
+if [ "${candidate}" = 1 ] && [ -n "${GATE:-}" ] && [ -e "${GATE}" ] && [ "${WARDYN_GATED:-}" != 1 ]; then
+  [ -O "${GATE}" ] && [ -x "${GATE}" ] && [ -z "$(find "${GATE}" -maxdepth 0 -perm /022)" ] \
+    || die "GATE=${GATE} must be an executable you own that only you can write"
+  G=("${GATE}")
 fi
 
 # step NAME CMD... — plain mode just runs CMD; candidate mode times it, logs it and, on failure,

@@ -31,14 +31,21 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(err.reason).toBe("");
   });
 
+  it("a git_credential refusal's cause rides the HttpError; absent is empty", async () => {
+    const withCause = new Response(JSON.stringify({ error: "x", reason: "git_credential", cause: "token_expired" }), { status: 422 });
+    expect(((await asJson(withCause).catch((e: unknown) => e)) as HttpError).cause).toBe("token_expired");
+    const bare = new Response(JSON.stringify({ error: "x", reason: "git_credential" }), { status: 422 });
+    expect(((await asJson(bare).catch((e: unknown) => e)) as HttpError).cause).toBe("");
+  });
+
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "", tool: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
   });
 
   it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
@@ -54,7 +61,7 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string org is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
   });
 
   it('{"error":"…","provider":"corp","kind":"custom_endpoint"} -> an HttpError naming the refused provider and kind (#532, #535, #543)', async () => {

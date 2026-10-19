@@ -63,6 +63,26 @@ SITE_CONFIG="${MANAGED_DIR}/site-config.json"
 [ -f "${ENV_FILE}" ] || die "wardyn-desktop.sh: ${ENV_FILE} not found — MDM has not delivered the envelope yet (docs/DESKTOP.md)"
 [ -f "${AGE_FILE}" ] || die "wardyn-desktop.sh: ${AGE_FILE} not found — run install.sh first (it mints the per-device key; MDM must never supply this one)"
 
+# The MDM-shipped envelope files decide what this root process runs: the
+# images and socket in wardyn.env, the run ceiling in policy.json, the network
+# facts site-config.json applies as admin. docs/DESKTOP.md's MDM file table
+# ships them root-owned 0644; one another account can write is refused, the
+# same owner and write rule secret.env gets below (readable is fine for these).
+refuse_shared_write() { # FILE
+  local st perm
+  st="$(stat -L -c '%a %u' "$1" 2>/dev/null || stat -L -f '%OLp %u' "$1" 2>/dev/null || true)"
+  [ -n "${st}" ] || die "wardyn-desktop.sh: cannot stat $1 — refusing to use a file whose mode and owner are unknown"
+  perm=$(( 8#${st%% *} ))
+  if [ "${st##* }" != "$(id -u)" ] || [ $(( perm & 0022 )) -ne 0 ]; then
+    die "wardyn-desktop.sh: $1 is owned by uid ${st##* } and/or group/world-writable (mode ${st%% *}) — this root process acts on it, so it must be writable by root alone. Ship it from MDM as root-owned 0644 (docs/DESKTOP.md 'The MDM file table'), then re-run."
+  fi
+}
+refuse_shared_write "${ENV_FILE}"
+for _f in "${MANAGED_DIR}/policy.json" "${SITE_CONFIG}"; do
+  if [ -f "${_f}" ]; then refuse_shared_write "${_f}"; fi
+done
+unset _f
+
 # The per-device secret-store key: a VALUE in WARDYN_AGE_KEY, not a path (no
 # WARDYN_AGE_KEY_FILE exists) — see docs/DESKTOP.md "A note on the mechanism".
 WARDYN_AGE_KEY="$(cat "${AGE_FILE}")"
@@ -151,7 +171,10 @@ fi
 # per-user. docs/DESKTOP.md "Which Docker socket" has the matrix.
 _env_sock="$(env_get "${ENV_FILE}" WARDYN_DOCKER_SOCK)"
 if [ -n "${_env_sock}" ]; then
-  export WARDYN_DOCKER_SOCK="${_env_sock}"
+  # WARDYN_DOCKER_SOCK is left to wardyn_pick_docker_host (below), which derives it from
+  # DOCKER_HOST: a Colima/Rancher host-side socket is not bind-mountable, so the mount
+  # must be the in-VM /var/run/docker.sock. Exporting the envelope value verbatim skipped that.
+  unset WARDYN_DOCKER_SOCK
   export DOCKER_HOST="unix://${_env_sock}"
 fi
 unset _env_sock
@@ -215,6 +238,23 @@ case "${PORT}" in
 esac
 if [ "${#PORT}" -gt 5 ] || [ "$(( 10#${PORT} ))" -lt 1 ] || [ "$(( 10#${PORT} ))" -gt 65535 ]; then
   die "wardyn-desktop.sh: WARDYN_UP_PORT is '${PORT}' — it must be a port number from 1 to 65535 (0 is refused: the desktop does not support an ephemeral port)"
+fi
+
+# The server-side OIDC issuer, resolved the same way. compose defaults it to
+# Dex's http://dex:5556, which no desktop stack runs, so an envelope naming a
+# real IdP and no internal issuer would send boot discovery nowhere. Set in
+# neither place, it is the issuer itself; a loopback issuer is the Dex demo's
+# and keeps compose's default.
+if [ -z "${WARDYN_OIDC_INTERNAL_ISSUER+x}" ] && [ -z "$(env_get "${ENV_FILE}" WARDYN_OIDC_INTERNAL_ISSUER)" ]; then
+  if [ -n "${WARDYN_OIDC_ISSUER+x}" ]; then
+    ISSUER="${WARDYN_OIDC_ISSUER}"
+  else
+    ISSUER="$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)"
+  fi
+  case "${ISSUER}" in
+    ''|http://localhost:*|http://127.0.0.1:*) ;;
+    *) export WARDYN_OIDC_INTERNAL_ISSUER="${ISSUER}" ;;
+  esac
 fi
 
 log "Bringing up the desktop compose stack (image ${WARDYN_WARDYND_IMAGE})"

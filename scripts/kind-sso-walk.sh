@@ -279,6 +279,9 @@ fi
 # The other four images are unaffected: still `kind load`ed above, still an
 # instant local-store hit, so the walk's timing everywhere else is unchanged.
 REGISTRY_NAME="${WARDYN_KIND_SSO_REGISTRY:-kind-sso-registry}"
+# An early failure (the cold-image build below, say) must still remove the registry and its anonymous volume;
+# cleanup_walk's EXIT trap further down replaces this one once everything it touches is defined.
+trap 'docker rm -fv "${REGISTRY_NAME}" "${COLD_PULL_THROTTLE_NAME:-}" >/dev/null 2>&1; [[ -z "${AWS_SSO_NODE_IMAGE:-}" ]] || docker rmi "${AWS_SSO_NODE_IMAGE}" >/dev/null 2>&1; true' EXIT
 REGISTRY_PORT="${WARDYN_KIND_SSO_REGISTRY_PORT:-5001}"
 KIND_NETWORK="kind"
 
@@ -722,7 +725,7 @@ jq -r '"manifest: \(.git_sha) dirty=\(.worktree_dirty_files) inject=\(.aws_sso_p
 step "opening the read-only port-forward to the fake's /_seen (127.0.0.1:${SEEN_PORT})"
 seen_pf_pid=""
 pod_watch_pid=""
-# ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
+# ALSO the taint: this EXIT trap replaces the early registry-only one set near REGISTRY_NAME, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
 # a leftover one causes on the NEXT walk). ALSO the registry, its rate-limited
 # front and the derived cold image (step 1c): removed here, so a fresh, empty
@@ -732,7 +735,7 @@ cleanup_walk() {
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
   [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
-  docker rm -f "${REGISTRY_NAME}" "${COLD_PULL_THROTTLE_NAME:-}" >/dev/null 2>&1
+  docker rm -fv "${REGISTRY_NAME}" "${COLD_PULL_THROTTLE_NAME:-}" >/dev/null 2>&1
   [[ -n "${AWS_SSO_NODE_IMAGE:-}" ]] && docker rmi "${AWS_SSO_NODE_IMAGE}" >/dev/null 2>&1
   return 0
 }

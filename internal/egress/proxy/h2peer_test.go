@@ -1059,3 +1059,23 @@ func TestH2ResendClassNeverEchoesPeerText(t *testing.T) {
 		}
 	}
 }
+
+// TestH2Fallback_PushForgeRead is the push forge-vouching read's sibling of
+// the broker lanes: a forge that speaks HTTP/2 without negotiating it still
+// answers the read, over HTTP/2, instead of failing the dial.
+func TestH2Fallback_PushForgeRead(t *testing.T) {
+	var c h2Counts
+	var dials atomic.Int32
+	p, _ := newGitBrokerH2Proxy(t, startTLSPeer(t, noALPNConfig(t), serveH2Unasked(&c)), &dials)
+	f := &forgeRepo{p: p, repo: "octocat/hello-world", tok: "T"}
+
+	var v any
+	status, err := f.get(context.Background(), "/repos/octocat/hello-world", &v)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d err = %v, want the forge's 200 over the HTTP/2 fallback", status, err)
+	}
+	if c.h2.Load() != 1 || c.h1.Load() != 0 {
+		t.Fatalf("forge served h1=%d h2=%d, want the read over HTTP/2", c.h1.Load(), c.h2.Load())
+	}
+}

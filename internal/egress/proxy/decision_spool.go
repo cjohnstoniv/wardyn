@@ -283,7 +283,8 @@ const ruleSourceAuditRecordTooLarge = "builtin:audit-record-too-large"
 const tooLargeFieldBytes = 512
 
 // recordTooLarge writes a bounded deny for a request refused because its target cannot be recorded:
-// the host, method and the start of the path, never the query. It was never sent, so it needs no
+// the host, method and the start of the path (an MCP broker path redacted as every broker record is),
+// never the query. It was never sent, so it needs no
 // reservation; a spool with no room counts it as a refusal, as any unadmitted deny.
 func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
 	host, path := mitmHost, ""
@@ -295,6 +296,11 @@ func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
 	}
 	if host == "" {
 		host = r.Host
+	}
+	if strings.HasPrefix(path, routeMCPBroker) {
+		// A broker path names its binding: keep only what every broker record keeps.
+		_, key, _ := strings.Cut(strings.TrimPrefix(path, routeMCPBroker), "/")
+		path = mcpRedactedPath("", key)
 	}
 	clip := func(v string) string { return strings.ToValidUTF8(v[:min(len(v), tooLargeFieldBytes)], "") }
 	p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: clip(strings.ToLower(host)), Method: clip(strings.ToUpper(r.Method)),

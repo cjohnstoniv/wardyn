@@ -465,7 +465,7 @@ func setDiff(a, b []string) []string {
 func diskBasisSentence(b client.MainDriveBasis, src types.LimitSource) []string {
 	switch b {
 	case client.MainDriveBasisRequest:
-		return []string{"The disk size is from your request."}
+		return []string{"The disk size is from the request that started this run."}
 	case client.MainDriveBasisPolicy:
 		return []string{"The disk size is set by the run's policy."}
 	case client.MainDriveBasisDefault:

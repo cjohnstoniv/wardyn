@@ -6,6 +6,9 @@
 import {
   test,
   expect,
+  ADMIN_TOKEN,
+  MEMBER_PRINCIPAL,
+  asRealMember,
   chooseShape,
   gotoConsole,
   mockMemberRole,
@@ -46,8 +49,7 @@ test.describe("governance — a member sees none of it (mocked /me role)", () =>
     await mockMemberRole(page);
     await gotoConsole(page);
 
-    // MEMBER_NAV_PATHS (app-shell.tsx) is the single source of truth, and
-    // /governance is deliberately not in it — there is no member governance
+    // /governance is deliberately not in the member nav — there is no member governance
     // route at all, and every route behind it is securityOps server-side.
     await expect(sidebarLink(page, "Governance")).toHaveCount(0);
     for (const label of ["Policies", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
@@ -60,12 +62,14 @@ test.describe("governance — a member sees none of it (mocked /me role)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// The member's view of a ceiling. Splices governance_profile_name onto the
-// REAL /policies/default response — route.fetch() + patch + refulfill, the
-// same technique fixtures.ts's mockMemberRole documents, so the shape around
-// it stays genuine. The field itself can never arrive here: effectiveCeiling
-// short-circuits for an operator and this harness has no non-operator
-// principal. The resolver's own answer is pinned server-side
+// The member's view of a ceiling. The splice cases below patch
+// governance_profile_name onto the REAL /policies/default response —
+// route.fetch() + patch + refulfill, the same technique fixtures.ts's
+// mockMemberRole documents, so the shape around it stays genuine. The mocked
+// role keeps the operator bearer, and effectiveCeiling short-circuits for an
+// operator, so the field cannot arrive that way; the real-member case further
+// down assigns a profile to asRealMember's principal and reads it back through
+// the member's own bearer. The resolver's own answer is pinned server-side
 // (governance_ceiling_test.go:432).
 // ---------------------------------------------------------------------------
 async function mockAssignedCeiling(page: Page, name: string): Promise<void> {
@@ -120,6 +124,55 @@ test.describe("governance — the member is told which ceiling bounds them", () 
     await openRunStep(page);
     await expect(page.getByText(/the governance profile your admin assigned you/)).toHaveCount(0);
     await expect(page.getByText(NR_RUN.LIMITS_NOTE(NAME))).toHaveCount(0);
+  });
+});
+
+// The assignment is real: a profile written through the admin API and bound to the member's own
+// principal, then read back through that member's bearer (no splice), so the resolver, the
+// redaction and the screen are all the production ones.
+test.describe("governance — a real member is told which ceiling bounds them", () => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  const REAL_NAME = "real-member-wall";
+
+  test("a profile assigned to the member's principal reaches the member's own Getting Started card", async ({ page }) => {
+    const prof = await page.request.post("/api/v1/governance/profiles", {
+      headers: auth,
+      data: {
+        name: REAL_NAME,
+        ceiling: {
+          allowed_domains: ["api.anthropic.com"],
+          denied_domains: [],
+          first_use_approval: "deny_with_review",
+          min_confinement_class: "CC3",
+          auto_stop_after_sec: 3600,
+          eligible_grants: [],
+          tool_rules: [{ tool: "*", effect: "allow" }],
+        },
+        limits: {},
+      },
+    });
+    expect(prof.status(), await prof.text()).toBe(201);
+    const profileID = (await prof.json()).profile.id;
+    try {
+      const assigned = await page.request.post("/api/v1/governance/assignments", {
+        headers: auth,
+        data: { subject_type: "user", subject: MEMBER_PRINCIPAL, profile_id: profileID, priority: 0 },
+      });
+      expect(assigned.ok(), await assigned.text()).toBeTruthy();
+
+      await asRealMember(page);
+      await gotoConsole(page);
+      await navToRoute(page, "/setup");
+      await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+      await expect(page.getByText(MEMBER.GS_CHIP(REAL_NAME))).toBeVisible();
+      await expect(page.getByText(MEMBER.GS_BODY(REAL_NAME))).toBeVisible();
+    } finally {
+      const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+      for (const a of snap.assignments ?? []) {
+        if (a.profile_id === profileID) await page.request.delete(`/api/v1/governance/assignments/${a.id}`, { headers: auth });
+      }
+      await page.request.delete(`/api/v1/governance/profiles/${profileID}`, { headers: auth });
+    }
   });
 });
 

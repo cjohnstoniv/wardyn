@@ -316,15 +316,6 @@ func (s PG) ListRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]type
 		WHERE m.pool_id = $1 AND r.owner = p.owner ORDER BY r.created_at DESC, r.id`, []any{poolID}, scanRunner)
 }
 
-// SetRunnerMachineName records the host name a runner reported on connect, the latest kept; a revoked
-// runner keeps the one it had. The caller has checked it with types.ValidMachineName.
-func (s PG) SetRunnerMachineName(ctx context.Context, id uuid.UUID, name string) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET machine_name = $2 WHERE id = $1 AND state <> 'revoked' AND machine_name <> $2`, id, name); err != nil {
-		return fmt.Errorf("store: set runner machine name: %w", err)
-	}
-	return nil
-}
-
 // SetRunnerArch records the CPU architecture a runner reported on connect, the latest kept; a revoked
 // runner keeps the one it had. The caller has checked it with types.ValidArch.
 func (s PG) SetRunnerArch(ctx context.Context, id uuid.UUID, arch string) error {

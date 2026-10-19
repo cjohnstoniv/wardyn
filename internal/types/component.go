@@ -433,12 +433,15 @@ func validComponentEnvName(name string) error {
 var reservedComponentEnvNames = map[string]bool{
 	// Which program runs, and where a shell or a session starts from.
 	"PATH": true, "HOME": true, "SHELL": true, "BASH_ENV": true, "ENV": true, "PROMPT_COMMAND": true,
+	"SHELLOPTS": true, "BASHOPTS": true, "PS4": true,
 	// What a language runtime loads before the program's own code.
 	"NODE_OPTIONS": true, "NODE_PATH": true,
 	"PYTHONPATH": true, "PYTHONHOME": true, "PYTHONSTARTUP": true,
-	"PERL5OPT": true, "PERL5LIB": true, "RUBYOPT": true, "RUBYLIB": true,
+	"PERL5OPT": true, "PERL5LIB": true, "RUBYOPT": true, "RUBYLIB": true, "PYTHONUSERBASE": true,
+	"JAVA_TOOL_OPTIONS": true, "_JAVA_OPTIONS": true, "JDK_JAVA_OPTIONS": true,
 	// The helpers git runs, and the agent's own configuration directory.
 	"GIT_EXEC_PATH": true, "GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_PROXY_COMMAND": true,
+	"GIT_EXTERNAL_DIFF": true, "GIT_ASKPASS": true, "SSH_ASKPASS": true, "GIT_TEMPLATE_DIR": true,
 	"CLAUDE_CONFIG_DIR": true,
 	// The route to the proxy and the trust Wardyn installs for it.
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true,

@@ -29,7 +29,7 @@ import (
 // writes meets that release's proxy, whose strict decoder refuses any key it
 // does not know. Its key set was generated at the tag by
 // internal/egress/proxy's configKeyPaths; bump both at each release.
-const previousProxyTag = "v0.7.12"
+const previousProxyTag = "v0.9.3"
 
 // refusedByPreviousProxy returns the first key in a proxy config that the
 // previous release's decoder refuses, or "" if that proxy loads it. It walks
@@ -84,11 +84,12 @@ func refusedByPreviousProxy(t *testing.T, raw []byte) string {
 	return walk(cfg, "")
 }
 
-// TestPreviousProxyRefusesWhatItCannotHonour: a run that uses nothing new
-// loads on the previous proxy, and a run whose policy uses a feature that
-// proxy lacks is refused there naming the key. The refusal is the fail-closed
-// half: dispatch hands the policy to the proxy whole, so an older proxy stops
-// the run instead of enforcing it without its push rules.
+// TestPreviousProxyRefusesWhatItCannotHonour: a run whose policy uses a feature
+// the previous proxy lacks is refused there naming the key (want), the
+// fail-closed half: dispatch hands the policy to the proxy whole, so an older
+// proxy stops the run instead of enforcing it without, say, its push rules.
+// Every key below reached v0.9.3, so each case loads ("") until the next
+// release adds one; add a case beside the key that does.
 func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	base := runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
 	pushRules := base
@@ -98,8 +99,6 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	reviewHold.Unattended = true
 	unattended := base
 	unattended.Unattended = true
-	// The previous proxy knows the grant as ado_grants; its strict decoder
-	// refuses ado_grant rather than running with the Azure DevOps gate off.
 	adoGrant := base
 	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{"dev.azure.com"}}
 	attributed := base
@@ -115,17 +114,13 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		want string
 	}{
 		{"required fields only", base, ""},
-		{"push rules", pushRules, "policy.push_rules"},
-		{"review hold on an unattended run", reviewHold, "policy.push_rules"},
-		// Dispatch sets unattended only beside review paths, which the case
-		// above refuses; alone the key is refused too.
-		{"unattended", unattended, "unattended"},
-		{"azure devops grant", adoGrant, "ado_grant"},
-		// Dispatch writes it for every governed run, so the proxy image moves
-		// before wardynd (docs/UI-SANDBOXES.md, upgrade note).
-		{"a governed run's attribution", attributed, "attribution"},
-		{"azure devops capabilities chosen by the policy", adoCaps, "policy.azure_devops_capabilities"},
-		{"github capabilities chosen by the policy", ghCaps, "policy.github_capabilities"},
+		{"push rules", pushRules, ""},
+		{"review hold on an unattended run", reviewHold, ""},
+		{"unattended", unattended, ""},
+		{"azure devops grant", adoGrant, ""},
+		{"a governed run's attribution", attributed, ""},
+		{"azure devops capabilities chosen by the policy", adoCaps, ""},
+		{"github capabilities chosen by the policy", ghCaps, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)

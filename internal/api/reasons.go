@@ -239,6 +239,8 @@ const (
 	reasonWorkspaceSSHSourcesNotReady = "workspace_ssh_sources_not_ready" // an SSH-remote source names a secret that has not been stored yet
 	reasonWorkspaceSourcesNotAllowed  = "workspace_sources_not_allowed"   // the caller's own local_dir sources fail the member-safe mount gate
 	reasonWorkspaceDeleteActiveRun    = "workspace_delete_active_run"     // the workspace is in use by a still-active run
+	reasonWorkspaceNameTaken          = "workspace_name_taken"            // another workspace already has this name
+	reasonWorkspaceUpdateConflict     = "workspace_update_conflict"       // the workspace changed while the edit was being prepared
 
 	// #656 slice 2 — site-config, governance and the user-drive doors share this
 	// one: the caller's group-membership snapshot is missing or was truncated at
@@ -431,8 +433,8 @@ const (
 	reasonUserDrivePreviewNoClaims         = "user_drive_preview_no_claims"         // the naming preview named no user_subjects
 	reasonUserDriveDeniedByProfile         = "user_drive_denied_by_profile"         // the caller's governance profile shuts the drive door
 
-	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the deployment's drive-size ceiling (site config) could not be read
-	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard
+	reasonUserDriveCeilingUnavailable     = "user_drive_ceiling_unavailable"       // the drive write's deployment ceiling could not be answered: the drive-size ceiling (site config) could not be read, or a host_path share did not answer in time (503)
+	reasonUserDriveRehomeListUnavailable  = "user_drive_rehome_list_unavailable"   // the drive list could not be read to run the re-home guard or the host_path nesting check (500)
 	reasonUserDriveReclaimNoDirectoryName = "user_drive_reclaim_no_directory_name" // the allocation resolves to no directory name, so there is no object to reclaim
 
 	// owner_ambiguous / owner_unresolved: resolveSecretOwner's (secrets.go) and
@@ -547,5 +549,5 @@ const (
 	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
 	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
 	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
-	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )

@@ -462,7 +462,13 @@ func TestSecretsAPI_ReservesOAuthSentinels(t *testing.T) {
 		}
 		// Seeded directly in the store, the sentinel is still excluded from the list.
 		sec.m[name] = []byte("shadow-value")
+		sec.m["plain-secret"] = []byte("plain-value")
 		rr := do(t, h.srv, http.MethodGet, "/api/v1/secrets", adminToken, "")
+		// A positive control: the list answered 200 and does show an ordinary secret, so the
+		// absence below is the filter's doing and not an empty or failed response.
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "plain-secret") {
+			t.Fatalf("GET /secrets = %d %s, want 200 listing the ordinary secret", rr.Code, rr.Body.String())
+		}
 		if strings.Contains(rr.Body.String(), name) {
 			t.Fatalf("sentinel %q leaked into list: %s", name, rr.Body.String())
 		}

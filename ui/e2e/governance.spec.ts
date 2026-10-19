@@ -26,7 +26,8 @@ import { SPEC_LABEL } from "./policy-source";
 // Governance profiles e2e (0.7) — lane: governance, port 8288, db wardyn_e2e.
 //
 // #209 split this file by behaviour: the member's own view of a ceiling
-// (route-spliced, independent of this file's real backend state) lives in
+// (route-spliced, plus one real-member case that writes and removes its own
+// profile, independent of this file's real backend state) lives in
 // governance-member.spec.ts, and the self-contained profile-limits round
 // trips (quota, storage ceilings, run limits — each creates its own named
 // profile) live in governance-profile-limits.spec.ts. What stays HERE is the
@@ -399,7 +400,9 @@ test.describe("governance — the resolved preview", () => {
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
-    await expect(page.getByText(GOV.PREVIEW_LEAD)).toBeVisible();
+    // Only the built-in user type exists here, so there is no picker and the lead does not tell the reader to use
+    // one (#2901). The with-types lead is pinned below, where a type is created.
+    await expect(page.getByText(GOV.PREVIEW_LEAD_NO_TYPES)).toBeVisible();
     // The People step's own field and hint, verbatim — one accepted shape.
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS, { exact: true })).toBeVisible();
     await expect(page.getByText(PREVIEW.FIELD_CLAIMS_HINT)).toBeVisible();
@@ -520,7 +523,8 @@ test.describe("governance — the security admin's console (real per-person toke
     );
 
     await gotoConsole(page);
-    await navToRoute(page, "/approvals");
+    // The Admin view's queue: /approvals is the User view, which the server narrows to the caller's own runs.
+    await navToRoute(page, "/admin/approvals");
 
     // authorizeUserDecision early-returns for isSecurityOperator
     // (approvals.go:392), so this tier decides ANY kind on ANY run org-wide —

@@ -95,12 +95,19 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     expect(v.body).toHaveLength(1);
   });
   it("sign in again, whichever cause ended the connection, offers Connect", () => {
-    for (const cause of ["ended", "consent_needed", "permissions_missing", undefined]) {
+    for (const cause of ["ended", "consent_needed", undefined]) {
       const v = patCardView(access({ ...minted, state: "expired_signin", cause, source: "org" }), "Azure DevOps")!;
       expect(v.chip).toEqual({ label: "Sign in again", tone: "warning" });
       expect(v.body).toEqual(["Your organisation asked you to sign in again before Wardyn can create tokens."]);
       expect(v.action).toBe("connect");
     }
+  });
+  it("permissions missing is the admin's to fix: the member sentence, nothing to press", () => {
+    const v = patCardView(access({ ...minted, state: "expired_signin", cause: "permissions_missing", source: "org" }), "Azure DevOps")!;
+    const needsApp = patCardView(access({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app", source: "org" }), "Azure DevOps")!;
+    expect(v.chip).toEqual({ label: "Not connected", tone: "neutral" });
+    expect(v.body).toEqual(needsApp.body);
+    expect(v.action).toBeNull();
   });
   it("blocked by the organisation (the blocked cause) names the fix and offers nothing to press", () => {
     const v = patCardView(access({ ...minted, state: "expired_signin", cause: "blocked" }), "Azure DevOps")!;
@@ -311,9 +318,21 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
       expect(v.lines[0]).toEqual({ text: `Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41 (${words})`, old: false });
     }
   });
-  it("a reason this console has no words for adds no uncopied text", () => {
+  it("a reason this console has no words for adds no uncopied text, and is still drawn as revoked", () => {
     const v = runTokenView([tok({ revoked_at: at(9, 41), revoke_reason: "mystery" })], false);
-    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02");
+    expect(v.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:41");
+  });
+  it("a token minted but never handed out reads as such, and does not make its predecessor (renewed)", () => {
+    const v = runTokenView(
+      [tok({}), tok({ created_at: at(15, 2), valid_to: at(23, 2), revoked_at: at(15, 3), revoke_reason: "unrecorded" })],
+      false,
+    );
+    expect(v.lines).toEqual([
+      { text: "Azure DevOps token: created 09:02 · expires 17:02", old: false },
+      { text: "Azure DevOps token: created 15:02 · expires 23:02 · revoked 15:03 (not handed out)", old: false },
+    ]);
+    const unreadable = runTokenView([tok({ revoked_at: at(9, 3), revoke_reason: "ends_unreadable" })], false);
+    expect(unreadable.lines[0].text).toBe("Azure DevOps token: created 09:02 · expires 17:02 · revoked 09:03 (sign-in state unreadable)");
   });
   it("6f: a revoke that was abandoned names when the token expires on its own", () => {
     expect(runTokenView([tok({ revoke_failed: true })], false).revokeFailedAt).toEqual(["17:02"]);

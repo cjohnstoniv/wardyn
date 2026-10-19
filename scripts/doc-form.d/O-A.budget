@@ -94,7 +94,17 @@
 # docs/OPERATIONS.md 55904 = 55880 + 24, measured: the recording-off sentences beside the setup status row.
 # docs/OPERATIONS.md 56036 = 55904 + 132, measured: merge of the AWS SSO renewal section beside the runner recovery and containment notes.
 # docs/OPERATIONS.md 56211 = 56036 + 175, measured: merge of the run output source section.
-docs/OPERATIONS.md=56211 share=35
+# 0.9.4 L5 +37: the shared-computer note after an SSO sign-out (#2100).
+# docs/OPERATIONS.md 56230 adds 19 over 56211, measured: turning persistence off keeps the old claim and its fs recordings.
+# docs/OPERATIONS.md 56248 = 56230 + 18, measured: #2160 pre-0.9.4 claims lack the keep annotation.
+# docs/OPERATIONS.md 56312 = 56248 + 64 at the prep/094-w0 merge: both sides' additions (0.9.4 L7b1 +64: drive set re-creates a legacy slug drive as id (#2335) +40; the 0191_secrets_value_rev row in the split-role migration list +24).
+# docs/OPERATIONS.md 56247 = 56211 + 36, measured: what the audit_personal_fields and credentials erasure scopes also reach.
+# 0.9.4 L7a2 +20: the redirect-row ecosystem hosts, why artifact_overrides was replaced, and the port-scoping cause.
+# 0.9.4 L7a2 +9: with several go rows the last one decides go_checksum_db_off.
+# 0.9.4 L12 +5: the PodDisruptionBudget renders at two or more replicas (#2164).
+# docs/OPERATIONS.md 56230 adds 19 over 56211, measured: 0.9.4 L4b, the split-role recipe runs with ON_ERROR_STOP and reaches the legacy partition through its loop.
+# 0.9.4 L8: docs/OPERATIONS.md 56344 adds 133 over 56211: the second-user role map and the internal_hosts ClusterIP rule.
+docs/OPERATIONS.md=56616 share=35
 # docs/OPERATIONS.md 55848 adds 132 over 55716: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/OPERATIONS.md 55867 adds 27 over 55840, measured: a run whose runner cannot be asked falls back to this deployment's runner, the older-runner exception, pooled runs, and the runner_offline gap reason.

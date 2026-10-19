@@ -22,7 +22,7 @@ import type {
   ApprovalKind,
   ApprovalState,
 } from "../../lib/types";
-import { AgentBadge } from "./primitives";
+import { AgentBadge, Chip } from "./primitives";
 import type { AutonomyLevel } from "../../lib/api/governance";
 import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 
@@ -224,5 +224,14 @@ describe("AgentBadge — an agent this console has no chip for", () => {
     render(<AgentBadge agent="gemini-cli" />);
     expect(screen.getByText("AG")).toBeInTheDocument();
     expect(screen.queryByText("GE")).not.toBeInTheDocument();
+  });
+});
+
+// #2590 follow-up: a caller's text-meta must not strip the Chip's own line-height, nor its tone colour.
+describe("Chip — a size token beside the base classes", () => {
+  it("keeps leading-5 and the tone colour when the caller passes text-meta", () => {
+    render(<Chip tone="danger" className="px-1.5 py-0 text-meta">3 deny</Chip>);
+    const chip = screen.getByText("3 deny");
+    expect(chip).toHaveClass("leading-5", "text-meta", "text-danger");
   });
 });

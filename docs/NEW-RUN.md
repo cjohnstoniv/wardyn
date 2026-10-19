@@ -55,7 +55,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 
 - **How should it run?** (Agent task only): **Interactive** or **Autonomous**.
   - Interactive means you work in the sandbox, and one harness can start with it.
-  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run Now**; **Schedule For Later** is marked **Coming soon**.
+  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**; **Schedule for later** is marked **Coming soon**.
 - **What should run?** (Application sandbox only): **Automation / script**. **Application / server** is **Coming soon**.
 - **Command** is required for an Application sandbox. It runs verbatim, and the run ends when it exits.
 - **Pool** is required. A pool that cannot take this run stays listed with its reason, such as **No online runners** or **Background only**.
@@ -207,7 +207,7 @@ A `kind: Run` document is the draft written as text. Choose **YAML / JSON** on t
 - Unsupported input is reported, never discarded. "N issues must be fixed" blocks **Continue to review**. **Open in Guided setup** validates, then opens step 1.
 - [Run documents](sdk.md#run-documents) lists the fields. A title or description is refused as `template_field_excluded`; you name the run at launch.
 
-From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
+From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
 
 The `wardyn template` commands are listed in [Run templates](sdk.md#run-templates).
 

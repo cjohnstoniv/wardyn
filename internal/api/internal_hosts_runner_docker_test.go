@@ -141,7 +141,7 @@ func TestInternalHostsOnRunnerDocker(t *testing.T) {
 	if len(cfg.InternalHosts) != 0 {
 		t.Fatalf("revived config keeps internal_hosts %+v the site no longer declares", cfg.InternalHosts)
 	}
-	cfgJSON, rerr := encodeRevivedConfig(cfg)
+	cfgJSON, rerr := encodeRevivedConfig(ctx, cfg)
 	if rerr != nil {
 		t.Fatalf("encode revived config: %+v", rerr)
 	}

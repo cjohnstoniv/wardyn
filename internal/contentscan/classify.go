@@ -26,7 +26,7 @@ func newClassifyDetector(markers []string) (classifyDetector, bool) {
 
 func (d classifyDetector) Scan(s Span, dst *[]Finding) {
 	lower := strings.ToLower(s.Text)
-	path := sanitizePath(s.FieldPath)
+	path := maskFormats(s.FieldPath)
 	for _, m := range d.markers {
 		if idx := strings.Index(lower, m); idx >= 0 {
 			*dst = append(*dst, Finding{

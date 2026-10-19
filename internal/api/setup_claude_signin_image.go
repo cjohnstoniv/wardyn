@@ -74,6 +74,15 @@ func (s *Server) claudeSignInImageOK(ctx context.Context, block *types.ModelProv
 	return introducedSubscription(block, nil) == "" || claudeSignInImageResolves(ctx, s.cfg.AgentImages, s.cfg.Runner)
 }
 
+// claudeSignInImageRows is the row for operator callers only: a member's Checks are
+// discarded, and a member's poll must not wait on a substrate call.
+func (s *Server) claudeSignInImageRows(ctx context.Context) []SetupCheck {
+	if !s.isOperator(ctx) {
+		return nil
+	}
+	return []SetupCheck{claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner)}
+}
+
 // claudeSignInImageCheck is the /setup/status row. Never Blocking: the kind is
 // optional (an install that never offers Claude subscriptions needs nothing
 // here), so a stale pin gates only that one kind (the E4 refusal), not the
@@ -82,6 +91,12 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 	const id, label = "claude_signin_image", "Claude sign-in image"
 	fix := "Build it: `make agent-images-core` (or `make setup`, which builds and pins it). " +
 		"See Operations → Claude sign-in image."
+	// Bounded like Capabilities on the same page: a wedged daemon must not hang
+	// every setup-status poll. A timeout is the inconclusive arm. Only this
+	// read-only row is bounded: the write-time refusal (E4) keeps asking with the
+	// request's own context, so a slow but healthy daemon still answers it.
+	ctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+	defer cancel()
 	st := resolveClaudeSignInImage(ctx, images, rnr)
 	if st.ref == "" {
 		return SetupCheck{

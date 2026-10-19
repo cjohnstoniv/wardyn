@@ -42,8 +42,8 @@ have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] 
 H="${WORK}/home"; mkdir -p "$H"
 printf '#!/bin/sh\necho "started: $*" >>"$STUB_LOG"\n' >"${WORK}/runnerd"; chmod +x "${WORK}/runnerd"
 export STUB_LOG="${WORK}/launcher.log"; : >"$STUB_LOG"
-# A stub plutil that finds an OrgURL only in a profile file that exists.
-printf '#!/bin/sh\nfor a; do f="$a"; done\n[ -f "$f" ] && echo https://wardyn.example\n' >"${WORK}/plutil"; chmod +x "${WORK}/plutil"
+# A stub plutil whose OrgURL is the profile file's content, and that fails on a missing file.
+printf '#!/bin/sh\nfor a; do f="$a"; done\n[ -f "$f" ] && cat "$f"\n' >"${WORK}/plutil"; chmod +x "${WORK}/plutil"
 PREFS="${WORK}/prefs"; mkdir -p "$PREFS"
 launch() { WARDYN_RUNNERD_BIN="${WORK}/runnerd" WARDYN_RUNNERD_HOME="$H" WARDYN_RUNNERD_PLUTIL="${WORK}/plutil" WARDYN_RUNNERD_PREFS="$PREFS" sh "${SRC}/runnerd-managed-start.sh"; }
 launch || fail "the launcher failed while unregistered (a nonzero exit restarts it every 10 seconds)"
@@ -57,9 +57,10 @@ rm "$H/Library/LaunchAgents/com.wardyn.runnerd.plist"
 launch || fail "the launcher failed with no OrgURL (a nonzero exit restarts it every 10 seconds)"
 [ ! -s "$STUB_LOG" ] || fail "the launcher served with no OrgURL in the profile"
 grep -q 'sets no OrgURL' "$H/Library/Logs/wardyn/runnerd.log" || fail "the launcher did not say the profile has no OrgURL"
-: >"$PREFS/com.wardyn.runnerd.plist"
+mkdir -p "$PREFS/$(id -un)"; : >"$PREFS/$(id -un)/com.wardyn.runnerd.plist"
+echo https://wardyn.example >"$PREFS/com.wardyn.runnerd.plist"
 launch || fail "the launcher failed when registered"
-[ "$(cat "$STUB_LOG")" = "started: serve" ] || fail "the registered launcher did not exec 'serve': $(cat "$STUB_LOG")"
+[ "$(cat "$STUB_LOG")" = "started: serve" ] || fail "a blank per-user OrgURL hid the device profile's, or serve did not start: $(cat "$STUB_LOG")"
 
 # ---- pre/postinstall -------------------------------------------------------------------------------
 TB="${WORK}/tbin"; mkdir -p "$TB"

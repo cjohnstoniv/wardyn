@@ -15,12 +15,13 @@ import (
 
 var _ secretstore.Revisioned = (*Store)(nil)
 
-// revisionExpr names a row's current content. Every local write re-keys the
-// row (a fresh data key and fresh nonces), so its ciphertext changes with it;
-// a store-mode write may keep the same external ref, so updated_at joins the
-// digest. Neither is a value or a key.
-const revisionExpr = `encode(sha256(ciphertext || wrapped_dek ||
-	convert_to(kek_id || '|' || extract(epoch from updated_at)::text, 'UTF8')), 'hex')`
+// revisionExpr names a row's current value: value_rev (migration 0191) takes a
+// fresh number on every write of the value (an insert, or `value_rev = DEFAULT`
+// in the three value writes: putRow, putIfRevision, putExternal) and keeps it
+// through a re-wrap or a move (-rewrap, -rewrap-principal-keys,
+// -migrate-secrets, the v0 conversion), which change the row's columns but not
+// its value. A renewal racing one of those still lands.
+const revisionExpr = `value_rev::text`
 
 // Revision names the current content of this view's own row of name, or "" when
 // there is none — see secretstore.Revisioned.
@@ -52,7 +53,7 @@ func (s *Store) putIfRevision(ctx context.Context, q execer, name, rev string, r
 		n = tag.RowsAffected()
 	} else {
 		tag, err := q.Exec(ctx, `
-			UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()
+			UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now(), value_rev=DEFAULT
 			WHERE owned_by=$1 AND name=$2 AND `+revisionExpr+` = $8`,
 			s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx), rev)
 		if err != nil {

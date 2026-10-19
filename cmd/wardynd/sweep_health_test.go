@@ -304,3 +304,30 @@ func (l listFailingApprovals) ListExpiredPendingApprovals(ctx context.Context, n
 	}
 	return l.sweepStore.ListExpiredPendingApprovals(ctx, now, cutoff, afterID, limit)
 }
+
+// ephemeralSweepRecorder is a credential-sweep server that also sweeps the expired handoff rows.
+type ephemeralSweepRecorder struct {
+	failingSweeps
+	calls chan struct{}
+}
+
+func (e ephemeralSweepRecorder) SweepExpiredEphemeral(context.Context) (int, error) {
+	select {
+	case e.calls <- struct{}{}:
+	default:
+	}
+	return 0, nil
+}
+
+// The credential sweep's tick also clears expired attach tickets and delegated tokens.
+func TestRunCredentialSweeper_AlsoSweepsExpiredEphemeralRows(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := ephemeralSweepRecorder{calls: make(chan struct{}, 1)}
+	go runCredentialSweeper(ctx, rec, time.Hour, nil)
+	select {
+	case <-rec.calls:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the credential sweep never swept the expired attach tickets and delegated tokens")
+	}
+}

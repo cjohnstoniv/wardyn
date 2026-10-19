@@ -31,6 +31,10 @@ const (
 	labelComponent = "wardyn.component" // "agent" | "proxy"
 	labelManaged   = "wardyn.managed"   // "true"
 
+	// labelDeployment names the deployment that created an object (labels), so the orphan sweeps of
+	// two control planes sharing one Docker daemon each keep to their own sandboxes.
+	labelDeployment = "wardyn.deployment"
+
 	componentAgent = "agent"
 	componentProxy = "proxy"
 )
@@ -73,4 +77,21 @@ func wardynLabels(runID uuid.UUID, component string, extra map[string]string) ma
 	l[labelRun] = runID.String()
 	l[labelComponent] = component
 	return l
+}
+
+// labels is wardynLabels plus this deployment's own label. The deployment is the control-plane
+// network the proxies join (Config.InternalNetwork): compose derives it from WARDYN_NS, so stacks
+// sharing a daemon each have their own. It stamps last, so no placement label can claim another's.
+func (d *Driver) labels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
+	l := wardynLabels(runID, component, extra)
+	l[labelDeployment] = d.cfg.InternalNetwork
+	return l
+}
+
+// otherDeployment says an object's labels name a deployment other than this one: the orphan sweeps
+// leave it to that deployment. An object with no deployment label (created before 0.9.4) is judged
+// as before.
+func (d *Driver) otherDeployment(l map[string]string) bool {
+	dep, ok := l[labelDeployment]
+	return ok && dep != d.cfg.InternalNetwork
 }

@@ -137,8 +137,9 @@ llm_ready_from_probe() {
 # is the process-env WARDYN_DEFAULT_POLICY for this invocation ("" if unset):
 # an explicit override always wins and clears the marker (operator has now
 # spoken) so a later plain `up` won't auto-pick over it. Otherwise ENV_FILE's
-# own value is kept UNLESS it is unset or still carries the marker (meaning WE
-# chose it last time, not the operator) — in which case pick_policy re-runs.
+# own value is kept UNLESS it is unset or still equals the path the marker
+# recorded (meaning WE chose it last time, not the operator) — in which case
+# pick_policy re-runs.
 # That re-pick is what lets a model provider or an exported API key
 # added AFTER the first `make setup` actually take effect on the next `up`:
 # the old "only decide when .env has nothing" rule froze the pure-Fence
@@ -156,13 +157,27 @@ resolve_default_policy() {
     return
   fi
   _rdp_cur=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY)
-  if [ -z "${_rdp_cur}" ] || [ "$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)" = "1" ]; then
+  _rdp_mark=$(env_get "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO)
+  # The marker records the path WE picked, so an edited value no longer matches it and is
+  # kept. A bare "1" (written before 0.9.4) does not say which path was ours: it is ours
+  # only while the value is still one pick_policy can return.
+  case "${_rdp_mark}" in
+    1) case "${_rdp_cur}" in
+         /examples/policies/claude-llm.json|/examples/policies/default.json|/examples/policies/demo.json) _rdp_ours=1 ;;
+         *) _rdp_ours=0 ;;
+       esac ;;
+    ""|0) _rdp_ours=0 ;;
+    *) [ "${_rdp_mark}" = "${_rdp_cur}" ] && _rdp_ours=1 || _rdp_ours=0 ;;
+  esac
+  if [ -z "${_rdp_cur}" ] || [ "${_rdp_ours}" = 1 ]; then
     _rdp_cur=$(pick_policy "${_rdp_runtimes}" "${_rdp_wants_llm}")
-    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 1
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO "${_rdp_cur}"
+  elif [ -n "${_rdp_mark}" ] && [ "${_rdp_mark}" != 0 ]; then
+    env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY_AUTO 0
   fi
   env_set "${_rdp_file}" WARDYN_DEFAULT_POLICY "${_rdp_cur}"
   echo "${_rdp_cur}"
-  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur
+  unset _rdp_file _rdp_override _rdp_runtimes _rdp_wants_llm _rdp_cur _rdp_mark _rdp_ours
 }
 
 # port_in_use PORT — best-effort; tries whatever's on PATH, defaults to "free"
@@ -299,7 +314,9 @@ wardyn_cli_prefix() {
 #   Authorization: Bearer — /api/v1/me and /api/v1/setup/status are in the
 #     humanOrAdminAuth group, which 401s an unauthenticated call whenever local
 #     mode is off; local mode returns before the bearer check, so ONE shape
-#     answers both postures. Fallback mirrors compose's :-demo-admin-token.
+#     answers both postures. Fallback mirrors compose's :-demo-admin-token. It
+#     goes in on stdin (-H @-), never on argv, which every local user can read;
+#     /healthz needs no credential and gets none.
 #
 # NOT `2>/dev/null`: `-m 5` bounds the curl, not the image pull docker does first
 # and reports ONLY on stderr — discarded, a slow or failed acquisition reached the
@@ -322,12 +339,23 @@ wardynd_probe() {
     unset _wp_env _wp_path _wp_tok _wp_img
     return 0
   fi
-  docker run --rm --pull=never --network "${WARDYN_NS:-wardyn}-internal" "${_wp_img}" \
+  { [ "${_wp_path}" = /healthz ] || printf 'Authorization: Bearer %s\n' "${_wp_tok:-demo-admin-token}"; } \
+    | docker run -i --rm --pull=never --network "${WARDYN_NS:-wardyn}-internal" "${_wp_img}" \
     -s -m 5 -w '\n%{http_code}' \
     -H "Host: 127.0.0.1:8080" \
-    -H "Authorization: Bearer ${_wp_tok:-demo-admin-token}" \
+    -H @- \
     "http://wardynd:8080${_wp_path}" || echo 000
   unset _wp_env _wp_path _wp_tok _wp_img
+}
+
+# local_mode_for_no_issuer ENV_FILE — with no issuer set, the stack runs local no-auth, except that an
+# explicit WARDYN_LOCAL_MODE=false (token mode, docs/OPERATIONS.md "Turn local mode off") is kept.
+local_mode_for_no_issuer() {
+  case "$(env_get "$1" WARDYN_LOCAL_MODE | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Keeping WARDYN_LOCAL_MODE=false from $1: token auth, not local no-auth." ;;
+    *) env_set "$1" WARDYN_LOCAL_MODE true ;;
+  esac
+  env_set "$1" WARDYN_OIDC_ISSUER ""
 }
 
 # ensure_env_file EXAMPLE FILE — create FILE from EXAMPLE on first run, born
@@ -640,8 +668,7 @@ cmd_up() {
     # lock the operator out if the IdP is down.
     refuse_local_mode_with_oidc "${ENV_FILE}"
   else
-    env_set "${ENV_FILE}" WARDYN_LOCAL_MODE true
-    env_set "${ENV_FILE}" WARDYN_OIDC_ISSUER ""
+    local_mode_for_no_issuer "${ENV_FILE}"
   fi
   # LocalMode no-auth requires a loopback request PEER; in compose the peer is the
   # docker gateway (port is published loopback-only, so LAN peers can't reach it).
@@ -690,17 +717,22 @@ cmd_up() {
   # network-topology-independent. Accept a host-curl too (covers Linux/mirrored).
   _cid=$(compose ps -q wardynd 2>/dev/null || true)
   log "Waiting for wardynd to become healthy"
+  # 330s is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT),
+  # the same sum setup.sh's host-mode wait and the chart's startupProbe use: a shorter wait
+  # fails the stack while a slow migration is still working.
+  _deadline=$((SECONDS + 330))
   _tries=0
   # -m 3 (the shape the WSL-reachability probe below uses): a peer that ACCEPTS
-  # and never replies hangs an unbounded curl forever, so the 60-try budget
+  # and never replies hangs an unbounded curl forever, so the deadline below
   # never expires and `make setup` waits with no ceiling at all.
   until { [ -n "${_cid}" ] && [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${_cid}" 2>/dev/null)" = "healthy" ]; } \
         || curl -fsS -m 3 "${_url}/healthz" >/dev/null 2>&1; do
     _tries=$((_tries + 1))
-    if [ "${_tries}" -gt 60 ]; then
+    if [ "${SECONDS}" -ge "${_deadline}" ]; then
       compose logs --tail 50 wardynd
-      die "wardynd did not become healthy — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
+      die "wardynd did not become healthy within 330s — see logs above (or: docker compose -f ${COMPOSE_FILE} logs wardynd)"
     fi
+    [ "${_tries}" = 45 ] && log "still waiting on wardynd — a first migration can take up to WARDYN_MIGRATE_TIMEOUT (5m)"
     sleep 2
     # The capture above ran right after `compose up -d`; on a slow daemon it can
     # come back empty, wedging this loop on the host-curl arm. Re-read until it
@@ -817,7 +849,15 @@ cmd_up() {
     log "    ${_cli} run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
   else
     open_url "${_url}"
-    log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
+    _mode=""
+    if [ -z "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
+      case "$(env_get "${ENV_FILE}" WARDYN_LOCAL_MODE | tr '[:upper:]' '[:lower:]')" in
+        0|false|no|off) ;;
+        *) _mode="  (local mode — no login)" ;;
+      esac
+    fi
+    log "Wardyn is up: ${_url}${_mode} — the Getting-started page is ready NOW."
+    unset _mode
     log "  Prove the sandbox boundary from the CLI (keyless):"
     log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
     log "  Give it a real model:  connect one under Settings -> Model providers (then run with sandbox-claude.yaml)"

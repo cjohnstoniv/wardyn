@@ -50,6 +50,7 @@ export function EmptyState({
   action,
   className,
   as = "h2",
+  tileClassName,
 }: {
   icon: React.ElementType;
   title: string;
@@ -64,11 +65,19 @@ export function EmptyState({
   className?: string;
   /** Heading level for `title` — see the module note above. Default h2. */
   as?: HeadingTag;
+  /** Overrides the icon tile's colours, for the one caller whose icon carries a meaning of its own (#2873). */
+  tileClassName?: string;
 }) {
   const Heading = as;
   return (
     <div className={cn("flex flex-col items-center justify-center gap-3 px-6 py-16 text-center", className)}>
-      <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted-foreground">
+      <div
+        data-testid="empty-state-tile"
+        className={cn(
+          "flex size-12 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted-foreground",
+          tileClassName,
+        )}
+      >
         <Icon className="size-5" />
       </div>
       <div className="space-y-1">

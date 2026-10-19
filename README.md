@@ -3,7 +3,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status) [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod) [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
 - **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
-- Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key by default.
+- Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials scoped to each run, one audited path off-host. Most credential kinds are added at the proxy and never placed in the sandbox ([which ones](docs/CREDENTIALS.md)).
 - [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
 - Coding agents are the flagship use.
 
@@ -30,7 +30,7 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.3/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.4/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
@@ -45,8 +45,8 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.3/instal
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
 
 ```sh
-# NOT releases/latest — it excludes pre-releases, and every Wardyn release is
-# one, so that endpoint 404s and leaves this empty.
+# NOT releases/latest — it excludes pre-releases, and a Wardyn release may be
+# one, so that endpoint can skip the newest release or 404.
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 
@@ -86,6 +86,9 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 - Put the sandbox rules in a small **YAML** (or JSON) policy and hand it to one `wardyn run` — interactive or unattended:
 
 ```sh
+# The CLI reads the token from the environment; the installer wrote it to ~/.wardyn/.env.
+export WARDYN_ADMIN_TOKEN=$(sed -n 's/^WARDYN_ADMIN_TOKEN=//p' ~/.wardyn/.env)
+
 cat > sandbox.yaml <<'YAML'
 allowed_domains: []              # the sandbox can reach nothing
 first_use_approval: always_deny  # an off-allowlist host is a hard 403, no human
@@ -131,7 +134,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 | Record Mode | Run once open, get the minimal policy, replay confined | [TRY-IT.md](docs/TRY-IT.md) |
 | Workspaces & secrets | Mounts only what the workspace declares; secrets write-only, never readable back | [OPERATIONS.md](docs/OPERATIONS.md) |
 | Policies & confinement | One policy picks the barrier: Fence (runc), Wall (gVisor), Vault (Kata, experimental); a host that can't enforce it refuses. Right-size it — a read-only scan or an indexer does not need what an autonomous agent needs | [POLICIES.md](docs/POLICIES.md) |
-| Model access | Each person's own key or Claude/AWS sign-in, injected proxy-side; the sandbox holds an inert sentinel | [TRY-IT.md](docs/TRY-IT.md) |
+| Model access | Each person's own key or Claude sign-in is injected proxy-side and the sandbox holds a placeholder; an AWS sign-in's session is injected too, but the short-lived role credentials it yields live in the sandbox | [TRY-IT.md](docs/TRY-IT.md) |
 | CI / headless | No UI, no human: the governed run's exit code becomes the pipeline's | [CI.md](docs/CI.md) |
 | Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |
 | UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
@@ -217,6 +220,7 @@ flowchart LR
 ## Honest security posture
 
 - What Wardyn does **not** defend against is published in full ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)).
+- Wardyn keeps credentials out of the sandbox wherever it can broker them, and names the kinds that enter ([SECURITY.md](SECURITY.md#which-credentials-enter-the-sandbox)).
 - Notable residuals:
   - **The model-API channel is an unavoidable data-exit path.**
     - Prompts and tool calls are logged; nothing stops an agent encoding data into a permitted prompt.

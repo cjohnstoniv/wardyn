@@ -210,3 +210,41 @@ func TestCreateSandbox_OperatorMountUnaffectedByMemberGate(t *testing.T) {
 		t.Fatal("agent container was not created for an operator mount")
 	}
 }
+
+// TestCreateSandbox_MemberMountWritable_HeldToTheRunsCeiling pins the bind-time writable re-check in the
+// driver: a read-write member bind outside the run's writable ceiling (SandboxSpec.UserWritable) is refused
+// and no container is made, while the same bind read-only, which the ceiling does not govern, still binds.
+func TestCreateSandbox_MemberMountWritable_HeldToTheRunsCeiling(t *testing.T) {
+	root, project := memberSandboxRoot(t)
+	for _, tc := range []struct {
+		name     string
+		readOnly bool
+		wantErr  bool
+	}{
+		{"read-write outside the ceiling", false, true},
+		{"read-only outside the ceiling", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
+			spec := testSpec()
+			spec.Mounts = []runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: tc.readOnly, MemberAuthored: true}}
+			spec.UserMountRoots = []string{root}
+			spec.UserWritable = &runner.UserWritableCeiling{Roots: []string{filepath.Join(root, "elsewhere")}}
+			_, err := d.CreateSandbox(context.Background(), spec)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "outside every member writable root") {
+					t.Fatalf("CreateSandbox err = %v, want the writable-ceiling refusal", err)
+				}
+				if f.containers[agentContainerName(spec.RunID)] != nil {
+					t.Fatal("an agent container was created for a refused writable bind")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("read-only member bind refused by the writable ceiling: %v", err)
+			}
+		})
+	}
+}

@@ -507,7 +507,8 @@ jobs:
         run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
       # W30-S1-2: docker/build-push-action's `tags:` accepts a newline-
       # separated list — push the semver tag always, plus `:latest` on the
-      # float-latest rows (see the matrix comment above for why). cosign
+      # float-latest rows (see the matrix comment above for why), never for a
+      # prerelease tag (one holding `-`), as the promote path below. cosign
       # still signs by DIGEST (build.outputs.digest), so floating `:latest`
       # doesn't change what gets signed.
       - name: Compute the image tags
@@ -517,10 +518,14 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           FLOAT_LATEST: ${{ matrix.float-latest }}
         run: |
+          latest=0
+          if [ "$FLOAT_LATEST" = "true" ]; then
+            case "$RELEASE_TAG" in *-*) ;; *) latest=1 ;; esac
+          fi
           {
             echo "tags<<EOF"
             echo "${IMAGE_NAME}:${RELEASE_TAG}"
-            if [ "$FLOAT_LATEST" = "true" ]; then
+            if [ "$latest" = 1 ]; then
               echo "${IMAGE_NAME}:latest"
             fi
             echo "EOF"
@@ -573,9 +578,12 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             # Nothing was pushed, so there is no digest to scan. The UI-lockfile
             # half needs no image and is the half that shipped broken, so a dry
@@ -622,7 +630,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
       - name: Upload the SBOM for the release-assets job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-${{ matrix.name }}
           path: sbom-${{ matrix.name }}.cdx.json
@@ -743,9 +751,12 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             # Nothing was pushed, so there is no digest to scan — see the job
             # comment above for why a dry run off a branch cannot get further
@@ -770,7 +781,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
       - name: Upload the SBOM for the release-assets job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-${{ matrix.name }}
           path: sbom-${{ matrix.name }}.cdx.json
@@ -902,9 +913,12 @@ jobs:
         env:
           IMAGE_REF: registry:ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ env.DIGEST }}
           SYFT_VERSION: v1.46.0
+          SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh" \
-            | sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+          curl -sSfL -o "${RUNNER_TEMP}/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf "${RUNNER_TEMP}/syft.tar.gz" -C /usr/local/bin syft
           syft "${IMAGE_REF}" -o cyclonedx-json > "sbom-${{ matrix.name }}.cdx.json"
           # wardynd embeds the console as a Vite bundle, which strips every
           # package.json, so the lockfile scan is merged in (see the `images` job).
@@ -932,7 +946,7 @@ jobs:
           subject-digest: ${{ env.DIGEST }}
           push-to-registry: true
       - name: Upload the SBOM for the release-assets job
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sbom-${{ matrix.name }}
           path: sbom-${{ matrix.name }}.cdx.json
@@ -959,9 +973,11 @@ jobs:
           - { goos: darwin, goarch: arm64 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # cache: false: release builds start from a clean Go cache.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -985,7 +1001,7 @@ jobs:
             "./$out" --version || "./$out" version
             "./$runnerd" --version
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -1010,7 +1026,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "cli-darwin-*"
           merge-multiple: true
@@ -1038,7 +1054,7 @@ jobs:
           grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-pkg
           path: wardyn-runnerd.pkg
@@ -1100,7 +1116,7 @@ jobs:
       - name: Sign the chart (keyless, by digest)
         if: inputs.dry_run != true
         run: cosign sign --yes "ghcr.io/cjohnstoniv/charts/wardyn@${{ steps.push.outputs.digest }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: chart
           path: dist/*.tgz
@@ -1137,7 +1153,7 @@ jobs:
           # documented verify recipe in the same edit; until then, pin.
           cosign-release: "v2.6.4"
       - name: Collect the per-image SBOMs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "{sbom-*,chart,cli-*,runner-pkg}"
           merge-multiple: true
@@ -1148,7 +1164,9 @@ jobs:
         run: |
           set -euo pipefail
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
-          chmod +x assets/wardyn-* 2>/dev/null || true
+          # The standalone binaries are copies: the verbatim licence texts travel with them.
+          tar -czf assets/wardyn-licenses.tar.gz THIRD-PARTY-NOTICES.md licenses/texts
+          chmod +x assets/wardyn-{linux,darwin}-* assets/wardyn-runnerd-{linux,darwin}-* 2>/dev/null || true
           # The runner's per-user service files and installer, one download.
           tar -czf assets/wardyn-runner-units.tar.gz -C deploy runner
           cd assets
@@ -1190,7 +1208,7 @@ jobs:
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
-                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg; do
+                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"

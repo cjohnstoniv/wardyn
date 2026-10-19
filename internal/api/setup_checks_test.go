@@ -363,7 +363,7 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven)
+			chk, ok := k8sEgressContainmentCheck(tc.driver, tc.netpolProven, false)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -399,7 +399,7 @@ func TestK8sEgressContainmentCheck(t *testing.T) {
 // real remedy (exempt Wardyn's pods, then unset the env) rather than just
 // suppressing the warning.
 func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
-	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged")
+	chk, ok := k8sEgressContainmentCheck("k8s", "acknowledged", false)
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
@@ -846,7 +846,7 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, envBuilderCheck(false))
 
 	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", ""} {
-		chk, ok := k8sEgressContainmentCheck("k8s", netpol)
+		chk, ok := k8sEgressContainmentCheck("k8s", netpol, false)
 		if !ok {
 			t.Fatalf("k8sEgressContainmentCheck(%q) absent", netpol)
 		}
@@ -890,9 +890,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 		t.Fatal("tlsCookiePostureCheck absent")
 	}
 
-	assertSetupCheckBlocking(t, scmProviderCheck(false, nil, setup.SCMPosture{}))
-	assertSetupCheckBlocking(t, scmProviderCheck(true, nil, setup.SCMPosture{}))
-	assertSetupCheckBlocking(t, scmProviderCheck(false, []string{"ssh-key-github-com"}, setup.SCMPosture{}))
+	assertSetupCheckBlocking(t, scmProviderCheck(false, nil, setup.SCMPosture{}, false))
+	assertSetupCheckBlocking(t, scmProviderCheck(true, nil, setup.SCMPosture{}, false))
+	assertSetupCheckBlocking(t, scmProviderCheck(false, []string{"ssh-key-github-com"}, setup.SCMPosture{}, false))
 
 	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, false))
 	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, true))
@@ -1151,5 +1151,21 @@ func TestStaticKeyServiceCheck(t *testing.T) {
 		if chk, ok := staticKeyServiceCheck(c.keyService, c.static, c.nodeRole); ok {
 			t.Errorf("%s: static key row %+v, want none", name, chk)
 		}
+	}
+}
+
+// A k8s runner that did not report its capabilities has no canary verdict to upgrade for: the row
+// points at substrate_health, not at a wardynd upgrade.
+func TestK8sEgressContainmentCheck_UnreadableRunnerPointsAtSubstrateHealth(t *testing.T) {
+	chk, ok := k8sEgressContainmentCheck("k8s", "", true)
+	if !ok || chk.Status != "fail" {
+		t.Fatalf("check = %+v (ok=%v), want a fail row", chk, ok)
+	}
+	if strings.Contains(chk.Fix, "Upgrade wardynd") || !strings.Contains(chk.Fix, "substrate_health") {
+		t.Errorf("Fix = %q, want it to point at substrate_health and not at an upgrade", chk.Fix)
+	}
+	old, _ := k8sEgressContainmentCheck("k8s", "", false)
+	if !strings.Contains(old.Fix, "Upgrade wardynd") {
+		t.Errorf("a runner that answered without a verdict keeps the upgrade advice, Fix = %q", old.Fix)
 	}
 }

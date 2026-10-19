@@ -253,7 +253,7 @@ One migration; its number comes from the lead.
 |---|---|---|
 | Credentials for a run nobody may start | Invariant 1: identity, grants and renewal only after promotion and re-checks | None while `QUEUED` |
 | Profile reassigned while waiting | Re-resolved at the start; different profile fails | None |
-| Authority lost while waiting | Start re-checks the identity, the revocation cutoff from `queued_at`, a service identity, and the role and user type the current mappings derive; suspension, a credential revocation and a retirement cancel queued runs | A group removal is never seen before the max wait: the epoch moves only on deactivation |
+| Authority lost while waiting | Start re-checks the identity, the revocation cutoff from `queued_at`, a service identity, and the role and user type the current mappings derive; suspension, a credential revocation and a retirement cancel queued runs | A group removal never changes the role a waiting run starts with, but it cuts the person's sessions, which cancels a run launched from the console while it waits |
 | Policy changed while waiting | Q7-A fails the run | None |
 | Queue flood | 100 waiting per person per pool; Q2b | Without a cap, 100 rows per person per pool |
 | Crashed promoter | Stale-lease pass on promoted runs | A dead promoted run holds its slot about 100 s |

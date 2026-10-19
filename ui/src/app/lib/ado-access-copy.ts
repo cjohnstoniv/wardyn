@@ -16,6 +16,8 @@ export const ADO_ACCESS = {
     "What a run launched with this policy may do against Azure DevOps — bound by your administrator's ceiling on the row it runs against.",
   HIGH_RISK_WARN_MEMBER: "High risk rows reach past this one run — grant one only when this run actually needs it.",
   LOCKED: "Not allowed by your administrator.",
+  // A capability some organisations allow and others do not: not locked, but the author is told who refuses it.
+  NOT_ALLOWED_FOR: (orgs: string) => `Not allowed for ${orgs}.`,
   SUMMARY_PREFIX: "Azure DevOps:",
   SUMMARY_EVERY_READ: "Read (every area)",
 } as const;

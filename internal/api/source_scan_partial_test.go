@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -43,6 +44,11 @@ func (s *partialScanStore) SetSourceScanResultUnfenced(_ context.Context, id uui
 		s.scanned = append(s.scanned, id)
 	}
 	return s.sources[id], nil
+}
+
+// GetWorkspace answers the reload an all-inline scan ends with.
+func (s *partialScanStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
+	return types.Workspace{ID: id}, nil
 }
 
 // TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded: when source i
@@ -102,5 +108,43 @@ func TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded(t *testing.T) {
 	}
 	if !strings.Contains(data, goodID.String()) {
 		t.Errorf("failure audit must record the already-succeeded source %s (partial progress), not just the failing one; data=%s", goodID, data)
+	}
+}
+
+// TestScanAttachedSources_MemberSourceOutsideRootsIs422: a member-owned
+// workspace's directory is scanned host-side only while the member mount gate
+// the run door re-runs still admits it. Outside the roots (narrowed since
+// onboarding) the scan is refused before the directory is read.
+func TestScanAttachedSources_MemberSourceOutsideRootsIs422(t *testing.T) {
+	root, inside := memberProjectRoot(t)
+	_, outside := memberProjectRoot(t)
+	for _, tc := range []struct {
+		name, dir string
+		refused   bool
+	}{{"inside the roots", inside, false}, {"outside the roots", outside, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			id := uuid.New()
+			fake := &partialScanStore{sources: map[uuid.UUID]types.Source{id: {ID: id, Kind: types.SourceLocalDir, Locator: tc.dir}}}
+			cfg := baseTestConfig(h, fake)
+			cfg.UserMounts = runner.UserMountPolicy{Roots: []string{root}}
+			srv := New(cfg)
+			ws := types.Workspace{ID: uuid.New(), OwnedBy: ownerMemberSub, Attachments: []types.WorkspaceAttachment{{SourceID: &id}}}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+ws.ID.String()+"/scan", nil)
+			rec := httptest.NewRecorder()
+			srv.scanAttachedSources(rec, req, ws)
+			if !tc.refused {
+				if rec.Code != http.StatusOK || len(fake.scanned) != 1 {
+					t.Fatalf("code = %d scanned = %v, want 200 and the one source scanned; body=%s", rec.Code, fake.scanned, rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusUnprocessableEntity || reasonOf(t, rec) != reasonWorkspaceSourceMountNotAllowed {
+				t.Fatalf("code = %d, want 422 %s; body=%s", rec.Code, reasonWorkspaceSourceMountNotAllowed, rec.Body.String())
+			}
+			if len(fake.scanned) != 0 {
+				t.Fatalf("scanned = %v, want nothing read outside the roots", fake.scanned)
+			}
+		})
 	}
 }

@@ -426,7 +426,7 @@ func TestApprovalReconcile_DoesNotReverseNewerDecision(t *testing.T) {
 // (approvals.go) promises an `always` is "reversible via the
 // denied-egress/approved-egress PUTs". An operator who approve·always'd H and
 // later removed it through PUT /workspaces/{id}/approved-egress (the documented
-// undo, handleSetApprovedEgress in workspaces.go) must not get H back on the
+// undo, handleSetApprovedEgress in workspaces_egress.go) must not get H back on the
 // allowlist at the next boot just because the approval row still says
 // APPROVED/always: re-applying it in ReconcileWorkspaceEgressDecisions would be
 // a durable, fail-open widening of a workspace the operator explicitly narrowed,

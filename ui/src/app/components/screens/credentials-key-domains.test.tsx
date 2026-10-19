@@ -211,3 +211,17 @@ describe("assignments", () => {
     expect(removeMock).not.toHaveBeenCalled();
   });
 });
+
+// #2888: the subject-type radios take the design system's accent, not the browser's blue.
+describe("Assign a domain dialog — radios (#2888)", () => {
+  it("each subject type radio uses the primary accent", async () => {
+    listMock.mockResolvedValue(data());
+    renderCard();
+    await screen.findByText(KEY_DOMAINS.ASSIGN_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: KEY_DOMAINS.ASSIGN_CTA }));
+    const dialog = await screen.findByRole("dialog");
+    const radios = within(dialog).getAllByRole("radio");
+    expect(radios.length).toBeGreaterThan(1);
+    for (const r of radios) expect(r).toHaveClass("accent-primary");
+  });
+});

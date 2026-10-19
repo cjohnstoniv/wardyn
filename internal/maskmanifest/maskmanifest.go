@@ -28,6 +28,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"sync"
@@ -271,6 +272,8 @@ func (m *Manifests) Covered(ctx context.Context, runID uuid.UUID) bool {
 		m.gone(runID)
 		return false
 	case err != nil:
+		slog.WarnContext(ctx, "maskmanifest: reading a run's manifest row failed; treating the corpus as not covered",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return false
 	case fenced:
 		m.Forget(runID)
@@ -310,12 +313,16 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 				if errors.Is(err, subjectkey.ErrDataLoss) {
 					m.Forget(runID) // the owner's key is destroyed: nothing here can open again
 				}
+				slog.WarnContext(ctx, "maskmanifest: opening a run's manifest key failed; treating the corpus as not covered",
+					slog.String("run_id", runID.String()), slog.Int("key_version", s.version), slog.Any("err", err))
 				return false
 			}
 			keys[s.version] = k
 		}
 		v, err := kek.Open(k, s.sealed, aad(runID, s.ordinal, s.version))
 		if err != nil {
+			slog.WarnContext(ctx, "maskmanifest: a sealed manifest value did not open; treating the corpus as not covered",
+				slog.String("run_id", runID.String()), slog.Int("ordinal", s.ordinal), slog.Int("key_version", s.version), slog.Any("err", err))
 			return false
 		}
 		plain = append(plain, v)

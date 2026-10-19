@@ -272,6 +272,27 @@ func TestKataScript_FloorEnforcement(t *testing.T) {
 	}
 }
 
+// runScript scrubs every WARDYN_* variable from the child, but the Kata install
+// script documents WARDYN_KATA_VERSION as its override, so that one must arrive.
+func TestRunScript_PassesKataVersionOnly(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	t.Setenv("WARDYN_KATA_VERSION", "3.32.1")
+	t.Setenv("WARDYN_ADMIN_TOKEN", "secret")
+	out := filepath.Join(t.TempDir(), "env")
+	if err := runScript(`printf '%s|%s' "${WARDYN_KATA_VERSION-unset}" "${WARDYN_ADMIN_TOKEN-unset}" > ` + out); err != nil {
+		t.Fatalf("runScript: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "3.32.1|unset" {
+		t.Errorf("child saw %q, want the Kata version and no other WARDYN_* variable", got)
+	}
+}
+
 // The bug this whole change fixes: a Docker Desktop host must never produce a
 // plan that EXECUTES a daemon restart. actUnsupported plans are never run, so
 // even though their guidance text mentions systemctl (for the *native* engine),

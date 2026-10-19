@@ -103,6 +103,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
 import { SPEC_LABEL } from "../policy-source";
+import { POLICIES_PAGE } from "../../src/app/components/wardyn/copy/policy-dialog";
 import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
@@ -265,8 +266,8 @@ test("A1 — the panel and its templates", async () => {
   await expect(dlg.getByRole("heading", { name: "New policy" })).toBeVisible();
 
   // The modal's own body text is the most interesting thing on screen — ring
-  // the "admin-gated config" description while the two intro lines land.
-  await spotlight(page, dlg.getByText(/admin-gated config/));
+  // the dialog's description while the two intro lines land.
+  await spotlight(page, dlg.getByText(/A named set of network, credential and lifetime rules/));
   await caption(page, "A policy is a spec — a run's rules, saved once with a name so runs can reuse it.");
   await beat(page, PACE.read);
   await caption(
@@ -288,16 +289,18 @@ test("A1 — the panel and its templates", async () => {
   // POLICY_TEMPLATES, seeded from examples/policies/*.json). The five-template
   // line names all five, so ASSERT all five before speaking it — a template
   // dropped from the product must not be narrated onto a screen that lost it.
-  const templateRow = dlg.getByText("Start from a template");
+  const templateRow = dlg.getByTestId("policy-template-menu");
   await spotlight(page, templateRow);
   await caption(page, "Start from a template.");
   await beat(page, BEAT_SHORT);
-  for (const label of ["Minimal", "Model provider only", "Package registries", "CI baseline", "Allow-all — observe first"]) {
+  await dlg.getByTestId("policy-template-menu").click();
+  for (const id of ["minimal", "model-provider", "registries", "ci", "allow-all"]) {
     await expect(
-      dlg.getByRole("button", { name: label }),
-      `no "${label}" template chip — the chips line names five, and this take would speak one that is gone`,
+      page.getByTestId(`policy-template-${id}`),
+      `no "${id}" template in the menu — the line names five, and this take would speak one that is gone`,
     ).toBeVisible();
   }
+  await page.keyboard.press("Escape");
   await caption(
     page,
     "And you don't start from a blank page: Minimal. Just the AI provider. Package download sites. A baseline for build pipelines.",
@@ -309,7 +312,8 @@ test("A1 — the panel and its templates", async () => {
   // Click one that VISIBLY rewrites the document (Package registries = eleven
   // hosts) — the dialog prefills with Minimal, so a Minimal click here would be
   // a dead one. The readable JSON is the point of this beat.
-  await act(page, dlg.getByRole("button", { name: "Package registries" }));
+  await dlg.getByTestId("policy-template-menu").click();
+  await act(page, page.getByTestId("policy-template-registries"));
 
   // The helper rail documents every key with its legal values (FIELD_HELP). The
   // docs-reference footer is a unique anchor to ring.
@@ -354,7 +358,8 @@ test("A2 — the safety meter", async () => {
 
   // Minimal template -> Guarded (CC2 = one medium; small egress + deny_with_
   // review + auto_stop = no higher item).
-  await act(page, dlg.getByRole("button", { name: "Minimal" }));
+  await dlg.getByTestId("policy-template-menu").click();
+  await act(page, page.getByTestId("policy-template-minimal"));
   await expect(meter, "Minimal did not read Guarded — the CC2 medium is not the overall level").toHaveAttribute(
     "data-safety",
     "Guarded",
@@ -381,7 +386,8 @@ test("A2 — the safety meter", async () => {
   // Allow-all template -> Weakest (allow-all egress + never-reap = two highs).
   // A single field edit can only add ONE high, so the second high has to come
   // from the template, not another CC edit.
-  await act(page, dlg.getByRole("button", { name: "Allow-all — observe first" }));
+  await dlg.getByTestId("policy-template-menu").click();
+  await act(page, page.getByTestId("policy-template-allow-all"));
   await expect(meter, "the allow-all template did not read Weakest — two highs are not both present").toHaveAttribute(
     "data-safety",
     "Weakest",
@@ -500,7 +506,7 @@ test("A4 — save, then reuse", async () => {
   // act 3's floor — rung here on the list, where the card is actually visible
   // (act 3 speaks the floor inside the editor dialog; delta lane 1.1). The card
   // is a collapsed <details>, so the click opens its YAML on camera.
-  const ceiling = page.getByText("Default (ceiling) policy", { exact: false }).first();
+  const ceiling = page.getByText(POLICIES_PAGE.CEILING_CAPTION).first();
   await centerInFrame(ceiling);
   await act(page, ceiling, "One more thing on this page, for teams: a default policy that caps what anyone's run may do — the ceiling every other policy sits under.");
   await caption(page, "On a single-user install you can ignore it.");

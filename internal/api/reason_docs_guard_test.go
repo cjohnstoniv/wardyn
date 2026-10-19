@@ -131,8 +131,8 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 }
 
 // runnerPoolWireReasons lists the runner pool reasons published by HTTP handlers
-// today. Keep their values in runnerpool. ReasonRunTypeMissing and the queue pair (ReasonQueueFull,
-// ReasonFull) are left out: they are described in prose, not in the table's reason column.
+// today. Keep their values in runnerpool. ReasonRunTypeMissing is left out: it is described in
+// prose, not in the table's reason column.
 var runnerPoolWireReasons = []runnerpool.Reason{
 	runnerpool.ReasonInvalid,
 	runnerpool.ReasonRequired,
@@ -145,6 +145,8 @@ var runnerPoolWireReasons = []runnerpool.Reason{
 	runnerpool.ReasonNoEligibleMember,
 	runnerpool.ReasonMemberMismatch,
 	runnerpool.ReasonPoolsUnavailable,
+	runnerpool.ReasonQueueFull,
+	runnerpool.ReasonFull,
 }
 
 // documentedDuplicateReasonValues lists wire values TWO OR MORE reasons.go

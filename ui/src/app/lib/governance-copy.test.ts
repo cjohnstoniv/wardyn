@@ -125,6 +125,7 @@ const rendered: Record<string, string> = {
   EMPTY_ASSIGN_BODY: GOVERNANCE.EMPTY_ASSIGN_BODY,
   PREVIEW_TITLE: GOVERNANCE.PREVIEW_TITLE,
   PREVIEW_LEAD: GOVERNANCE.PREVIEW_LEAD,
+  PREVIEW_LEAD_NO_TYPES: GOVERNANCE.PREVIEW_LEAD_NO_TYPES,
   PREVIEW_USER_TYPE_LABEL: GOVERNANCE.PREVIEW_USER_TYPE_LABEL,
   PREVIEW_USER_TYPE_HINT: GOVERNANCE.PREVIEW_USER_TYPE_HINT,
   PREVIEW_RUN_CTA: GOVERNANCE.PREVIEW_RUN_CTA,
@@ -212,8 +213,8 @@ const rendered: Record<string, string> = {
 const NUMERIC_TEMPLATE = ["RUBRIC.SET_NOTE(n, level)"];
 
 describe("governance-copy — §7.2-§7.13 parsed out of the prompt doc", () => {
-  it("finds all 141 frozen keys in the doc", () => {
-    expect(doc.size).toBe(141);
+  it("finds all 142 frozen keys in the doc", () => {
+    expect(doc.size).toBe(142);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -581,5 +582,14 @@ function resolve0(rel: string): string {
 describe("MEMBER_DRIVE_DOOR", () => {
   it("is the design's label", () => {
     expect(MEMBER_DRIVE_DOOR.LABEL).toBe("Can't create drives");
+  });
+});
+
+// The resolver ranks user > group > user_type > all (internal/api/select_by_tier.go),
+// and the Assignments editor offers a user-type subject: the one precedence line
+// must name that tier.
+describe("governance-copy: PRECEDENCE names the user-type tier", () => {
+  it("places a user type between a group and everyone", () => {
+    expect(GOVERNANCE.PRECEDENCE).toContain("a group beats a user type, and a user type beats everyone");
   });
 });

@@ -194,6 +194,20 @@ describe("state 3: setup errors", () => {
     expect(gitRowInvalid(latest!)).toBe(false);
   });
 
+  it("a cleared or non-whole longest life withholds Save rather than falling back to the default (#2511)", async () => {
+    let latest: GitProvider | undefined;
+    render(<Harness initial={row({ token_mode: "minted_pat", pat_max_hours: 4 })} onLatest={(r) => (latest = r)} />);
+    const field = screen.getByLabelText(ADO_PAT.TOKEN_LIFE_LABEL);
+    await userEvent.clear(field);
+    expect(screen.getByText(ADO_PAT.TOKEN_LIFE_RANGE)).toBeInTheDocument();
+    expect(gitRowInvalid(latest!)).toBe(true);
+    await userEvent.type(field, "4.5");
+    expect(gitRowInvalid(latest!)).toBe(true);
+    await userEvent.clear(field);
+    await userEvent.type(field, "4");
+    expect(gitRowInvalid(latest!)).toBe(false);
+  });
+
   it("a Save refused for want of a client secret says so under the token option", () => {
     render(<Harness initial={row({ token_mode: "minted_pat" })} refusal={`git[0].entra.token_mode: ${ADO_PAT.NO_CLIENT_SECRET}`} />);
     expect(screen.getByText(ADO_PAT.NO_CLIENT_SECRET)).toBeInTheDocument();

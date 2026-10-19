@@ -130,7 +130,7 @@ export function AuditRetention() {
                 <TableCell className="whitespace-nowrap text-muted-foreground">{coversLabel(p, cutover)}</TableCell>
                 <TableCell className="text-right tabular-nums">{p.rows.toLocaleString("en-US")}</TableCell>
                 <TableCell className="text-muted-foreground">
-                  {p.state === "closed" ? RETENTION.CLOSED : RETENTION.OPEN}
+                  {p.state === "closed" ? RETENTION.CLOSED : p.state === "future" ? RETENTION.FUTURE : RETENTION.OPEN}
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap items-center gap-2">

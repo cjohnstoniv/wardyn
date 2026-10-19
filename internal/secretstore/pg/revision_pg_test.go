@@ -191,3 +191,35 @@ func mustGetValue(t *testing.T, st secretstore.Store, name string) string {
 	}
 	return string(b)
 }
+
+// A guarded Put whose holder read the row before a maintenance mode re-wrapped
+// it (-rewrap's rewrapAll) and moved it (-rewrap-principal-keys' flipRow),
+// value unchanged, still lands (#2810): the revision names the value, not its
+// wrapping. A write of the value still moves it.
+func TestPut_IfRevisionLandsAfterARewrapOfTheSameValue(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := t.Context()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+	mustPut(t, mixedStore(t, pool, oldID, false, nil, false), "bob", "renewed", "first-pair")
+	on := mixedStore(t, pool, newID, true, nil, false)
+	rev, err := on.For("bob").(secretstore.Revisioned).Revision(ctx, "renewed")
+	if err != nil || rev == "" {
+		t.Fatalf("revision = %q, %v", rev, err)
+	}
+	if _, err := Rekey(ctx, pool, oldID, newID, nil); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	if _, err := on.SealToPrincipalKeys(ctx); err != nil {
+		t.Fatalf("SealToPrincipalKeys: %v", err)
+	}
+	if got := rowOf(t, pool, "bob", "renewed"); got.version != pkVersion {
+		t.Fatalf("the row is %+v after the move; want it under a principal key", got)
+	}
+	if err := on.For("bob").Put(secretstore.WithIfRevision(ctx, rev), "renewed", []byte("second-pair")); err != nil {
+		t.Fatalf("guarded Put after the row was only re-wrapped and moved = %v; want it to land", err)
+	}
+	mustGetOwned(t, on, "bob", "renewed", "second-pair")
+	if err := on.For("bob").Put(secretstore.WithIfRevision(ctx, rev), "renewed", []byte("stale-pair")); !errors.Is(err, secretstore.ErrRevisionChanged) {
+		t.Fatalf("guarded Put on the revision before a write = %v; want ErrRevisionChanged", err)
+	}
+}

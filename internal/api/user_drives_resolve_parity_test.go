@@ -135,8 +135,20 @@ func driveSwitchSentinels(t *testing.T, f *ast.File, name string) []string {
 		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "errors" {
 			return true
 		}
-		if id, ok := call.Args[1].(*ast.Ident); ok {
-			out = append(out, id.Name)
+		// A package-qualified sentinel (store.ErrNotFound) is an arm like any other; dropping it
+		// would let one switch grow an arm the other never learns of. An unknown shape is a Fatal,
+		// not a silent skip.
+		switch a := call.Args[1].(type) {
+		case *ast.Ident:
+			out = append(out, a.Name)
+		case *ast.SelectorExpr:
+			pkg, ok := a.X.(*ast.Ident)
+			if !ok {
+				t.Fatalf("%s: errors.Is sentinel %T.%s has a qualifier this guard cannot render", name, a.X, a.Sel.Name)
+			}
+			out = append(out, pkg.Name+"."+a.Sel.Name)
+		default:
+			t.Fatalf("%s: errors.Is sentinel of shape %T — teach this guard the shape rather than skipping the arm", name, a)
 		}
 		return true
 	})

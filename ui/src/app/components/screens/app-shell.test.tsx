@@ -24,9 +24,9 @@ import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
 // is only the second, "user" is neither.
-function renderMobileNav(role: Role = "admin", memberMode = false) {
+function renderMobileNav(role: Role = "admin", memberMode = false, path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <UnsavedGuardProvider>
         <MobileNav
           pendingApprovals={2}
@@ -259,8 +259,8 @@ describe("AppShell — account-menu role chip gating", () => {
     await user.click(headerButtons[headerButtons.length - 1]);
 
     const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
-    expect(within(menu).queryByText("user", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("Admin", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("User", { exact: true })).toBeNull();
   });
 });
 
@@ -477,6 +477,14 @@ describe("MobileNav (below-md nav fallback)", () => {
     }
   });
 
+  it("keeps Runs lit on a run's own page, not only on the list (#2908)", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/runs/run-1");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Runs/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /^Approvals/ })).not.toHaveAttribute("aria-current");
+  });
+
   it("Escape closes the drawer and returns aria-expanded to false", async () => {
     const user = userEvent.setup();
     renderMobileNav();
@@ -583,6 +591,22 @@ describe("SidebarNav (member role)", () => {
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
     const links = screen.getAllByRole("link");
     expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+  });
+
+  // #2872: Providers, Components and Drives are reached from Settings' cards and
+  // have no nav entry, so Settings stays lit on them instead of nothing.
+  it.each(["/admin/providers", "/admin/components", "/admin/drives"])("Settings stays lit on %s", async (path) => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, path);
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Settings/ })).toHaveClass("bg-sidebar-accent");
+  });
+
+  it("Settings is not lit on an unrelated admin page", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/runs");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^Settings/ })).not.toHaveClass("bg-sidebar-accent");
   });
 
   it("Settings is absent from a member's sidebar", async () => {

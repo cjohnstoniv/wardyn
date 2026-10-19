@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"net/http"
@@ -72,6 +73,8 @@ type sessionTokenStore struct {
 	rbacStore
 	toks    []types.APIToken
 	revoked []uuid.UUID
+	// revokeErr, when set, fails every RevokeAPIToken.
+	revokeErr error
 }
 
 func (s *sessionTokenStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
@@ -92,6 +95,9 @@ func (s *sessionTokenStore) ListAPITokensByPrincipal(_ context.Context, p string
 	return out, nil
 }
 func (s *sessionTokenStore) RevokeAPIToken(_ context.Context, id uuid.UUID, _ string, now time.Time) (types.APIToken, error) {
+	if s.revokeErr != nil {
+		return types.APIToken{}, s.revokeErr
+	}
 	s.revoked = append(s.revoked, id)
 	return types.APIToken{ID: id, RevokedAt: &now}, nil
 }
@@ -439,8 +445,8 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
 	}
 	const wantRefusal = "no known principal matches that email address; name the subject exactly"
 	if !strings.Contains(w.Body.String(), wantRefusal) {
@@ -452,4 +458,34 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != "nobody@corp.example" {
 		t.Errorf("revokedSubs = %v, want the cutoff still stamped (a sub with no live session is indistinguishable from a typo here)", fake.revokedSubs)
 	}
+}
+
+// An email two principals claim is the caller's input to fix: 422 owner_ambiguous with the sentence, the
+// same refusal as an unresolved one. When a real failure rides beside the refusal (here a token that
+// cannot be revoked), the answer stays a 500 so the failure is not hidden behind a caller-fixable 422.
+func TestRevokeSessions_AmbiguousEmailIs422UnlessARealFailureRidesAlong(t *testing.T) {
+	toks := []types.APIToken{
+		{ID: uuid.New(), Principal: "sub-alice-1", Email: "alice@corp.example"},
+		{ID: uuid.New(), Principal: "sub-alice-2", Email: "alice@corp.example"},
+	}
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+
+	t.Run("refusal alone is a 422 owner_ambiguous", func(t *testing.T) {
+		srv, _, _ := sessionsTestServerWithTokens(t, toks)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@corp.example"}`)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		if got := decodeRefusal(t, w); got.Reason != "owner_ambiguous" || got.Error != "more than one known principal matches; name the subject exactly, as the Audit log shows it" {
+			t.Errorf("body = %+v, want reason owner_ambiguous and the ambiguity sentence", got)
+		}
+	})
+	t.Run("a real store failure beside it stays a 500", func(t *testing.T) {
+		srv, _, st := sessionsTestServerWithTokens(t, toks)
+		st.revokeErr = errors.New("token store down")
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@corp.example"}`)
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500 (a failed token revoke must not read as a caller-fixable 422); body=%s", w.Code, w.Body.String())
+		}
+	})
 }

@@ -410,6 +410,13 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
     await expect(alert).toHaveText(SIGNIN.UNREACHABLE_ERROR);
   });
 
+  test("a provider refusal names its own cause (#2125)", async ({ page }) => {
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=oidc_refused");
+
+    await expect(page.getByRole("alert")).toHaveText(SIGNIN.OIDC_REFUSED);
+  });
+
   test("the email_domain refusal points a locked-out reader at their admin, not an env var they cannot reach", async ({ page }) => {
     await clearTokenInit(page);
     await page.goto("/?auth_error=email_domain");
@@ -479,6 +486,47 @@ test.describe("admin-written help under a sign-in refusal (#484)", () => {
     await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
     await expect(page.getByTestId("sign-in-help")).toHaveCount(0);
     await expect(page.getByText(HELP_TEXT)).toHaveCount(0);
+  });
+});
+
+// #2099 — a signed-out visit to a deep link keeps the page for the SSO sign-in to return to.
+test.describe("sign in returns to the page asked for (#2099)", () => {
+  test("the SSO link carries the console path the person opened", async ({ page }) => {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", sso: true, token_login: true }) }),
+    );
+    await clearTokenInit(page);
+    await page.goto("/runs/abc?tab=logs");
+
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      /\/auth\/login\?return_to=%2Fruns%2Fabc%3Ftab%3Dlogs$/,
+    );
+  });
+});
+
+// #2110 — a cold load whose SSO session ended says so; a 401 that names no session stays a first visit.
+test.describe("a cold load finds the session ended (#2110)", () => {
+  const probe = (page: Page, body: Record<string, string>) =>
+    page.route("**/api/v1/runs?limit=1", (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(body) }),
+    );
+
+  test("an expired session shows the signed-out notice", async ({ page }) => {
+    await probe(page, { error: "your session expired — sign in again", reason: "expired_session" });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(page.getByText(SESSION_ENDED_REASON)).toBeVisible();
+  });
+
+  test("a 401 naming no session shows no notice", async ({ page }) => {
+    await probe(page, { error: "missing bearer token" });
+    await clearTokenInit(page);
+    await page.goto("/");
+
+    await expect(signInToken(page)).toBeVisible();
+    await expect(page.getByText(SESSION_ENDED_REASON)).toHaveCount(0);
   });
 });
 

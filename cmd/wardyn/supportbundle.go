@@ -223,8 +223,9 @@ func gatherProxyDiagnostics(ctx context.Context, c *sdk.Client, setupStatusRaw [
 // deliberately not only the names Wardyn itself ships: `docker compose config`
 // resolves an OPERATOR's whole environment, so the bundle carries key names
 // this repo has never seen. PASSWD/PASSPHRASE/APIKEY are spelled out because
-// PASSWORD/_KEY do not contain them.
-const secretMarkers = `PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|APIKEY|_KEY|CREDENTIAL|AUTHORIZATION|AUTH|COOKIE|BEARER|_DSN`
+// PASSWORD/_KEY do not contain them. NOTIFY/WEBHOOK: a chat webhook URL is
+// itself the credential (WARDYN_APPROVAL_NOTIFY's channels carry only a url).
+const secretMarkers = `PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|APIKEY|_KEY|CREDENTIAL|AUTHORIZATION|AUTH|COOKIE|BEARER|_DSN|NOTIFY|WEBHOOK`
 
 // Opaque YAML scalars can contain nested credentials (WARDYN_AUDIT_SINKS' JSON)
 // or command flags. A match redacts the whole scalar, not a guessed substring.

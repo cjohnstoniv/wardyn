@@ -147,12 +147,16 @@ func (s PG) BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UU
 }
 
 // MemberDriveOwnerStarting reports whether owner has a run in STARTING, the state in which dispatch
-// re-reads a run's member drives and then creates its sandbox. The owner compares as
-// types.CanonicalUserSubject does, so it never misses the owner's own runs.
-func (s PG) MemberDriveOwnerStarting(ctx context.Context, owner string) (bool, error) {
+// re-reads a run's member drives and then creates its sandbox, or a run with no sandbox recorded
+// whose watcher lease is held and younger than leaseFresh. Dispatch holds that lease from before the re-read
+// until its create returns, whatever the run's state, so a create still running after its run was
+// ended elsewhere counts until it stops. The owner compares as types.CanonicalUserSubject does, so
+// it never misses the owner's own runs.
+func (s PG) MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error) {
 	var starting bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE state = 'STARTING'
-		AND (btrim(created_by) = $1 OR lower(btrim(created_by)) = $1))`, owner).Scan(&starting)
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs
+		WHERE (state = 'STARTING' OR (sandbox_ref = '' AND watcher_owner <> '' AND watcher_heartbeat > now() - $2::interval))
+		AND (btrim(created_by) = $1 OR lower(btrim(created_by)) = $1))`, owner, max(leaseFresh, 0).String()).Scan(&starting)
 	if err != nil {
 		return false, fmt.Errorf("store: read the owner's starting runs: %w", err)
 	}

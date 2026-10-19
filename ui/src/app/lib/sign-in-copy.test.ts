@@ -42,8 +42,8 @@ function render(docKey: string): string {
 }
 
 describe("sign-in-copy / states — signin-first-contact-canon.md, #457", () => {
-  it("finds all 21 frozen keys in the doc", () => {
-    expect(doc.size).toBe(21);
+  it("finds all 22 frozen keys in the doc", () => {
+    expect(doc.size).toBe(22);
   });
 
   it.each([...doc.keys()])("%s is byte-exact", (key) => {
@@ -101,7 +101,7 @@ const SIGN_IN_TSX = readFileSync(
 const INLINE_JSX_ANCHORS: Record<string, RegExp> = {
   "admin-token label": /<Label htmlFor="token"[^>]*>\s*\n\s*(.+?)\s*\n\s*<\/Label>/,
   "Remember checkbox label":
-    /onCheckedChange=\{[^}]*\}\s*\n\s*aria-label="[^"]*"\s*\n\s*\/>\s*\n\s*(.+?)\s*\n\s*<span/,
+    /onCheckedChange=\{[^}]*\}\s*\n\s*aria-label="[^"]*"\s*\n\s*\/>[^]*?<span>\s*\n\s*(.+?)(?:\{" "\})?\s*\n\s*<span/,
   "Remember checkbox hint": /<span className="text-muted-foreground">\s*\n\s*(.+?)\s*\n\s*<\/span>/,
   "token form submit": /<>\s*\n\s*(.+?)\s*\n\s*<ArrowRight/,
   "SSO control": /<DoorOpen[^>]*\/>\s*\n\s*(\{SSO_SIGN_IN\})\s*\n\s*<\/a>/,

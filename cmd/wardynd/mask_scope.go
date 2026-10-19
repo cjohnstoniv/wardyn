@@ -50,17 +50,22 @@ func (m *maskScope) uncovered(runID uuid.UUID) bool {
 }
 
 // withMaskScope is data with "mask_scope":"globals_only" added when data is
-// empty or a JSON object that does not carry the key. Any other shape is left
-// as it is: the label never makes a row unreadable.
+// empty or a JSON object that does not carry the key at its top level (the
+// string anywhere deeper, in a value or a nested object, does not count). Any
+// other shape is left as it is: the label never makes a row unreadable.
 func withMaskScope(data json.RawMessage) json.RawMessage {
 	label := []byte(`"mask_scope":"` + maskScopeValue + `"`)
 	t := bytes.TrimSpace(data)
 	switch {
-	case bytes.Contains(t, []byte(`"mask_scope"`)):
-		return data
 	case len(t) == 0 || bytes.Equal(t, []byte("null")):
 		return append(append([]byte{'{'}, label...), '}')
 	case t[0] == '{' && json.Valid(t):
+		var top map[string]json.RawMessage
+		if json.Unmarshal(t, &top) == nil {
+			if _, ok := top["mask_scope"]; ok {
+				return data
+			}
+		}
 		if len(bytes.TrimSpace(t[1:len(t)-1])) == 0 {
 			return append(append([]byte{'{'}, label...), '}')
 		}

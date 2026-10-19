@@ -14,7 +14,7 @@
 // pool's limits and the mount paths) are stubbed. The preflight is computed
 // from the body it was sent, so the mount map follows what the person chose.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, continueNewRun, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
@@ -345,6 +345,17 @@ test.describe("New Run, Files: repositories", () => {
     await expect(page.getByRole("status").filter({ hasText: summary })).toBeVisible();
   });
 
+  for (const how of ["a real click", "Space on the focused radio"]) {
+    test(`the lone No extra files radio shows checked after ${how}`, async ({ page }) => {
+      await stub(page, { branches: ["main"] });
+      await toFiles(page);
+      await expect(noExtra(page)).not.toBeChecked();
+      if (how === "a real click") await noExtra(page).click();
+      else { await noExtra(page).focus(); await page.keyboard.press("Space"); }
+      await expect(noExtra(page)).toBeChecked();
+    });
+  }
+
   test("No extra files is a choice: only the main drive, and a repository added later replaces it", async ({ page }) => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);
@@ -460,5 +471,39 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     await expect(dialog(page).getByRole("radio", { name: new RegExp(`^${DRIVE.name}`) })).toBeDisabled();
     await expect(dialog(page).getByText(NR_RUN.REASON_NOT_ALLOWED_PROFILE)).toBeVisible();
     await expect(dialog(page).getByText(NR_FILES.NOT_IN_POOL)).toHaveCount(0);
+  });
+});
+
+// #2107: Review says a typed branch is not checked until the run starts; a picked one says nothing new.
+test.describe("New Run, Review: a typed branch", () => {
+  async function toReview(page: Page) {
+    // Continue is held while nothing is attached, and the run is not complete until the main drive's size is
+    // stored: wait for the card, then enter the size as a person would (the field only shows the pool's default).
+    await expect(cards(page).filter({ hasText: "web" })).toBeVisible();
+    await sizeInput(page).fill("10");
+    await sizeInput(page).blur();
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await continueNewRun(page, NR_REVIEW.TITLE);
+  }
+
+  test("a typed branch shows the not-checked line under its row", async ({ page }) => {
+    await stub(page);
+    await toFiles(page);
+    await pick(page, NR_FILES.REPOSITORY_BADGE, "web");
+    await dialog(page).getByRole("textbox", { name: NR_FILES.BRANCH_ARIA("web") }).fill("feature/x-typo");
+    await confirm(page);
+    await toReview(page);
+    await expect(page.getByTestId("attachment-ref-not-checked")).toHaveText(NR_FILES.REF_NOT_CHECKED);
+  });
+
+  test("a branch picked from the list shows nothing new", async ({ page }) => {
+    await stub(page, { branches: ["main", "release"] });
+    await toFiles(page);
+    await pick(page, NR_FILES.REPOSITORY_BADGE, "web");
+    await dialog(page).getByRole("combobox", { name: NR_FILES.BRANCH_ARIA("web") }).selectOption("release");
+    await confirm(page);
+    await toReview(page);
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await expect(page.getByTestId("attachment-ref-not-checked")).toHaveCount(0);
   });
 });

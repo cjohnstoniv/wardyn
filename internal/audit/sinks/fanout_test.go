@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
@@ -283,4 +284,34 @@ func TestFanout_RecoversChildPanic(t *testing.T) {
 			t.Errorf("Emit error = %v, want the panicked error itself (%v)", err, sentinel)
 		}
 	})
+}
+
+// slowCloseSink's Close waits for release, like a syslog sink stuck on its collector.
+type slowCloseSink struct {
+	closeRecorderSink
+	release chan struct{}
+}
+
+func (s *slowCloseSink) Close() error { <-s.release; return nil }
+
+// One child stuck in Close must not keep the children after it from flushing: the
+// webhook sink's final batch is lost when wardynd is killed before its Close runs.
+func TestFanout_CloseDoesNotWaitOnOneStuckChild(t *testing.T) {
+	stuck := &slowCloseSink{closeRecorderSink: closeRecorderSink{name: "syslog"}, release: make(chan struct{})}
+	after := &closeRecorderSink{name: "webhook"}
+	f := sinks.NewFanout(stuck, after)
+
+	done := make(chan struct{})
+	go func() { _ = f.Close(); close(done) }()
+	deadline := time.After(3 * time.Second)
+	for !after.closed.Load() {
+		select {
+		case <-deadline:
+			close(stuck.release)
+			t.Fatal("the second child was not closed while the first was still stuck in Close")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(stuck.release)
+	<-done
 }

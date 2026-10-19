@@ -73,6 +73,19 @@
 # docs/ENV.md 39236 = 39200 + 36, measured: merge of the run output source rows; the lane's lines land unchanged.
 # docs/ENV.md 39268 = 39236 + 32, measured: the WARDYN_ADO_LANE_DECLINED_HOSTS row
 # docs/ENV.md 39307 = 39268 + 39, measured: renewal never contacts the identity provider; the admin revoke that ends a session
-docs/ENV.md=39307 share=5
+# 0.9.4 L7b1 +19: the KV prefix and mount are fixed once rows exist (#2807)
+# 0.9.4 L13 +19: the WARDYN_AGENT_ARCH row (stage-agent-binary.sh --arch). Combined 39307 + 19 + 19.
+# 0.9.4 L7a2 +2: the smtp helo field.
+# docs/ENV.md 39334 = 39307 + 27, measured: the WARDYN_APPROVAL_EXPIRY_AFTER row says 0 or negative turns the sweeper off and nothing then expires.
+# docs/ENV.md 39338 adds 4 over 39334, measured: the WARDYN_APPROVAL_EXPIRY_AFTER row now says a pending approval stays pending past its run's wait budget unless its client withdraws it.
+# 0.9.4 L12 +52: WARDYN_GIT_APPROVAL_TIMEOUT forwarding and the DEFAULT_POLICY_AUTO marker path (#2356, #2221).
+# docs/ENV.md 39336 adds 29 over 39307, measured: 0.9.4 L4b, the image-build host-capacity line and the advisor CLI flags.
+# docs/ENV.md 39345 adds 9 over 39336, measured: 0.9.4 L4b review, the image-build sentence in the WARDYN_HOST_MAX_LOAD1 row.
+# 0.9.4 L8: docs/ENV.md 39317 adds 10 over 39307: the git_pat broker wording in the resident-delivery rule.
+# 0.9.4 L8: docs/ENV.md 39329 adds 12 over 39317: ssh_key delivery claims bounded.
+# 0.9.4 L3 +29: docs/ENV.md 39336 adds 29 over 39307 (the staged CA trust variable bullet: the value an organisation staged is kept on every runner substrate, #2104).
+# 0.9.4 W4-DOCS-1: docs/ENV.md 39587 adds 68 over 39519, measured: #2357 #2359 #2360 #2362: recording mount value form, PAT scope row, switch count and parser exception, OIDC scopes.
+# docs/ENV.md=39536 adds 17 (0.9.4 W4-API-B): the Azure authority host row says the Key Vault client stays on the public cloud (#2809).
+docs/ENV.md=39620 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

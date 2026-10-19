@@ -173,6 +173,25 @@ describe("light-theme WCAG AA contrast", () => {
     expect(ratio(token("muted-foreground"), token("muted"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // The barrier chips (BarrierBadge, barrier-chip) put the tier fg on its own
+  // translucent tint over white or --muted; vault's gold measured 4.44:1 and
+  // 4.09:1 there before this pair was gated.
+  for (const tier of ["fence", "wall", "vault"]) {
+    it(`--${tier}-fg on --${tier}-bg is >= 4.5:1 over white AND over --muted`, () => {
+      const m = root.match(new RegExp(`--${tier}-bg:\\s*rgba\\((\\d+),\\s*(\\d+),\\s*(\\d+),\\s*([\\d.]+)\\)`));
+      if (!m) throw new Error(`--${tier}-bg not found in :root`);
+      for (const ground of [WHITE, token("muted")]) {
+        const bg =
+          "#" +
+          [1, 2, 3]
+            .map((k) => Math.round(+m[4] * +m[k] + (1 - +m[4]) * parseInt(ground.slice(2 * k - 1, 2 * k + 1), 16)))
+            .map((v) => v.toString(16).padStart(2, "0"))
+            .join("");
+        expect(ratio(token(`${tier}-fg`), bg), `${tier} over ${ground}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+
   // Placeholder text is still text (WCAG 1.4.3, 4.5:1) as well as needing to
   // read as distinctly not-a-value (>=3:1 from filled --foreground) — a dark-
   // theme regression once satisfied only the second half (see below).
@@ -448,6 +467,22 @@ describe("light-theme WCAG AA contrast", () => {
       offenders,
       `raw palette text color — use the guarded semantic token:\n${offenders.join("\n")}`,
     ).toHaveLength(0);
+  });
+
+  // theme.css defines no --ok or --warn colour (the tokens are success/warning),
+  // and Tailwind emits nothing for an undefined colour, so a class naming them
+  // renders unstyled with no error.
+  it("no colour utility names the undefined ok/warn tokens in src/app", () => {
+    const undefinedToken = /\b(?:text|bg|border|ring|fill|stroke)-(?:ok|warn)(?:-subtle)?\b/;
+    const offenders: string[] = [];
+    for (const f of walkTsx("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (undefinedToken.test(ln)) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(offenders, `undefined colour token — use success/warning:\n${offenders.join("\n")}`).toHaveLength(0);
   });
 });
 

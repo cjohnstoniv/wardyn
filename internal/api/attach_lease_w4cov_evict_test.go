@@ -608,3 +608,33 @@ func TestLeaseCovTakeOverRouteDisplacesARemoteHolderAndRefusesWhenNobodyHoldsThe
 		t.Errorf("audit row = %s by %q data %s (%v), want session.takeover by the taker of alice's ssh terminal", ev.Action, ev.Actor, ev.Data, err)
 	}
 }
+
+// A writer that loses its lease to another replica leaves the observers queued behind it here waiting
+// on that replica's lease, so when it frees the oldest of them is promoted, as the keeper promotes any
+// observer waiting on a lease. Before, they waited on nobody and stayed read-only.
+func TestLeaseCovALostLeaseLeavesItsObserversWaitingForTheLease(t *testing.T) {
+	leases := newLeaseCovLeases()
+	srv, _, _ := leaseCovServer(t, leases, leaseCovServerOpts{})
+	alice, bob := newLeaseCovClient("alice", attachSourceWeb), newLeaseCovClient("bob", attachSourceWeb)
+	srv.registerAttachHolder(leaseCovRun, alice.h)
+	srv.registerAttachHolder(leaseCovRun, bob.h)
+	if w, obs := leaseCovState(srv, leaseCovRun); w != alice.h || len(obs) != 1 || bob.h.waitRemote.Load() {
+		t.Fatalf("writer=%v observers=%d bob waitRemote=%v, want alice writing and bob queued locally", w, len(obs), bob.h.waitRemote.Load())
+	}
+
+	other := uuid.MustParse("00000000-0000-4000-8000-00000000ca01")
+	leases.put(leaseCovRun, other, "carol", attachSourceWeb) // carol, on another replica, took it over
+	srv.attachLeaseLost(leaseCovRun, alice.h, attachLeaseLostReason)
+	if !bob.h.waitRemote.Load() {
+		t.Fatal("bob does not wait on the other replica's lease after alice lost it")
+	}
+
+	if _, err := leases.ReleaseAttachLease(t.Context(), leaseCovRun, other); err != nil { // carol left
+		t.Fatal(err)
+	}
+	srv.promoteFromLease(leaseCovRun) // the free notice
+	if w, _ := leaseCovState(srv, leaseCovRun); w != bob.h || !bob.h.writable.Load() {
+		t.Fatalf("writer=%v bob writable=%v, want bob promoted", w, bob.h.writable.Load())
+	}
+	bob.promotedNotice(t)
+}

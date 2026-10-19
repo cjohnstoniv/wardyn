@@ -9,11 +9,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
 import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { IMAGES } from "../../../lib/availability-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { PROVIDERS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../../lib/unsaved-copy";
@@ -74,9 +76,10 @@ vi.mock("../../../lib/api/base-images", () => ({
   baseImages: { list: () => Promise.resolve([]), add: vi.fn() },
 }));
 
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
-  return { ...actual, useNavigate: () => vi.fn() };
+  return { ...actual, useNavigate: () => navigateMock };
 });
 
 // #460 review — wrapped in UnsavedGuardProvider even for tests that never
@@ -84,13 +87,15 @@ vi.mock("react-router-dom", async () => {
 // so every existing assertion below is unaffected, and it's what the tab-
 // switch-guard tests need to see the real confirm dialog rather than the
 // context's own no-provider fallback (which would proceed silently).
-function renderScreen(operator = true) {
+function renderScreen(operator = true, operatorResolved = true) {
   return render(
-    <UnsavedGuardProvider>
-      <OperatorProvider operator={operator} principal="alice">
-        <ProvidersScreen />
-      </OperatorProvider>
-    </UnsavedGuardProvider>,
+    <MemoryRouter initialEntries={["/admin/providers"]}>
+      <UnsavedGuardProvider>
+        <OperatorProvider operator={operator} operatorResolved={operatorResolved} principal="alice">
+          <ProvidersScreen />
+        </OperatorProvider>
+      </UnsavedGuardProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -99,6 +104,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  navigateMock.mockReset();
   getWorkspaceProvidersMock.mockReset();
   putWorkspaceProvidersMock.mockReset();
   getSetupStatusMock.mockReset();
@@ -107,6 +113,30 @@ beforeEach(() => {
   getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
   putAgentProvidersMock.mockReset();
   whoamiMock.mockReset();
+});
+
+describe("ProvidersScreen — a security admin", () => {
+  // #2880: not a super admin, so the page refuses with the Settings card, fetches nothing, and offers the way back.
+  it("is refused with the super-admin card and a way back to Runs, and nothing is fetched", async () => {
+    renderScreen(false);
+    expect(await screen.findByText(PROVIDERS_SUPER_ONLY.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(PROVIDERS_SUPER_ONLY.BODY)).toBeInTheDocument();
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: PROVIDERS.TITLE })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS_SUPER_ONLY.CTA }));
+    expect(navigateMock).toHaveBeenCalledWith("/admin/runs");
+  });
+});
+
+describe("ProvidersScreen — before /me has answered", () => {
+  // Cold-load window: `operator` reads the fail-open default TRUE, so the admin reads must wait for a real answer.
+  it("fires no admin read while the operator tier is unresolved", async () => {
+    renderScreen(true, false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+    expect(getSetupStatusMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("ProvidersScreen", () => {

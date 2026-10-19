@@ -37,6 +37,18 @@ func (s *Server) eraseRecordingsOf(ctx context.Context, person string) (any, err
 		return nil, fmt.Errorf("%w: the recording store cannot delete", erasure.ErrNotAvailable)
 	}
 	total := 0
+	// One scan of the store for all the runs where it can, not one per run.
+	if many, ok := s.cfg.RecordingStore.(recording.RunsDeleter); ok && len(ids) > 0 {
+		keys := make([]string, len(ids))
+		for i, id := range ids {
+			keys[i] = id.String()
+		}
+		n, err := many.DeleteRuns(ctx, keys)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"recordings": n, "runs_fenced": len(ids)}, nil
+	}
 	for _, id := range ids {
 		n, err := del.DeleteRun(ctx, id.String())
 		if err != nil {

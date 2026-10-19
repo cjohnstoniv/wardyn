@@ -97,7 +97,7 @@ type setupStatusLite struct {
 // tierLabels are the PLAN §10.3 tier ids' words, the same ones the console's account menu shows.
 var tierLabels = map[string]string{
 	"local-only": "local only — not governed by an organisation",
-	"runner":     "client-mode runner for an organisation",
+	"runner":     "enrolled with an organisation (legacy)",
 	"org":        "organisation",
 }
 
@@ -819,6 +819,10 @@ func runScript(script string) error {
 	// A sudo'd installer needs the operator's PATH/HOME/proxy vars (all kept by
 	// the denylist) and none of Wardyn's own configuration or credentials.
 	c.Env = cliutil.ScrubChildEnv(os.Environ())
+	// The one WARDYN_* variable the scripts are documented to read (docs/ENV.md): kataScript's version override.
+	if v, ok := os.LookupEnv("WARDYN_KATA_VERSION"); ok {
+		c.Env = append(c.Env, "WARDYN_KATA_VERSION="+v)
+	}
 	c.Stdout, c.Stderr, c.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return c.Run()
 }

@@ -39,7 +39,7 @@ replicas: 1
 # failing does not stop the control plane. Replaces `allowMultiReplica`, which
 # is removed (a values file that still sets it true is refused, with a pointer
 # here). Sets WARDYN_HA=true on the container, lifts the `replicas > 1`
-# refusal, and adds a PodDisruptionBudget (minAvailable 1) and a preferred pod
+# refusal, and (at two or more replicas) adds a PodDisruptionBudget (minAvailable 1) and a preferred pod
 # anti-affinity across nodes. The upgrade strategy stays Recreate: this is node
 # failure tolerance, not zero-downtime upgrades.
 #
@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.9.3 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.9.4 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -328,7 +328,8 @@ secretStore:
     clientIdPlatform: ""
     # Entra authority host; empty = the public cloud's.
     authorityHost: ""
-    # Start of every secret name (empty = the release namespace).
+    # Start of every secret name (empty = the release namespace). Fixed once
+    # rows exist: a changed prefix, or namespace when empty, refuses their reads.
     prefix: ""
     # Versions a secret holds before the next write starts a new name.
     maxVersions: 100
@@ -617,6 +618,10 @@ k8s:
   # templates/rbac.yaml documents.
   rbac:
     create: true
+  # The cluster's DNS domain (kubelet --cluster-domain). Only the Service FQDN the
+  # proxies dial for WARDYN_CONTROL_PLANE_URL uses it; change it on a cluster whose
+  # domain is not cluster.local, or those names do not resolve.
+  clusterDomain: cluster.local
   # Namespace every sandbox's Secret/NetworkPolicies/pods are created in.
   # Empty => the release namespace (no runs-namespace.yaml, no
   # createRunsNamespace — the chart never creates or labels one). A DIFFERENT,
@@ -909,6 +914,14 @@ goMemLimit: "400MiB"
 # asciicast into Postgres, unbounded. Want that instead? Set
 # env.WARDYN_RECORDING_STORE=pg and leave persistence off: the pg store needs no
 # PVC and is readable from any replica.
+#
+# The claim is annotated helm.sh/resource-policy: keep: turning persistence off
+# (as ha.enabled requires) or `helm uninstall` leaves it, and the recordings and
+# audit quarantine on it, in place; turning persistence back on re-attaches it.
+# Delete it deliberately: kubectl delete pvc <fullname>-data.
+# A claim created by a chart before 0.9.4 has no annotation yet: upgrade once
+# with persistence still on, or run kubectl annotate pvc <fullname>-data
+# helm.sh/resource-policy=keep, before turning it off.
 #
 # F199: this switch also decides where the audit spool and its quarantine
 # sidecar (audit-spool.jsonl / audit-spool.jsonl.quarantine, templates/deployment.yaml's

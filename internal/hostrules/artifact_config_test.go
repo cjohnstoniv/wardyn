@@ -119,3 +119,13 @@ func TestEmitArtifactConfig_GoChecksumDBOptOut(t *testing.T) {
 		t.Errorf("default env GOSUMDB = %q, want %q (one slash between the mirror and /sumdb/)", env["GOSUMDB"], want)
 	}
 }
+
+// A cargo index URL is emitted with exactly one trailing slash, whether or not the configured base has one.
+func TestEmitArtifactConfig_CargoIndexEndsInOneSlash(t *testing.T) {
+	for _, base := range []string{"https://artifactory.corp/api/cargo/index", "https://artifactory.corp/api/cargo/index/", "https://artifactory.corp/api/cargo/index//"} {
+		files, _ := EmitArtifactConfig(map[string]string{"cargo": base}, false)
+		if want := `index = "sparse+https://artifactory.corp/api/cargo/index/"`; !strings.Contains(files[".cargo/config.toml"], want) {
+			t.Errorf("base %q: config.toml = %q, want it to contain %s", base, files[".cargo/config.toml"], want)
+		}
+	}
+}

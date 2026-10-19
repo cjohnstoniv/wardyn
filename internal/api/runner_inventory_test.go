@@ -77,14 +77,14 @@ func (f *runnerRegistrationFake) ListRunnersByOwner(_ context.Context, owner str
 
 // ListVisibleRunnersByOwner applies the rules the store's query does: no lapsed unclaimed runner, and no
 // revoked one unless someone other than the owner revoked it within revokedShown.
-func (f *runnerRegistrationFake) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error) {
+func (f *runnerRegistrationFake) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration, p store.Page) ([]types.Runner, error) {
 	mine, _ := f.ListRunnersByOwner(ctx, owner)
-	return slices.DeleteFunc(mine, func(row types.Runner) bool {
+	return fakePage(slices.DeleteFunc(mine, func(row types.Runner) bool {
 		if runnerLapsed(row, now) {
 			return true
 		}
 		return row.State == types.RunnerRevoked && (row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-revokedShown)))
-	}), nil
+	}), p), nil
 }
 
 func (f *runnerRegistrationFake) ListUnusedRunnerRegistrationTokensPage(_ context.Context, now time.Time, owner string, p store.Page) ([]types.RunnerRegistrationToken, error) {
@@ -213,6 +213,32 @@ func viewIDs(views []types.RunnerView) map[uuid.UUID]types.RunnerView {
 		out[v.ID] = v
 	}
 	return out
+}
+
+// A person's own list is a page: limit and offset window it, and a further page is signalled, so a
+// large inventory is never one unbounded body and a partial list is never read as complete.
+func TestMeRunnersArePagedAndSignalTruncation(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	a := f.addRunner(srv, "alice", "a", types.RunnerClaimed, time.Hour)
+	b := f.addRunner(srv, "alice", "b", types.RunnerClaimed, 2*time.Hour)
+	c := f.addRunner(srv, "alice", "c", types.RunnerClaimed, 3*time.Hour)
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+
+	first := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners?limit=2", alice, "")
+	second := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners?limit=2&offset=2", alice, "")
+	got1, got2 := runnerViewsOf(t, first), runnerViewsOf(t, second)
+	if len(got1) != 2 || got1[0].ID != a.ID || got1[1].ID != b.ID || first.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Fatalf("first page = %v, truncated %q; want a, b and the signal", viewIDs(got1), first.Header().Get("X-Wardyn-Truncated"))
+	}
+	if len(got2) != 1 || got2[0].ID != c.ID || second.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Fatalf("last page = %v, truncated %q; want c and no signal", viewIDs(got2), second.Header().Get("X-Wardyn-Truncated"))
+	}
+	if all := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, ""); len(runnerViewsOf(t, all)) != 3 || all.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Fatalf("the default page of three runners = %d rows, signal %q", len(runnerViewsOf(t, all)), all.Header().Get("X-Wardyn-Truncated"))
+	}
+	if bad := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners?limit=x", alice, ""); bad.Code != http.StatusBadRequest {
+		t.Fatalf("limit=x = %d, want 400", bad.Code)
+	}
 }
 
 func TestMeRunnersShowOnlyTheCallersOwn(t *testing.T) {

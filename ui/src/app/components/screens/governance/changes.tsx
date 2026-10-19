@@ -18,10 +18,11 @@
 // Every string is from CHANGES (governance-copy.ts); this file adds none.
 import * as React from "react";
 import { Inbox } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api } from "../../../lib/api/governance";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -89,22 +90,44 @@ export function ChangesTab({
   onChanged: () => void;
 }) {
   const [open, setOpen] = React.useState<GovernanceChange | null>(null);
+  const navigate = useNavigate();
   return (
     <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
-      <div className="px-6 pt-5">
-        <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>
-      </div>
+      {/* The lead describes the list, so it rides with the list; with nothing waiting the empty block
+          below says the same thing once (#2907). */}
+      {changes.length > 0 && (
+        <div className="px-6 pt-5">
+          <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>
+        </div>
+      )}
       {loadError && (
-        <div className="px-6">
+        <div className="px-6 pt-5">
           <Note tone="red" role="alert">
             <Mono className="text-inherit">{loadError}</Mono>
           </Note>
         </div>
       )}
-      <div className="mt-4">
+      <div className={changes.length > 0 ? "mt-4" : undefined}>
         {changes.length === 0 ? (
-          // No action: a change reaches this list only by being proposed at a write site.
-          <EmptyState icon={Inbox} title={CHANGES.EMPTY_TITLE} description={CHANGES.EMPTY_BODY} />
+          // A change reaches this list only by being proposed at a write site, so the one door is the audit
+          // trail, where the decided ones are.
+          <div data-testid="changes-empty">
+            <EmptyState
+              icon={Inbox}
+              title={CHANGES.EMPTY_TITLE}
+              description={CHANGES.EMPTY_BODY}
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="changes-empty-audit"
+                  onClick={() => navigate("/admin/audit")}
+                >
+                  {CHANGES.EMPTY_CTA}
+                </Button>
+              }
+            />
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -128,7 +151,7 @@ export function ChangesTab({
                     <Mono className="text-foreground">{changeTarget(c)}</Mono>
                   </TableCell>
                   <TableCell>{c.proposed_by}</TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={c.proposed_at}>
+                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                     {relativeTime(c.proposed_at)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground" title={c.expires_at}>

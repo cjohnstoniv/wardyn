@@ -7,6 +7,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
 import { SITE } from "../src/app/components/wardyn/copy";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { WELCOME } from "../src/app/components/wardyn/copy/getting-started";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -135,7 +136,7 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockGatedStatus(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByText("Getting started").first()).toBeVisible();
+    await expect(page.getByText(WELCOME.NOTE)).toBeVisible();
   });
 
   test("a shell update landing mid-redirect keeps a gated install in the funnel (#469)", async ({ page }) => {

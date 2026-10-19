@@ -169,7 +169,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
   return (
     <DetailSectionCard
       title={`Allowed hosts · ${rows.length}`}
-      subtitle="Every run against this workspace may reach these. Nothing is here unless you approved it or a recording proved it was used."
+      subtitle={EGRESS.ALLOWED_HOSTS_SUBTITLE}
     >
       <HostList rows={rows} emptyText="Nothing approved yet." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
     </DetailSectionCard>

@@ -259,7 +259,7 @@ describe("SafetyMeter — dimmed on parse failure", () => {
     render(<SafetyMeter spec={null} />);
     const meter = screen.getByTestId("safety-meter");
     expect(meter).toHaveAttribute("data-safety", "");
-    expect(meter).toHaveTextContent(/fix the json first/i);
+    expect(meter).toHaveTextContent(/fix the policy first/i);
     // The effect returns before scheduling anything, so no call is ever queued.
     expect(gradePolicyMock).not.toHaveBeenCalled();
   });

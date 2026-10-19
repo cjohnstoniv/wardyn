@@ -20,7 +20,7 @@
 
 import { expect, test } from "@playwright/test";
 import { ENTRA_STORAGE_STATE, MEMBER_EMAIL, SANDBOX_UP, launchFromReview, viewLaunchedRun, walkNewRunToReview, walkSignIn } from "./helpers";
-import { termText } from "../terminal-text";
+import { termText, waitForShell } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1");
 test.use({ storageState: ENTRA_STORAGE_STATE });
@@ -38,6 +38,7 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   const read = async () => (await termText(screen).catch(() => "")) as string;
 
   await screen.click();
+  await waitForShell(page, screen);
   // A history entry for the wheel to wrongly recall, then enough output to fill
   // more than one screen so there is scrollback to reach.
   await page.keyboard.type("echo recall-sentinel");
@@ -45,18 +46,28 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   await expect.poll(read, { timeout: SANDBOX_UP }).toContain("recall-sentinel");
   await page.keyboard.type("seq 1 400");
   await page.keyboard.press("Enter");
-  await expect.poll(read, { timeout: 30_000 }).toContain("400");
+  // A line of its own: the typed `seq 1 400` also contains "400".
+  await expect.poll(read, { timeout: 30_000 }).toMatch(/^400$/m);
 
   // Wheel up over the terminal: tmux enters copy-mode and shows its position
   // indicator, and the first lines of the output come into view.
   const box = (await screen.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -300);
-  await expect.poll(read, { timeout: 15_000 }).toMatch(/\[\d+\/\d+\]/);
+  // Scrolled up: a position past 0, not the indicator's initial [0/N].
+  await expect.poll(read, { timeout: 15_000 }).toMatch(/\[[1-9]\d*\/\d+\]/);
 
   // Leave copy-mode; the prompt line is empty, so no history was recalled.
   await page.keyboard.press("q");
-  await expect.poll(read, { timeout: 15_000 }).toContain("400");
-  const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
-  expect(lines[lines.length - 1]).toMatch(/\$$/);
+  await expect.poll(read, { timeout: 15_000 }).toMatch(/^400$/m);
+  // The prompt returns after the last number is drawn; poll for it, not for one read that can land between.
+  await expect
+    .poll(
+      async () => {
+        const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
+        return lines[lines.length - 1] ?? "";
+      },
+      { timeout: 15_000 },
+    )
+    .toMatch(/\$$/);
 });

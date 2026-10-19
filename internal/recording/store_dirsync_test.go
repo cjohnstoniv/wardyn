@@ -73,3 +73,30 @@ func TestFSStore_SaveRecordingFileSyncsTheFile(t *testing.T) {
 		t.Errorf("a failed fsync returned %v, want it", err)
 	}
 }
+
+// Erasure takes the same tolerance a save does (#2785): on a filesystem that cannot fsync a directory
+// the marker is written and the files removed, instead of erasure failing every time.
+func TestFSStore_DeleteRunIgnoresDirectorySyncThatIsNotSupported(t *testing.T) {
+	const runID = "11111111-1111-4111-8111-111111111111"
+	s, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveCast(context.Background(), runID, strings.NewReader("data")); err != nil {
+		t.Fatal(err)
+	}
+	orig := syncDir
+	t.Cleanup(func() { syncDir = orig })
+	syncDir = func(*os.File) error { return &os.PathError{Op: "sync", Path: ".", Err: syscall.EINVAL} }
+	n, err := s.DeleteRun(context.Background(), runID)
+	if err != nil || n != 1 {
+		t.Fatalf("DeleteRun = %d, %v; want 1 removed and no error", n, err)
+	}
+	if _, err := s.OpenCast(context.Background(), runID); !errors.Is(err, ErrErased) {
+		t.Fatalf("OpenCast after erase = %v, want ErrErased", err)
+	}
+	syncDir = func(*os.File) error { return &os.PathError{Op: "sync", Path: ".", Err: syscall.EIO} }
+	if _, err := s.DeleteRun(context.Background(), runID); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("a real directory-sync failure returned %v, want EIO", err)
+	}
+}

@@ -22,7 +22,7 @@ func (d *knownSecretDetector) Scan(s Span, dst *[]Finding) {
 	// Mask BOTH corpus values AND well-known secret FORMATS out of the path
 	// so a Finding is content-free by construction — an agent-controlled key
 	// that is itself a secret (or secret-shaped) must not leak via the path.
-	path := sanitizePath(d.safePath(s.FieldPath))
+	path := maskFormats(d.safePath(s.FieldPath))
 	raw := []byte(s.Text)
 	for i, sec := range d.secrets {
 		// Report only the FIRST occurrence per (secret, span): one finding is

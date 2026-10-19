@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -430,5 +431,86 @@ func TestAWSCLI_ReviveKeepsThePortalGrant(t *testing.T) {
 		if kept != tc.kept {
 			t.Errorf("%s: kept = %t, want %t", tc.name, kept, tc.kept)
 		}
+	}
+}
+
+// strandedCLIHold raises a CLI sign-in hold, then stores a fresh capture by a login run created
+// after it, with the eager resolve never having landed.
+func strandedCLIHold(t *testing.T) (*reauthFixture, *cliResolveStore, types.ApprovalRequest) {
+	t.Helper()
+	live := cliAWSRowDef()
+	f, st := cliResolveFixture(t, cliSnapshot(subOwner), &live, true)
+	dead := cliAWSBlob()
+	dead.ExpiresAt = time.Now().Add(-time.Hour).UTC()
+	putCLIBlobIn(t, f, subOwner, dead)
+	if w := f.resolve(t); w.Code != http.StatusLocked {
+		t.Fatalf("resolve = %d %s, want 423", w.Code, w.Body.String())
+	}
+	ap := onlyReauthRow(t, f.srv)
+
+	loginRun := types.AgentRun{ID: uuid.New(), CreatedBy: subOwner, CreatedAt: time.Now().Add(time.Second)}
+	f.st.loginRun = loginRun
+	fresh := cliAWSBlob()
+	fresh.SourceRunID = loginRun.ID.String()
+	putCLIBlobIn(t, f, subOwner, fresh)
+	return f, st, ap
+}
+
+func pollApproval(t *testing.T, f *reauthFixture, ap types.ApprovalRequest) types.ApprovalRequest {
+	t.Helper()
+	w := do(t, f.srv, http.MethodGet, "/api/v1/internal/approvals/"+ap.ID.String(), f.token, "")
+	var got types.ApprovalRequest
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("poll = %d %s (%v)", w.Code, w.Body.String(), err)
+	}
+	return got
+}
+
+// A CLI row's hold is repaired on the sidecar's own poll when the eager resolve
+// after the capture never landed: the stored session was captured by a login
+// run created after the raise, so the row is a resolved one not yet written down.
+func TestAWSCLI_ReconcileOnReadResolvesAStrandedHold(t *testing.T) {
+	f, _, ap := strandedCLIHold(t)
+	if got := pollApproval(t, f, ap); got.State != types.ApprovalApproved {
+		t.Fatalf("state = %s, want the CLI hold APPROVED from the stored capture", got.State)
+	}
+}
+
+// The repair is no weaker than the eager path: a run that no longer carries the row leaves the
+// hold pending, whatever session is stored.
+func TestAWSCLI_ReconcileOnReadLeavesAHoldWhenTheRunDroppedTheRow(t *testing.T) {
+	f, st, ap := strandedCLIHold(t)
+	st.attached = nil
+	if got := pollApproval(t, f, ap); got.State != types.ApprovalPending {
+		t.Fatalf("state = %s, want PENDING: the run no longer carries the row", got.State)
+	}
+}
+
+// An id that names no row answers as a row the caller may not attach (403), not
+// a 500, so whether it exists is not observable.
+func TestAWSCLI_SignInDoorAbsentRowIsTheUnavailableRefusal(t *testing.T) {
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	srv, st, _, _ := signInFixture(t, nil, types.SiteConfig{})
+	srv.cfg.Store = &cliSignInStore{signInStore: st}
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/components/"+cliAWSID+"/sign-in", member, "")
+	if w.Code != http.StatusForbidden || reasonOf(t, w) != "capability_component" {
+		t.Fatalf("sign-in for an absent row = %d %s, want 403 capability_component", w.Code, w.Body.String())
+	}
+}
+
+type componentReadFails struct{ *cliSignInStore }
+
+func (componentReadFails) GetComponent(context.Context, uuid.UUID, string) (types.Component, error) {
+	return types.Component{}, errors.New("db down")
+}
+
+// A failed row read is not "the row changed": the capture is not refused as
+// stale, the failure is returned.
+func TestAWSCLI_StoreSignInSurfacesAFailedRowRead(t *testing.T) {
+	srv, st, _, _ := signInFixture(t, nil, types.SiteConfig{})
+	srv.cfg.Store = componentReadFails{&cliSignInStore{signInStore: st}}
+	changed, err := srv.storeCLISignIn(context.Background(), loginRunStamp{CLIComponentID: cliAWSID}, awsSSOScope{}, awsSSOBlob{})
+	if changed || err == nil {
+		t.Fatalf("storeCLISignIn = changed %v, err %v; want changed=false and the read error", changed, err)
 	}
 }

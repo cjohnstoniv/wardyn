@@ -338,6 +338,9 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
+	if s.ext != nil {
+		return s.putOverPointer(ctx, name, r)
+	}
 	if gen, fenced := s.generationFence(ctx); fenced {
 		return s.putFenced(ctx, name, gen, r)
 	}
@@ -355,7 +358,7 @@ func (s *Store) putRow(ctx context.Context, q execer, name string, r sealedRow) 
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()`,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now(), value_rev=DEFAULT`,
 		s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx),
 	)
 	if err != nil {
@@ -382,6 +385,7 @@ func expiresAt(ctx context.Context) *time.Time {
 // k wraps the DEK bound to the same (owner, name).
 func seal(ctx context.Context, k kek.KEK, owner, name string, value []byte) (wrapped, ct []byte, err error) {
 	dek := make([]byte, kek.DEKSize)
+	defer clear(dek)
 	if _, err := rand.Read(dek); err != nil {
 		return nil, nil, fmt.Errorf("draw data key: %w", err)
 	}

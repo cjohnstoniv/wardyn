@@ -145,3 +145,4 @@ f97122834de2de0a730e7286b38bd4bd65520227:internal/workspacescan/golden_test.go:g
 2a286657c5b630914191deb906a57237ee2f716d:internal/api/template_write_test.go:github-pat:173
 56f6ae02637b1ea212fc5bdc9958f04dbe87a81f:internal/workspacescan/golden_test.go:generic-api-key:75
 b822c57c208258f042ff991ef2e973947d66ce2f:internal/api/launch_intent_test.go:github-pat:74
+e3894e8bdf5469faa29c4b542d3756d99b3c1186:internal/contentscan/fieldpath_corpus_cut_test.go:generic-api-key:17

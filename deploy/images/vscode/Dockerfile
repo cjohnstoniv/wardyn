@@ -46,18 +46,19 @@ USER root
 # the build closed, never silently).
 ARG CODE_SERVER_VERSION=4.139.1
 ARG TARGETARCH
-# shell-quote inside code-server, replaced with the fixed release. code-server
-# 4.139.1 and the newest release (4.140.0) both bundle shell-quote 1.10.0 in
+# shell-quote inside code-server, replaced with the fixed
+# release. code-server 4.139.1 and the newest release (4.141.0,
+# checked 2026-10-18 on linux-amd64) both bundle shell-quote 1.10.0 in
 # lib/vscode/node_modules (CVE-2026-102422, CRITICAL; fixed in 1.11.0), so a
 # code-server bump cannot clear it. The module is plain JavaScript with no
 # dependencies and no install script, so the registry tarball unpacked in
 # place of the bundled copy is the whole install: no npm at build time. Its
-# sha256 is computed from the registry tarball at build-pin time, like the
-# sums above (that tarball's sha512 matched the integrity the registry
+# sha256 is computed from the registry tarball at build-pin time, like
+# the sums above (that tarball's sha512 matched the integrity the registry
 # publishes). It happens in the same RUN as the code-server install, so no
-# image layer carries 1.10.0. The lines refuse any bundled version other than
-# 1.10.0: a changed bundle requires re-inspecting both the module and the
-# embedded-code tracking below before removing the replacement.
+# image layer carries 1.10.0. The lines refuse any bundled version other
+# than 1.10.0: a changed bundle requires re-inspecting both the module
+# and the embedded-code tracking below before removing the replacement.
 # The bundled @devcontainers/cli also inlines its own copy; #1904 and the
 # parent README track it separately. Replacing this module does not fix it.
 ARG SHELL_QUOTE_VERSION=1.11.0

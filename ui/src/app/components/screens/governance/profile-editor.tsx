@@ -132,6 +132,7 @@ export function ProfileEditor({
   const inheritedLimits = (baseProfile?.effective?.limits ?? {}) as Record<string, unknown>;
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
   const [limitsMoved, setLimitsMoved] = React.useState(false);
+  const [limitsFolded, setLimitsFolded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   // The four access-request fields (M3 S5), kept as typed; save trims them.
   const [contact, setContact] = React.useState<Required<PolicyContact>>({
@@ -285,6 +286,14 @@ export function ProfileEditor({
                   setLimitsMoved(true);
                 }
               }
+              // Going standalone from a composed profile folds what binds today (base plus
+              // narrowing) into the standalone policy and limits; otherwise the save would
+              // send the starter ceiling and empty limits, widening the profile silently.
+              if (base !== BASE_NONE && next === BASE_NONE && profile?.overlay && profile.effective) {
+                setSpec(specText(profile.effective.ceiling));
+                setLimits({ ...profile.effective.limits });
+                setLimitsFolded(true);
+              }
               setBase(next);
             }}
           />
@@ -345,6 +354,11 @@ export function ProfileEditor({
           </>
         ) : (
           <>
+        {limitsFolded && (
+          <p className="mt-2 max-w-[82ch] text-body text-muted-foreground" data-testid="governance-limits-folded">
+            {GOV.PROFILE_FOLDED}
+          </p>
+        )}
         <LimitRow
           label={GOV.LIMIT_EXEC_LABEL}
           hint={withMono(GOV.LIMIT_EXEC_HINT)}

@@ -17,6 +17,8 @@ type ApplyStep struct {
 	Fields      []string              `json:"fields,omitempty"`  // update: the JSON names of what changes
 	Outcome     string                `json:"outcome,omitempty"` // results only: "applied" | "pending" | "failed"
 	Error       string                `json:"error,omitempty"`   // with outcome "failed"
+	// Warnings, results only, are what the server warned of on a profile write it applied.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // withOutcome records how the write this step describes went: failed when it

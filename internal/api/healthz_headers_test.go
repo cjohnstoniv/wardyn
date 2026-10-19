@@ -75,6 +75,16 @@ func TestAPIResponsesAreNoStore(t *testing.T) {
 			t.Errorf("%s: Cache-Control = %q, want %q", path, got, "no-store")
 		}
 	}
+	// The 401 above never reaches a handler's own response: an AUTHENTICATED 200 is the one a
+	// shared cache could serve to someone else.
+	srv := New(baseTestConfig(h, newAuthzStore()))
+	w := do(t, srv, http.MethodGet, "/api/v1/runs", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("authenticated GET /api/v1/runs = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("authenticated /api/v1/runs: Cache-Control = %q, want %q", got, "no-store")
+	}
 }
 
 // TestHashedAssetsStayImmutable is the negative control: content-addressed

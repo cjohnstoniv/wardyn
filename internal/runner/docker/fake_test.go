@@ -90,6 +90,9 @@ type createdContainer struct {
 type fakeDocker struct {
 	mu sync.Mutex
 
+	// inspectFailures is how many more ContainerInspect calls fail outright.
+	inspectFailures int
+
 	info system.Info
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
 	pingErr   error
@@ -386,17 +389,20 @@ func (f *fakeDocker) Ping(ctx context.Context, _ client.PingOptions) (client.Pin
 	return client.PingResult{}, f.pingErr
 }
 
-func (f *fakeDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
+func (f *fakeDocker) ImageList(ctx context.Context, opts client.ImageListOptions) (client.ImageListResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// The driver passes a reference filter; we just report presence for any
-	// image marked present.
+	// Honour the reference filter as the daemon does: one image per asked ref that
+	// is present, so a ref the host lacks reads absent whatever else it holds. With
+	// no reference filter every present image is listed.
+	var items []image.Summary
+	wanted := opts.Filters["reference"]
 	for ref, present := range f.images {
-		if present {
-			return client.ImageListResult{Items: []image.Summary{{ID: ref}}}, nil
+		if present && (len(wanted) == 0 || wanted[ref]) {
+			items = append(items, image.Summary{ID: ref})
 		}
 	}
-	return client.ImageListResult{}, nil
+	return client.ImageListResult{Items: items}, nil
 }
 
 func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
@@ -731,6 +737,10 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectFailures > 0 {
+		f.inspectFailures--
+		return client.ContainerInspectResult{}, errors.New("fake: inspect: daemon busy")
+	}
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerInspectResult{}, fakeNotFound{msg: "no such container: " + id}

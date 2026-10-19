@@ -1,7 +1,8 @@
-{{- if and .Values.ha .Values.ha.enabled }}
+{{- if and .Values.ha .Values.ha.enabled (gt (int .Values.replicas) 1) }}
 # High availability: a voluntary disruption (a node drain) never takes the last
 # ready replica. It does not help a node that fails outright, which anti-affinity
-# and the replica count cover.
+# and the replica count cover. Not rendered at one replica: minAvailable 1 on a
+# single pod allows zero disruptions and blocks every node drain.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

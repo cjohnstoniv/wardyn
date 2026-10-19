@@ -141,6 +141,27 @@ describe("HarnessLoginPane — the sign-in's own markers", () => {
       expect(ready).toHaveTextContent(clean);
       expect(screen.getByTestId("signin-device-code")).toHaveTextContent(/^ABCD-EFGH$/);
     });
+
+    // #2559: the pane used to keep the first device URL it saw, so a manual retry (new code) or a
+    // truncated first paint left Open, the copied link and the code chip on a dead or cut code.
+    it("a retried login's new code replaces the first one", async () => {
+      await attachAwsRun();
+      const url = (code: string) => `https://d-1234567890.awsapps.com/start/#/device?user_code=${code}`;
+      await act(async () => lastAttachOutput?.(`${url("AAAA-BBBB")}\r\n`));
+      expect(await screen.findByTestId("signin-device-code")).toHaveTextContent(/^AAAA-BBBB$/);
+      await act(async () => lastAttachOutput?.(`^C\r\n${url("CCCC-DDDD")}\r\n`));
+      expect(screen.getByTestId("signin-device-code")).toHaveTextContent(/^CCCC-DDDD$/);
+      expect(screen.getByTestId("signin-ready")).toHaveTextContent(url("CCCC-DDDD"));
+    });
+
+    it("a whole reprint replaces a first paint a redraw cut short", async () => {
+      await attachAwsRun();
+      const base = "https://d-1234567890.awsapps.com/start/#/device?user_code=";
+      await act(async () => lastAttachOutput?.(`${base}ABCD\x1b[0m\r\n`));
+      await screen.findByTestId("signin-device-code");
+      await act(async () => lastAttachOutput?.(`${base}ABCD-EFGH\r\n`));
+      expect(screen.getByTestId("signin-device-code")).toHaveTextContent(/^ABCD-EFGH$/);
+    });
   });
 
   // `saving` with no autoCapture is TWO different states. On a helper

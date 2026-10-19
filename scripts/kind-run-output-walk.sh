@@ -116,7 +116,10 @@ read_output() { # FILE: a final capture, retried while the row is still being wr
   local i max_iter=30
   [[ "${RECORDING}" == "pg" ]] && max_iter=90
   for i in $(seq 1 "${max_iter}"); do
-    w run output "${RUN_ID}" >"$1" 2>"$1.err" && [[ "$(w run output "${RUN_ID}" --json | jq -r .complete)" == "true" ]] && return 0
+    # The complete flag first, the text only once it is true: the other order can read text that was still
+    # growing, then see complete=true, and call that partial capture final.
+    [[ "$(w run output "${RUN_ID}" --json 2>/dev/null | jq -r .complete 2>/dev/null)" == "true" ]] \
+      && w run output "${RUN_ID}" >"$1" 2>"$1.err" && return 0
     sleep 2
   done
   cat "$1.err" >&2

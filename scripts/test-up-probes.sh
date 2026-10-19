@@ -79,12 +79,17 @@ if printf '%s\n' "$@" | grep -qx 'alpine:3.20'; then
   exec "${cargs[@]}"
 fi
 
+# Every probe's argv is kept: whatever lands there is readable by every local user (ps).
+printf '%s\n' "$*" >> "${PROBE_LOG:-/dev/null}.argv"
 host=""; auth=""; url=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -H) case "${2:-}" in
           Host:*)          host="${2#Host: }" ;;
           Authorization:*) auth="${2#Authorization: }" ;;
+          @-) while IFS= read -r h; do   # curl reads one header per stdin line
+                case "${h}" in Authorization:*) auth="${h#Authorization: }" ;; esac
+              done ;;
         esac
         shift 2 ;;
     http://*) url="$1"; shift ;;
@@ -96,6 +101,7 @@ done
 rest="${url#http://}"
 if [[ -z "${host}" ]]; then host="${rest%%/*}"; fi
 path="/${rest#*/}"
+printf '%s %s\n' "${path}" "${auth:-none}" >> "${PROBE_LOG:-/dev/null}.auth"
 emit() { printf '%s\n%s' "$1" "$2"; exit 0; }
 
 if [[ "${GATE_LOCAL_MODE}" == "true" ]]; then
@@ -192,6 +198,32 @@ got="$(wardynd_probe "${env_file}" /api/v1/me | tail -n1)"
 grep -q '      401)' "${UP_SH}" \
   || fail "scripts/up.sh's local-mode gate smoke has no 401 arm — a token-mode mismatch falls into the generic 'inconclusive, check logs' branch (ADV2-01: the branches must distinguish healthy from broken)"
 
+# The bearer reaches wardynd on stdin, never on the docker argv (readable by every local user),
+# and the unauthenticated /healthz is sent none at all.
+export PROBE_LOG="${dir}/probe"; rm -f "${PROBE_LOG}".*
+GATE_TOKEN=s3cret-admin-token
+got="$(wardynd_probe "${env_file}" /api/v1/me | tail -n1)"
+[ "${got}" = "200" ] || fail "the stdin bearer did not answer the token-mode gate (HTTP ${got})"
+wardynd_probe "${env_file}" /healthz >/dev/null
+grep -q 's3cret-admin-token' "${PROBE_LOG}.argv" && fail "wardynd_probe put the admin token on the docker argv: $(cat "${PROBE_LOG}.argv")"
+grep -qx '/healthz none' "${PROBE_LOG}.auth" || fail "wardynd_probe sent a credential to /healthz: $(cat "${PROBE_LOG}.auth")"
+unset PROBE_LOG
+
+# Token mode survives a re-run: an explicit WARDYN_LOCAL_MODE=false stays false, while a fresh .env
+# (or one already in local mode) gets local no-auth.
+eval "$(sed -n '/^local_mode_for_no_issuer() {/,/^}/p' "${UP_SH}")"
+for v in false False 0 off; do
+  printf 'WARDYN_LOCAL_MODE=%s\n' "${v}" > "${dir}/lm.env"
+  local_mode_for_no_issuer "${dir}/lm.env" >/dev/null 2>&1
+  [ "$(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)" = "${v}" ] || fail "a re-run overwrote WARDYN_LOCAL_MODE=${v} (token mode) with $(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)"
+done
+for v in "" true; do
+  if [ -n "${v}" ]; then printf 'WARDYN_LOCAL_MODE=%s\n' "${v}" > "${dir}/lm.env"; else printf '# WARDYN_LOCAL_MODE=true\n' > "${dir}/lm.env"; fi
+  local_mode_for_no_issuer "${dir}/lm.env" >/dev/null 2>&1
+  [ "$(env_get "${dir}/lm.env" WARDYN_LOCAL_MODE)" = "true" ] || fail "a .env with WARDYN_LOCAL_MODE='${v}' did not get local no-auth"
+done
+grep -q '^    local_mode_for_no_issuer "${ENV_FILE}"$' "${UP_SH}" || fail "cmd_up no longer calls local_mode_for_no_issuer when no issuer is set"
+
 # ── 4) end to end: the LLM-ready re-pick is reachable again ────────────────
 # ADV2-02's actual consequence. llm_ready_from_probe only trusts a 200, so
 # before the fix this fed on a 403/401 body forever and the ceiling stayed
@@ -203,7 +235,7 @@ got="$(llm_ready_from_probe "$(wardynd_probe "${env_file}" /api/v1/setup/status)
 [ "${got}" = "1" ] || fail "a healthy stack reporting llm_ready:true did not drive the post-boot policy re-pick (llm_ready_from_probe gave '${got}') — the re-pick is still unreachable (ADV2-02)"
 
 # ── 5) every host-side health probe is TIME-BOUNDED (perf-2:perf2-C1) ──────
-# cmd_up's health wait advertises a ceiling of 60 tries x 2s, and common.sh's
+# cmd_up's health wait advertises a 330s deadline, and common.sh's
 # wait_healthy/wait_down carry their own TRIES budgets — but an unbounded curl
 # against a peer that ACCEPTS the connection and never replies blocks forever,
 # so the loop never reaches its second attempt and the budget is fiction.
@@ -222,6 +254,14 @@ done
   printf '%s' "${unbounded}" >&2
   fail "every host-side curl probe must carry a max-time bound (-m); a stalled-but-accepting peer otherwise blocks the poll loop past its advertised ceiling forever (perf2-C1)"
 }
+
+# #2223: the wait is wardynd's own boot budget (30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT, the sum
+# setup.sh's host-mode wait and the chart's startupProbe use), not ~2 minutes: a shorter one fails the stack
+# while a slow migration is still working and skips the runner limits, probes and image builds after it.
+grep -q '_deadline=\$((SECONDS + 330))' "${UP_SH}" && grep -q '"${SECONDS}" -ge "${_deadline}"' "${UP_SH}" \
+  || fail "cmd_up's health wait is no longer a 330s deadline - it gives up before wardynd's 330s boot budget while a migration is still running (#2223)"
+grep -q 'still waiting on wardynd' "${UP_SH}" \
+  || fail "cmd_up's 330s health wait prints no progress line, so a long migration reads as a hang (#2223)"
 
 grep -q '_cid=$(compose ps -q wardynd 2>/dev/null || true)$' "${UP_SH}" || fail "cmd_up no longer reads the wardynd container id the way this guard expects"
 # CAPTURE, THEN MATCH — never `awk | grep -q` under `pipefail`: `grep -q`

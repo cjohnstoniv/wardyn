@@ -52,6 +52,17 @@ describe("AddWorkspaceDialog — the local_dir root constraint follows !operator
     expect(screen.queryByLabelText(/path on this host/i)).not.toBeInTheDocument();
   });
 
+  // #2889: an unavailable source reads as unavailable but stays selectable, since selecting it is how the explainer shows.
+  it("draws the unavailable Local directory card dashed and muted, still clickable; an available one is plain", async () => {
+    const { unmount } = renderDialog(false, null);
+    const card = screen.getByRole("button", { name: /^local directory/i });
+    expect(card).toBeEnabled();
+    expect(card).toHaveClass("border-dashed", "text-muted-foreground");
+    unmount();
+    renderDialog(true, null);
+    expect(screen.getByRole("button", { name: /^local directory/i })).not.toHaveClass("border-dashed");
+  });
+
   it("leaves a super admin (operator:true) the unconstrained hint — byte-identical to pre-0.7", async () => {
     renderDialog(true, null);
     await pickLocalDir();
@@ -144,6 +155,21 @@ describe("AddWorkspaceDialog — Branch only where it's wired", () => {
     renderDialog(true, "/home/agent-projects");
     await pickLocalDir();
     expect(screen.queryByLabelText(/branch/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("AddWorkspaceDialog — the Empty explanation follows the mount path", () => {
+  it("names the path the workspace is created at, not a fixed literal", async () => {
+    renderDialog(true, null);
+    await userEvent.click(screen.getByRole("button", { name: /^empty/i }));
+    expect(screen.getByText(/empty scratch directory at/i)).toHaveTextContent("/home/agent/work");
+    await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
+    const mount = screen.getByLabelText("Mount path");
+    await userEvent.clear(mount);
+    await userEvent.type(mount, "/workspace");
+    const body = screen.getByText(/empty scratch directory at/i);
+    expect(body).toHaveTextContent("/workspace");
+    expect(body).not.toHaveTextContent("/home/agent/work");
   });
 });
 

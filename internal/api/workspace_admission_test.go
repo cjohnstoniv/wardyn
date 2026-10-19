@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -485,6 +486,9 @@ func requestWithToken(t *testing.T, token string) *http.Request {
 	return r
 }
 
+// createRunCall matches a call of either run-creating door.
+var createRunCall = regexp.MustCompile(`s\.create(?:Queued)?Run\(`)
+
 // TestStoreCreateRunCallerCensus is the pin that no launcher was missed. Every
 // lane that creates a run either routes through a request door that admits, or
 // admits at its own clone-URL derivation — and the only way to keep that true as
@@ -494,8 +498,11 @@ func requestWithToken(t *testing.T, token string) *http.Request {
 // (the upstream-proxy probe) clone NOTHING: both run a Wardyn-authored step with
 // no workspace and no repo, which is why they carry no admission call.
 func TestStoreCreateRunCallerCensus(t *testing.T) {
+	// createQueuedRun is createRun for a launch that waits in a queue, and inserts a run row as
+	// surely; a census that matched only s.createRun( would miss it.
 	want := []string{
 		"harnesscred.go",          // clones nothing — the login capture
+		"run_queue.go",            // POST /runs into a pool's queue, answered after the same admission sites
 		"runs.go",                 // POST /runs (three admission sites above it)
 		"site_config_probe.go",    // clones nothing — the proxy probe
 		"source_scan.go",          // launchSourceScanRun — admits at its clone URL
@@ -515,7 +522,7 @@ func TestStoreCreateRunCallerCensus(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("read %s: %v", name, rerr)
 		}
-		if strings.Contains(string(src), "s.createRun(") {
+		if createRunCall.Match(src) {
 			got = append(got, name)
 		}
 	}

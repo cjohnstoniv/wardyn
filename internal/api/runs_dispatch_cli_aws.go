@@ -154,6 +154,16 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 	}, injections)
 }
 
+// runCarriesCLIComponent reports whether run still carries the org row id as an
+// attached component; a failed read says no, since a scope is never resolved
+// from a failed read.
+func runCarriesCLIComponent(ctx context.Context, cs store.ComponentStore, run types.AgentRun, id uuid.UUID) bool {
+	attached, err := cs.ListRunComponents(ctx, run.ID)
+	return err == nil && slices.ContainsFunc(attached, func(rc types.RunComponent) bool {
+		return !rc.SelfDefined && rc.ComponentID != nil && *rc.ComponentID == id
+	})
+}
+
 // cliSSOScopeAt is the AWS CLI arm of resolveAWSSSOInjection's scope
 // re-derivation: the run owner's own session for the row the grant recorded,
 // while the run still carries that row and the live row still pins what the
@@ -168,10 +178,7 @@ func (s *Server) cliSSOScopeAt(ctx context.Context, run types.AgentRun, sn awsSS
 	if !ok || err != nil {
 		return awsSSOScope{}, "component"
 	}
-	attached, err := cs.ListRunComponents(ctx, run.ID)
-	if err != nil || !slices.ContainsFunc(attached, func(rc types.RunComponent) bool {
-		return !rc.SelfDefined && rc.ComponentID != nil && *rc.ComponentID == id
-	}) {
+	if !runCarriesCLIComponent(ctx, cs, run, id) {
 		return awsSSOScope{}, "component"
 	}
 	row, err := cs.GetComponent(ctx, id, "")

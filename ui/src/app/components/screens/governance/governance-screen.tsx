@@ -36,7 +36,7 @@ import { useSearchParams } from "react-router-dom";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange } from "../../../lib/types";
-import { getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
@@ -198,7 +198,8 @@ export function GovernanceScreen() {
           onValueChange={(v) => setSearchParams(v === "profiles" ? {} : { tab: v }, { replace: true })}
           className="mt-6"
         >
-          <TabsList>
+          {/* Scrolls inside itself at phone width; justify-start so the first tab is never clipped (#2896). */}
+          <TabsList className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
             {securityOperator && <TabsTrigger value="runner-credentials">{DELIVERY.TAB}</TabsTrigger>}
             {securityOperator && <TabsTrigger value="egress-baseline">{BASELINE.TAB}</TabsTrigger>}
@@ -360,7 +361,7 @@ export function GovernanceScreen() {
                                 deployment ever makes that false. */}
                             <SafetyMeter spec={p.effective?.ceiling ?? p.ceiling} />
                           </TableCell>
-                          <TableCell className="whitespace-nowrap text-muted-foreground" title={p.updated_at}>
+                          <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(p.updated_at)}>
                             {relativeTime(p.updated_at)}
                           </TableCell>
                           <TableCell>

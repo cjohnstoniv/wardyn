@@ -79,7 +79,7 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   heading keeps the `@layer base` sizes.
 - **Weights:** 400 body and inputs, 500 row titles / buttons / labels, 600 headings and
   uppercase meta labels — the three `--font-weight-*` tokens.
-- **Body tracking is `0.01em`.** `theme.css`'s `body` sets none today — add
+- **Body tracking is `0.01em`.** `theme.css`'s `body` sets it — change
   `letter-spacing` there, not `tracking-*` at call sites.
 - **Mono (`--font-mono`) is for literals only:** run ids, paths, commands, fingerprints,
   exit codes, URLs, wire values — never prose, labels, or emphasis (`Chip` takes `mono`
@@ -106,7 +106,7 @@ cards, run cards, icon wells. Exactly three elevation levels:
 | Level | How | Where |
 |---|---|---|
 | Hairline | `border-border` only | Rows, dividers, banners, table cells |
-| Lift | `shadow-xs` + border | Cards, `outline` buttons. Only `checkbox.tsx#Checkbox` and `radio-group.tsx#RadioGroupItem` carry it today — the cards are border-only, which is in budget |
+| Lift | `shadow-xs` + border | Cards, `outline` buttons. Only `checkbox.tsx#Checkbox`, `radio-group.tsx#RadioGroupItem` and the two focus-mode buttons in `run-detail/canvas.tsx#RunCanvas` carry it today — the cards are border-only, which is in budget |
 | Floating | one `--shadow-floating` token | Popovers, dropdowns, selects, dialogs, sheets, floating toolbars |
 
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
@@ -252,6 +252,9 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **A bulk action names what it skipped.** Approving observed egress skips a model provider's own
+  hosts; the toast reads "Approved 3 hosts. Skipped 1 model-provider host: <host>" (`EGRESS.PROMOTED_SKIPPED`
+  in the copy module) instead of reporting success for the whole click.
 - **Pool words.** A runner is a **self-hosted runner** (a person's computer) or a **remote-hosted
   runner** (the server's Docker host or Kubernetes cluster); a pool is an **organization pool** or
   a **user pool**; every runner has **Runs at once**, and a pool's limits come from its runners.

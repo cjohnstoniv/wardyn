@@ -382,7 +382,9 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
-	idx := indexWorkspacesBySource(all)
+	// A source several workspaces carry is judged by one the caller may launch
+	// when there is one: another member onboarding it first refuses nobody.
+	idx := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(r, ws) })
 	for _, wm := range spec.WorkspaceMounts {
 		if ws, ok := idx.localDir[wm.Source]; ok && !s.mayLaunchWorkspace(r, ws) {
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
@@ -536,7 +538,8 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // 500) and returns failed=true — the caller (one frame up, off-request-capable)
 // owns refreshing the run and answering the response; a WORKSPACE image build
 // failure is fail-open (keeps the convention image), since onboarding is a
-// convenience, not a gate. Each build is one a kill of the run stops
+// convenience, not a gate, except that a failed wrap of the workspace's CHOSEN
+// base image marks the run FAILED like a BYOI build (the workspace_id door's answer). Each build is one a kill of the run stops
 // (trackRunBuild); a run already terminal builds nothing and also returns
 // failed=true, with its state left as it is, and a run that cannot be read
 // builds nothing and is failed. The resolved image is persisted for provenance
@@ -658,10 +661,21 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		if !ok {
 			return "", true
 		}
-		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID)); ok {
-			image = built
-		}
+		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
 		endBuild()
+		if res.OK {
+			image = res.Image
+		} else if res.BaseErr != nil {
+			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
+			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
+			// run.build failure row, so only the run is failed here.
+			failCtx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
+			defer cancel()
+			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
+			// run.build row carries it for the operator.
+			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
+			return "", true
+		}
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write

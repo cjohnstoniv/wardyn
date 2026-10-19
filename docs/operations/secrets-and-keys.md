@@ -15,7 +15,7 @@ flowchart LR
 
 ## Secrets from files (Vault Agent / CSI)
 
-- Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds a **path** instead of the value: `WARDYN_PG_DSN_FILE`, `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_APPROVAL_NOTIFY_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE` ([ENV.md](../ENV.md)).
+- Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds a **path** instead of the value: `WARDYN_PG_DSN_FILE`, `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`, `WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`, `WARDYN_AUDIT_SINKS_FILE`, `WARDYN_APPROVAL_NOTIFY_FILE`, `WARDYN_ORG_ENROLMENT_TOKEN_FILE`, `WARDYN_SCIM_TOKEN_FILE` and `WARDYN_SCIM_TOKEN_NEXT_FILE` ([ENV.md](../ENV.md)).
 - Use them when a control requires secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver, projected volumes), or when a posture scanner flags secret env vars.
 
 How `wardynd` reads them (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../../cmd/wardynd/secret_file.go)):
@@ -253,6 +253,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 | **Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until *you* delete it | Restoring it is only half an undo — the database is already re-encrypted, so `.bak` is usable **only** together with the Postgres dump from step 1 |
 | ↳ | Once the rotated deployment is confirmed working, delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
 | A step after the commit fails (the key file could not be replaced) | The error says so and names `<key-file>.new`. That file holds the new identity, and at that point is the **only** key that reads the store — save it before doing anything else |
+| A re-run finds `<key-file>.new` or `<key-file>.new.tmp` from an earlier run | The rotation refuses and leaves the file alone. If the latest `secret.rekey` row (above) names the recipient `age-keygen -y <key-file>.new` prints, move it into place and set `WARDYN_AGE_KEY` to it; otherwise remove it and run again |
 | Always | **Back the key up off-host.** Rotation re-encrypts what is there; it cannot recover a key you have already lost |
 
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
@@ -333,7 +334,11 @@ Keep the key at `exportable=false`, `allow_plaintext_backup=false` and `deletion
 ```hcl
 path "transit/encrypt/wardyn" { capabilities = ["update"] }
 path "transit/decrypt/wardyn" { capabilities = ["update"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+path "auth/token/renew-self" { capabilities = ["update"] }
 ```
+
+The two `auth/token/` paths are the client's own token upkeep (`token-file` authentication reads the token's TTL with `lookup-self`; a renewable token is kept alive with `renew-self`). Vault's `default` policy already grants both; state them when the token is issued without it.
 
 **Binding.** Every wrap carries the row's owner and name as Transit `associated_data`, so a wrapped data key moved to another row does not unwrap.
 
@@ -825,7 +830,15 @@ path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_
 path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
   capabilities = ["create", "update", "read", "delete", "list"]
 }
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
 ```
+
+- The two `auth/token/` stanzas are the client's own token upkeep: `token-file` authentication reads the token's TTL with `lookup-self`, and a renewable token is kept alive with `renew-self`. Vault's `default` policy already grants both; state them when the token is issued without it.
 
 - With token-file authentication (compose, VMs) there is no Kubernetes alias to template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as `wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`.
 - Give each install its own policy.
@@ -950,6 +963,7 @@ Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 
 - The kind (`platform` for wardynd's boot keys) is in the name and the tag, so your Key Vault logs can tell the two apart. Key Vault has no per-name policy, so unlike two Vault roles it does not separate the privilege.
 - A read derives the name from the row's owner and name and refuses a row that points to any other name or vault. It then refuses a value whose tags name another row.
+- So the prefix and the vault URL, as spelled (an explicit `:443` included), are fixed once rows exist, and so is the namespace when the chart supplies the prefix. A changed one makes every read refuse; wardynd warns at boot and names the settings. Set it back to the value the rows were written under.
 - A replace is a new **version** of the same name, and every earlier version is **disabled**: Key Vault cannot delete old versions.
 - A write lists the versions before it writes and disables only those, so it never disables a newer one; writes to one credential wait for each other across replicas.
 - Once the name holds `WARDYN_AZURE_KV_MAX_VERSIONS` versions, the next write starts a new generation: a fresh name, and the old generation is deleted. The default is 100, well under the 500 at which Key Vault's secret backup fails — the vault's own count decides, not the pointer row.

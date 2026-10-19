@@ -238,8 +238,11 @@ func packageBatchWrite(req Request) (Verdict, error) {
 // pullRequestWrite classifies a pull-request write, promoting it to
 // CapPolicyBypass when the body asks to complete the PR through the branch
 // policy — Azure DevOps takes the same vso.code_write scope either way, so
-// the body is the only place the difference exists.
-func pullRequestWrite(method string, req Request) (Verdict, error) {
+// the body is the only place the difference exists. sub is the segment after
+// the PR id (reviewers, properties, attachments, …): those bodies are often an
+// array or raw bytes, not the PR object, so one this struct cannot read is
+// still a pull-request write.
+func pullRequestWrite(method string, req Request, sub string) (Verdict, error) {
 	if method == http.MethodDelete {
 		return Verdict{Capability: CapPR}, nil
 	}
@@ -256,6 +259,9 @@ func pullRequestWrite(method string, req Request) (Verdict, error) {
 		} `json:"completionOptions"`
 	}
 	if err := decodeUnique(body, &pr); err != nil {
+		if sub != "" {
+			return Verdict{Capability: CapPR}, nil
+		}
 		return Verdict{}, err
 	}
 	if pr.CompletionOptions != nil && pr.CompletionOptions.BypassPolicy != nil && *pr.CompletionOptions.BypassPolicy {
@@ -506,7 +512,7 @@ func batchOpIsWorkItem(uri, org string) (string, error) {
 	}
 	// The resource is the segment after _apis/wit/, "" when there is none.
 	if i+2 < len(segs) {
-		return segs[i+2], nil
+		return foldSegment(segs[i+2]), nil
 	}
 	return "", nil
 }

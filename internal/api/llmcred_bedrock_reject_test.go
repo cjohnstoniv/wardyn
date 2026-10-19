@@ -68,3 +68,22 @@ func TestDenyAlwaysReject_BedrockLaneIsGuarded(t *testing.T) {
 		})
 	}
 }
+
+// TestApproveAlwaysRejects_StaysAsOnMainForBedrockHosts: the model-provider row
+// hosts join the record-promotion skip set only. approve·always on a Bedrock
+// host is accepted exactly as before (a wider refusal is a posture change).
+func TestApproveAlwaysRejects_StaysAsOnMainForBedrockHosts(t *testing.T) {
+	sc := types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{{
+		ID: "bedrock", UID: "uid-bedrock", Kind: types.ModelProviderBedrockBearer,
+		Bedrock:   &types.BedrockSettings{Region: "us-east-1"},
+		Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "us.anthropic.claude-x"}},
+	}}}}
+	s := &Server{cfg: Config{Store: siteOnlyStore{sc: sc}}}
+	const host = "bedrock-runtime.us-east-1.amazonaws.com"
+	if _, refused := s.approveAlwaysRejects(context.Background(), types.Workspace{})[host]; refused {
+		t.Errorf("approve·always on %s is refused; it must behave as on main", host)
+	}
+	if _, skipped := s.recordPromoteSkipHosts(context.Background(), types.Workspace{})[host]; !skipped {
+		t.Errorf("record promotion does not skip %s", host)
+	}
+}

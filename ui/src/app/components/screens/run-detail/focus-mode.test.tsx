@@ -286,6 +286,14 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(strip().getByText(RUN_COCKPIT.deny(1))).toBeInTheDocument();
   });
 
+  it("marks the counts as a floor only when the audit trail's pages left a gap", () => {
+    const { unmount } = render(<FocusMode ctx={ctx({ egress, auditGap: true })} onExit={() => {}} />);
+    expect(strip().getByText(new RegExp(RUN_COCKPIT.countsFloor))).toBeInTheDocument();
+    unmount();
+    render(<FocusMode ctx={ctx({ egress })} onExit={() => {}} />);
+    expect(strip().queryByText(new RegExp(RUN_COCKPIT.countsFloor))).toBeNull();
+  });
+
   it("counts a network-fault row as failed, not as deny, and hides the count when there is none", () => {
     const { unmount } = render(
       <FocusMode

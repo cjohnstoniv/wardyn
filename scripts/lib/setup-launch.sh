@@ -48,9 +48,44 @@ host_runner_limits() {
 }
 
 # local_build_needed — true when ./bin/wardynd, ./bin/wardyn or the UI bundle is missing, or any
-# non-test Go source (or go.mod/go.sum) is newer than ./bin/wardyn. An old CLI left by an earlier
+# non-test Go source, embedded migration (.sql), go.mod/go.sum or UI source/package file is newer than ./bin/wardyn. An old CLI left by an earlier
 # checkout lacks the flags setup.sh passes it, so a present binary is not enough.
 local_build_needed() {
   [ ! -x ./bin/wardynd ] || [ ! -x ./bin/wardyn ] || [ ! -f ./ui/dist/index.html ] && return 0
-  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
+  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name '*.sql' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ] \
+    || [ -n "$(find ui/src ui/public ui/index.html ui/package.json ui/pnpm-lock.yaml ui/vite.config.ts -type f -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
+}
+
+# stale_secrets_wipe_consent ENV_FILE — may setup.sh TRUNCATE the secrets table after
+# wardynd could not decrypt it? 0 = yes, 1 = no (with the reason printed). The wipe
+# destroys every stored credential and the boot keys, so it needs the same consent as the
+# volume wipe, and is refused when the decrypt failed because THIS shell handed wardynd a
+# different key than ENV_FILE's: the stored secrets are then still readable with ENV_FILE's.
+# ask_yn comes from setup.sh.
+stale_secrets_wipe_consent() {
+  _ssw_envkey=$(grep -E '^WARDYN_AGE_KEY=' "$1" 2>/dev/null | head -1 | cut -d= -f2-) || true
+  if [ -n "${WARDYN_AGE_KEY_FILE:-}${WARDYN_PLATFORM_KEY_FILE:-}" ] || { [ -n "${WARDYN_AGE_KEY:-}" ] && [ "${WARDYN_AGE_KEY}" != "${_ssw_envkey}" ]; }; then
+    warn "Your shell sets WARDYN_AGE_KEY, WARDYN_AGE_KEY_FILE or WARDYN_PLATFORM_KEY_FILE to a key other than the one in $1; wardynd used it, so the stored secrets may be fine under that file's key."
+    warn "Nothing was cleared (WARDYN_FORCE_RESET=1 does not override this). Fix: unset those variables, or export the WARDYN_AGE_KEY from $1, then run make setup again."
+    unset _ssw_envkey
+    return 1
+  fi
+  unset _ssw_envkey
+  if [ "${WARDYN_FORCE_RESET:-}" = 1 ]; then warn "WARDYN_FORCE_RESET=1 - clearing the secrets table."; return 0; fi
+  warn "Clearing the secrets table DESTROYS every stored credential (model providers, SCM) and the boot keys."
+  [ -t 0 ] && ask_yn "Clear the secrets table (audit log, runs and recordings are kept)?" n && return 0
+  warn "Nothing was cleared. To clear them: run make setup in a terminal and answer y, or set WARDYN_FORCE_RESET=1 and run make setup again."
+  return 1
+}
+
+# workspaces_root_too_broad DIR — true when DIR is the home directory, a folder above it, or /:
+# the daemon would then see ~/.ssh, ~/.aws and the rest of home (docs/ENV.md: never your home
+# directory). DIR is resolved first (trailing slash, .., symlinks), so ~/ and /home are caught as
+# well as an exact $HOME. A DIR that does not exist is not judged here; setup.sh refuses it itself.
+workspaces_root_too_broad() {
+  local root home
+  root=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  home=$(cd "${HOME}" 2>/dev/null && pwd -P) || home=${HOME}
+  case "${home%/}/" in "${root%/}/"*) return 0 ;; esac
+  return 1
 }

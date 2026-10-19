@@ -51,7 +51,7 @@ const (
 	staleWitnessRetries = 3
 )
 
-// runnerGrace never lets a runner-mode delete be a force delete: a zero grace removes the object
+// runnerGrace never lets a pod delete be a force delete, in either mode: a zero grace removes the object
 // without the kubelet confirming (R4-M2). nil keeps the pod's own grace.
 func runnerGrace(g *int64) *int64 {
 	if g == nil || *g >= 1 {
@@ -611,7 +611,12 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	default:
 		return refuseRecord("unknown attestation")
 	}
+	// Compared again under the run's lock: an observer that latched a reuse since the comparison
+	// above changed the tuple the approvers saw.
 	_, err = d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		if !sameTuple(*ev.tuple(runID), rec.Tuple) {
+			return false, refuseRecord("the run's own record no longer matches the approved tuple; the approvals lapse")
+		}
 		r := rec
 		ev.Record = &r
 		return true, nil

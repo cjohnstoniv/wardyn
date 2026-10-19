@@ -190,7 +190,8 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Starting up")).toBeVisible();
     await expect(page.getByText("Starting", { exact: true })).toBeVisible();
     await expect(page.getByText("Queued run")).toBeVisible();
-    await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+    // A PENDING run reads Pending, the run page's own word; Queued is the separate wait for a pool slot (#2922).
+    await expect(page.getByTestId("run-row").filter({ hasText: "Queued run" }).getByText("Pending", { exact: true })).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "Ended today" })).toBeVisible();
     await expect(page.getByText("Wrapped up fine")).toBeVisible();
@@ -220,6 +221,13 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Queued", { exact: true })).toBeVisible();
     await expect(page.getByText("3rd in line")).toBeVisible();
     await expect(page.getByText("QUEUED", { exact: true })).toHaveCount(0);
+  });
+
+  test("a truncated page says the list is cut, never silently drops the rest", async ({ page }) => {
+    await mockRunsList(page, () => ({ runs: [baseRun("t1", "One of many", { state: "COMPLETED", ended_at: new Date().toISOString() })], truncated: true }));
+    await gotoConsole(page);
+    await expect(page.getByText("One of many")).toBeVisible();
+    await expect(page.getByText("Showing the newest 1000 runs. Narrow the filters to see the rest.")).toBeVisible();
   });
 
   test("'Earlier this week' expands, aria-expanded toggles, and focus stays on the toggle", async ({ page }) => {

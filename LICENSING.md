@@ -49,12 +49,12 @@ Wardyn is distributed through four channels:
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
-| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,wardyn-runnerd,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
+| **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release with `wardyn-licenses.tar.gz`, the licence texts and notices for them and for the `wardyn-runnerd-*` binaries |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
 `agent-vscode` and `agent-novnc` — the UI-sandbox relay's two apps — publish
-starting with the next tagged release; both build `FROM` `agent-base`, never
+with every release; both build `FROM` `agent-base`, never
 from the unpublished `agent-claude-code` below. Unlike the vendor CLI, Wardyn
 **does** convey what these two contain — a pinned code-server and a minimal X
 stack — under those components' own licences; see the next section.
@@ -103,7 +103,7 @@ binary:
   GHCR package was removed on 2026-08-30. Its Dockerfile remains a local build
   recipe, and [`deploy/images/THIRD-PARTY-TERMS.md`](deploy/images/THIRD-PARTY-TERMS.md)
   states the vendor terms that bind anyone who builds and runs it themselves.
-  The two product images (`wardynd`, `wardyn-proxy`) contain no such component.
+  The product images (`wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`) contain no such component.
 
 You do not have to take any of this on trust: every published image is
 cosign-signed and carries an attested CycloneDX SBOM and build provenance.
@@ -113,8 +113,8 @@ One thing to know before your scanner reads that SBOM. A Vite bundle strips
 every `package.json`, so scanning the `wardynd` image finds no npm packages at
 all; the release job therefore merges in a scan of `ui/pnpm-lock.yaml`, and a
 lockfile records **build-time** dependencies as well as shipped ones. So the
-`wardynd` SBOM lists ~609 npm components where only 91 are bundled into the
-console, and among the extra ~518 are build tools under MPL-2.0
+`wardynd` SBOM lists many npm components that are not bundled into the
+console, and among the extras are build tools under MPL-2.0
 (`lightningcss`), EPL-2.0 (`elkjs`), CC-BY-4.0 (`caniuse-lite`) and one
 (`khroma`) that declares no licence in `package.json` (its tarball carries an
 MIT text). None of them are in the console bundle, none are executed at
@@ -125,8 +125,11 @@ OFL-1.1, ISC and 0BSD only.
 
 The complete component inventory is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with verbatim licence texts in
-`licenses/texts/`. Both are generated, CI-verified against drift, and shipped
-inside every image at `/usr/share/doc/wardyn/`.
+`licenses/texts/`. Both are generated and CI-verified against drift. The images
+carry the notices at `/usr/share/doc/wardyn/` and the texts at
+`/usr/share/doc/wardyn/licenses/`. The macOS runner package installs them under
+`/usr/local/wardyn/share/doc/` (texts in `licenses/` below it), and the CLI
+release assets carry the texts in `wardyn-licenses.tar.gz`.
 
 ## Components invoked as separate processes
 

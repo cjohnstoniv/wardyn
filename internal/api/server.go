@@ -718,6 +718,8 @@ type Server struct {
 	fleet fleetSnapshot
 	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
 	revokedEndRetry revokedEndRetry
+	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
+	inventoryHoldAudit inventoryHoldAudit
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
@@ -828,6 +830,10 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// attachIgnoredSeen holds the sub+person pairs whose sub_known person.attach row this process already
+	// wrote (people.go attachIgnored); ponytail: per process, so a restart or another replica writes it
+	// once more. A durable mark on the person row would need a migration.
+	attachIgnoredSeen sync.Map
 	// authFailedLimiter rate-bounds the auth.fail audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
@@ -880,8 +886,9 @@ type Server struct {
 	// than the source of truth: it is write-through and read-once-memoized
 	// against store.AWSSSOSpentTokenStore (Postgres), so a restart no longer
 	// re-grades an already-spent credential `live` (#149) — the first read of a
-	// given fingerprint after a restart costs one best-effort row read, and
-	// every read after that (in THIS process) costs nothing.
+	// spent fingerprint after a restart costs one best-effort row read, and
+	// every read after that (in THIS process) costs nothing. Only spent marks
+	// are memoized (#2138).
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex

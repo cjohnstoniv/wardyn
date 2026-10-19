@@ -24,6 +24,7 @@ import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { coveredSuffixes } from "./egress-baseline-coverage";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
 
@@ -163,12 +164,18 @@ export function EgressBaselineTab({ onSubmitted }: { onSubmitted?: () => void })
                 rows={6}
                 value={draft.suffixes}
                 disabled={disabled}
-                aria-describedby="baseline-suffixes-hint"
+                aria-describedby={["baseline-suffixes-hint", "baseline-suffixes-covers"].join(" ")}
                 onChange={(e) => edit({ suffixes: e.target.value })}
               />
               <p id="baseline-suffixes-hint" className="text-xs text-muted-foreground">
                 {BASELINE.SUFFIXES_HINT}
               </p>
+              {/* #2130: what each entry reaches, read live off the box, so the admin sees it before saving. */}
+              <ul id="baseline-suffixes-covers" data-testid="baseline-suffixes-covers" className="space-y-0.5 text-xs text-muted-foreground">
+                {coveredSuffixes(lines(draft.suffixes)).map((entry, i) => (
+                  <li key={`${i}:${entry}`}>{BASELINE.COVERS(entry)}</li>
+                ))}
+              </ul>
             </div>
           </div>
 

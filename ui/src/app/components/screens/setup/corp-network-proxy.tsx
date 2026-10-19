@@ -55,7 +55,7 @@ function evidenceRows(d?: HostProxyDetection): EvidenceRow[] {
   if (!d) return [];
   const rows: EvidenceRow[] = [];
   const push = (key: string, s?: HostProxySetting) => {
-    if (s) rows.push({ key, value: s.value, source: s.source, hasCredentials: s.has_credentials, useValue: s.value });
+    if (s) rows.push({ key, value: s.value, source: s.source, hasCredentials: s.has_credentials, useValue: usableValue(s) });
   };
   push("HTTP_PROXY", d.http_proxy);
   push("HTTPS_PROXY", d.https_proxy);
@@ -66,8 +66,19 @@ function evidenceRows(d?: HostProxyDetection): EvidenceRow[] {
   return rows;
 }
 
-function proxyCandidateValues(d?: HostProxyDetection): string[] {
+// The server masks a detected password to "***", so a credentialed value can never be saved
+// as shown: it prefills the field minus the mask and the operator types the password. An
+// unparseable one is withheld whole and has no usable value (#2572).
+function usableValue(s: HostProxySetting): string | undefined {
+  if (!s.has_credentials) return s.value;
+  if (s.value.startsWith("<redacted")) return undefined;
+  const bare = s.value.replace(":***@", "@");
+  return bare.includes("://") ? bare : `http://${bare}`;
+}
+
+function proxyCandidateValues(d?: HostProxyDetection, oneClickOnly = false): string[] {
   const values = evidenceRows(d)
+    .filter((r) => !oneClickOnly || !r.hasCredentials)
     .map((r) => r.useValue)
     .filter((v): v is string => !!v);
   return [...new Set(values)];
@@ -148,7 +159,7 @@ function EvidenceBlock({
 }: {
   rows: EvidenceRow[];
   showUse: boolean;
-  onUse: (value: string) => void;
+  onUse: (row: EvidenceRow) => void;
   onRecheck: () => void;
   operator: boolean;
   /** The server's graded host_proxy check (see HostProxyCheckNote above) — absent on a fixture-compat older daemon. */
@@ -199,7 +210,7 @@ function EvidenceBlock({
                     variant="outline"
                     className="shrink-0"
                     disabled={!operator}
-                    onClick={() => onUse(r.useValue!)}
+                    onClick={() => onUse(r)}
                   >
                     Use this
                   </Button>
@@ -286,7 +297,7 @@ export function HostProxyTab({
   }, [siteConfig]);
 
   const rows = evidenceRows(detection);
-  const candidates = proxyCandidateValues(detection);
+  const candidates = proxyCandidateValues(detection, true);
   const configured = isProxyConfigured(siteConfig);
   const showUse = !useSecret && !configured;
   // A referenced secret can vanish out from under this config —
@@ -344,13 +355,14 @@ export function HostProxyTab({
   };
 
   const draftHasCreds = !useSecret && hasUserinfo(url);
+  const passwordTyped = !draftHasCreds || !!new URL(url).password;
 
   return (
     <div className="space-y-4">
       <EvidenceBlock
         rows={rows}
         showUse={showUse}
-        onUse={(value) => (hasUserinfo(value) ? setUrl(value) : saveUrl(value))}
+        onUse={(row) => (row.hasCredentials || hasUserinfo(row.useValue!) ? setUrl(row.useValue!) : saveUrl(row.useValue!))}
         onRecheck={onRecheck}
         operator={operator}
         hostProxyCheck={hostProxyCheck}
@@ -437,6 +449,7 @@ export function HostProxyTab({
               <>
                 <div className="rounded-lg border border-warning/30 bg-warning-subtle p-2">
                   <p className="text-meta leading-snug text-warning">{T.CRED_URL_NOTE}</p>
+                  {!passwordTyped && <p className="text-meta leading-snug text-warning">{T.CRED_PASSWORD_MASKED}</p>}
                 </div>
                 <div className="flex items-center gap-2">
                   <Chip tone="neutral" mono className="text-meta">

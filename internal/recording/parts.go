@@ -24,6 +24,13 @@ import (
 // CastKey(runID, PartSuffix(n)). OpenJoined and StatJoined put them back
 // together; nothing else needs to know a cast was split.
 
+// FormatHeader is the upload header wardyn-rec sets, to FormatLog, when the body is a plain log rather than
+// a cast. Absent (an older wardyn-rec, or a cast) the server tells them apart by the body's first bytes.
+const (
+	FormatHeader = "X-Wardyn-Recording-Format"
+	FormatLog    = "log"
+)
+
 // LogCutMarker is the line wardyn-rec appends to a plain log it uploads cut short: the first keep of size
 // bytes, then this.
 func LogCutMarker(keep, size int64) string {

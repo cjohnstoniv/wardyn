@@ -6,11 +6,11 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import {
+  ArrowRight,
   CircleX,
   FilterX,
   Loader2,
   Play,
-  Plus,
   RotateCw,
   Search,
   SquareTerminal,
@@ -20,7 +20,7 @@ import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
-import { fmtBytes, relativeTime } from "../../lib/format";
+import { absoluteTime, fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -50,6 +50,8 @@ import {
   RECORDINGS_LOADING,
   RECORDINGS_LOAD_MORE,
   RECORDINGS_MORE_NOTE,
+  RECORDINGS_NONE_SEARCHED_TITLE,
+  RECORDINGS_NONE_SO_FAR,
   RECORDINGS_PAGE_ERROR_BODY,
   RECORDINGS_PAGE_ERROR_TITLE,
 } from "./recording-copy";
@@ -215,11 +217,50 @@ export function RecordingScreen() {
   const filtersActive = query !== "" || agentFacet !== "all" || stateFacet !== "all";
   const showFilters = library.length > MIN_CARDS_FOR_FILTERS || filtersActive;
 
+  // The paged footer, shared by the list and by an empty first page: runs
+  // without a recording fill a page too, so "no recordings yet" with
+  // truncated set must still offer the next page (#2519). #159: the house
+  // pattern for a paged list is a text link matching the Runs board's own
+  // "Load N more" (runs.tsx#RunsTable), never a second button convention. No
+  // total ever renders; see recording-copy.ts.
+  const pager = (
+    <div className="mt-4">
+      {pageError ? (
+        <div className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-subtle p-3.5">
+          <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">{RECORDINGS_PAGE_ERROR_TITLE}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {RECORDINGS_PAGE_ERROR_BODY(library.length)}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={loadMore}>
+            <RotateCw className="size-3.5" /> Retry
+          </Button>
+        </div>
+      ) : truncated ? (
+        <p className="text-center text-xs text-muted-foreground">
+          {library.length === 0 ? RECORDINGS_NONE_SO_FAR(runs.length) : RECORDINGS_MORE_NOTE(library.length)}{" "}
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="font-medium text-info hover:underline disabled:pointer-events-none disabled:opacity-60"
+          >
+            {loadingMore ? RECORDINGS_LOADING : RECORDINGS_LOAD_MORE(PAGE_SIZE)}
+          </button>
+        </p>
+      ) : (
+        <p className="text-center text-xs text-muted-foreground">{RECORDINGS_ALL_LOADED(library.length)}</p>
+      )}
+    </div>
+  );
+
   return (
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
         title="Recordings"
-        description="Captured terminal sessions, replayed byte-for-byte. Built from the run list alone — a run's own cast is fetched only when you press play."
+        description={RECORDINGS.LEDE}
         actions={
           <Button variant="outline" size="sm" onClick={load}>
             <RotateCw className="size-3.5" /> Refresh
@@ -245,7 +286,7 @@ export function RecordingScreen() {
               recordingDisabled ? undefined : (
                 <Button asChild size="sm">
                   <Link to="/runs">
-                    <Plus className="size-4" /> Go to Runs
+                    Go to Runs <ArrowRight className="size-4" />
                   </Link>
                 </Button>
               )
@@ -256,22 +297,29 @@ export function RecordingScreen() {
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
-            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
+            title={
+              recordingDisabled
+                ? RECORDING_DISABLED_TITLE
+                : truncated
+                  ? RECORDINGS_NONE_SEARCHED_TITLE(runs.length)
+                  : RECORDINGS.NONE_TITLE
+            }
             description={
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
-                : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
+                : RECORDINGS.NONE_BODY
             }
             action={
               recordingDisabled ? undefined : (
                 <Button asChild size="sm">
                   <Link to="/runs">
-                    <Plus className="size-4" /> Go to Runs
+                    Go to Runs <ArrowRight className="size-4" />
                   </Link>
                 </Button>
               )
             }
           />
+          {!recordingDisabled && (truncated || pageError) ? <div className="px-4 pb-4">{pager}</div> : null}
         </div>
       ) : (
         <>
@@ -352,40 +400,7 @@ export function RecordingScreen() {
             </div>
           )}
 
-          {/* #159 — the house pattern for a paged list: a text link matching
-              the Runs board's own "Load N more" (runs.tsx#RunsTable), never a
-              second button convention. No total ever renders — see
-              recording-copy.ts. */}
-          <div className="mt-4">
-            {pageError ? (
-              <div className="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-subtle p-3.5">
-                <CircleX className="mt-0.5 size-4 shrink-0 text-danger" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground">{RECORDINGS_PAGE_ERROR_TITLE}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {RECORDINGS_PAGE_ERROR_BODY(library.length)}
-                  </p>
-                </div>
-                <Button variant="outline" size="sm" onClick={loadMore}>
-                  <RotateCw className="size-3.5" /> Retry
-                </Button>
-              </div>
-            ) : truncated ? (
-              <p className="text-center text-xs text-muted-foreground">
-                {RECORDINGS_MORE_NOTE(library.length)}{" "}
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="font-medium text-info hover:underline disabled:pointer-events-none disabled:opacity-60"
-                >
-                  {loadingMore ? RECORDINGS_LOADING : RECORDINGS_LOAD_MORE(PAGE_SIZE)}
-                </button>
-              </p>
-            ) : (
-              <p className="text-center text-xs text-muted-foreground">{RECORDINGS_ALL_LOADED(library.length)}</p>
-            )}
-          </div>
+          {pager}
         </>
       )}
 
@@ -480,7 +495,7 @@ function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} />
         <Mono>{fmtBytes(bytes)}</Mono>
-        <span className="text-xs text-muted-foreground" title={run.created_at}>
+        <span className="text-xs text-muted-foreground" title={absoluteTime(run.created_at)}>
           {relativeTime(run.created_at)}
         </span>
         <Link

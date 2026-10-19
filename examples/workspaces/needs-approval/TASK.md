@@ -5,10 +5,13 @@
     wardyn run \
       --agent claude-code \
       --repo your-org/needs-approval \
-      --task "Run bash fetch_changelog.sh https://example.com/CHANGELOG and report the full output including the HTTP response or error message. Wait up to 60 seconds for the request to complete."
+      --task "Run bash fetch_changelog.sh https://example.com/CHANGELOG and report the full output including the HTTP response or error message. The script retries for about three minutes, so wait for it to finish."
 
 (Both outcomes are worth seeing: run it twice, or approve/deny from the UI
-while the agent waits.)
+while the agent waits. Under the default `deny_with_review` the first request
+is refused with an approval-pending 403 and the script's next attempt, after
+you decide, carries the outcome. Under `wait_for_review` the request is held
+instead, up to the hold deadline.)
 
 ## What to watch
 
@@ -26,7 +29,7 @@ Click Approve in the UI (or via CLI):
 
 Then observe:
 - Audit: approval.decide outcome=approved + egress.allow for example.com.
-- Agent receives an HTTP response from example.com and prints it.
+- A later attempt by the script receives an HTTP response from example.com, and the agent prints it.
 
 ### Deny path
 
@@ -36,7 +39,7 @@ Click Deny in the UI (or via CLI):
 
 Then observe:
 - Audit: approval.decide outcome=denied + egress.deny for example.com.
-- Agent receives HTTP 403 from the proxy and reports FETCH_FAILED.
+- Every later attempt receives HTTP 403 from the proxy, and the agent reports FETCH_FAILED after the last one.
 
 ## PASS criteria
 
@@ -45,7 +48,7 @@ Then observe:
 2. Audit contains egress.hold for example.com, carrying the approval_id.
 3. After APPROVE: audit contains approval.decide outcome=approved
    decision_scope=run AND egress.allow for example.com; agent receives a
-   response. (decision_scope=run is the default — the CLI/UI examples above
+   response on a later attempt. (decision_scope=run is the default — the CLI/UI examples above
    pass no scope.)
 4. After DENY: audit contains approval.decide outcome=denied
    decision_scope=run AND egress.deny for example.com; agent receives HTTP

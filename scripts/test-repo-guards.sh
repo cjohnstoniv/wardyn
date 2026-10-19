@@ -68,6 +68,20 @@
 #  18. nightly.yml's scope=candidate skips exactly the lanes a release does not
 #      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
 #      carries `if: inputs.scope != 'candidate'`, a job inside it never does.
+#  19. every compose file that digest-pins an image sits in a directory the
+#      `docker-compose` entry of .github/dependabot.yml lists — the `docker`
+#      ecosystem reads Dockerfiles, so a compose pin outside that entry is never
+#      proposed an update.
+#  20. release.yml bundles licenses/texts and THIRD-PARTY-NOTICES.md as
+#      wardyn-licenses.tar.gz next to the standalone binaries and fails the
+#      release unless that asset landed — the binaries are copies, and their
+#      MIT/BSD/Apache terms need the notice texts to travel with them.
+#  21. no workflow step pipes a download into a shell, and every syft install in
+#      release.yml checks a pinned sha256 — those jobs hold the signing identity.
+#  22. .dockerignore excludes every secret-bearing local file .gitignore names, so
+#      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
+#  23. an agent image that sets npm's proxy keys for an install deletes them again
+#      in the same RUN, so a build proxy URL never stays in the shipped layer.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -681,6 +695,89 @@ else
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
     if [ "$scope_fail" = 0 ]; then ok "nightly scope=candidate skips exactly the unwatched lanes"; fi
+fi
+
+# ── 19. compose image pins are covered by Dependabot's docker-compose entry ─
+# The `docker` ecosystem entry reads Dockerfile FROM lines; compose `image:` pins
+# are read by the separate `docker-compose` ecosystem. A directory that digest-pins
+# a compose image but is missing from that entry gets no update proposals.
+DEPENDABOT="${DEPENDABOT:-.github/dependabot.yml}"
+listed_dirs="$(awk '/^  - package-ecosystem:/ { on = ($3 == "docker-compose") } on && /^      - \// { sub(/^\//, "", $2); print $2 }' "$DEPENDABOT" | sort -u)"
+pinned_dirs="$( { git ls-files -z -- ':(glob)**/*compose*.y*ml' \
+    | xargs -0 -r grep -lE '^[[:space:]]*image:[[:space:]]+[^$[:space:]]+@sha256:[0-9a-f]{64}' || true; } \
+    | sed -E 's|/[^/]*$||' | sort -u)"
+if [ -z "$pinned_dirs" ]; then
+    bad "guard 19 found no compose file with a digest-pinned image — the extractor is pointing at nothing"
+else
+    missing="$(comm -23 <(printf '%s\n' "$pinned_dirs") <(printf '%s\n' "$listed_dirs"))"
+    if [ -n "$missing" ]; then
+        bad "$DEPENDABOT: no package-ecosystem docker-compose directory for $(echo $missing) — its digest-pinned compose images would never be proposed an update"
+    else
+        ok "every compose directory with a digest-pinned image ($(echo $pinned_dirs)) is in Dependabot's docker-compose entry"
+    fi
+fi
+
+# ── 20. the release bundles the licence texts next to the binaries ──────────
+# A table of licence names is not the notice MIT, BSD and Apache-2.0 require to
+# accompany a binary copy; licenses/texts/ is. The CLI and runnerd binaries reach
+# people as bare release assets, so the texts ship as one more asset.
+RELEASE_YML="${RELEASE_YML:-.github/workflows/release.yml}"
+if ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*licenses/texts' "$RELEASE_YML" \
+    || ! grep -qE 'tar -czf assets/wardyn-licenses\.tar\.gz .*THIRD-PARTY-NOTICES\.md' "$RELEASE_YML"; then
+    bad "$RELEASE_YML: 'Assemble the asset set' does not build assets/wardyn-licenses.tar.gz from licenses/texts and THIRD-PARTY-NOTICES.md"
+elif ! awk '/for want in/ { on = 1 } on { print } on && /; do/ { exit }' "$RELEASE_YML" | grep -q 'wardyn-licenses\.tar\.gz'; then
+    bad "$RELEASE_YML: the required-asset loop does not name wardyn-licenses.tar.gz"
+else
+    ok "release.yml bundles the licence texts as wardyn-licenses.tar.gz and requires it"
+fi
+
+# ── 21. release tooling is checked before it runs ───────────────────────────
+# The publishing jobs hold id-token: write, so a fetched script piped into sh runs
+# as the release identity. Tools come from a SHA-pinned action or a download whose
+# sha256 is pinned beside its version.
+WORKFLOWS_DIR="${WORKFLOWS_DIR:-.github/workflows}"
+piped="$(grep -nE '\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' "$WORKFLOWS_DIR"/*.yml || true)"
+syft_versions=$(grep -c '^ *SYFT_VERSION:' "$RELEASE_YML" || true)
+syft_sums=$(grep -cE '^ *SYFT_SHA256: [0-9a-f]{64}$' "$RELEASE_YML" || true)
+syft_checks=$(grep -c 'SYFT_SHA256}  .*| sha256sum -c -' "$RELEASE_YML" || true)
+if [ -n "$piped" ]; then
+    bad "a workflow pipes a download into a shell: ${piped}"
+elif [ "$syft_versions" = 0 ] || [ "$syft_sums" != "$syft_versions" ] || [ "$syft_checks" != "$syft_versions" ]; then
+    bad "$RELEASE_YML: ${syft_versions} SYFT_VERSION pin(s), ${syft_sums} SYFT_SHA256 pin(s), ${syft_checks} sha256sum check(s) — every syft install must check its pinned sha256"
+else
+    ok "no workflow pipes a download into a shell; all ${syft_versions} syft installs check a pinned sha256"
+fi
+
+# ── 22. secret-bearing local files stay out of the build context ────────────
+DOCKERIGNORE="${DOCKERIGNORE:-.dockerignore}"
+missing=""
+for want in .env '**/.env' .npmrc '**/.npmrc' local/ '**/.env.*.local' \
+    examples/composer-configs/anthropic-api.json examples/composer-configs/openai-api.json; do
+    grep -qxF -- "$want" "$DOCKERIGNORE" || missing="$missing $want"
+done
+if [ -n "$missing" ]; then
+    bad "$DOCKERIGNORE does not exclude:${missing} — a repo-root COPY . . would layer it into a builder stage"
+else
+    ok ".dockerignore excludes every secret-bearing local file .gitignore names"
+fi
+
+# ── 23. a build proxy never stays in an agent image's npm config ────────────
+# `npm config set proxy` writes the image user's .npmrc; the RUN that sets it
+# for an install deletes it again, so the layer keeps no (possibly credentialed)
+# build proxy and in-sandbox npm keeps wardyn-proxy.
+IMAGES_DIR="${IMAGES_DIR:-deploy/images}"
+leaky=""
+for f in "$IMAGES_DIR"/*/Dockerfile; do
+    sets=$(grep -c 'npm config set https\?-\?proxy' "$f" || true)
+    [ "$sets" = 0 ] && continue
+    awk '/^RUN /{r=""} {r=r $0 "\n"} !/\\$/ && r!="" {print r; r=""}' "$f" \
+        | awk -v RS='' '/npm config set (https-)?proxy/ && !/npm config delete proxy https-proxy/ {bad=1} END {exit bad}' \
+        || leaky="$leaky $f"
+done
+if [ -n "$leaky" ]; then
+    bad "an agent image keeps npm's build proxy in its layer:${leaky} — delete proxy https-proxy in the RUN that sets them"
+else
+    ok "every agent image that sets npm's proxy keys deletes them in the same RUN"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

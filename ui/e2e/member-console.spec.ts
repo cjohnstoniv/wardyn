@@ -26,6 +26,7 @@ import {
 } from "./fixtures";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 test.describe("member console — real member navigation", () => {
@@ -39,7 +40,6 @@ test.describe("member console — real member navigation", () => {
     for (const label of ["Runs", "Approvals", "Workspaces"] as const) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    // MEMBER_NAV_PATHS (app-shell.tsx) is the single source of truth.
     // Permissions joined the sidebar in 0.6 and is admin-only: 0.6 ships no
     // member permissions screen at all, only the inline why-denied moments
     // below, so it must not appear here. Recordings is the admin evidence
@@ -47,6 +47,11 @@ test.describe("member console — real member navigation", () => {
     for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"] as const) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
+    // This is the User view, where an admin sees the same nav, so the lines above do not tell a
+    // member from an admin. The Admin view does: it refuses a real member.
+    await navToRoute(page, "/admin/runs");
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
   });
 
   test("the account menu shows a quiet 'user' chip", async ({ page }) => {
@@ -59,7 +64,7 @@ test.describe("member console — real member navigation", () => {
     await page.locator("header").getByRole("button").last().click();
     const menu = page.getByRole("menu");
     // The non-admin side is a user (packet B, D6).
-    await expect(menu.getByText("user", { exact: true })).toBeVisible();
+    await expect(menu.getByText("User", { exact: true })).toBeVisible();
   });
 
   test("admin (unmocked, today's default): the full nine-item nav in the Admin view", async ({ page }) => {

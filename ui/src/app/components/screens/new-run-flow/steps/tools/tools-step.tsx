@@ -16,6 +16,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
+import { useOwnTokenRows } from "../../../../../lib/hooks/use-own-token-rows";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
@@ -79,6 +80,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
+  const ownRows = useOwnTokenRows(status);
   // Connected: the shell reads the person's Azure DevOps answer again, and the server is asked about this run again.
   const connectAdo = async (connect: () => Promise<boolean | null>) => {
     if (await connect()) {
@@ -178,6 +180,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
             answered={answered}
             names={names}
             providers={providers}
+            ownRows={ownRows}
             ado={{
               access: status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined),
               policyCaps: adoCaps,

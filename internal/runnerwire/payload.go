@@ -121,6 +121,10 @@ type Caps struct {
 	// reads and sends a resident value only for a runner that says so; an older
 	// runner's run with one is refused before any value is read.
 	Resident bool `json:"resident,omitempty"`
+	// EndsUnkept says the runner's substrate cannot keep an ended sandbox
+	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
+	// (a runner older than 0.9.4) reads as keeps, as before.
+	EndsUnkept bool `json:"ends_unkept,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

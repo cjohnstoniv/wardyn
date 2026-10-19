@@ -217,6 +217,35 @@ describe("Harnesses step: Make's Harness 1", () => {
   });
 });
 
+// #2861: until the roster answers, the step says so instead of showing a dead Add
+// button, and an agent task never claims it "can continue without" a harness.
+describe("Harnesses step: while the roster loads", () => {
+  function showPending(intent: RunIntent) {
+    render(
+      <MemoryRouter>
+        <NewRunDraftProvider owner="alice">
+          <Seeded intent={intent}>
+            <HarnessesStep location={{ screen: "step", step: "harnesses" }} go={vi.fn()} startFromScratch={() => {}} deps={{ load: () => new Promise<Roster>(() => {}) }} />
+          </Seeded>
+        </NewRunDraftProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it.each([["Interactive", INTERACTIVE], ["Autonomous", AUTONOMOUS]])("%s: a loading line, no Add button, no 'can continue without one'", async (_n, intent) => {
+    showPending(intent);
+    expect(await screen.findByText(NR_HARNESSES.LOADING)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NR_HARNESSES.ADD_HARNESS })).not.toBeInTheDocument();
+    expect(screen.queryByText(NR_HARNESSES.EMPTY_BODY)).not.toBeInTheDocument();
+  });
+
+  it("an environment, whose harnesses are optional, still says it can continue without one", async () => {
+    showPending({ shape: "environment", experience: "interactive" });
+    expect(await screen.findByText(NR_HARNESSES.LOADING)).toBeInTheDocument();
+    expect(screen.getByText(NR_HARNESSES.EMPTY_BODY)).toBeInTheDocument();
+  });
+});
+
 describe("Harnesses step: Environment and Application", () => {
   it.each([
     ["environment", { shape: "environment", experience: "interactive" } as RunIntent],

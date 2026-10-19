@@ -443,8 +443,8 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 	return nil
 }
 
-// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
-// ui.close Data-fields cells to what the emit passes: `duration_sec` is
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open, ui.close and
+// ui.start Data-fields cells to what the emit passes: `duration_sec` is
 // computed only at close (s.auditUI's caller at internal/api/uigateway.go
 // passes it in the ui.close call's map literal, not ui.open's), and
 // TestAuditActionsDocCitationsAreLive only checks citation proximity, never
@@ -466,27 +466,44 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 		t.Fatalf("read internal/api/uigateway.go: %v", err)
 	}
 	mapLit := regexp.MustCompile("`([a-z0-9_]+)`|\"([a-z0-9_]+)\":")
+	// auditUISession adds the portal and sponsor keys to every ui.* row after
+	// the call site's literal, so they are part of what the emit passes.
+	sessSrc, err := os.ReadFile(filepath.Join(root, "internal", "api", "uigateway_session.go"))
+	if err != nil {
+		t.Fatalf("read internal/api/uigateway_session.go: %v", err)
+	}
+	helperKeys := regexp.MustCompile(`data\["([a-z0-9_]+)"\]`).FindAllStringSubmatch(string(sessSrc), -1)
+	if len(helperKeys) == 0 {
+		t.Fatal("found no data[\"...\"] assignments in auditUISession — re-anchor this guard")
+	}
 	for _, tc := range []struct {
 		action string
 		call   *regexp.Regexp
 	}{
 		{"ui.open", regexp.MustCompile(`"ui\.open"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
 		{"ui.close", regexp.MustCompile(`"ui\.close"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
+		// ui.start emits from two call sites (success, failure); their literals are unioned.
+		{"ui.start", regexp.MustCompile(`"ui\.start"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
 	} {
-		m := tc.call.FindSubmatch(src)
-		if m == nil {
+		calls := tc.call.FindAllSubmatch(src, -1)
+		if calls == nil {
 			t.Fatalf("could not find the %s emit's map[string]any{...} literal in internal/api/uigateway.go — re-anchor this guard", tc.action)
 		}
 		emitted := map[string]bool{}
-		for _, kv := range mapLit.FindAllStringSubmatch(string(m[1]), -1) {
-			for _, k := range kv[1:] {
-				if k != "" {
-					emitted[k] = true
+		for _, m := range calls {
+			for _, kv := range mapLit.FindAllStringSubmatch(string(m[1]), -1) {
+				for _, k := range kv[1:] {
+					if k != "" {
+						emitted[k] = true
+					}
 				}
 			}
 		}
 		if len(emitted) == 0 {
 			t.Fatalf("parsed 0 keys out of the %s emit's map literal — re-anchor this guard", tc.action)
+		}
+		for _, kv := range helperKeys {
+			emitted[kv[1]] = true
 		}
 		documented := dataFieldsCell(t, root, tc.action)
 		docSet := map[string]bool{}

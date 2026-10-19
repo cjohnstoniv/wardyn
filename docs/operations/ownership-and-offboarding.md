@@ -38,6 +38,7 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
   - Treat it like creating the workspace.
 - **Offboarding a USER DRIVE is two halves, only one of them a product action — and the ORDER is not the obvious one.**
   - Run `POST /drives/preview` **first, while the allocation still exists**, and write the object name down.
+  - On a `host_path` drive the preview blanks `object_name` unless a super admin runs it: the name is a path under the drive's host root, which only a super admin is shown.
   - The preview answers "what does this deployment say about THIS principal" by running the ordinary resolver (`resolveUserDriveFor`, [`internal/api/user_drives_resolve.go`](../../internal/api/user_drives_resolve.go)), and the resolver matches on the **grant**:
     - delete the allocation first and the preview resolves nothing,
     - so the one call that names the object a person is about to lose stops being able to name it.
@@ -143,6 +144,6 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
 
 **Deciding an approval is kind-restricted, not just owner-restricted** (`decide()`, [`internal/api/approvals.go`](../../internal/api/approvals.go)): a member may approve or deny an `egress_domain` approval on a run they own.
 
-- `credential` and `tool_call` approvals stay **admin-only regardless of ownership**
+- `credential` and `tool_call` approvals stay **admin-only regardless of ownership** except an Azure DevOps access request on a run the member owns ([USERS.md](../USERS.md#deciding-an-egress-approval-on-your-own-run))
   - the shipped default policy requires approval on `github_token`,
   - so a member self-approving their own run's credential request would self-mint a real token, and self-approving a `tool_call` re-opens exactly what the clamp (below) exists to bound.

@@ -128,7 +128,12 @@ func TestParse_SMTPRefusals(t *testing.T) {
 	if _, err := Parse(pre + good + `,"to":["a@example.com"],"username":"u","password":"p"}]}`); err != nil {
 		t.Fatalf("a valid smtp channel was refused: %v", err)
 	}
+	if _, err := Parse(pre + good + `,"to":["a@example.com"],"helo":"wardyn.corp.example"}]}`); err != nil {
+		t.Fatalf("an smtp channel with a helo name was refused: %v", err)
+	}
 	for name, c := range map[string]struct{ cfg, leak string }{
+		"LF in helo":      {good + `,"to":["a@example.com"],"helo":"wardyn.corp\nexample"`, "wardyn.corp"},
+		"helo with space": {good + `,"to":["a@example.com"],"helo":"not a name"`, "not a name"},
 		"CR in host":      {`"host":"smtp.example.com\r","port":587,"from":"w@example.com"`, "smtp.example"},
 		"LF in from":      {`"host":"smtp.example.com","port":587,"from":"w@example.com\nBcc: x@example.com"`, "Bcc"},
 		"LF in to":        {good + `,"to":["a@example.com\r\nBcc: x@example.com"]`, "Bcc"},

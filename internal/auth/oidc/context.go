@@ -265,10 +265,16 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 // RoleStampTTL on, so a sooner role deadline is the expiry a request reads.
 func (a *Authenticator) withPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = contextWithPrincipal(ctx, sess)
+	return context.WithValue(ctx, expiryCtxKey{}, a.enforcedExpiry(sess))
+}
+
+// enforcedExpiry is the moment Middleware stops accepting sess: its expiry, or sooner the end of the
+// role stamp's life. /me and the expiry header both name it, so the console warns before the 401.
+func (a *Authenticator) enforcedExpiry(sess Session) time.Time {
 	if ttl := a.cfg.RoleStampTTL; ttl > 0 && !sess.IssuedAt.IsZero() && sess.IssuedAt.Add(ttl).Before(sess.Expiry) {
-		ctx = context.WithValue(ctx, expiryCtxKey{}, sess.IssuedAt.Add(ttl))
+		return sess.IssuedAt.Add(ttl)
 	}
-	return ctx
+	return sess.Expiry
 }
 
 // principalCtxKey — see PrincipalFromContext.

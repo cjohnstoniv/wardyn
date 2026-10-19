@@ -33,7 +33,8 @@
 # docs/operations/who-gets-in.md 1752 adds 245 over 1507, measured: the "How long a console session lasts" section comparing the three session shapes (0.9.3 console session lifetime).
 # docs/operations/who-gets-in.md 1757 adds 5 over 1752, counted from the diff: a renewal sets the expiry to the original length from the request (0.9.3 console session lifetime, review).
 # docs/operations/who-gets-in.md 1789 = 1757 + 32, measured: same session-renewal limit in the sliding-session list
-docs/operations/who-gets-in.md=1789 share=35
+# 0.9.4 L8: docs/operations/who-gets-in.md 1925 adds 136 over 1789: the session knobs and their trade-off.
+docs/operations/who-gets-in.md=1925 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
@@ -62,15 +63,18 @@ docs/operations/admin-only-writes.md=3698 share=35
 # docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
-docs/operations/three-roles.md=4650 share=35
+docs/operations/three-roles.md=4677 share=35
 docs/operations/provider-policy.md=1278 share=35
-docs/operations/ownership-and-offboarding.md=2370 share=35
+# 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
+docs/operations/ownership-and-offboarding.md=2414 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
 # docs/operations/governance-writes.md 3132 adds 46 over 3086 (0.9.3 FIN-E), measured: the runner trust row and held remote-hosted runner changes.
-docs/operations/governance-writes.md=3132 share=35
-docs/operations/member-runs.md=1044 share=35
+# 0.9.4 W4-DOCS-1: docs/operations/governance-writes.md 3158 adds 26 over 3132, measured: #2369: the run node record row.
+docs/operations/governance-writes.md=3158 share=35
+# 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
+docs/operations/member-runs.md=1054 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/user-drives.md 4823 adds 5 over 4818 (0.9.3 RV5), measured: nested-root race has no database guard yet.
 # docs/operations/user-drives.md 4823 = 4818 + 5 (RV5), measured at the wave-A merge.
@@ -78,7 +82,7 @@ docs/operations/user-drives.md=4823 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
-docs/operations/capabilities.md=4383 share=35
+docs/operations/capabilities.md=4393 share=35
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 docs/operations/custom-components.md=1269 share=35
@@ -109,7 +113,9 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 5001 adds 38: the sponsor_not_entitled denial row (0.9.3 FIN-B2).
 # docs/operations/denials.md 5179 adds 168, measured: the node-loss containment reasons.
 # docs/operations/denials.md 5186 adds 7 over 5179, measured: the node-loss containment wording after merging the runner sweep.
-docs/operations/denials.md=5186 share=35
+# 0.9.4 W4-DOCS-1: docs/operations/denials.md 5188 adds 2 over 5186, measured: #2370 #2372: audited always-scope 403, admin_view causes.
+# docs/operations/denials.md 5191 adds 3 (0.9.4 final review): node_record_human_only also names the API token, as the code and docs/sdk.md do.
+docs/operations/denials.md=5191 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

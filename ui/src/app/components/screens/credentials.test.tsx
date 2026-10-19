@@ -115,6 +115,8 @@ describe("the inventory", () => {
     listInventoryMock.mockRejectedValue(new HttpError(503, msg));
     renderScreen();
     expect(await screen.findByText(msg)).toBeInTheDocument();
+    expect(screen.getByText(INVENTORY.NO_META_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
@@ -312,7 +314,7 @@ describe("tokens an admin created for someone else (#1477)", () => {
     expect(MINTED.TITLE).toBe("Tokens an admin created for someone else");
     expect(MINTED.CHIP(3)).toBe("3 still work");
     expect(MINTED.COUNT(3)).toBe(
-      "3 tokens were created by an admin for another person. They keep working until revoked. Values are never shown.",
+      "3 tokens were created by an admin for another person. They keep working until they expire or are revoked. Values are never shown.",
     );
     expect(MINTED.NOTE).toBe("No one can create a token that acts as another person. They sign in and create their own.");
     expect(MINTED.EMPTY).toBe("No admin has created a token for someone else.");

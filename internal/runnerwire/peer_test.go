@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -193,6 +194,25 @@ func TestPeerRefusedOpen(t *testing.T) {
 	p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(*Stream, Open) error { return errors.New("no") }})
 	if _, err := p.org.Open(ctxT(t), Open{Kind: KindRelay}); err == nil {
 		t.Fatal("a refused open succeeded")
+	}
+}
+
+// An OnOpen handler that answers ErrOpenCapacity (wrapped or not) resets the OPEN with ResetCapacity,
+// which an opener may retry; every other error stays a ResetRefused.
+func TestPeerOpenRefusalCodes(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code uint32
+	}{
+		{ErrOpenCapacity, ResetCapacity},
+		{fmt.Errorf("pending: %w", ErrOpenCapacity), ResetCapacity},
+		{errors.New("no"), ResetRefused},
+	} {
+		p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(*Stream, Open) error { return tc.err }})
+		var re *ResetError
+		if _, err := p.org.Open(ctxT(t), Open{Kind: KindRelay}); !errors.As(err, &re) || re.Code != tc.code {
+			t.Errorf("OnOpen %v: open = %v, want reset code %d", tc.err, err, tc.code)
+		}
 	}
 }
 

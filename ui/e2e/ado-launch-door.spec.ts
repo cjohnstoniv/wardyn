@@ -134,4 +134,37 @@ test.describe("New Run — the Azure DevOps launch door", () => {
     await expect(page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toHaveCount(0);
     expect(popupOpened).toBe(false);
   });
+
+  // #2621: a refusal whose cause is an expired own token cannot be repaired by
+  // Connect, so no door opens; the server's sentence stays under Launch.
+  test("an expired-token refusal opens no Connect dialog and leaves the sentence under Launch", async ({
+    page,
+    context,
+  }) => {
+    const sentence = "your Azure DevOps token has expired: replace it in Settings, then start the run again";
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: sentence,
+          reason: "git_credential",
+          org: "https://dev.azure.com/contoso",
+          cause: "token_expired",
+        }),
+      });
+    });
+
+    await openNameDialog(page, "e2e ado expired token");
+    let popupOpened = false;
+    context.on("page", () => {
+      popupOpened = true;
+    });
+    await launchInDialog(page);
+
+    await expect(nameDialog(page).locator("#name-run-sentence")).toContainText(sentence);
+    await expect(page.getByRole("heading", { name: ADO.LAUNCH_DIALOG_TITLE })).toHaveCount(0);
+    expect(popupOpened).toBe(false);
+  });
 });

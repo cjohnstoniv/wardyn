@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -18,27 +19,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func (f *runnerRegistrationFake) SetRunnerArch(_ context.Context, id uuid.UUID, arch string) error {
+// RecordRunnerCaps is store.PG's write with no sessions to fence: every report is the current one's.
+func (f *runnerRegistrationFake) RecordRunnerCaps(_ context.Context, id uuid.UUID, _ string, r store.RunnerCapsReport, now time.Time) (bool, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
-	if row, ok := f.rows[id]; ok && row.State != types.RunnerRevoked {
-		row.Arch = arch
-		f.rows[id] = row
+	row, ok := f.rows[id]
+	if !ok {
+		return false, nil
 	}
-	return nil
-}
-
-func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid.UUID, name string) error {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	if row, ok := f.rows[id]; ok && row.State != types.RunnerRevoked {
-		row.MachineName = name
-		f.rows[id] = row
+	if r.Version != "" {
+		row.Version = r.Version
 	}
-	return nil
+	if row.State != types.RunnerRevoked {
+		row.MachineName = cmp.Or(r.MachineName, row.MachineName)
+		row.Arch = cmp.Or(r.Arch, row.Arch)
+	}
+	row.LastSeenAt = &now
+	f.rows[id] = row
+	return true, nil
 }
 
 func (f *runnerRegistrationFake) TouchRunner(_ context.Context, id uuid.UUID, version string, now time.Time) error {

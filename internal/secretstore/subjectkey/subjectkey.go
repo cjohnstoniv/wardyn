@@ -314,7 +314,10 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	if err != nil {
 		// An outage or a revoked access is not a verdict on the wrap: say what failed, keeping the cause
 		// for errors.Is, and leave the "does not unwrap" wording to a key service that answered about it.
-		if errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrService) {
+		// A service that answered and refused the wrap (a Transit decrypt carries ErrService too) is that
+		// verdict, so it is checked first.
+		answered := errors.Is(err, kek.ErrRefused) || errors.Is(err, kek.ErrCorrupt)
+		if !answered && (errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrService)) {
 			return nil, fmt.Errorf("subjectkey: the key service could not unwrap generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, err)
 		}
 		return nil, fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q) does not unwrap (moved, forged, corrupted, or its key version retired): %w", id.version, id.owner, id.purpose, err)
@@ -330,6 +333,13 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 // from is already current. A destroyed from is ErrDataLoss. The data key is
 // opened here and never leaves it, and the value it seals is never opened.
 func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, sealed, fromAAD []byte, toAAD func(version int) []byte) (int, []byte, error) {
+	// from first: Current creates a generation for an owner who has none, and
+	// a destroyed from must not leave the erased owner a fresh live key.
+	oldKey, err := m.Key(ctx, owner, purpose, from)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer clear(oldKey)
 	cur, curKey, err := m.Current(ctx, owner, purpose)
 	if err != nil {
 		return 0, nil, err
@@ -338,11 +348,6 @@ func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, s
 	if cur == from {
 		return cur, nil, nil
 	}
-	oldKey, err := m.Key(ctx, owner, purpose, from)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer clear(oldKey)
 	dek, err := kek.Open(oldKey, sealed, fromAAD)
 	if err != nil {
 		return 0, nil, fmt.Errorf("subjectkey: the data key does not open under generation %d (moved, forged or corrupted): %w", from, err)

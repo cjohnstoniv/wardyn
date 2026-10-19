@@ -89,13 +89,13 @@ export function NoRunnerCard({ noDriver }: { noDriver: boolean }) {
   return (
     <div className="rounded-xl border border-danger/40 bg-danger-subtle p-5">
       <div className="flex items-start gap-3">
-        <AlertOctagon className="mt-0.5 size-5 text-danger" aria-hidden />
+        <AlertOctagon data-testid="no-runner-icon" className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
         <div>
           <div className="text-foreground">No sandbox runner — runs can't launch.</div>
           <p className="mt-1 text-sm text-muted-foreground">
             {noDriver ? (
               <>
-                Fix: start wardynd with <Mono>-runner docker</Mono> (built with -tags docker).
+                Fix: start wardynd with <Mono>-runner docker</Mono> (built with <Mono>-tags docker</Mono>).
               </>
             ) : (
               "Fix: start the Docker daemon (or install a container runtime) so Wardyn can build a barrier, then re-check."
@@ -328,7 +328,7 @@ export function EnvironmentStep({
   // Column cell classes — the selected column gets a teal (--primary) ring built
   // from cell borders; non-selectable columns dim.
   const col = (cc: ConfinementClass, pos: "head" | "mid" | "foot") => {
-    const sel = selected === cc;
+    const sel = !noRunner && selected === cc;
     return cn(
       "px-4 align-top",
       pos === "head" ? "pt-4 pb-3" : "py-3",
@@ -355,17 +355,17 @@ export function EnvironmentStep({
       <p className="text-sm text-muted-foreground">
         {noRunner
           ? "The tier matrix is shown for reference — tiers can't be selected until a runner is available."
-          : "Weakest to strongest — pick a column to save it in this browser as the default barrier for new runs."}
+          : "Weakest to strongest. New runs default to the strongest barrier installed here; you can pick a different one per run in New Run."}
       </p>
 
       {/* The picker: a radiogroup whose radios are the three column headers. */}
       <div
         role="radiogroup"
         aria-label="Barrier tier"
-        className={cn(
-          "overflow-x-auto rounded-xl border",
-          noRunner && "pointer-events-none opacity-60",
-        )}
+        // `relative` contains the sr-only (absolute) TierIllustration labels, which
+        // otherwise widen the page at 390px (#2839). No extra dim for noRunner: the
+        // radios are already disabled and the cells carry their own opacity (#2840).
+        className="relative overflow-x-auto rounded-xl border"
       >
         <table className="w-full min-w-[720px] table-fixed border-collapse text-sm">
           <thead>
@@ -377,7 +377,7 @@ export function EnvironmentStep({
               </th>
               {CC_ORDER.map((cc) => {
                 const st = tierState(cc);
-                const sel = selected === cc;
+                const sel = !noRunner && selected === cc;
                 const canSelect = selectable(cc);
                 const meta = CC_META[cc];
                 return (
@@ -519,7 +519,7 @@ export function EnvironmentStep({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Your pick is saved in this browser as the default barrier for new runs.
+        Nothing here is saved: New Run starts from the strongest installed barrier and lets you pick per run.
       </p>
     </div>
   );

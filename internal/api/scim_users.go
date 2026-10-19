@@ -400,6 +400,13 @@ func (s *Server) applySCIMChange(w http.ResponseWriter, r *http.Request, st scim
 	reactivate := ch.active != nil && *ch.active
 	before, err := st.IdentityAliasValues(ctx, ident.ID)
 	if err != nil {
+		// A deactivation still goes through the suspension, which cuts the exact row even while the
+		// directory cannot be read; the projection change waits for the identity provider's retry.
+		if suspend {
+			if serr := s.suspendIdentity(ctx, st, ident.ID, scimSlot(ctx)); serr != nil {
+				err = serr
+			}
+		}
 		s.scimServerError(w, r, "read the user", err)
 		return
 	}

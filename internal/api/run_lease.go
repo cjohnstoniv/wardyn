@@ -405,12 +405,19 @@ func (s *Server) warnRunEnding(ctx context.Context, leaser store.RunLeaser, run 
 			return
 		}
 		if applied {
+			// The files are kept for the grace only when the end KEEPS the run; one
+			// the lifetime kill tears down at its end (Background, or an end at or
+			// past the cap) has nothing kept (#2792).
+			var keptSec int64
+			if _, killed := lifetimeEndDue(run, *run.EndsAt); !killed {
+				keptSec = int64(s.cfg.EndedRunGrace.Seconds())
+			}
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ending_soon",
 				run.ID.String(), "success", mustJSON(map[string]any{
 					"ends_at":        run.EndsAt,
 					"threshold_sec":  int64(threshold.Seconds()),
 					"left_sec":       int64(left.Seconds()),
-					"files_kept_sec": int64(s.cfg.EndedRunGrace.Seconds()),
+					"files_kept_sec": keptSec,
 				})))
 		}
 		return

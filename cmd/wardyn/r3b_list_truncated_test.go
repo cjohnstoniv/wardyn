@@ -57,6 +57,8 @@ func TestListCmdsWarnOnTruncation(t *testing.T) {
 		// this finding's definition of the defect, not a lesser version of it.
 		{"policy list", []string{"policy", "list"}, []types.RunPolicy{{ID: uuid.New(), Name: "example"}}},
 		{"workspace list", []string{"workspace", "list"}, []types.Workspace{{ID: uuid.New(), Name: "example"}}},
+		// Your own runners are a page too (GET /me/runners), so a partial list says so.
+		{"runner list", []string{"runner", "list"}, []types.RunnerView{{ID: uuid.New(), Name: "example", State: types.RunnerClaimed}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := r3bTruncatedListServer(t, tc.body)

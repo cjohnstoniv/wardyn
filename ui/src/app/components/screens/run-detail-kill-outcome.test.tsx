@@ -189,6 +189,12 @@ describe("RunDetailScreen — what a killed run held that Wardyn cannot revoke",
     expect(await screen.findByText(/received as an environment variable/)).toBeInTheDocument();
   });
 
+  it("a file-secret grant gets the rotation line without any mint row", async () => {
+    seed({ kills: [kill("success", 6)], grants: [grantRecord("g1", "file_secret")], mints: [] });
+    renderRun();
+    expect(await screen.findByText(/received as a file/)).toBeInTheDocument();
+  });
+
   it("a failed mint fetch says Wardyn couldn't read which credentials the run held", async () => {
     seed({ kills: [kill("success", 6)], grants: [grantRecord("g1", "github_token")], mints: new Error("audit store degraded") });
     renderRun();

@@ -13,8 +13,8 @@
 #          $WARDYN_VERSION, never a hard-coded release number.
 #     C6   RELEASING.md's required-status-checks `contexts` cover `notices`
 #          and every one of ci.yml's `trivy (<image>)` jobs (F121).
-#     C7   ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
-#          compose file they describe (F081/F091/F155).
+#     C7   VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
+#          compose file they describe (F091/F155).
 #     C8a  docs/ci/github-actions.yml and azure-pipelines.yml pin the wardyn
 #          checkout they EXECUTE at the shipped version (F007, security: an
 #          unpinned pin runs tip-of-default-branch shell in a secret-bearing
@@ -130,7 +130,7 @@ grep -qF "${pg_pw}" <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions that Postgres publishes on loopback with the PUBLISHED literal password '${pg_pw}' — the second person psql's straight past every admin/member control the section is about (F155)"
 grep -qi 'registry' <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
-pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
+pass "C7 VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
 
 # ── C8a: both pasteable CI pipelines pin the wardyn checkout they EXECUTE ───
 #
@@ -203,7 +203,7 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # release needs every grant since, whichever release candidates came between.
 # When a final release is cut, set it to the first migration after that release
 # (RELEASING.md, step 1); the next release's tables then go in a new bullet.
-UNRELEASED_FROM=0191 # v0.9.3, the last final release, ships migrations up to 0190
+UNRELEASED_FROM=0192 # v0.9.4, the last final release, ships migrations up to 0191
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }
@@ -217,12 +217,14 @@ newest="$(basename "$(ls "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql | tail -1)" | cu
 [ "$((10#${UNRELEASED_FROM}))" -le "$((10#${newest} + 1))" ] \
   || fail "UNRELEASED_FROM ${UNRELEASED_FROM} is above the next migration number $((10#${newest} + 1)) (newest is ${newest}): the split-role check reads no migration it should (C8h). Set it to the first migration after the last release"
 checked=0
+new_tables=""
 for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
   num="$(basename "${f}" | cut -c1-4)"
   [ "$((10#${num}))" -ge "$((10#${UNRELEASED_FROM}))" ] || continue
   while read -r tbl; do
     [ -n "${tbl}" ] || continue
     checked=$((checked + 1))
+    new_tables="${new_tables} ${tbl}"
     grep -qF "\`${tbl}\`" <<<"${split_note}" \
       || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
   done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
@@ -240,14 +242,34 @@ pass "C8h the split-role upgrade note grants all ${checked} tables created since
 # string literal: DELETE FROM t; UPDATE t SET; INSERT INTO t ... DO UPDATE; a
 # FROM t with FOR [NO KEY] UPDATE. A statement assembled from several literals
 # is judged per literal, so this is a floor, not a proof.
-verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | perl -e '
-  my $note = <STDIN>; $note =~ s/\.\s+Without\b.*//s;       # the grant sentence only
+#
+# The whole bullet is read, a sentence at a time: each "`VERBS` on `t`, ..." group
+# grants the tables its own sentence names (the verbs reset at every sentence, so
+# the prose after a grant never inherits it). Every table the note names (and
+# every one a migration since UNRELEASED_FROM creates) must land in that map, else
+# a rephrased note could shrink what this reads without any failure. SQL that runs on the MIGRATOR
+# connection (migrator_sql: the app role never executes it) is not counted
+# against the app role.
+all_tables="$(cat "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql | grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' | awk '{print tolower($NF)}' | sort -u | tr '\n' ' ')"
+migrator_sql="internal/db/deployment_versions.go" # RecordDeploymentVersion, run by migrateRecordingVersion on the migrator DSN
+verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | NEW_TABLES="${new_tables}" ALL_TABLES="${all_tables}" MIGRATOR_SQL="${migrator_sql}" perl -e '
+  my $note = <STDIN>;
   my (%has, $verbs);
-  while ($note =~ /`?(SELECT(?:, [A-Z]+)*)`?\s+on\b|`([a-z][a-z_]*)`/g) {
-    if (defined $1) { $verbs = $1; next }
-    $has{$2} = $verbs if defined $verbs;
+  for my $sentence (split /(?<=\.)\s+(?=[A-Z])/, $note) {
+    $verbs = undef;
+    while ($sentence =~ /`?(SELECT(?:,\s+[A-Z]+)*)`?\s+on\b|`([a-z][a-z_]*)`/g) {
+      if (defined $1) { ($verbs = $1) =~ s/\s+/ /g; next }
+      $has{$2} = $verbs if defined $verbs;
+    }
   }
-  my @files = grep { !/_test\.go$/ } split /\n/, `find internal cmd -name "*.go" -not -path "*/testdata/*"`;
+  my %made = map { $_ => 1 } split " ", $ENV{ALL_TABLES};
+  my %named = map { $_ => 1 } ($note =~ /`([a-z][a-z_]*)`/g);
+  for my $t (sort(keys %named), sort split " ", $ENV{NEW_TABLES}) {
+    next unless $made{$t} || grep { $_ eq $t } split " ", $ENV{NEW_TABLES};
+    print "$t is a table the note names, but no \"VERBS on\" group of its sentence grants it\n" unless exists $has{$t};
+  }
+  my %migrator = map { $_ => 1 } split " ", $ENV{MIGRATOR_SQL};
+  my @files = grep { !/_test\.go$/ && !$migrator{$_} } split /\n/, `find internal cmd -name "*.go" -not -path "*/testdata/*"`;
   my %need;
   for my $f (@files) {
     open my $h, "<", $f or next; local $/; my $src = <$h>; close $h;

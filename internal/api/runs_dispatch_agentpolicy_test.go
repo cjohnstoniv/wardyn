@@ -259,8 +259,10 @@ func TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown(t *testing.T) 
 	// stop it here.
 	fr = &fakeRunner{capsErr: errors.New("docker info: connection refused")}
 	_, _, st = agentPolicyDispatch(t, fr, "claude-code", types.AutonomyL3)
-	if strings.Contains(st.failureHint, "capabilities could not be read") {
-		t.Errorf("an L3 run was failed on the managed-settings capability read it does not need: %q", st.failureHint)
+	// The outcome, not the failure sentence: a hint that has since been reworded cannot hide a failure.
+	if fr.createCalls != 1 || st.state == types.RunFailed {
+		t.Errorf("L3 run: CreateSandbox calls = %d, state = %s (hint %q), want 1 and not FAILED: it never needed the capability read",
+			fr.createCalls, st.state, st.failureHint)
 	}
 }
 

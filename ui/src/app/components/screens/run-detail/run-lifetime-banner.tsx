@@ -18,7 +18,6 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { waitEnded } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -26,6 +25,7 @@ import * as RL from "../../wardyn/copy/run-lifetime";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import { keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
+import { reviveWithToasts } from "../runs/revive-run";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
 function endsWarningStageNow(run: RunDetail): RL.EndsWarningStage | null {
@@ -114,12 +114,7 @@ export function RunLifetimeBanner({
   const revive = async () => {
     setAction("revive");
     try {
-      const res = await runsApi.reviveRun(run.id);
-      if (res.denied_added.length > 0) toast.info(RL.revivePolicy(res.denied_added.length));
-      onChanged();
-    } catch (err) {
-      if (waitEnded(err)) toast.info(RL.REVIVE_STILL_STARTING);
-      else toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+      if (await reviveWithToasts(run.id, "Couldn't revive this run")) onChanged();
     } finally {
       setAction(null);
     }
@@ -147,12 +142,15 @@ export function RunLifetimeBanner({
     setAction("revive");
     try {
       const defaultMs = (run.run_limits?.default_end_sec ?? 24 * 60 * 60) * 1000;
-      await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(Date.now() + defaultMs).toISOString() });
-      const res = await runsApi.reviveRun(run.id);
-      if (res.denied_added.length > 0) toast.info(RL.revivePolicy(res.denied_added.length));
+      try {
+        await runsApi.setRunEndAndWait(run.id, { endsAt: new Date(Date.now() + defaultMs).toISOString() });
+      } catch (err) {
+        toast.error("Couldn't extend and revive this run", { description: getErrorMessage(err) });
+        return;
+      }
+      await reviveWithToasts(run.id, "Couldn't extend and revive this run");
+      // The end has moved whatever the revive did, so the page re-reads either way.
       onChanged();
-    } catch (err) {
-      toast.error("Couldn't extend and revive this run", { description: getErrorMessage(err) });
     } finally {
       setAction(null);
     }

@@ -134,8 +134,14 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	// snapshot the person's own token just produced — never anything the
 	// portal says.
 	if !slices.Contains(sess.Groups, d.Group) {
+		// groups_truncated says the snapshot was partial, so the refusal may be the
+		// identity provider's cut rather than the person's membership (#2764).
+		data := map[string]any{"reason": "outside_scope", "group": d.Group}
+		if sess.GroupsTruncated {
+			data["groups_truncated"] = true
+		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange",
-			sess.Sub, "denied", mustJSON(map[string]any{"reason": "outside_scope", "group": d.Group})))
+			sess.Sub, "denied", mustJSON(data)))
 		writeOAuthError(w, http.StatusForbidden, "access_denied", "this portal cannot act for this person")
 		return
 	}

@@ -78,10 +78,10 @@ export function DirectoryCombobox({
 }) {
   const [status, setStatus] = React.useState<Status>(QUIET);
   const [absent, setAbsent] = React.useState(false);
-  // The DisplayName of a picked group, for as long as the field still holds
-  // that group's id. Only groups get one: a user's email is both rendered and
-  // stored, so there is nothing for a chip to explain.
-  const [pickedGroup, setPickedGroup] = React.useState<string | null>(null);
+  // A picked group's id and DisplayName. The chip shows only while the field still holds that id,
+  // so a value the parent clears or replaces drops it. Only groups get one: a user's email is both
+  // rendered and stored, so there is nothing for a chip to explain.
+  const [pickedGroup, setPickedGroup] = React.useState<{ claim: string; name: string } | null>(null);
   // What we last inserted ourselves. Without it, filling the field from a pick
   // re-runs the search for the claim value just resolved and re-opens the list
   // under the admin's cursor.
@@ -121,7 +121,7 @@ export function DirectoryCombobox({
 
   const pick = (e: DirectoryEntry) => {
     picked.current = e.claim_value;
-    setPickedGroup(e.kind === "group" ? e.display_name : null);
+    setPickedGroup(e.kind === "group" ? { claim: e.claim_value, name: e.display_name } : null);
     setStatus(QUIET);
     onChange(e.claim_value);
   };
@@ -169,9 +169,9 @@ export function DirectoryCombobox({
       {status.kind === "rows" && status.rows.length === 0 && <Hint>{DIRECTORY.NO_MATCHES}</Hint>}
       {status.kind === "failed" && <Hint>{DIRECTORY.LOOKUP_FAILED}</Hint>}
 
-      {pickedGroup !== null && (
+      {pickedGroup !== null && q === pickedGroup.claim && (
         <p className="mt-2 flex flex-wrap items-center gap-2 text-xs leading-snug text-muted-foreground">
-          <Chip tone="neutral">{DIRECTORY.GROUP_PICKED_CHIP(pickedGroup)}</Chip>
+          <Chip tone="neutral">{DIRECTORY.GROUP_PICKED_CHIP(pickedGroup.name)}</Chip>
           {DIRECTORY.GROUP_VALUE_NOTE}
         </p>
       )}

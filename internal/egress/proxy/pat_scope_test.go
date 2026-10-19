@@ -197,6 +197,21 @@ func TestPATBrokerReadOnlyShutsBothReceivePackDoors(t *testing.T) {
 	}
 }
 
+// A repeated service key cannot carry an unchecked value to the forge: refs
+// discovery forwards only the one service value the checks read.
+func TestPATBrokerReadOnlyForwardsOnlyTheCheckedService(t *testing.T) {
+	p, up, _ := patScopeProxy(t, "gitlab.com", PATGrant{Access: types.PATAccessRead})
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/gitlab.com/team/app/info/refs?service=git-upload-pack&service=git-receive-pack", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q, want the fetch advertisement served", rec.Code, rec.Body.String())
+	}
+	if up.gitQuery != "service=git-upload-pack" {
+		t.Fatalf("upstream query = %q, want only the checked service", up.gitQuery)
+	}
+}
+
 // A grant that is write (the default) and sets no repos is the unnarrowed grant
 // of every earlier release: a push passes.
 func TestPATBrokerUnnarrowedGrantStillPushes(t *testing.T) {

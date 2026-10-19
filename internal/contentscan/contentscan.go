@@ -294,12 +294,12 @@ func (e *Engine) Mode() Mode {
 }
 
 // sanitizeFieldPath is the single content-free guarantee for a Finding's
-// FieldPath: masks well-known secret FORMATS (sanitizePath) and the
+// FieldPath: masks well-known secret FORMATS (maskFormats) and the
 // operator-declared corpus (maskCorpus) so NO detector can carry a raw
 // secret, used as an agent-controlled JSON key, into the append-only audit.
-// Idempotent.
+// Both masks run on the whole path, BEFORE it is cut to length. Idempotent.
 func (e *Engine) sanitizeFieldPath(path string) string {
-	return maskCorpus(sanitizePath(path), e.corpus)
+	return truncateFieldPath(maskCorpus(maskFormats(path), e.corpus))
 }
 
 // capFindings enforces the per-request findings cap on res, in place. vetted

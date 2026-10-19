@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ── Governance (migration 0052) ─────────────────────────────────────────────
@@ -108,6 +111,10 @@ type GovernanceChange struct {
 	ProposedAt time.Time            `json:"proposed_at"`
 	ExpiresAt  time.Time            `json:"expires_at"`
 	Diff       GovernanceChangeDiff `json:"diff"`
+	DecidedBy  string               `json:"decided_by,omitempty"`
+	DecidedAt  *time.Time           `json:"decided_at,omitempty"`
+	// Reason is a rejection's optional explanation.
+	Reason string `json:"reason,omitempty"`
 }
 
 // GovernanceDeferredWrite is a write ApplyGovernanceResult did not send because
@@ -164,8 +171,23 @@ func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) 
 }
 
 // governanceAssignmentKey is the natural key ApplyGovernance and
-// handleUpsertGovernanceAssignment both upsert an assignment by.
+// handleUpsertGovernanceAssignment both upsert an assignment by. The subject is folded the way
+// validateGovernanceAssignment stores it, so a document's "Alice@Corp.com" meets the stored
+// "alice@corp.com" instead of reading as one delete plus one create.
 func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) string {
+	switch subjectType {
+	case types.CapabilitySubjectAll:
+		subject = ""
+	case types.CapabilitySubjectGroup:
+		// A subject the server would refuse stays as written; the write reports it.
+		if canon, ok := types.CanonicalGroupSubject(subject); ok {
+			subject = canon
+		}
+	case types.CapabilitySubjectUser:
+		subject = types.CanonicalUserSubject(subject)
+	default:
+		subject = strings.TrimSpace(subject)
+	}
 	return string(subjectType) + "\x00" + subject
 }
 
@@ -350,6 +372,10 @@ func governancePruneOrder(profiles []GovernanceProfile) []GovernanceProfile {
 func (c *Client) ApplyGovernance(ctx context.Context, doc GovernanceDocument, prune bool) (GovernanceDocument, error) {
 	res, err := c.ApplyGovernanceResult(ctx, doc, prune)
 	if err != nil {
+		// The writes held before the failure are still held: errors.As still finds their change ids.
+		if len(res.Pending) > 0 {
+			err = errors.Join(err, &PendingApprovalError{Changes: res.Pending, Deferred: res.Deferred, PruneSkipped: res.PruneSkipped})
+		}
 		return GovernanceDocument{}, err
 	}
 	if len(res.Pending) > 0 {
@@ -450,8 +476,10 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 				replacing = &existing
 			}
 			step := governanceProfileStep(p.Name, replacing)
-			got, pending, werr := c.writeGovernanceProfile(ctx, p, replacing)
-			res.Steps = append(res.Steps, step.withOutcome(pending != nil, werr))
+			got, warnings, pending, werr := c.writeGovernanceProfile(ctx, p, replacing)
+			step = step.withOutcome(pending != nil, werr)
+			step.Warnings = warnings
+			res.Steps = append(res.Steps, step)
 			if werr != nil {
 				return res, werr
 			}
@@ -523,9 +551,10 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	return res, err
 }
 
-// writeGovernanceProfile creates p, or replaces the stored profile it names. A write the server holds
-// for approval comes back as the pending change and a zero profile.
-func (c *Client) writeGovernanceProfile(ctx context.Context, p GovernanceProfile, replacing *GovernanceProfile) (GovernanceProfile, *GovernanceChange, error) {
+// writeGovernanceProfile creates p, or replaces the stored profile it names, with the warnings the
+// server raised on it. A write the server holds for approval comes back as the pending change and a
+// zero profile.
+func (c *Client) writeGovernanceProfile(ctx context.Context, p GovernanceProfile, replacing *GovernanceProfile) (GovernanceProfile, []string, *GovernanceChange, error) {
 	req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
 	req.withComposition(p, replacing)
 	method, path := http.MethodPost, "/api/v1/governance/profiles"
@@ -535,9 +564,9 @@ func (c *Client) writeGovernanceProfile(ctx context.Context, p GovernanceProfile
 	var resp GovernanceProfileResponse
 	pending, err := c.doPending(ctx, method, path, req, &resp)
 	if err != nil {
-		return GovernanceProfile{}, nil, fmt.Errorf("apply governance profile %q: %w", p.Name, err)
+		return GovernanceProfile{}, nil, nil, fmt.Errorf("apply governance profile %q: %w", p.Name, err)
 	}
-	return resp.Profile, pending, nil
+	return resp.Profile, resp.Warnings, pending, nil
 }
 
 // pruneGovernance deletes every assignment, then every profile, in current that

@@ -17,7 +17,9 @@
 - The keyless quick-start trio: sealed floor -> real Claude -> real code.
 - [`sandbox.yaml`](sandbox.yaml) is the sealed floor (empty allowlist, `always_deny`, `CC1`) you pass straight to `wardyn run --policy-file` to prove the egress boundary with a plain `--task-mode exec` command — no keys, no repo.
 - [`sandbox-claude.yaml`](sandbox-claude.yaml) is the "give it a real Claude" step: Anthropic egress and a read-only git-broker grant.
-- It has deliberately no model grant: the model credential is the run's model provider's (connected per person under Settings -> Model providers, injected proxy-side; the sandbox holds only an inert sentinel).
+- It has deliberately no model grant: the model credential is the run's model provider's (connected per person under Settings -> Model providers, injected proxy-side).
+  - For key and Claude sign-in providers the sandbox holds only a placeholder.
+  - A `bedrock_sso` provider leaves short-lived AWS role credentials in it.
 - [`sandbox-workspace.yaml`](sandbox-workspace.yaml) is the "give it real code" step: the same keyless model-provider path plus one operator-authored `workspace_mounts` entry.
 - The agent edits REAL files in the one host directory you name — edit `source`, then onboard it once with `wardyn workspace create --kind local_dir --source <path>` (a run may only mount an ONBOARDED source; the gate is un-bypassable).
 - All three are commented.
@@ -26,6 +28,7 @@
 
 - The external-tool lane ([docs/SSH.md](../../docs/SSH.md) "Other tools over SSH"): a human drives this sandbox from their own IDE or agent workbench over the SSH gateway instead of handing Wardyn a task string.
 - `auto_stop_after_sec: -1` because the reaper's idle clock cannot see a human thinking in their own editor, or that tool's own agent working between calls that touch the sandbox at all — both would otherwise read as idle.
+  - It means never reaped only under a ceiling with no positive `auto_stop_after_sec`; a member under the shipped default ceiling is cut to 3600s unless the operator raises it.
 - `first_use_approval: wait_for_review` holds an unknown-host connection for a live decision instead of denying it outright, on the premise that someone is already at the keyboard to decide.
 - `git_push_any_branch: true` turns off Wardyn's own push branch-namespace check for this run (each such push is audited as `brokered:git:branch-ns-off`).
 - The grant's GitHub ruleset still bounds what the token may touch — see [docs/POLICIES.md](../../docs/POLICIES.md)'s "Bound the token itself" for what still bounds the token when this is on.
@@ -42,6 +45,7 @@
 
 - Claude coding policies: `api.anthropic.com` + npm/Go registry egress (GitHub arrives via the brokered `github_token` grant — contents read, approval-gated — not the allowlist); `first_use_approval: "deny_with_review"`.
 - The model credential is the run's model provider's, not a policy grant.
+- The shipped `github_token` grant carries `"repos": []`, a template. Before a `--repo` clone can work, list the repository in the grant's own `scope.repos`, as [`remote-workspace.yaml`](remote-workspace.yaml) and [`sandbox-claude.yaml`](sandbox-claude.yaml) do ([the details](../../docs/POLICIES.md)).
 - Both [`scripts/up.sh`](../../scripts/up.sh)'s `pick_policy` and host mode pick it when a real model path is configured (it replaced `composer-dev.json` — same ceiling, honest name).
 - The `-inspected` variant is the LLM-egress-inspection example: it adds `llm_inspection` (`mode: "alert"`, `detect_secrets: true`, `on_scanner_error: "pass"`) so prompt traffic to the model provider is scanned and alerts are logged without blocking.
 
@@ -55,7 +59,8 @@
 ## demo.json
 
 - The zero-dependency floor policy (`min_confinement_class: "CC1"` — runs anywhere Docker runs, no gVisor needed): `proxy.golang.org` egress only, `first_use_approval: "deny_with_review"`, one approval-gated read-only `github_token` grant.
-- `github.com` is deliberately **not** allowlisted — that grant routes git through the repo-scoped git-broker instead, so the sandbox never dials GitHub directly.
+- `github.com` is deliberately **not** allowlisted — a `github_token` grant that names its repositories routes git through the repo-scoped git-broker instead, so the sandbox never dials GitHub directly.
+- The shipped grant has `"repos": []`: list the repository in its `scope.repos` first, or the broker mints nothing and the clone fails.
 - The compose launcher auto-picks it when gVisor/`runsc` is absent (see the [`deploy/compose/.env.example`](../../deploy/compose/.env.example) header for the pick order).
 
 ## ci.json

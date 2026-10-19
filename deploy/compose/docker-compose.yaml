@@ -338,6 +338,7 @@ services:
       WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
+      WARDYN_GIT_APPROVAL_TIMEOUT: "${WARDYN_GIT_APPROVAL_TIMEOUT:-}"
       # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off"): "off"
       # restores the pre-0.7.6 behaviour for NEW dispatches only. Empty
       # default lands on flagEnv's own compiled default ("on") like every
@@ -438,8 +439,11 @@ services:
       # must never point at an issuer that isn't running. Set it (and start
       # dex) via `docker compose --profile sso up` for the SSO/Dex demo.
       WARDYN_OIDC_ISSUER: "${WARDYN_OIDC_ISSUER:-}"
+      # Another IdP: set WARDYN_OIDC_CLIENT_ID to its client, and
+      # WARDYN_OIDC_INTERNAL_ISSUER to the issuer (the desktop launcher does
+      # that itself when the envelope leaves it unset).
       WARDYN_OIDC_INTERNAL_ISSUER: "${WARDYN_OIDC_INTERNAL_ISSUER:-http://dex:5556}"
-      WARDYN_OIDC_CLIENT_ID: "wardyn"
+      WARDYN_OIDC_CLIENT_ID: "${WARDYN_OIDC_CLIENT_ID:-wardyn}"
       WARDYN_OIDC_CLIENT_SECRET: "${WARDYN_OIDC_CLIENT_SECRET:-wardyn-oidc-secret}"
       # Follows the published port (and is overridable like its five neighbours):
       # this is the URL the BROWSER is sent back to, so it has to name the host
@@ -455,7 +459,9 @@ services:
       # With them out of sync Dex refuses the authorize request outright, which
       # is the loud failure; the 8080 hard-code was the silent one.
       WARDYN_OIDC_REDIRECT_URL: "${WARDYN_OIDC_REDIRECT_URL:-http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback}"
-      WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # `-` not `:-`: unset keeps the demo's wardyn.local, an explicit empty value clears
+      # the allowlist (and with it the email_verified gate Entra tokens cannot pass).
+      WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS-wardyn.local}"
       # Refuse a sign-in whose id_token lacks email_verified=true (an absent claim
       # counts as unverified). Empty = off; see docs/ENV.md.
       WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED: "${WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED:-}"
@@ -678,8 +684,8 @@ services:
   # would only put the master key on an argv any `ps`/`/proc` reader on the
   # host can see for no benefit.
   #   export WARDYN_GROUNDTRUTH_TOKEN=$(docker compose exec -T wardynd \
-  #     /usr/local/bin/wardynd -print-groundtruth-token \
-  #     -dsn "$WARDYN_PG_DSN")
+  #     /wardynd -print-groundtruth-token)
+  # (No -dsn: the running container already has WARDYN_PG_DSN in its environment.)
   # (The token has the provider's 1h TTL; re-mint on rotation. The wardynd image
   # bundles the wardynd binary, so the same image mints it.)
   # ───────────────────────────────────────────────────────────────────────────
@@ -733,6 +739,8 @@ services:
       # Comma-separated run ids the host sensor is blind to (CC3/Kata); a
       # kernel.sensor.bypass event is emitted once per id at boot.
       WARDYN_GROUNDTRUTH_BLIND_RUNS: "${WARDYN_GROUNDTRUTH_BLIND_RUNS:-}"
+      # Opt-in (see README): forward host-wide events the sidecar could not map to a Wardyn run. Off by default.
+      WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS: "${WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS:-false}"
     volumes:
       # Read the Tetragon JSON export.
       - tetragon_export:/var/log/tetragon:ro

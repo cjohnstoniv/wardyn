@@ -202,7 +202,7 @@ function AssignDialog({ domains, onClose, onWrote }: { domains: string[]; onClos
           <div className="flex flex-wrap gap-4">
             {TYPES.map((t) => (
               <label key={t.value} className="flex items-center gap-1.5 text-sm text-foreground">
-                <input type="radio" name="key-domain-subject-type" checked={type === t.value} onChange={() => setType(t.value)} />
+                <input type="radio" name="key-domain-subject-type" className="accent-primary" checked={type === t.value} onChange={() => setType(t.value)} />
                 {t.label}
               </label>
             ))}

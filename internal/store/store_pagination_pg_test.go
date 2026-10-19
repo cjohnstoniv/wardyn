@@ -107,6 +107,48 @@ func TestPG_QueryAuditEventsPage_LimitOffset(t *testing.T) {
 	}
 }
 
+// TestPG_QueryAuditEventsPage_Newest proves Page.Newest answers a run's newest window newest-first on both
+// per-run reads (plain and filtered), while the default stays oldest-first.
+func TestPG_QueryAuditEventsPage_Newest(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	runID := uuid.New()
+	var ids []uuid.UUID
+	for i := 0; i < 5; i++ {
+		ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &runID, ActorType: types.ActorSystem,
+			Actor: "newest-test", Action: "egress.allow", Outcome: "success"}
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+			t.Fatalf("insert audit event %d: %v", i, err)
+		}
+		ids = append(ids, ev.ID)
+	}
+
+	plain, err := pg.QueryAuditEventsPage(ctx, runID, store.Page{Limit: 2, Newest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := pg.QueryAuditEventsFilteredPage(ctx, &runID, store.AuditFilter{ActionPrefix: "egress."}, store.Page{Limit: 2, Newest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest, err := pg.QueryAuditEventsPage(ctx, runID, store.Page{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{ids[4].String(), ids[3].String()}
+	if got := eventIDs(plain); !reflect.DeepEqual(got, want) {
+		t.Errorf("plain Newest = %v, want %v", got, want)
+	}
+	if got := eventIDs(filtered); !reflect.DeepEqual(got, want) {
+		t.Errorf("filtered Newest = %v, want %v", got, want)
+	}
+	if got := eventIDs(oldest); !reflect.DeepEqual(got, []string{ids[0].String(), ids[1].String()}) {
+		t.Errorf("default = %v, want the oldest two", got)
+	}
+}
+
 // TestPG_ListRunsPage_BoundAndWindow proves ListRunsPage caps at LIMIT and that
 // OFFSET shifts the window, using a marker set the test fully owns so the
 // assertions hold regardless of other rows in the shared DB.

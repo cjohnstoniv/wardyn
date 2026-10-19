@@ -51,7 +51,9 @@ func TestPG_PromoteQueue_APartlyJudgedPassStartsWhatItPromoted(t *testing.T) {
 	waiting, occupant := e.waitingPerson(pool, "")
 	e.srv.cfg.Store = judgingCutShort{e.pg}
 	e.free(occupant)
-	e.srv.promoteQueue(context.Background(), pool.ID, 10*time.Second)
+	if err := e.srv.promoteQueue(context.Background(), pool.ID, 10*time.Second); err == nil {
+		t.Error("a pass whose judging was cut short returned no error; the sweep would report itself healthy")
+	}
 	if got := e.waitStarted(waiting.ID); got.SPIFFEID == "" {
 		t.Errorf("the promoted run is %s %q with nothing minted; want it started", got.State, got.StatusDetail)
 	}

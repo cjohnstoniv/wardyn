@@ -81,6 +81,11 @@ import { Cockpit } from "./run-detail/cockpit";
 // piece of state it held (grants, approvals, recording, ending audit) die with
 // the old instance instead of landing on B (#1483). react-router reuses one
 // element across a param change, so without the key nothing resets.
+// The TabsList is transparent on the page, so the primitive's light-theme active pill (bg-card) vanishes
+// into it and no tab reads as selected; give the active tab a visible fill and the rest a muted label (#2911).
+const RUN_TAB =
+  "h-7 gap-1.5 text-xs text-muted-foreground data-[state=active]:border-border data-[state=active]:bg-muted data-[state=active]:text-foreground";
+
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   return <RunDetailPage key={id} id={id} />;
@@ -91,7 +96,7 @@ function RunDetailPage({ id }: { id: string }) {
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
   const {
-    run, grants, egress, approvals, audit, recordingAudit, status, tab, setTab,
+    run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
     recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
@@ -294,10 +299,10 @@ function RunDetailPage({ id }: { id: string }) {
           <RunDetailCommandBar
             tabs={
               <TabsList className="h-7 bg-transparent p-0">
-                <TabsTrigger value="overview" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="overview" className={RUN_TAB}>
                   <LayoutDashboard className="size-3.5" /> Overview
                 </TabsTrigger>
-                <TabsTrigger value="approvals" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="approvals" className={RUN_TAB}>
                   <ShieldCheck className="size-3.5" /> Approvals
                   {pending.length > 0 && (
                     <span className="rounded-full bg-warning-subtle px-1.5 text-meta font-semibold text-warning">
@@ -305,16 +310,16 @@ function RunDetailPage({ id }: { id: string }) {
                     </span>
                   )}
                 </TabsTrigger>
-                <TabsTrigger value="policy" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="policy" className={RUN_TAB}>
                   <FileText className="size-3.5" /> {POLICY_TAB.tab}
                 </TabsTrigger>
-                <TabsTrigger value="audit" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="audit" className={RUN_TAB}>
                   <ScrollText className="size-3.5" /> Audit
                 </TabsTrigger>
-                <TabsTrigger value="recording" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="recording" className={RUN_TAB}>
                   <SquareTerminal className="size-3.5" /> Recording
                 </TabsTrigger>
-                <TabsTrigger value="output" className="h-7 gap-1.5 text-xs">
+                <TabsTrigger value="output" className={RUN_TAB}>
                   <Logs className="size-3.5" /> {RUN_OUTPUT.tab}
                 </TabsTrigger>
               </TabsList>
@@ -331,6 +336,7 @@ function RunDetailPage({ id }: { id: string }) {
               grants={grants}
               egress={egress}
               audit={endingEvents}
+              auditGap={auditGap}
               held={held}
               outcomeReady={outcomeReady}
               pending={pending}
@@ -469,24 +475,32 @@ function AuditTab({
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="divide-y divide-border">
             {events.map((e) => (
-              <div key={e.id} className="flex items-center gap-3 px-4 py-2.5">
+              // One line from sm up; below sm the target drops to a second line of its own (#2917).
+              <div key={e.id} data-testid="run-audit-row" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 sm:flex-nowrap">
                 <span
-                  className="w-[68px] shrink-0 font-mono text-meta text-muted-foreground"
+                  data-testid="run-audit-time"
+                  className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
                   title={absoluteTime(e.time)}
                 >
                   {clockTime(e.time)}
                 </span>
-                <ActorTypeChip type={e.actor_type} />
-                <span className="w-[190px] shrink-0 truncate font-mono text-xs text-muted-foreground" title={e.action}>
+                {/* A fixed slot, so the action and target columns start at one x for every actor. */}
+                <span className="inline-flex w-[88px] shrink-0">
+                  <ActorTypeChip type={e.actor_type} />
+                </span>
+                <span
+                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                  title={e.action}
+                >
                   {e.action}
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
                     so the row says who decided, as the Audit screen does. */}
                 {toolRuleDecision(e) ? (
-                  <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
+                  <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
                 ) : (
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
                     {e.target === ERASED_VALUE ? (
                       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
                         {AUDIT.ERASED}

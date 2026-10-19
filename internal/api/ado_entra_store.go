@@ -677,6 +677,12 @@ func (s *Server) postADOEntraToken(ctx context.Context, cfg ADOEntraConfig, form
 		return out, fmt.Errorf("%w: parse token response (status %d): %w", ErrADOEntraUnavailable, resp.StatusCode, uerr)
 	}
 	if out.Error != "" {
+		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
+			// The console's own application is refused; the stored sign-ins are kept,
+			// so the operator has to learn it from the log.
+			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
+				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
+		}
 		return out, classifyADOEntraError(out.Error, out.ErrorDescription)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 || out.AccessToken == "" || out.ExpiresIn <= 0 {
@@ -699,8 +705,13 @@ func classifyADOEntraError(code, desc string) error {
 		return fmt.Errorf("%w: %s (%s)", ErrADOEntraConsentRequired, code, entraConsentRequiredCode)
 	case code == entraOAuthInteractionRequired:
 		return fmt.Errorf("%w: %s%s", ErrADOEntraInteractionRequired, code, aadstsSuffix(desc))
-	case code == "invalid_grant" || code == "invalid_client" || code == "unauthorized_client":
+	case code == "invalid_grant":
 		return fmt.Errorf("%w: %s", ErrADOEntraDeadCredential, code)
+	// invalid_client and unauthorized_client name the console's own application
+	// (an expired or mistyped secret, a disabled app), not this person's token,
+	// which is still valid once the administrator fixes it: unavailable, so the
+	// stored sign-in survives, as Entra's invalid_client does elsewhere in
+	// this tree (the Key Vault client).
 	default:
 		return fmt.Errorf("%w: the authority refused with %s", ErrADOEntraUnavailable, code)
 	}

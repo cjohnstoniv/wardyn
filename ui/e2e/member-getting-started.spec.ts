@@ -257,6 +257,8 @@ test.describe("member Getting Started (real per-person token)", () => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
     await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible();
+    // #2906: the lede ("Connect the model providers your admin set up") would contradict the chip.
+    await expect(page.getByText(CONNECTIONS.LEDE)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
   });
 

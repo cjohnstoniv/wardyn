@@ -142,3 +142,18 @@ func TestPortQualifiedEntryVerdictsUnchanged(t *testing.T) {
 		t.Errorf("deny evalHost(other.com) = %q, want %q", got, hostAllow)
 	}
 }
+
+// A bracketed IPv6 literal with no port is refused, as it always was, but the refusal no longer blames a
+// ":port" qualifier it does not have; the bracketed form with a port stays valid.
+func TestValidDomainEntry_BracketedIPv6WithoutPortSaysSo(t *testing.T) {
+	err := ValidDomainEntry("[fd00::1]")
+	if err == nil {
+		t.Fatal(`ValidDomainEntry("[fd00::1]") = nil; the bracketed form without a port never matches`)
+	}
+	if !strings.Contains(err.Error(), "without brackets") || strings.Contains(err.Error(), "qualifier") {
+		t.Errorf("error = %v, want it to explain the IPv6 forms rather than a port qualifier", err)
+	}
+	if err := ValidDomainEntry("[fd00::1]:443"); err != nil {
+		t.Errorf(`ValidDomainEntry("[fd00::1]:443") = %v, want nil`, err)
+	}
+}

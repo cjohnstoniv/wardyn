@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"slices"
@@ -177,24 +178,46 @@ func entryCoversAny(entry string, drop map[string]bool) bool {
 // workspace_envcode.go's envAsCodeFor) go through, so a network-only redirect
 // can never accidentally grow a package-manager config file.
 func artifactBaseURLs(sc types.SiteConfig) map[string]string {
-	if len(sc.EgressRedirects) == 0 {
+	rows := ecosystemMirrorRows(sc)
+	if len(rows) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(sc.EgressRedirects))
-	for _, r := range sc.EgressRedirects {
-		if r.Ecosystem == "" {
-			continue // network-only: no per-tool config file
-		}
-		out[r.Ecosystem] = r.To
-	}
-	if len(out) == 0 {
-		return nil
+	out := make(map[string]string, len(rows))
+	for eco, r := range rows {
+		out[eco] = r.To
 	}
 	return out
 }
 
-// artifactGoSumDBOff reports whether the go mirror artifactBaseURLs picks (the last go row) opts out of
-// checksum-database verification.
+// ecosystemMirrorRows picks the one row per ecosystem whose To becomes that
+// ecosystem's tool config. The console suggests several hosts per ecosystem
+// (pypi.org and files.pythonhosted.org, proxy.golang.org and sum.golang.org),
+// each stamped with the same ecosystem; only the row for the ecosystem's index
+// host (the first of its public hosts) names the mirror's index, so it wins
+// over its companion hosts, which stay network-only. With no index row the last
+// row of the ecosystem wins, as it always did.
+func ecosystemMirrorRows(sc types.SiteConfig) map[string]types.EgressRedirect {
+	out := map[string]types.EgressRedirect{}
+	indexed := map[string]bool{}
+	for _, r := range sc.EgressRedirects {
+		if r.Ecosystem == "" {
+			continue // network-only: no per-tool config file
+		}
+		isIndex := false
+		if hosts := hostrules.PublicRegistryHosts(r.Ecosystem); len(hosts) > 0 {
+			isIndex = strings.EqualFold(hostrules.HostOf(r.From), hosts[0])
+		}
+		if indexed[r.Ecosystem] && !isIndex {
+			continue
+		}
+		out[r.Ecosystem], indexed[r.Ecosystem] = r, isIndex || indexed[r.Ecosystem]
+	}
+	return out
+}
+
+// artifactGoSumDBOff reports whether the LAST go row opts out of checksum-database
+// verification, as it always has; the row that names the mirror (ecosystemMirrorRows)
+// does not decide it.
 func artifactGoSumDBOff(sc types.SiteConfig) bool {
 	off := false
 	for _, r := range sc.EgressRedirects {
@@ -241,11 +264,19 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 	// Operator namespace: an artifact-registry token ref is site-config, not a
 	// member's own row.
 	present := map[string]bool{}
+	secretListFailed := false
 	if s.cfg.Secrets != nil {
-		if names, err := s.cfg.Secrets.List(ctx); err == nil {
-			for _, n := range names {
-				present[n] = true
-			}
+		names, err := s.cfg.Secrets.List(ctx)
+		if err != nil {
+			// A transient store failure must not read as "your secret is missing":
+			// log it once, and let the denied row below say the store could not be
+			// listed. The run still degrades to redirect-only, as before.
+			secretListFailed = true
+			slog.ErrorContext(ctx, "wardynd: could not list the secret store for artifact-redirect token injection; redirects apply without a token",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+		for _, n := range names {
+			present[n] = true
 		}
 	}
 
@@ -311,6 +342,9 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		port := redirectPort(r.To)
 		tok, why := s.resolveRedirectToken(ctx, r, present)
 		if why != "" {
+			if secretListFailed && (strings.HasSuffix(why, "not found") || strings.HasSuffix(why, "is not in the store")) {
+				why = "the secret store could not be listed (transient store error), so the token secret's presence is unknown"
+			}
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "denied", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,

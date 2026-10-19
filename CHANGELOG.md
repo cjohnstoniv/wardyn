@@ -8,6 +8,476 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-10-19
+
+A stability and honesty release on top of 0.9.3: runner and output-recovery fixes, a hardening pass on credential
+erasure, stored secrets and member drives, a console polish pass across the run, setup and admin screens, and
+corrected credential-claims text. Upgrading from 0.9.3, read "Before you upgrade": it carries every change that can
+refuse or reshape something that worked before.
+
+### Before you upgrade
+
+- **Migration `0191_secrets_value_rev`** adds `secrets.value_rev`, an identity column, and rewrites the `secrets` table
+  once on the first start, under an exclusive lock. A guarded secret write in flight across the upgrade sees one
+  superseded conflict and is retried. The column is an identity, so a split-role install needs no extra grant for it.
+- **`WARDYN_APPROVAL_EXPIRY_AFTER` of 0 or less now turns the approval sweeper off**, with a boot warning. It used to
+  expire every pending approval. If you set 0 to expire approvals at once, set a positive duration instead.
+- **A run blocked on a tool approval nobody answers now stops at its idle limit.** The tool gate's approval poll no
+  longer counts as agent activity for the idle clock, so such a run that used to wait indefinitely now ends.
+- **A kill on Kubernetes no longer force-deletes the pods.** It uses a grace of at least 1 second and waits for the
+  kubelet to confirm before the run is reported gone.
+- **`helm uninstall` now leaves the `<fullname>-data` PVC.** The claim carries `helm.sh/resource-policy: keep`, which
+  also keeps it when you turn `persistence` off. Delete it with `kubectl delete pvc` when you mean to. A claim made
+  before 0.9.4 lacks the annotation: run `kubectl annotate pvc <fullname>-data helm.sh/resource-policy=keep` before you
+  turn `persistence` off.
+- **A compose `.env` that sets `WARDYN_OIDC_EMAIL_DOMAINS=` empty now clears the allowlist.** It used to fall back to
+  `wardyn.local`; now any email domain may sign in, and the `email_verified` requirement that goes with the allowlist
+  is lifted. Leave the line out to keep the `wardyn.local` default.
+- **An `ssh_key` grant whose key is the member's own secret also reads `known_hosts` from the member's own secrets.**
+  Store a `known_hosts` secret of your own.
+- **A member's first-use hold wait and hold count above the operator's ceiling are lowered to it**, with a warning, as
+  the policy rules already said.
+- **Eleven more component environment names are reserved**, and a component that sets one is refused, a stored one at
+  its next run, with the name and reason: `SHELLOPTS`, `BASHOPTS`, `PS4`, `PYTHONUSERBASE`, `JAVA_TOOL_OPTIONS`,
+  `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS` and `GIT_TEMPLATE_DIR`.
+- **A dotfile directory that differs from a protected one only by case** (`.SSH`, for example) is refused as `.ssh` is.
+- **A sign-in name with a character that folds onto an ASCII letter** (U+0130, U+212A or U+017F, for example) gets
+  `drive_subject_unsupported` (`422` on resolve, `400` on reclaim, and on the `/me` token), where its home folded onto
+  an ASCII person's. An admin's home override still applies. Nothing changes for an existing drive.
+- **A member's drive delete can be refused as `member_drive_in_use`** for up to 90 seconds after one of the owner's
+  runs ends.
+- **`GET /me/runners` is paged**: `limit` and `offset`, 200 by default, with `X-Wardyn-Truncated` when cut. The Go
+  client and the console walk every page. An older CLI sees only the first 200 runners; `wardyn runner list` takes
+  `--limit` and `--offset` and warns when the list is cut.
+- **The egress baseline keeps today's subdomain coverage in 0.9.4.** An internal host suffix on the baseline still
+  covers the host and every host under it. The Baseline hosts box now shows what each entry covers, before you save.
+  0.10 moves baseline entries to the exact host named, so read that list now.
+- **A personal API token can no longer propose or approve a node record** (`node_record_human_only`; the admin token
+  was already refused). `wardyn runner node-record` therefore works in local mode only: on a single sign-on deployment
+  use the console.
+- **Desktop envelope files must be root-owned and not group- or world-writable**: `wardyn.env`, `policy.json` and
+  `site-config.json` are checked as `secret.env` is, and a symlink is judged by its target. Readable modes such as
+  `0644` are unchanged.
+- **A staged `claude` binary built for the other architecture is refused at image build.** Stage with
+  `scripts/stage-agent-binary.sh --arch amd64|arm64`.
+- **Autonomous Codex task runs now pass `--skip-git-repo-check` and `--dangerously-bypass-approvals-and-sandbox`**, as
+  autonomous Claude Code runs already do. Codex's own inner sandbox cannot start under Wardyn's container hardening, so
+  these runs ended with no changes and exit 0. Wardyn's confinement is the boundary; Codex's is not in play.
+  Interactive Codex and Claude Code runs are unchanged.
+- **Scripted `setup.sh` no longer truncates stored secrets without consent.** A headless run keeps the data and prints
+  the command; set `WARDYN_FORCE_RESET=1` to opt in. A shell that exports `WARDYN_AGE_KEY`, `WARDYN_AGE_KEY_FILE` or
+  `WARDYN_PLATFORM_KEY_FILE` differing from `.env` is refused, and `WARDYN_FORCE_RESET=1` does not override that.
+- **A person's credentials erasure deletes more.** It now deletes all of the person's delegated tokens, live or
+  expired, and the history of their runs' Azure DevOps tokens that is already revoked or expired; a run token still
+  live at Azure DevOps stays for the sweep that retries its revoke. `DELETE /people/{principal}/credentials` and a SCIM
+  purge do the same. Erasures done before 0.9.4 gain the audit-subject tombstone only when run again.
+- **`helm upgrade` now refuses `ha.enabled=true` without `k8s.enabled=true`.** That set of values crash-looped wardynd
+  at boot; a release carrying it now gets the error at render instead.
+- **`make setup` refuses a workspaces root that is your home directory or a folder above it**, such as `~/`, `/home`
+  or `/`, because the daemon would see everything under it. This covers `WARDYN_WORKSPACES_ROOT`, typed or remembered
+  in `deploy/compose/.env`. Point it at a dedicated directory, for example `~/projects`.
+- **`make setup` keeps an explicit `WARDYN_LOCAL_MODE=false` (token mode) on a re-run.** A re-run no longer changes
+  the mode you set.
+- **A site-config CIDR of exactly `fd20:ce::254/128` is now refused at write.** It is a never-lift metadata address.
+
+### Not tested here
+
+These are covered by tests against simulated parts only; check them on your estate.
+
+- Mixed-version runners: a 0.9.3 runner beside a 0.9.4 control plane, and the reverse, on a live Docker engine and on
+  Kubernetes.
+- The Kubernetes runner's refusal of an oversize CA bundle, and the `ends_unkept` capability, on a live cluster.
+- A real `helm upgrade` that drops persistence, with the data claim kept.
+- A desktop start under a real MDM profile, and the desktop tarball extracted as root.
+- Browsers holding more than 8 requests in flight to one run's app over HTTP/2.
+- Bedrock record promotion against an allow-all recording on a live run.
+- Real Microsoft Entra ID answers for `invalid_client`, `unauthorized_client` and a disabled app.
+- The console's new screens under a live single sign-on session.
+
+### Added
+
+- **`scripts/stage-agent-binary.sh --arch amd64|arm64`** (or `WARDYN_AGENT_ARCH`) stages the agent binary for either
+  architecture; the default is unchanged. The corp image guide documents a cross-architecture build that needs neither
+  the binfmt nor the buildkit public image.
+- **A person's erasure can reach three more scopes**: run templates, runner pools and drives, as opt-in checkboxes in
+  the console's erase dialog, unticked by default.
+- **`GET /audit?run_id=...&order=desc`** answers a run's newest window newest-first. The console uses it, so a long
+  run's cockpit and audit view show its latest events.
+- **A queued run's page says it is queued**, why it waits, its place in line and when it gives up.
+- **The Baseline hosts box lists what each internal host suffix covers** (admins), one line per entry as typed.
+  Review says a typed branch is not checked until the run starts, as the picker already did.
+- **Getting started and Settings name every organisation's own-token line** for Azure DevOps, not only the
+  first one; a launch missing tokens names the organisations. The policy editor locks a capability only when no
+  organisation's ceiling allows it, and hints the organisations that refuse one that others allow.
+- **The policy summary shows the largest file, the hold waits and the largest push inspected.**
+- **The setup status tier for a legacy enrolled daemon** reads "enrolled with an organisation (legacy)", apart from a
+  client-mode runner. The wire value is unchanged.
+- **An optional `helo` field on SMTP notification channels**; absent, the identity is `localhost` as before.
+- **`k8s.clusterDomain`** in the chart (default `cluster.local`).
+- **`wardyn site-config set --clear <field>[,..]`** clears a field the older forms carry forward. The old forms are
+  byte-identical on the wire.
+- **A caps field `ends_unkept`** that a runner sets when its substrate keeps no ended sandbox, and the container label
+  `wardyn.deployment`, so each deployment's sweep leaves another's containers alone. An unlabelled container keeps the
+  0.9.3 rule.
+- **`pkg/client.RunNodeRecordRequest`**, an alias of the existing request type, and `wardyn audit` help lists the
+  `service` actor type.
+- **`wardyn-licenses.tar.gz`** (verbatim licence texts and notices) is attached to the release next to the standalone
+  `wardyn-*` and `wardyn-runnerd-*` binaries.
+- **`wardyn drive set` warns** when a drive file re-creates a legacy drive under id naming, and wardynd warns at boot
+  about stored secret pointers the configured external store no longer derives.
+- New 409 reasons `workspace_name_taken` and `workspace_update_conflict`. The `git_credential` `422` answer carries an
+  additive, optional `cause` (absent means not connected); the console opens Connect Azure DevOps only for a cause a
+  sign-in repairs. A bulk record promote answers with an
+  additive `X-Wardyn-Record-Skipped-Hosts` header naming the model-provider hosts it skipped.
+- **The `delegation.exchange` `outside_scope` audit row carries `groups_truncated: true`** when the person's group
+  snapshot was partial.
+
+### Changed
+
+- The console's UI relay queues concurrent requests on its 8 pooled connections, for up to 5 seconds, instead of
+  failing them at once with `503`.
+- Approval notification retries wait 30 s, 1 m, 2 m and 4 m, each varied by up to 20%, so a rate-limited burst no
+  longer retries as one burst.
+- A runner's reconnect-limit refusal arrives as a WebSocket close (`1013`) carrying `runner_stream_rate_limited`, and
+  an old runner logs a clearer close error instead of an opaque one.
+- A claim of a runner registration the 24-hour sweep removed gets one uniform answer that names the expiry and the
+  remedy.
+- A runner's inventory-hold audit row is written at most once per runner per hour per replica.
+- A recording is uploaded in ramped parts (5 minutes first, doubling to the 24-hour cap), so a kill no longer loses
+  the first part.
+- A bulk record promote skips a requested host that is a model provider's own host instead of refusing the request.
+- The Runs list says when it is cut at its page limit.
+- Probe error text for `curl` exits 56 and 22 names the cause.
+- Release tooling: a resumed `make release-patch` no longer merges commits main gained during the wait; it reports how
+  many it left out.
+- Dependency updates: Go (chi 5.5.0, go-jose 4.1.6, godbus 5.2.4, moby client 0.6.2, `x/*` modules), UI (Radix,
+  lucide-react 1.57.0, React 19.3.1, Playwright 1.64.1), CI actions, base-image digests and Rust 1.99.0. Dependabot now
+  watches the compose service images.
+- SECURITY.md's report template lists the runner components and deployment shapes and asks for the runner trust class.
+
+### Corrections to earlier notes
+
+- Earlier text claimed credentials never enter the sandbox. Some kinds do: the console, README, SECURITY,
+  ARCHITECTURE and threat-model text now names which credential kinds enter the sandbox, and "never" is said only of
+  the kinds Wardyn brokers.
+- The setup `scm_provider` row follows the PAT broker switch, and the `git_pat` risk rationale names both broker
+  postures.
+- `wardyn run --file` help now says an `inline_policy` is sent as an overlay.
+- Run lifetime: a remote workspace's `-1` is never reaped only under a ceiling with no positive `auto_stop`.
+- `WARDYN_OIDC_SESSION_RENEW_CAP`, `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`, the renewal `login_hint` and the browser session
+  cookie are documented, with the trade-off of the defaults; the doc also says to keep runner reconnects reliable
+  behind a shared ingress by allowing `/api/v1/runners/*/stream` and setting `WARDYN_TRUSTED_PROXIES`.
+- With `GOVERN_ADMIN_RUNS` off, a security admin's User view is not a binding bound; the member-mode doc now says so.
+- Signing out cancels a console-launched run waiting in a pool queue; the user docs now say so.
+- The 0.9.3 notes left out these changes:
+  - A device's queued launch is promoted as the device, and keeps the create-door refusal.
+  - A later end for a run already past its lifetime limit is refused (`409` `run_end_wait_max_lifetime`), not set in
+    the past.
+  - A service token minted at or before `sponsor_since` no longer authenticates.
+  - A UI session for a run with no service sponsor no longer names the creator as its Service.
+  - The sign-in screen puts the SSO button above the "or" divider and the admin-token form.
+- The 0.9.3 "Recording defaults to preferred" upgrade note needs a correction: `PUT /api/v1/runner-pool-defaults`
+  replaces the whole document, so a write that leaves out `pool_id` or `barrier` clears it. Leaving out `recording`
+  keeps it.
+- The 0.9.3 registration note links `docs/operations/hybrid-laptops.md`, and the published agent images include
+  `rsync`.
+- The audit action reference lists the `entry`, `service_identity` and `via` fields on `ui.open` and `ui.close`, and
+  the SDK reason table lists `runner_pool_queue_full` and `runner_pool_full`.
+- The HA lock order includes the organisation MCP server key. The notify and small-lanes records show the
+  accepted owner decisions. Agent threat-model category 13 names the three opt-in four-eyes gates.
+- `WARDYN_AZURE_AUTHORITY_HOST` does not enable a sovereign-cloud Key Vault. The auth-failure suppression
+  counter covers shared and per-key drops.
+- NOTICE lists all ten dependency files. SCIM is disclosed as untested against a live Entra tenant.
+- The VEX statement lists the nine images, and the probe script and README are corrected.
+- The architecture and threat-model docs describe the snapshot-then-commit mint and the GitHub CLI grant's scope.
+  The docs say boot's home-root warning covers `/` and the daemon's own `$HOME`.
+
+### Fixed
+
+Runners and output:
+
+- When wardynd takes over a running sandbox's output after a restart, a runner that reconnects at the same moment no
+  longer ends the recording early or writes part of the output twice. Its stream now waits until the takeover has
+  caught up to where the runner resumes.
+- A runner's version, machine name, architecture and retire capability are written together and only by its current
+  session, so a superseded session's late capabilities no longer overwrite the current one.
+- A runner's queued-run evidence is ordered by delivery order, not by a timestamp that can tie.
+- An orphan teardown and its sweep are bounded, so a stalled engine no longer holds them open.
+- When an attach lease is lost, the run's waiting observers are promoted, not stranded.
+- A completion watcher that cannot read the run retries once and then leaves it to the lease sweep, instead of tearing
+  down a run whose files are kept.
+- A credential renewal's retry gaps are clamped so the last attempts land before the held token expires.
+- A dead agent no longer reads "still running": a container that exited non-zero or was out of memory reports its own
+  terminal status.
+- A Docker sweep skips containers labelled for another deployment.
+- An SFTP or sync session that ends because the image lacks the server prints the image-contract message.
+- The Kubernetes runner refuses an oversize CA bundle with a named error, at the 128 KiB environment limit.
+- `ci-run.sh` binds every published host port ephemerally and, in remote mode, kills the run when it stops waiting (a
+  timeout, TERM or INT).
+- `up.sh reset-all` reaps only this stack's labelled sandboxes and networks.
+- The queue sweep reports a failed end, fail or promotion instead of reading as healthy.
+- `wardyn-rec` exits 128 plus the signal number (143 on SIGTERM) when the recorded command is signalled, instead of 0
+  or 1.
+- An exec whose recording choice cannot be read is retried once, then refused; the run's failure audit names the
+  cause.
+- Ground-truth recording now flags connections to every known cloud metadata endpoint.
+- The recorder declares a plain log, so the server stops guessing from its first bytes, and replay refuses every key
+  the store would refuse as a `404`.
+- Recording erasure tolerates a filesystem that cannot sync a directory, removes a run's staging files, and scans once
+  for many runs.
+- A transient run read no longer writes a permanent output-capture gap.
+- A queued run over the quota leftover gets no near-full warning. A limits sweep re-leases a local run whose end
+  moved. `run.ending_soon` reports no kept files for a run the end tears down.
+- `wardyn-runnerd` treats any 5xx from register as ambiguous, and `setup --no-service` sees a systemd user
+  unit under `XDG_CONFIG_HOME`. The k8s runner setup skill uses the CLI for org tokens and runner claims.
+- A blank per-user `OrgURL` on the macOS managed runner falls back to the device profile.
+- A proxy revive whose relay is refused keeps the running proxy.
+- The drive probe container is labelled and removed after a client-side create timeout.
+  `wardyn-tetragon-ingest` exits 2 naming the setting on a non-positive interval or negative buffer.
+- livebus logs a repeated listener failure once, and its recovery.
+
+Credentials, secrets and audit:
+
+- An Entra `invalid_client` or `unauthorized_client` answer (an expired or mistyped console client secret, a disabled
+  app) no longer deletes people's stored Azure DevOps, Azure Foundry or Azure CLI sign-ins; only `invalid_grant` does.
+- Run tokens minted through an Azure DevOps row are still revoked after an admin switches the row's token mode.
+- A stranded AWS CLI sign-in hold is resolved on the sidecar's next poll when the eager resolve did not land.
+- The launch preflight's Azure DevOps fact grades the organisation the launch would refuse on when several own-token
+  rows are enabled; scanning a workspace or source at your `max_concurrent_runs` cap answers `403` with the limit and
+  remedy instead of `500`.
+- A secret's revision no longer changes when a key rewrap, a store migration or a conversion rewrites its ciphertext
+  without changing its value, so those maintenance runs no longer fail a concurrent guarded write.
+- Saving a secret whose commit fails is rechecked under the row's lock before the old external value is deleted.
+- A principal-key reseal checks the source key first, and the remaining count skips a row whose own key was destroyed.
+- The audit spool drains past a line it cannot quarantine without re-recording the lines behind it every tick.
+- An audit spool blocked behind a line it cannot move checks, every tenth pass and without recording anything, whether
+  its volume is writable again, and drains once it is.
+- wardynd logs a failed scan for stored secret pointers the configured external store no longer derives, and logs an
+  Entra refusal that names a console client app; both used to pass silently.
+- A spooled audit row counts as pending only when its parsed data marks it so; free text in an egress path or a token
+  name can no longer stall the drain.
+- `wardynd -rotate-age-key` refuses to run while an earlier run's `<key>.new` or `<key>.new.tmp` is on disk.
+- Audit targets are cut on a character boundary and invalid UTF-8 is replaced, so a crafted path no longer produces a
+  row Postgres refuses. The audit export pages by position, so events written during a long export no longer repeat at
+  a page boundary. The recovery rehearsal skips erasure fence markers and accepts plain-log recordings.
+- A webhook or syslog sink that stalls no longer hangs shutdown: close is bounded at 10 s and sinks close concurrently.
+- Erasing a person's audit fields clears their name and typed reason from the approvals they decided, and an erased
+  person's rows stay erased after their identity row is bound to someone else.
+- Saving a credential locally over a row that still points into the configured external store removes the old external
+  value.
+- A person can disconnect their Azure DevOps sign-in after the row is disabled or their access to it is withdrawn.
+- Workspace reads project recording results to the reader's tier; `wardyn support-bundle` redacts approval-notify
+  webhook URLs; a member's own or shared workspace launch is no longer refused because another member onboarded the
+  same repository first.
+- A SCIM deactivation suspends even when its first directory read fails.
+- A person created by object id no longer writes a denied attach audit row on every sign-in.
+- `POST /sessions/revoke` with an unresolved or ambiguous email answers `422` instead of `500`; the reason code and
+  sentence are unchanged.
+- A Transit KEK refusal of a wrapped key is reported as a refusal, not as a key-service outage. A Vault KV binding
+  rewrite keeps the organisation's `custom_metadata`, and a Transit decrypt refusal keeps its wrap-verdict wording.
+- AWS SSO refresh no longer remembers a "not spent" answer, so a concurrent spent mark is no longer overwritten.
+- The Azure DevOps org check no longer leaks its probe token when masking registration fails or the request goes away.
+- An Azure DevOps Server hold timeout is not counted as an AWS SSO timeout. A failed revoke of an unrecorded
+  Azure DevOps run token is audited and logged with the documented reason `unrecorded`. The lost-start audit
+  note no longer blames a kill for a store fault.
+- A failed secret-store list is a `503`, not an invalid policy or a missing redirect secret. `POST /runs` with
+  an unlistable secret store answers `503` `store_unavailable`.
+- A late decision on an approval that the run's end cancelled answers `approval_run_ended`. The second-human bypass
+  failure row names the real refusal class.
+- The run's mask-manifest corpus logs why it is not provably covered. SSH key and run lookup store errors are
+  logged.
+- A notification tier delay past int32 seconds is clamped instead of wrapping.
+- A person's `runner_pools` erasure also deletes their cockpit layouts, and the threat model exception list is
+  corrected.
+- The daily credential tick sweeps expired attach tickets and delegated tokens.
+- The audit spool gauge counts a line whose write or sync failed. Cancelled syslog emits count as drops, and
+  fan-out emits survive a gone caller. Denial coalescing keeps delegated attempts apart, and the
+  webhook drain flushes a batch at a time.
+- Error text no longer reaches `5xx` bodies or logs on revive owner checks, Azure grant writes and drive home failures.
+- Disconnecting Azure DevOps also forgets the sign-ins held for a disabled row. The audit spool's volume probe
+  refuses a volume that cannot take a spool-sized rewrite.
+- A sign-in refused by the domain allowlist clears the session cookie on every path.
+- GitHub repo owners are trimmed and matched case-insensitively. The minted-credential lookup joins only the
+  run's own grants, and a discarded mint logs its run and grant.
+- `wardyn-aws-sso` prints its failure marker when setup fails before the login.
+- Secret-store reconcile targets the configured external store. Each internal TLS listener gets its own clone
+  of the hop TLS config.
+- An idle or max-age stop runs the full revocation cascade: proxy config, PATs and resident values.
+
+Workspaces, policy and images:
+
+- Editing a workspace no longer reverts a run claim, record result or build that landed during the edit: the edit is
+  redone from the fresh row, and one the workspace still outruns is refused with `409` `workspace_update_conflict`. A
+  sources edit keeps a running record session.
+- Creating or renaming a workspace onto a taken name answers `409` `workspace_name_taken` instead of `500`.
+- A repository clone never deletes or clones over files already at its target, and a target that cannot be created
+  skips the clone instead of ending the run.
+- A companion-host redirect row (`files.pythonhosted.org`, `sum.golang.org`) no longer overrides the index row in the
+  generated pip, cargo or go config.
+- A push forge read to a host that speaks HTTP/2 unasked no longer fails the push check.
+- Azure DevOps pull-request reviewer, property and attachment writes are no longer refused as unclassifiable.
+- A stored policy mount under `/home/agent/drives` or `/home/agent/shared` is dropped and logged instead of failing the
+  run at `STARTING`.
+- Record promotion no longer offers Bedrock or gateway model-provider hosts, and a governance ceiling that withholds
+  the Bedrock lane keeps the AWS CLI portal interception and drops the lane's own SSO injection.
+- A workspace's chosen base image that fails to wrap now fails the run on the mount and policy door too.
+- The "start a new run for the new limit" notice no longer appears when a pool or deployment lifetime cap cut the end.
+- `/setup/status` bounds its image probes and skips the Claude sign-in probe for members.
+- The operator sandbox sweep and the periodic sweep serialise per run; `wardynd -print-groundtruth-token` beside a live
+  daemon is no longer refused by the single-instance lock.
+- Boot reconcile, the hourly orphan sweeps and the run-secret sweep read only the runs they act on, and a member's run
+  list uses the `created_by` index.
+- A single-replica chart no longer renders a PodDisruptionBudget that blocks a node drain.
+- `WARDYN_OIDC_CLIENT_ID` is forwarded by the compose file (default `wardyn`), and the desktop launcher points the
+  internal issuer at a configured non-Dex issuer.
+- The desktop launcher derives the Docker socket mount from `DOCKER_HOST` instead of exporting the envelope's
+  `WARDYN_DOCKER_SOCK` verbatim, so a Colima or Rancher socket is not bind-mounted; the envelope examples single-quote
+  the SIEM sinks value because `secret.env` is shell syntax; a failed plain uninstall falls back to the compose project
+  label and exits non-zero if that also fails.
+- `WARDYN_GIT_APPROVAL_TIMEOUT` reaches the proxy sidecar; `WARDYN_KATA_VERSION` survives the child-environment scrub.
+- The full agent image's cache directories are owned by the agent user.
+- `install.sh --uninstall` falls back to `docker compose down` and fails loudly if that also fails.
+- `up.sh` waits 330 s for the daemon, like setup and the chart, and keeps a hand-edited policy path.
+- The attach shell waits for the run's prep to finish, not a fixed 120 s; a hung clone now holds it until you press
+  Ctrl-C.
+- The site-config seed no longer re-validates the merged document.
+- Host proxy detection masks token-only logins and PAC URLs, ignores commented maven and apt examples, and takes the
+  last shell export. The `git credential.helper` probe on `/setup/status` is bounded.
+- The personal component cap holds under concurrent saves. A failed source-scan launch releases the source
+  with the fenced write.
+- `POST /runs` warns when a repo is dropped for an unsafe ref or locator. A workspace root whose folder is
+  named like a dependency tree is still scanned for git remotes.
+- The governance change list sets `X-Wardyn-Truncated` only when the list was really cut. Preset reads redact
+  `policy_overlay` wherever `inline_policy` is redacted and keep repository credentials out of both reads.
+- `dispatch` reads `llm_inspection.mode` trimmed.
+- A `404` from Azure DevOps with user data no longer says the account lacks access. The LLM coverage-gap row records
+  the real port and method, and a bracketed IPv6 entry with no port gets an accurate refusal.
+- `HostOf` drops a login before the first slash, and the cargo index URL ends in a slash.
+- On `POST` and `PUT /drives`, the share-probe `503` and the drive-list `500` now carry
+  `user_drive_ceiling_unavailable` and `user_drive_rehome_list_unavailable`, not `user_drive_request_invalid`.
+  A user-type create refused by a leftover reference says so.
+- A direct credential-delivery save checks `If-Match` under the governance lock. A governance profile delete
+  audits the name it removed.
+- contentscan masks the corpus before truncating field paths. Derived git remotes are validated.
+  Leaving a runner-pool owner also removes their run layouts.
+- Setup checks name `substrate_health` for an unreadable k8s runner. `llm_access` residency is always
+  `proxy_injected`. Absent CLI sign-in rows answer the unavailable refusal.
+- A failed source-scan grant now fails the pending run, and a repo-devcontainer image fallback is reported as
+  "not built".
+- A push whose trees nest too deep is refused as a `413` ceiling with a nesting remedy, not the `--unshallow` advice.
+- The public-API-disabled warning is skipped when SSO is configured. Boot's operator-allowlist posture lines
+  name today's role tiers.
+- A very large list offset no longer turns into a negative `LIMIT` and a `500` on the runs-by-creator-or-sponsor list.
+- `helm upgrade --reuse-values` from a release without `scim.purgeAfter` renders the 720h default instead of `<nil>`.
+- The compose groundtruth sidecar now receives `WARDYN_GROUNDTRUTH_FORWARD_UNMAPPED_HOST_EVENTS` (default false). The
+  codex-cli image selftest no longer prints `OPENAI_API_KEY` when it is set.
+- `make setup` honours a non-default `WARDYN_UP_PORT` for the host wardynd and rebuilds on UI or migration changes.
+  `scripts/demo.sh` no longer prints the admin token, and `scripts/up.sh` shows "local mode - no login" only in local
+  mode.
+- Drive probes and workspace scans now apply the same mount rules as a launch. An `egress_host` grant written as
+  `host:port` is stored as its host.
+- Directory search no longer offers App Role suggestions when there is no sign-in app. A held role-mapping approval
+  that would now change access names the step that resolves it.
+
+Tests and CI:
+
+- Test integrity: 36 guards that could pass vacuously now fail on a planted defect. Audit-DDL probes fail instead of
+  skipping when the lane can satisfy them, and the refresh-token fake redeems exactly once under concurrency. The e2e
+  harness retry re-picks ports, and the python task graders run isolated and require `Ran N tests` and `OK`.
+- The testlive secret-file guard judges the real path and fails closed.
+- rc tags no longer move `:latest` on the release build path. The release workflow marks only the CLI and runnerd
+  binaries executable.
+- `scripts/verify-release.sh` no longer demands `wardyn-runnerd.pkg` of v0.9.3-rc.1 and rc.2 and says why an image
+  lookup failed. It checks a tag before 0.9.4 without the licence tarball, which first shipped in 0.9.4.
+- `make runnerd-image` no longer stamps a local dev image as a release build, so a local runnerd reports its
+  commit-suffixed version. The helm-lint absence checks fail on a render failure.
+
+CLI:
+
+- The approvals list's HOLD column shows the server's hold, not a private 30 s window; `wardyn run logs` no longer
+  drops reordered events; `wardyn governance plan` and `set` key assignments as the server canonicalises them.
+- SDK: Go names for the first-use and override constants. `GovernanceChange` carries its decision.
+  Apply steps carry the server's warnings, printed by `wardyn governance set`.
+- A failed apply keeps its held changes in a `PendingApprovalError`. `ListRunnerPoolsPage` reports truncation,
+  and `wardyn runner pool list` warns.
+- `wardyn workspace --add` keeps an `@` inside ssh URLs. The 401 hint points at the compose quick-start's
+  token. `wardyn logs --interval 0` no longer spins.
+
+Console:
+
+- An SSO sign-in that began on a deep link returns to that page. An identity provider's refusal shows a message on the
+  sign-in screen. A cold load whose session expired says you were signed out. After an SSO sign-out the console
+  reminds you to sign out of your identity provider too, on a shared computer.
+- The session-expiry banner follows the role-stamp deadline. A member renewing their sign-in on Getting started is no
+  longer told the page is not theirs. The AWS device sign-in pane follows a retried login's new code.
+- The admin-minted token list no longer counts tokens of deactivated people; "include revoked" still shows them.
+- The Approvals screen asks for the User view's own scope and polls only what is on screen; a held sign-in in the run's
+  Approvals tab offers the sign-in door instead of disabled Approve and Deny buttons.
+- Revive no longer reports failure after a successful revive, and a revive that timed out reads as "result unknown".
+- A failed poll no longer drops a demo sandbox; a failed attach-ticket mint on reconnect retries; a stale deny
+  confirmation no longer reopens.
+- A never-handed-out Azure DevOps token is no longer shown as the live one; the killed-run list names file secrets it
+  cannot revoke; a service identity's sponsor can open its run's terminal.
+- The ending-soon warning no longer promises 7 days of kept files; Recordings keeps paging when the newest runs have
+  none; the containment panel refreshes while a run is held and offers Retry when a read fails.
+- Setup and New Run: a refused harness token no longer re-posts on every chunk, and the paste fallback and Cancel stay
+  after a refused auto-capture; an edited egress rule drops its stale test verdict; a proxy save clears the old probe,
+  and the corporate-network probes get the launch deadline; a credentialed proxy row shows `user@host` only and never
+  saves the masked password; the setup review button and "Switch to user view" obey the same gate as Finish setup; the
+  Environment step no longer says a barrier pick is saved in the browser; the record review's Approve list leaves out
+  the hosts the server never promotes.
+- Governance and Settings: host-list removal buttons are disabled while any removal is in flight; the member approvals
+  hint no longer offers "always" and the directory chip follows the picked claim; an edited governance profile folds
+  its composed limits into the standalone form; a non-whole token lifetime withholds Save; a switched-off git provider
+  row says why Save is withheld; a multi-source workspace's detail header names its composition.
+- Copy fixes: the SafetyMeter caption no longer says JSON for a YAML editor; the drives copy describes the multi-drive
+  model; the SCIM unfinished-step table and labels name every step; the Permissions copy says `service_attach` binds
+  super admins; the Governance precedence line names the user-type tier; the account menu role chip uses the role
+  label; Wall is no longer called the default barrier; both workspace delete confirmations name the recorded sessions
+  and requirements; the Allowed hosts subtitle no longer claims every row was approved; the welcome note points at the
+  sidebar's Setup entry; the no-metadata credential store is no longer titled "Something went wrong"; a pre-created
+  retention partition reads "Not started"; the inert-row hint says to delete the old row after re-adding; Recordings
+  and the New policy dialog drop implementation terms; the run policy view's disk sentence is reader-neutral.
+- Narrow screens: the audit row, tab bars, the Governance tab list, the run Overview pane, copy pills and the
+  New Run footer no longer overflow at phone width; the footer is a sticky bar under 640 px.
+- Copy and layout pass across run, setup, admin, governance, workspace and settings screens: one word for "Pending",
+  sentence case on the Run step timing options, a short caption under each locked setup step, a back link on the runner
+  pool form, the Who column on wide Add-a-grant forms, empty states inside cards, a Re-check button on the Settings
+  Host card, the Changes tab, and the New policy dialog's "Start from a template" menu.
+- A `permissions_missing` Azure DevOps card says an admin must act and offers nothing to press. The Policies
+  page names the ceiling policy as the limit on any inline policy.
+
+### Security
+
+- Hardened stored-secret grant resolution, sign-in hold binding, role-map approval serialisation, and the sponsor revoke
+  for an email-form directory identity.
+- Reserved more process-control environment names from component configuration (shell, Java and git helper hooks).
+- Tightened the member drive home, mount ceiling, deny-list and delete rules, queued-run snapshots, and local revive.
+- Tightened the Entra and Azure DevOps token cache under high availability, so a deleted sign-in stops being injected
+  within its documented window.
+- Tightened what run owners and other readers below the security tier see in containment and audit views, and the
+  projection of workspace egress writes.
+- Hardened policy composition limits, peer text in dial-failure reasons, the git push path-byte budget, the SSH
+  gateway's connection accounting, the sign-in return path and the console relay's response headers.
+- Hardened the workspace scan advisor's tool lock, the Tetragon label handling, an accepted record's re-check on later
+  reuse, desktop envelope checks, and node-record sessions.
+- Hardened the desktop tarball, which is built with root-owned entries.
+- Hardened CI: the nightly migration-merge check builds and tests only same-repo pull requests (fork pull requests are
+  counted and skipped), runs its checks in a step with no token in its environment, and keeps its scratch refs to
+  itself; the signed release binaries are built without the shared Go cache; the distinct-UID recording permission
+  proofs run as root in a throwaway container and fail if skipped.
+- Hardened credential-holding processes (`wardyn-runnerd` now disables core dumps at start, like `wardynd` and
+  `wardyn-proxy`) and tightened key handling in the secret store, the attach CLI's error text, and the redaction of
+  sandbox-facing error messages.
+- Tightened the egress proxy's handling of tool-approval text, brokered git discovery and model-gateway addresses, and
+  added the Google Compute Engine IPv6 metadata server to the addresses an `internal_hosts` lift never opens.
+- Hardened setup: the chart's `kek.*` renders without a `secretStore` block, and setup probes pass the admin token on
+  stdin and send none to `/healthz`. `demo.sh` drops `-e token`. `test-drive` refuses an unknown `--section` and
+  prints the token only when it is the demo default.
+- Hardened images and build: agent images remove npm's build proxy settings after install, and `agent-full` checks the
+  Temurin key fingerprint and pins the repo. Release SBOM tooling installs from a checksum-verified tarball. The image
+  download gate covers `wget` and `ADD <url>`, and `.dockerignore` adds secret-bearing local files.
+
 ## [0.9.3] — 2026-10-17
 
 Organisation runners in Kubernetes, runner-resident credentials, and laptop runners fit for a locked-down
@@ -452,7 +922,7 @@ both architectures.
   container, and `setup` says when runs on the engine have no disk cap (overlayfs).
 - The release checks that every published image has linux/amd64 and linux/arm64, and `wardynd:latest` is now
   multi-arch. An image running under emulation is named with its digest, its platform, whether the digest is an
-  index, and the fix (docs/build-images.md covers building the claude-code harness image for both architectures).
+  index, and the fix (docs/operations/build-images.md covers building the claude-code harness image for both architectures).
 
 ### Fixed
 

@@ -118,6 +118,9 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	if err := validateDriveSet(spec.Drives); err != nil {
 		return "", "", "", err
 	}
+	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
+		return "", "", "", fmt.Errorf("k8s: %w: %d bytes with the organisation's staged CA and this runner's own bundle; trim one of them", errTrustedCATooBig, n)
+	}
 	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return "", "", "", err
@@ -167,7 +170,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// list would drop NetworkPolicies as soon as Delete is issued, and a pod
 	// mid-Terminating is unselected by any policy (default-allow), reopening
 	// unconfined egress on a pod still holding this run's MITM CA key and
-	// RunToken. Zero grace period: nothing has been handed to a caller yet.
+	// RunToken. Shortest grace: nothing has been handed to a caller yet.
 	fail := func(err error) (runner.Sandbox, error) {
 		zero := int64(0)
 		if terr := d.teardownByRunID(context.Background(), spec.RunID, &zero); terr != nil {
@@ -789,6 +792,17 @@ func (d *Driver) openSink(runID uuid.UUID) (any, error) {
 	}
 	return d.cfg.Sink.ProxyConfig(key), nil
 }
+
+// mitmCAPEMEnv is the one environment string that carries a sandbox's CA trust (runner.InstallSandboxTrustedCA).
+const mitmCAPEMEnv = "WARDYN_MITM_CA_PEM"
+
+// maxEnvString is the largest "NAME=value" string, its NUL included, Linux starts a process with
+// (MAX_ARG_STRLEN). Kubernetes has no mount to carry a runner's bundle past it, as Docker's
+// runner.TrustedCAMountPath does, so a create over it is refused instead of every exec failing E2BIG.
+// ponytail: refuse; project the bundle from the run Secret as a file if a pair this large is needed.
+const maxEnvString = 128 << 10
+
+var errTrustedCATooBig = errors.New("the sandbox CA trust is too big for one environment variable")
 
 // withRunnerTrustedCA appends runnerd's own CA bundle to a sandbox's CA trust (runner mode); it
 // returns a copy, never the caller's map.

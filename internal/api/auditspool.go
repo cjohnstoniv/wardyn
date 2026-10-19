@@ -76,6 +76,15 @@ type AuditSpool struct {
 	// Drain touches them), not atomics: they are read and written as a pair.
 	poisonKey  [sha256.Size]byte
 	poisonHits int
+	// poisonProven: a pass proved the store up behind the line poisonKey names
+	// but could not move it aside. retireFailed: the last rewrite failed, so the
+	// lines a pass recorded behind a suspect stayed in the file. With both
+	// set, a pass retries the move before recording anything behind the line
+	// again, which would only record those lines twice. Guarded by mu.
+	poisonProven bool
+	retireFailed bool
+	// retireBlocked counts the passes retireFailed has held back since the last probe pass.
+	retireBlocked int
 }
 
 // spoolPoisonAttempts is how many consecutive Drain attempts one line gets
@@ -89,6 +98,11 @@ type AuditSpool struct {
 // re-proves the same rejection while the events BEHIND it wait, and
 // docs/OPERATIONS.md promises the trail "becomes complete again automatically".
 const spoolPoisonAttempts = 3
+
+// spoolRetireProbeEvery bounds how long a failed rewrite blocks the drain behind a poison line the
+// sidecar will not take: every this-many blocked passes the spool volume is probed for a write, and a
+// writable one lifts the block.
+const spoolRetireProbeEvery = 10
 
 // spoolDrainDeadline bounds ONE Drain pass, and with it how long the spool lock
 // can be held. Half the 30-second drain tick (auditSpoolDrainInterval,
@@ -199,16 +213,22 @@ func (a *AuditSpool) Append(ev types.AuditEvent) error {
 	if a.endsUnterminated() {
 		payload = append([]byte{'\n'}, payload...)
 	}
-	if _, err := a.f.Write(payload); err != nil {
-		return err
+	// A failed Write or Sync may still have put bytes on disk: a short Write
+	// lands a prefix, and a failed fsync leaves the whole line written. Those
+	// bytes are a line to Drain (a torn tail is read as a line), so count them
+	// whenever anything landed or the Write completed, or the gauge under-counts
+	// until the next restart recount.
+	n, werr := a.f.Write(payload)
+	if werr == nil {
+		werr = a.f.Sync()
 	}
-	if err := a.f.Sync(); err != nil {
-		return err
+	if n > 0 {
+		// Exactly one line either way: a torn fragment was ALREADY counted as a
+		// line (a tail with no newline is a line), and the separator only
+		// terminates it.
+		a.lines.Add(1)
 	}
-	// Exactly one line either way: a torn fragment was ALREADY counted as a line
-	// (a tail with no newline is a line), and the separator only terminates it.
-	a.lines.Add(1)
-	return nil
+	return werr
 }
 
 // endsUnterminated reports whether the spool's last on-disk byte is not '\n' —
@@ -357,6 +377,18 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 				break
 			}
 			suspectIdx, suspect = i, ev
+			if a.poisonProven && a.retireFailed {
+				// Nothing is recorded behind the line while the rewrite is down, or those lines
+				// would land again every pass. Every spoolRetireProbeEvery passes the volume is
+				// probed without recording; on a pass that finds it writable the block lifts, and
+				// the next pass records the lines behind the line once and rewrites.
+				a.retireBlocked++
+				if a.retireBlocked >= spoolRetireProbeEvery {
+					a.retireBlocked = 0
+					a.retireFailed = !a.volumeWritable()
+				}
+				break
+			}
 			continue
 		}
 		drop[i] = true
@@ -367,7 +399,7 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			provenUp = true
 		}
 	}
-	if suspectIdx >= 0 && !provenUp {
+	if suspectIdx >= 0 && !provenUp && !a.poisonProven {
 		// The pass ended without the store accepting anything behind the
 		// suspect, so it stays. Logged DISTINCTLY, because StartDrain's own
 		// "store still failing" line tells the wrong story here: this shape is
@@ -383,7 +415,7 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			slog.Int("attempts", a.poisonHits),
 			slog.Any("err", replayErr))
 	}
-	if suspectIdx >= 0 && provenUp {
+	if suspectIdx >= 0 && (provenUp || a.poisonProven) {
 		// Only ever reached when something was actually blocked behind it. A
 		// suspect at the very END of the spool blocks nothing, cannot be proven
 		// against a live store, and is simply retried next tick.
@@ -392,18 +424,31 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			// place is the only honest option left: the alternative is dropping
 			// an audit event to unblock the queue.
 			replayErr = qerr
+			a.poisonProven = true
 		} else {
 			drop[suspectIdx] = true
 			replayErr = errSpoolLineQuarantined
+			a.poisonProven, a.retireBlocked = false, 0
 		}
 	}
 
+	if err := a.retire(lines, drop, ends, chunkLen, size); err != nil {
+		return replayed, errors.Join(replayErr, err)
+	}
+	return replayed, replayErr
+}
+
+// retire removes the lines drop marks from the spool: the dropped prefix by
+// moving the cursor past it, the rest by a rewrite. Drain's pass, after its
+// replay; the caller holds a.mu.
+func (a *AuditSpool) retire(lines [][]byte, drop []bool, ends []int64, chunkLen, size int64) error {
 	// The drop set is a PREFIX in every ordinary pass: the loop stops at the
 	// first line the store would not take, so everything it dropped lies in
 	// front of everything it kept. That is what lets a pass retire its work by
-	// advancing a byte offset instead of rewriting the file. The one exception
-	// is a blank or torn line sitting BEHIND a held-back poison suspect - real,
-	// but rare - and it falls through to the rewrite below.
+	// advancing a byte offset instead of rewriting the file. The exceptions
+	// are a blank or torn line sitting BEHIND a held-back poison suspect, and
+	// the lines a probe recorded behind a suspect it could not move aside -
+	// real, but rare - and they fall through to the rewrite below.
 	prefix, dropped := 0, 0
 	for i := range lines {
 		if drop[i] {
@@ -414,15 +459,19 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		}
 	}
 	if dropped == 0 {
-		return replayed, replayErr
+		return nil
 	}
-	a.lines.Add(-int64(dropped))
-	if dropped == prefix {
+	if prefix > 0 {
+		// The prefix is retired as the cursor moves past it, whatever a rewrite
+		// below does with the lines dropped behind a kept one.
+		a.lines.Add(-int64(prefix))
 		a.consumed += ends[prefix-1]
 		// Persisted with the work it describes. This is the only record that
 		// these lines already reached the store until a compaction rewrites the
 		// file, which happens at most every other pass by design.
 		a.saveSpoolCursor()
+	}
+	if dropped == prefix {
 		// Compact only when the reclaim pays for itself: once the consumed
 		// prefix is at least as big as what is left, a rewrite halves the file,
 		// so the rewrites over a whole backlog sum to at most 2N instead of the
@@ -431,10 +480,10 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 		// volume as the database that has just come back). Reaching the end
 		// always reclaims, so an emptied spool still reads 0 on disk.
 		if a.consumed >= size {
-			return replayed, errors.Join(replayErr, a.reclaimAll(size))
+			return a.reclaimAll(size)
 		}
 		if a.consumed*2 < size {
-			return replayed, replayErr
+			return nil
 		}
 	}
 	keep := make([][]byte, 0, len(lines))
@@ -443,7 +492,14 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			keep = append(keep, line)
 		}
 	}
-	return replayed, errors.Join(replayErr, a.compact(keep, a.consumedBase()+chunkLen, size))
+	if err := a.compact(keep, a.consumedBase()+chunkLen, size); err != nil {
+		// The lines dropped behind a kept one are still in the file: not retired.
+		a.retireFailed = true
+		return err
+	}
+	a.retireFailed, a.retireBlocked = false, 0
+	a.lines.Add(-int64(dropped - prefix))
+	return nil
 }
 
 // consumedBase is the file offset the current window was read from.
@@ -577,6 +633,27 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	return nil
 }
 
+// volumeWritable reports whether the spool's directory takes a synced write at the path compact
+// stages its rewrite at, without touching the spool itself. Caller must hold a.mu.
+// The probe is as large as the spool, the most a rewrite writes: a one-byte probe passes on a
+// nearly full volume the rewrite then fails on, and the lines behind the suspect land again.
+func (a *AuditSpool) volumeWritable() bool {
+	fi, err := os.Stat(a.path)
+	if err != nil {
+		return false
+	}
+	tmp := a.path + ".tmp"
+	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if err != nil {
+		return false
+	}
+	_, werr := tf.Write(make([]byte, max(fi.Size(), 1)))
+	serr := tf.Sync()
+	cerr := tf.Close()
+	rerr := os.Remove(tmp)
+	return werr == nil && serr == nil && cerr == nil && rerr == nil
+}
+
 // strikeLine records one more consecutive rejection of exactly this line and
 // returns the running count. A line different from the last rejected one resets
 // the counter to 1: whatever was being retried has drained, been quarantined,
@@ -588,7 +665,7 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 func (a *AuditSpool) strikeLine(line []byte) int {
 	key := sha256.Sum256(line)
 	if key != a.poisonKey {
-		a.poisonKey, a.poisonHits = key, 0
+		a.poisonKey, a.poisonHits, a.poisonProven, a.retireBlocked = key, 0, false, 0
 	}
 	a.poisonHits++
 	return a.poisonHits

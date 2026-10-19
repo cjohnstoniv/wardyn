@@ -217,11 +217,21 @@ func adoOrgCheckAnswer(e *adoPATError) string {
 // it at once. (nil, nil) when it was created; the refusal when Azure DevOps
 // refused it; an error when the call did not complete.
 func (s *Server) adoOrgCheckCanary(ctx context.Context, cfg ADOEntraConfig, owner, org string, validTo time.Time, res *adoOrgCheckResult) (*adoPATError, error) {
-	pat, err := s.createADOPAT(ctx, cfg, owner, org, adoPATRequest{DisplayName: adoOrgCheckTokenName, Scope: "vso.profile", ValidTo: validTo}, false)
+	// The create runs on a context that outlives the request, as the revoke
+	// does: an admin who closes the tab mid-create must not leave a created
+	// canary (364 days for canary 2) behind with no one to revoke it.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*adoPATTimeout)
+	defer cancel()
+	pat, err := s.createADOPAT(cctx, cfg, owner, org, adoPATRequest{DisplayName: adoOrgCheckTokenName, Scope: "vso.profile", ValidTo: validTo}, false)
 	var perr *adoPATError
 	if errors.As(err, &perr) {
 		return perr, nil
 	} else if err != nil {
+		// A created token whose masking could not be recorded was not handed out
+		// but is live at Azure DevOps: revoke it, or list it as unrevoked.
+		if pat.AuthorizationID != "" {
+			s.revokeADOOrgCheckCanary(ctx, cfg, owner, org, pat.AuthorizationID, res)
+		}
 		return nil, err
 	}
 	s.revokeADOOrgCheckCanary(ctx, cfg, owner, org, pat.AuthorizationID, res)

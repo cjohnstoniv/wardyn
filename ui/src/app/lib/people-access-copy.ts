@@ -198,7 +198,7 @@ export const PREVIEW = {
 export const ACCESS_STATE = {
   SSO_UNAVAILABLE_TITLE: "SSO isn't configured on this deployment",
   SSO_UNAVAILABLE_BODY:
-    "Role mappings need SSO to mean anything — there's no per-person identity to map without it. This is likely a stale view; reload to see the single-user explainer instead.",
+    "Role mappings need SSO to mean anything — there's no per-person identity to map without it.",
   FETCH_FAILED_TITLE: "Couldn't load role mappings",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Your chart's mappings still apply even though this list can't confirm them right now.",

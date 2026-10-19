@@ -294,7 +294,7 @@ function refusalBody(
         />
       );
     case "mask":
-      return <EmptyState icon={Logs} title={RUN_COCKPIT.loadError} description={RUN_OUTPUT.maskUnavailable} />;
+      return <EmptyState icon={Logs} title={RUN_OUTPUT.maskTitle} description={RUN_OUTPUT.maskUnavailable} />;
     default:
       return <ErrorState message={RUN_COCKPIT.loadError} onRetry={retry} />;
   }

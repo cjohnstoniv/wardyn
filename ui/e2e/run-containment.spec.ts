@@ -25,7 +25,14 @@ const tuple = {
   reuses: [{ name: "n1", uid: "uid-n1-new", machine_id: "m7", system_uuid: "s7" }],
 };
 
-async function openHeldRun(page: Page, boundPassed: boolean): Promise<{ posted: () => unknown }> {
+// answer, when given, replaces the fixed containment body: it sees the 1-based call count and returns the
+// status and JSON for that read, so a test can move the hold on or fail a read.
+async function openHeldRun(
+  page: Page,
+  boundPassed: boolean,
+  answer?: (call: number) => { status: number; json: unknown },
+): Promise<{ posted: () => unknown }> {
+  let calls = 0;
   let posted: unknown;
   await page.route("**/api/v1/runs/*", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -34,8 +41,9 @@ async function openHeldRun(page: Page, boundPassed: boolean): Promise<{ posted: 
     if (json.task === "e2e fixture 2") Object.assign(json, { placement: "local", runner_name: "cluster-a", runner_online: true });
     await route.fulfill({ response, json });
   });
-  await page.route("**/api/v1/runs/*/containment", (route) =>
-    route.fulfill({
+  await page.route("**/api/v1/runs/*/containment", (route) => {
+    if (answer) return route.fulfill(answer(++calls));
+    return route.fulfill({
       json: {
         pending: {
           kind: "pending_delete",
@@ -49,8 +57,8 @@ async function openHeldRun(page: Page, boundPassed: boolean): Promise<{ posted: 
         },
         records: [],
       },
-    }),
-  );
+    });
+  });
   await page.route("**/api/v1/runs/*/node-record", async (route) => {
     posted = route.request().postDataJSON();
     await route.fulfill({
@@ -67,6 +75,36 @@ async function openHeldRun(page: Page, boundPassed: boolean): Promise<{ posted: 
 }
 
 test.describe("Run detail — a Kubernetes run held as containment pending", () => {
+  const held = (boundPassed: boolean) => ({
+    pending: {
+      kind: "pending_delete",
+      since: new Date(Date.now() - 40 * 60_000).toISOString(),
+      bound_until: new Date(Date.now() + (boundPassed ? -5 : 20) * 60_000).toISOString(),
+      bound_passed: boundPassed,
+      name_reused: false,
+      no_causal_association: false,
+      two_people: false,
+      tuple,
+    },
+    records: [],
+  });
+
+  test("the line moves on to 'termination unknown' by itself once the bound passes", async ({ page }) => {
+    await openHeldRun(page, false, (call) => ({ status: 200, json: held(call > 1) }));
+    await expect(page.getByTestId("run-containment-line")).toContainText("Containment pending; egress bounded until");
+    await expect(page.getByTestId("run-containment-line")).toContainText(C.PASSED_TITLE, { timeout: 15_000 });
+  });
+
+  test("a failed read says so and Retry brings the hold back", async ({ page }) => {
+    await openHeldRun(page, false, (call) =>
+      call === 1 ? { status: 500, json: { error: "boom" } } : { status: 200, json: held(false) },
+    );
+    await expect(page.getByTestId("run-containment-stale")).toContainText(C.LOAD_FAILED);
+    await page.getByTestId("run-containment-stale").getByRole("button", { name: C.RETRY }).click();
+    await expect(page.getByTestId("run-containment-line")).toContainText("Containment pending");
+    await expect(page.getByTestId("run-containment-stale")).toHaveCount(0);
+  });
+
   test("shows the egress bound, the reused node name, and the record form with its machines", async ({ page }) => {
     await openHeldRun(page, false);
     await expect(page.getByTestId("run-containment-line")).toContainText("Containment pending; egress bounded until");

@@ -47,6 +47,8 @@ export const INVENTORY = {
   ERASE_ROW: "Erase credentials",
   ERASE_BY_EMAIL: "Erase someone's credentials",
   EMPTY_TITLE: "No one has stored a credential yet",
+  // The store's canon 503 is a supported configuration, not a fault: the card is titled for what is true, not "Something went wrong".
+  NO_META_TITLE: "Nothing to list on this store",
   EMPTY_BODY: "People add their own keys and sign-ins in Your account, in the user view. They show here once they do.",
   NO_PROVIDERS_BODY: "Add one in Settings. Each person then connects their own, and it shows here.",
   OPEN_SETTINGS: "Open Settings",
@@ -95,6 +97,18 @@ export const ERASE_DATA = {
       hint: "Their secret values, kept so run output can hide them.",
     },
     recordings: { label: "Recordings", hint: "Not erased unless you choose it." },
+    run_setups: {
+      label: "Run templates",
+      hint: "Their saved templates, and their name on shared ones. Not erased unless you choose it.",
+    },
+    runner_pools: {
+      label: "Runner pools",
+      hint: "Their own runner pools; runs waiting for one end. Not erased unless you choose it.",
+    },
+    member_drives: {
+      label: "Drives",
+      hint: "Drives they created, with their files. Not erased unless you choose it.",
+    },
   },
   SEALING_NOTE:
     "Personal details are erasable only for events recorded while audit sealing was on. Earlier events keep them until retention drops their partition.",
@@ -118,8 +132,8 @@ export const MINTED = {
   CHIP: (n: number) => (n === 1 ? "1 still works" : `${n} still work`),
   COUNT: (n: number) =>
     n === 1
-      ? "1 token was created by an admin for another person. It keeps working until revoked. Values are never shown."
-      : `${n} tokens were created by an admin for another person. They keep working until revoked. Values are never shown.`,
+      ? "1 token was created by an admin for another person. It keeps working until it expires or is revoked. Values are never shown."
+      : `${n} tokens were created by an admin for another person. They keep working until they expire or are revoked. Values are never shown.`,
   NOTE: "No one can create a token that acts as another person. They sign in and create their own.",
   EMPTY: "No admin has created a token for someone else.",
   COL_PERSON: "Person",

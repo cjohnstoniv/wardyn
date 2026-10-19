@@ -24,7 +24,8 @@ import (
 // Only per-user (Entra) rows are graded. A row is per-user when s.cfg.ADOEntra
 // resolves a config for it; any other row, a shared PAT row included, gets no
 // fact at all, so a working PAT row never reads as expired. The provider write
-// boundary admits at most one enabled per-user row (validateOneEntraRow).
+// boundary admits at most one enabled sign-in row (validateOneEntraRow), but
+// any number of own_pat rows, one per organisation.
 //
 // Entra publishes no refresh-token expiry, so `expiring` is unreachable. A
 // sign-in is `expired_signin` when a renewal recorded it dead (DeadAt) or it
@@ -208,7 +209,8 @@ type perUserADORow struct {
 }
 
 // perUserADORows is every ENABLED azure_devops row this deployment's
-// ADOEntra source covers — at most one (see the file doc comment).
+// ADOEntra source covers: at most one sign-in row, and any number of own_pat
+// rows (see the file doc comment).
 func (s *Server) perUserADORows(ctx context.Context, sc types.SiteConfig) ([]perUserADORow, error) {
 	var out []perUserADORow
 	for _, row := range gitProviderRows(sc) {
@@ -426,9 +428,9 @@ func (s *Server) computeSCMAccessRowsFor(ctx context.Context, sc types.SiteConfi
 	return out, nil
 }
 
-// scmAccessValue is the FIRST row of computeSCMAccessRowsFor (at most one
-// exists, see the file doc comment) — the shape SetupStatus.SCMAccess
-// (setup.go) wants inline; it lives here because setup.go is at its size cap.
+// scmAccessValue is the FIRST row of computeSCMAccessRowsFor — the shape
+// SetupStatus.SCMAccess (setup.go) wants inline, so with several own_pat rows
+// the others are on GET /me/scm-access only; it lives here because setup.go is at its size cap.
 // The zero SCMAccess{} when there is none — setup.go's `omitzero` then drops
 // the field — and when the rows could not be read: setup status is a summary,
 // so an unreadable fact is left out rather than failing the whole page or
@@ -450,8 +452,9 @@ func (s *Server) scmAccessValue(ctx context.Context, sc types.SiteConfig, subjec
 // git_credential fact — never a refusal, and never a
 // deployment-wide guess: the per-user row (if any) that ADMITS one of repos,
 // graded for subject, using the SAME row-selection perUserADORowsAdmitting
-// gitCredentialRefusal itself uses, so a preflight fact and a launch refusal
-// can never point at different rows. nil when no per-user row admits any of
+// gitCredentialRefusal itself uses, and the first such row that is not live,
+// as the gate does, so a preflight fact and a launch refusal can never point
+// at different rows. nil when no per-user row admits any of
 // these repos — a GitHub-only run, a deployment with no Azure DevOps row at
 // all, or one whose only Azure DevOps row is shared, all read identically:
 // nothing to say. Also nil when the row or the sign-in could not be read: an
@@ -469,11 +472,22 @@ func (s *Server) gitCredentialFactForRepos(ctx context.Context, subject string, 
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
-	out, err := s.scmAccessForRow(ctx, rows[0], subject)
-	if err != nil {
-		return nil
+	// The row the gate would refuse on (gitCredentialRefusalForLauncher stops at
+	// the first admitting row that is not live), else the first.
+	var first *SCMAccess
+	for _, row := range rows {
+		out, err := s.scmAccessForRow(ctx, row, subject)
+		if err != nil {
+			return nil
+		}
+		if out.State != modelAccessLive && out.State != modelAccessExpiring {
+			return &out
+		}
+		if first == nil {
+			first = &out
+		}
 	}
-	return &out
+	return first
 }
 
 // adoSignInPresenceFact is the policy preview's counterpart of
@@ -512,11 +526,15 @@ func (s *Server) adoSignInPresenceFact(ctx context.Context, sc types.SiteConfig,
 // any preflight verdict exists — a 422 can be the very FIRST thing this
 // caller hears about the row, so the dialog cannot depend on a
 // `git_credential` preflight fact having already landed. No row id — see
-// SCMAccess's own doc comment.
+// SCMAccess's own doc comment. Cause is why the row is unusable when it is
+// more than "not connected" (an scmAccessCause value or
+// ReasonADOPATNeedsConsoleApp), so the console opens Connect only for one a
+// sign-in repairs; absent means not connected.
 type gitCredentialErrorBody struct {
 	Error  string `json:"error"`
 	Reason string `json:"reason"`
 	Org    string `json:"org,omitempty"`
+	Cause  string `json:"cause,omitempty"`
 }
 
 // gitCredentialRefusalReason is the 422 `reason` the New Run rail recognises
@@ -569,7 +587,7 @@ var errGitCredentialRefused = errors.New(gitCredentialRefusalReason)
 // gitCredentialErrorBody needs (the org) through an error return — Unwrap
 // makes it match errGitCredentialRefused for a caller that only wants to
 // know WHICH refusal this is, errors.As for one that wants the org too.
-type gitCredentialRefusalError struct{ Org, Sentence string }
+type gitCredentialRefusalError struct{ Org, Sentence, Cause string }
 
 func (e *gitCredentialRefusalError) Error() string { return e.Sentence }
 func (e *gitCredentialRefusalError) Unwrap() error { return errGitCredentialRefused }
@@ -648,17 +666,17 @@ func (s *Server) gitCredentialRefusalForLauncher(ctx context.Context, subject st
 		case access.State == modelAccessLive, access.State == modelAccessExpiring:
 			continue
 		case access.Cause == scmAccessCauseTokenExpired:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialOwnPATExpiredRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialOwnPATExpiredRefusal, Cause: scmAccessCauseTokenExpired}
 		case access.Cause == scmAccessCauseEnded:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialEndedRefusal, Cause: scmAccessCauseEnded}
 		case access.Cause == scmAccessCauseConsentNeeded:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialConsentRefusal, Cause: scmAccessCauseConsentNeeded}
 		case access.Cause == scmAccessCauseBlocked:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialBlockedRefusal, Cause: scmAccessCauseBlocked}
 		case access.Cause == scmAccessCausePermissionsMissing:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialPermissionsRefusal, Cause: scmAccessCausePermissionsMissing}
 		case access.Cause == ReasonADOPATNeedsConsoleApp:
-			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal}
+			return &gitCredentialRefusalError{Org: access.Org, Sentence: adoPATNeedsConsoleAppRefusal, Cause: ReasonADOPATNeedsConsoleApp}
 		}
 		return &gitCredentialRefusalError{Org: access.Org, Sentence: gitCredentialNotConnectedRefusal}
 	}
@@ -693,7 +711,7 @@ func (s *Server) gitCredentialRefusal(w http.ResponseWriter, r *http.Request, re
 	// unaudited; only a run that actually DISPATCHES and then fails audits,
 	// under run.create.
 	writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
-		Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+		Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org, Cause: gcErr.Cause,
 	})
 	return true
 }

@@ -145,6 +145,7 @@ test.describe("Run cockpit — a long kill outcome scrolls instead of clipping",
           { id: "g1", created_at: at, spec: { kind: "github_token", scope: {} } },
           { id: "g2", created_at: at, spec: { kind: "git_pat", scope: { host: "dev.azure.com" } } },
           { id: "g3", created_at: at, spec: { kind: "env_secret", scope: {} } },
+          { id: "g4", created_at: at, spec: { kind: "file_secret", scope: {} } },
         ],
       }),
     );
@@ -153,6 +154,7 @@ test.describe("Run cockpit — a long kill outcome scrolls instead of clipping",
     const block = page.getByTestId("run-failure-block");
     await expect(block).toContainText("teardown is not confirmed");
     await expect(block).toContainText("it stays live until you rotate it on dev.azure.com");
+    await expect(block).toContainText("received as a file");
     expect(await block.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
     // The block is bounded by its tile (a share of it), so it never spills out
     // of the tile where overflow-hidden would clip the audit button: its own

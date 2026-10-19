@@ -4,15 +4,16 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { PendingChangeError } from "../../../lib/api/core";
 import { absoluteTime } from "../../../lib/format";
 import { aheadByHours } from "../../../lib/test-clock";
-import type { GovernanceChange } from "../../../lib/types";
+import type { GovernanceChange, RunDetail } from "../../../lib/types";
 import type { RunContainment, RunContainmentPending } from "../../../lib/types/run-containment";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { CONTAINMENT as C } from "../../wardyn/copy/run-containment";
-import { ContainmentPending } from "./containment-pending";
+import { runners } from "../../../lib/api/runners";
+import { ContainmentPending, useRunContainment } from "./containment-pending";
 
 const recordNode = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({ runners: { recordNode: (...a: unknown[]) => recordNode(...a), runContainment: vi.fn() } }));
@@ -51,10 +52,10 @@ function pending(over: Partial<RunContainmentPending> = {}): RunContainment {
   };
 }
 
-function show(containment: RunContainment | null, securityOperator = true, onChanged = vi.fn()) {
+function show(containment: RunContainment | null, securityOperator = true, onChanged = vi.fn(), failed = false) {
   render(
     <OperatorProvider operator={securityOperator} securityOperator={securityOperator}>
-      <ContainmentPending runId="run-1" containment={containment} onChanged={onChanged} />
+      <ContainmentPending runId="run-1" containment={containment} onChanged={onChanged} failed={failed} />
     </OperatorProvider>,
   );
   return onChanged;
@@ -143,5 +144,73 @@ describe("ContainmentPending", () => {
     const rows = screen.getAllByTestId("run-node-record");
     expect(rows[0]).toHaveTextContent(C.stateRefused("a Node still holds n1"));
     expect(rows[1]).toHaveTextContent(C.STATE_ACCEPTED);
+  });
+});
+
+describe("ContainmentPending — a stale or failed read (#K3b-L1)", () => {
+  it("a failed first read says so and Retry reads again, instead of showing nothing", () => {
+    const onChanged = show(null, true, vi.fn(), true);
+    expect(screen.getByTestId("run-containment-stale")).toHaveTextContent(C.LOAD_FAILED);
+    fireEvent.click(screen.getByRole("button", { name: C.RETRY }));
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed refresh keeps the last good hold on screen, marked as possibly out of date", () => {
+    show(pending(), true, vi.fn(), true);
+    expect(screen.getByTestId("run-containment-stale")).toHaveTextContent(C.STALE);
+    expect(screen.getByTestId("run-containment-line")).toHaveTextContent("Containment pending");
+  });
+});
+
+describe("useRunContainment — keeping a held run's containment current", () => {
+  const localRun = { id: "run-1", placement: "local", updated_at: "t0" } as unknown as RunDetail;
+  const read = runners.runContainment as unknown as ReturnType<typeof vi.fn>;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    read.mockReset();
+  });
+
+  it("re-reads a held run on a timer, so the passed bound shows without the run's updated_at moving", async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValueOnce(pending({ bound_passed: false })).mockResolvedValue(pending({ bound_passed: true }));
+    const { result } = renderHook(() => useRunContainment(localRun));
+    await act(async () => {});
+    expect(result.current[0]?.pending?.bound_passed).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current[0]?.pending?.bound_passed).toBe(true);
+  });
+
+  it("a failed read keeps the last good answer and reports failed; the next good read clears it", async () => {
+    vi.useFakeTimers();
+    read
+      .mockResolvedValueOnce(pending())
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue(pending());
+    const { result } = renderHook(() => useRunContainment(localRun));
+    await act(async () => {});
+    expect(result.current[2]).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current[0]?.pending).toBeTruthy();
+    expect(result.current[2]).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(result.current[2]).toBe(false);
+  });
+
+  it("a run with no hold is read once and not polled", async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValue({ records: [] });
+    renderHook(() => useRunContainment(localRun));
+    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20000);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });

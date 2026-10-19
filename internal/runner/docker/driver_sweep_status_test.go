@@ -156,3 +156,71 @@ func TestAgentStatus_MapsExecLiveness(t *testing.T) {
 		}
 	})
 }
+
+// An exec record is gone once its container stops. A container a daemon restart, a reboot or an
+// operator stopped exits 143 (or was OOM killed): that is as definitive as a clean stop, so the agent
+// status is the container's own, exit code included, never the "ambiguous" error that holds the run
+// RUNNING until the 30 minute ceiling. A running container with no exec record stays ambiguous.
+func TestAgentStatus_ExecGoneOnAFailedContainerIsDefinitive(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		state container.State
+		code  int
+	}{
+		{"exited 143", container.State{Status: "exited", ExitCode: 143}, 143},
+		{"OOM killed", container.State{Status: "exited", ExitCode: 137, OOMKilled: true}, 0}, // reported as OOM killed, no code
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.execGone = "exec-1"
+			f.containers["wardyn-agent-x"] = &createdContainer{name: "wardyn-agent-x", cfg: &container.Config{}, state: &c.state}
+			st, err := newTestDriver(f).AgentStatus(context.Background(), "wardyn-agent-x", "exec-1")
+			if err != nil {
+				t.Fatalf("AgentStatus: %v", err)
+			}
+			if st.State != types.RunFailed || (c.code != 0 && (st.ExitCode == nil || *st.ExitCode != c.code)) {
+				t.Fatalf("status = %+v, want FAILED (exit code %d)", st, c.code)
+			}
+		})
+	}
+	f := newFakeDocker()
+	f.execGone = "exec-1"
+	f.containers["wardyn-agent-x"] = &createdContainer{name: "wardyn-agent-x", cfg: &container.Config{}, state: &container.State{Status: "running", Running: true}}
+	if _, err := newTestDriver(f).AgentStatus(context.Background(), "wardyn-agent-x", "exec-1"); err == nil {
+		t.Fatal("exec gone on a running container answered definitively; want the ambiguous error")
+	}
+}
+
+// Two deployments can share one Docker daemon (concurrent CI jobs, a desktop stack beside a dev
+// one): an aged sandbox another deployment labelled is never this one's orphan, whatever this
+// one's database says. This deployment's own, and an unlabelled one from before the label, are
+// swept as before; a create labels every object with this deployment.
+func TestSweepOrphanedSandboxes_KeepsToItsOwnDeployment(t *testing.T) {
+	ours := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
+	theirs := uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000002")
+	unlabelled := uuid.MustParse("cccccccc-0000-0000-0000-000000000003")
+	f := newFakeDocker()
+	for _, id := range []uuid.UUID{ours, theirs, unlabelled} {
+		seedSandbox(f, id)
+	}
+	old := time.Now().Add(-time.Hour).Unix()
+	f.listItems = []container.Summary{
+		{ID: agentContainerName(ours), Created: old, Labels: map[string]string{labelRun: ours.String(), labelDeployment: "wardyn-internal"}},
+		{ID: agentContainerName(theirs), Created: old, Labels: map[string]string{labelRun: theirs.String(), labelDeployment: "ci-job-b-internal"}},
+		{ID: agentContainerName(unlabelled), Created: old, Labels: map[string]string{labelRun: unlabelled.String()}},
+	}
+	d := newTestDriver(f)
+	swept, err := d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true })
+	if err != nil || swept != 2 {
+		t.Fatalf("SweepOrphanedSandboxes = %d, %v; want 2 (ours and the unlabelled one)", swept, err)
+	}
+	f.mu.Lock()
+	gone := f.containers[agentContainerName(theirs)].removed
+	f.mu.Unlock()
+	if gone {
+		t.Fatal("swept another deployment's sandbox")
+	}
+	if l := d.labels(ours, componentAgent, map[string]string{labelDeployment: "spoofed"}); l[labelDeployment] != "wardyn-internal" {
+		t.Fatalf("labels = %v, want this deployment's %s stamped over any placement label", l, labelDeployment)
+	}
+}

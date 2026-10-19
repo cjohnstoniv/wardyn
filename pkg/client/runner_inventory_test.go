@@ -77,7 +77,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	}
 	want := []string{
 		"GET /api/v1/runners?state=revoked", "GET /api/v1/runners", "GET /api/v1/runners/" + id.String(),
-		"GET /api/v1/me/runners", "GET /api/v1/me/runners/" + id.String(), "GET /api/v1/runners?state=all&limit=2&offset=4", "GET /api/v1/runners/tokens?owner=alice", "DELETE /api/v1/runners/tokens/" + id.String(), "DELETE /api/v1/me/runners/" + id.String(),
+		"GET /api/v1/me/runners?limit=1000", "GET /api/v1/me/runners/" + id.String(), "GET /api/v1/runners?state=all&limit=2&offset=4", "GET /api/v1/runners/tokens?owner=alice", "DELETE /api/v1/runners/tokens/" + id.String(), "DELETE /api/v1/me/runners/" + id.String(),
 		"GET /api/v1/runners/settings", "PUT /api/v1/runners/settings",
 	}
 	if len(got) != len(want) {
@@ -101,5 +101,33 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	wantBody := `{"limits":{"runs_at_once":3,"total":{"cpu_millis":4000,"memory_mib":8192,"disk_mib":102400},"per_run":{"cpu_millis":1000,"memory_mib":2048,"disk_mib":20480}}}`
 	if len(got) != 1 || got[0] != "PUT /api/v1/me/runners/"+id.String() || putBody != wantBody {
 		t.Fatalf("SetMyRunnerLimits sent %v %q", got, putBody)
+	}
+}
+
+// ListMyRunners reads every page the server flags truncated, so a large inventory never comes back
+// partial; ListMyRunnersPage reads one page and says whether more exist.
+func TestListMyRunnersWalksEveryPage(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.RequestURI())
+		switch r.URL.Query().Get("offset") {
+		case "":
+			w.Header().Set("X-Wardyn-Truncated", "true")
+			_, _ = w.Write([]byte(`[{"name":"a"},{"name":"b"}]`))
+		default:
+			_, _ = w.Write([]byte(`[{"name":"c"}]`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := client.New(srv.URL, "tok")
+	all, err := c.ListMyRunners(context.Background())
+	if err != nil || len(all) != 3 || all[2].Name != "c" {
+		t.Fatalf("ListMyRunners = %+v, %v; want all three runners", all, err)
+	}
+	if want := []string{"/api/v1/me/runners?limit=1000", "/api/v1/me/runners?limit=1000&offset=2"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("requests %v, want %v", got, want)
+	}
+	if rows, more, err := c.ListMyRunnersPage(context.Background()); err != nil || !more || len(rows) != 2 {
+		t.Fatalf("ListMyRunnersPage = %+v, %v, %v; want two rows and more", rows, more, err)
 	}
 }

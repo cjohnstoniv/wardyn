@@ -79,7 +79,7 @@ operator decides. Nothing in this round adds an approvals surface.
 
 **`/policies` — the ceiling, read-only for members.** `PoliciesScreen`
 (`ui/src/app/components/screens/policies.tsx:130-142`) already discloses the default ceiling
-in a `<details>` labelled "Default (ceiling) policy — applied to runs with no policy_id, and
+in a `<details>` labelled "Default (ceiling) policy — applied to runs that name no policy, and
 to every member's inline policy" (`:134`). `PolicyPanel` (`policy-panel.tsx:6-27`) is ONE
 spec-JSON authoring surface with two instances — `instance="policies"` (the admin editor body)
 and `instance="run"` (the New Run card) — carrying the template row, the JSON editor, the
@@ -439,7 +439,7 @@ Listed so that every product string rendered in the mock has a key somewhere.
 | `PERM.SUBJECT_ALL` | `permissions-copy.ts` | Everyone signed in |
 | `PERM.HINT_USER` | `permissions-copy.ts` | An email address or the sign-in subject id. Either one matches the same person. |
 | `PERM.HINT_GROUP` | `permissions-copy.ts` | A group or app-role name exactly as your identity provider sends it in the token. |
-| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Super admins are exempt; a security admin is not. |
+| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Super admins are exempt, except for service_attach; a security admin is not. |
 | `PERM.REMOVE` | `permissions-copy.ts` | Remove |
 | `PEOPLE.CANCEL` | `people-access-copy.ts` | Cancel |
 | `PEOPLE.ROLE_ADMIN` / `PEOPLE.ROLE_MEMBER` | `people-access-copy.ts` | Admin / Member |
@@ -571,7 +571,7 @@ is what an operator can actually do.
 |---|---|
 | `ASSIGN_TITLE` | Assignments |
 | `ASSIGN_LEAD` | Who runs under which profile. One profile applies to a person — never two merged together. |
-| `PRECEDENCE` | The most specific assignment wins: a person beats a group, and a group beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name. |
+| `PRECEDENCE` | The most specific assignment wins: a person beats a group, a group beats a user type, and a user type beats everyone. Within a person, the sign-in subject beats the email. Between groups, the higher priority wins, then the profile name. |
 | `EFFECT_NOTE` | Takes effect on their next run. A run already dispatched keeps the ceiling it started with. |
 | `SIGNIN_NOTE` | A change to someone's groups in your identity provider reaches Wardyn only when they next sign in, so they keep their current ceiling until then — or, for an API token, until it is re-minted. |
 | `COL_PROFILE` | Profile |
@@ -588,6 +588,7 @@ is what an operator can actually do.
 | `EMPTY_ASSIGN_BODY` | A profile with no assignment bounds nobody. Assign one to a group to start. |
 | `PREVIEW_TITLE` | Resolved profile |
 | `PREVIEW_LEAD` | Paste the roles, groups, or email a person's token would carry, choose their user type, and see which profile would bind their runs. |
+| `PREVIEW_LEAD_NO_TYPES` | Paste the roles, groups, or email a person's token would carry, and see which profile would bind their runs. |
 | `PREVIEW_USER_TYPE_LABEL` | User type |
 | `PREVIEW_USER_TYPE_HINT` | The type the person signs in as. Most people sign in as Standard user. |
 | `PREVIEW_RUN_CTA` | Resolve |

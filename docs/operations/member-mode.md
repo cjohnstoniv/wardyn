@@ -7,11 +7,6 @@ are two ways; they answer different questions, and they compose.
 
 ## 1. The switch — the User view
 
-*Route, field and audit-action names below predate the 0.8 rename sweep
-— see [Renamed in 0.8](../OPERATIONS.md#renamed-in-08) for the current
-`POST /me/view` route and `/me` keys; this section's own copy is
-repointed in #620.*
-
 The **Console view** switch beside the wordmark offers **Admin view** |
 **User view** to a signed-in SSO admin. Choosing **User view** sets a flag
 on your EXISTING session cookie; your role is never rewritten, only the
@@ -50,8 +45,8 @@ with no per-person role to pause, so nothing is clamped or POSTed, and
 `POST /me/view` answers those callers `400` if called directly.
 
 **Runs start in the User view.** A signed-in SSO admin or security admin
-in the **Admin view** cannot start or preview a run: `POST /runs` and
-`POST /runs/preflight` answer `409` with reason `admin_view`. Switch to the
+in the **Admin view** cannot start or preview a run: `POST /runs`,
+`POST /runs/preflight` and the policy preview answer `409` with reason `admin_view`. Switch to the
 User view to launch. The refusal keys on the browser session only — the
 admin token, a `wdn_` token and a single-operator install launch as before.
 
@@ -82,6 +77,10 @@ no admin route opens whatever the type.
   (`POST /policies/grade`, a read-only computation) still work. Viewing
   your own type launches as usual. The refusal is audited as `authz.denied`
   with the viewed and stamped types.
+- With `WARDYN_GOVERN_ADMIN_RUNS` off (the default), the picked type is the type the view's runs resolve against, for either admin tier.
+  - Your stamped type does not limit which type you pick.
+  - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
+  - Turn the switch on when an admin's own stamped type must bound the runs they launch.
 
 ## The no-credential preview — "Preview as a new user"
 
@@ -144,7 +143,7 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 | Ceiling | What it means |
 | --- | --- |
 | **1. Role only.** | Runs, workspaces and secrets you created stay yours, so owner-legal paths still pass for you where they would 404 for someone else. `GET /me/capabilities` and every governance ceiling resolve against your real group snapshot — the mode clamps the role, never the group tier. |
-| **2. Credentials you already hold are not clamped — the mode is per-SESSION.** | The SSH gateway reads the role stamped on the KEY in the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`). So an admin in member mode still holds the admin override on other people's runs over SSH. By the identical argument, any `wdn_` API token you already hold keeps its own stamped role (the token lane replays the DB row, never the session), as does the deployment admin bearer token. The `409` token door and the capped key door stop NEW credentials — they cannot reach into old ones. Your browser session is clamped; another credential of yours is a different session. |
+| **2. Credentials you already hold are not clamped — the mode is per-SESSION.** | The SSH gateway reads the role stamped on the KEY in the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`). So an admin in the User view still holds the admin override over SSH, but since 0.8.5 only on runs with no personal owner, never on a person's run. By the identical argument, any `wdn_` API token you already hold keeps its own stamped role (the token lane replays the DB row, never the session), as does the deployment admin bearer token. The `409` token door and the capped key door stop NEW credentials — they cannot reach into old ones. Your browser session is clamped; another credential of yours is a different session. |
 | **3. Rolling upgrades.** | The flag rides the existing session cookie with no codec bump (a bump would sign every live session out mid-rollout, which is worse). During a rolling Kubernetes upgrade a replica still running the previous version ignores the flag and answers your requests as an admin. Finish the rollout before you rely on what you see. |
 | **4. Model access and ownership still resolve to you.** | The mode clamps the role and deliberately leaves your subject alone. Under a `per_user` roster row your own captured AWS SSO session is what `/setup/status`, run create and dispatch all resolve — an admin who has signed in sees a live credential while "viewing as member". This is what the 0.7.4 field report was misled by. |
 

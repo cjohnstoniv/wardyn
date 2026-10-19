@@ -196,6 +196,20 @@ test.describe("Run page — startup progress in the terminal hero (#1419)", () =
     await expect(list(page).locator('[data-state="active"]')).toHaveCount(0);
   });
 
+  test("PENDING promoted from a 40 minute queue wait is clocked from admission, not overdue", async ({ page }) => {
+    await spliceRun(page, "e2e fixture 0", () => ({
+      interactive: true,
+      status_detail: "",
+      status_reason: "",
+      ageCreated: 40 * MIN,
+      admitted_at: new Date(Date.now() - 5 * S).toISOString(),
+    }));
+    await openRun(page, "e2e fixture 0");
+    await expect(rows(page).first()).toHaveText(RUN_STARTUP.STEP_START);
+    await expect(rows(page).first()).toHaveAttribute("data-state", "active");
+    await expect(hint(page)).toHaveCount(0);
+  });
+
   test("ImagePullBackOff: the failed row and the pull alert, the list stops", async ({ page }) => {
     await spliceRun(page, "e2e fixture 1", () => ({
       interactive: true,

@@ -14,6 +14,9 @@
 #   scripts/pg-test-select.sh --packages [api|store]
 #       Prints API_PKGS (the default) or STORE_PKGS: the one place each shard's
 #       package list lives (the store shard is store, db, broker, cmd/wardynd, ...).
+#   scripts/pg-test-select.sh --selection [<go package pattern>...]
+#       Prints one "<import path> <Test> [probe]" line per gated top-level test (./... when no pattern).
+#       cmd/wardynd's pg_race_gate_guard_test.go reads it to hold every gated goroutine test to the race gate.
 #   scripts/pg-test-select.sh --guard <go test -json output> [<go package pattern>...]
 #       The unit job's JSON (WARDYN_TEST_PG unset) is the independent proof:
 #       every top-level test there that skipped naming WARDYN_TEST_PG must be
@@ -126,6 +129,13 @@ if [ "${1:-}" = "--packages" ]; then
     store) echo "$STORE_PKGS" ;;
     *) echo "pg-test-select: --packages takes api or store" >&2; exit 2 ;;
   esac
+  exit 0
+fi
+
+if [ "${1:-}" = "--selection" ]; then
+  shift
+  [ $# -gt 0 ] || set -- ./...
+  selection "$@"
   exit 0
 fi
 

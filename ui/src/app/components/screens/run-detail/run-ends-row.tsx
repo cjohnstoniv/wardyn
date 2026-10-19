@@ -200,7 +200,7 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-6 px-2 text-xs" disabled={busy}>
-                  {RL.waitValueHours(Math.round(run.wait_budget_sec / 3600))}
+                  {RL.waitValueSec(run.wait_budget_sec)}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
@@ -212,7 +212,7 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <span className="text-muted-foreground">{RL.waitLocked(Math.round(run.wait_budget_sec / 3600))}</span>
+            <span className="text-muted-foreground">{RL.waitLocked(run.wait_budget_sec)}</span>
           )}
         </div>
       )}

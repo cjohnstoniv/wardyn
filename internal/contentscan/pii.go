@@ -28,7 +28,7 @@ var piiRules = []piiRule{
 }
 
 func (piiDetector) Scan(s Span, dst *[]Finding) {
-	path := sanitizePath(s.FieldPath)
+	path := maskFormats(s.FieldPath)
 	for _, rule := range piiRules {
 		for _, loc := range rule.re.FindAllStringIndex(s.Text, -1) {
 			match := s.Text[loc[0]:loc[1]]

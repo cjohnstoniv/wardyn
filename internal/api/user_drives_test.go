@@ -757,8 +757,14 @@ func TestNestedHostRootDrivesAreRefused(t *testing.T) {
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("code = %d, want 500: %s", w.Code, w.Body.String())
 		}
+		if got := errorReason(w); got != reasonUserDriveRehomeListUnavailable {
+			t.Errorf("the 500 reason = %q, want %q", got, reasonUserDriveRehomeListUnavailable)
+		}
 		if st.listErr != nil {
 			t.Fatal("the blip was never consumed — the nesting gate did not read the store at all, so this subtest proved nothing")
+		}
+		if strings.Contains(w.Body.String(), "boom") {
+			t.Errorf("the 500 carries the store's own error text: %s", w.Body.String())
 		}
 	})
 }
@@ -1946,6 +1952,10 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 		policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
 			{Source: "/srv/legacy", Target: runner.DriveTarget, ReadOnly: &ro},
 			{Source: "/srv/legacy2", Target: runner.DriveTarget + "/shared", ReadOnly: &ro},
+			{Source: "/srv/legacy3", Target: runner.DrivesRoot, ReadOnly: &ro},
+			{Source: "/srv/legacy4", Target: runner.DrivesRoot + "/x", ReadOnly: &ro},
+			{Source: "/srv/legacy5", Target: runner.SharedRoot, ReadOnly: &ro},
+			{Source: "/srv/legacy6", Target: runner.SharedRoot + "/y", ReadOnly: &ro},
 			{Source: "/srv/work", Target: "/home/agent/work", ReadOnly: &ro},
 		}}
 		mounts := buildRunMounts(policy, userMountPosture{})

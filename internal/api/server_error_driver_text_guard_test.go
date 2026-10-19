@@ -136,7 +136,7 @@ type serverErrorForwarder struct {
 // uiFail is uigateway.go's UI-relay dial-error constructor.
 var serverErrorForwarders = map[string]serverErrorForwarder{
 	"refuseCapture": {statusArg: 3, msgArg: 5}, // s.refuseCapture(w, r, claims, status, reason, msg, scope)
-	"uiFail":        {statusArg: 1, msgArg: 2}, // uiFail(ctx, status, msg)
+	"uiFail":        {statusArg: 1, msgArg: 3}, // uiFail(ctx, status, reason, msg)
 	// #445: the member-visible run failure hint (run.FailureHint), which
 	// refuseADOEntraDispatch also copies into the run.create audit detail.
 	"failAndRevoke":          {statusArg: -1, msgArg: 3}, // s.failAndRevoke(ctx, runID, from, hint)
@@ -238,6 +238,13 @@ var server5xxStatusIdents = map[string]bool{
 // identical logic against a synthetic source string instead of a real file
 // on disk.
 func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
+	return scanFileForLeaksWith(serverErrorForwarders, fset, name, file, src)
+}
+
+// scanFileForLeaksWith is scanFileForLeaks over a caller's forwarder table, so a guard can follow a
+// helper (a run_revive.go reviveRefused, a local refuse closure) in the files that were fixed without
+// flagging every older site in the package.
+func scanFileForLeaksWith(forwarders map[string]serverErrorForwarder, fset *token.FileSet, name string, file *ast.File, src []byte) map[string][]string {
 	found := map[string][]string{}
 	for _, decl := range file.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
@@ -264,7 +271,7 @@ func scanFileForLeaks(fset *token.FileSet, name string, file *ast.File, src []by
 				// itself carries writeError's (status, msg) pair as ordinary
 				// arguments at fixed positions.
 				callee := calleeName(node)
-				fwd, ok := serverErrorForwarders[callee]
+				fwd, ok := forwarders[callee]
 				if !ok {
 					return true
 				}
@@ -445,6 +452,96 @@ func (s *Server) dispatchRun(ctx context.Context) {
 	}
 }
 
+// TestScanFileForLeaks_FlagsUiFailMessage pins the uiFail hop: its driver text
+// rides in the FOURTH argument (the third is the reason code), so a
+// err.Error() there must be found, and a logged message must not be.
+func TestScanFileForLeaks_FlagsUiFailMessage(t *testing.T) {
+	const src = `package api
+
+func (s *Server) dialRelay(ctx context.Context) error {
+	return uiFail(ctx, http.StatusBadGateway, reasonX, "dial relay: "+err.Error())
+}
+
+func (s *Server) dialRelayLogged(ctx context.Context) error {
+	return uiFail(ctx, http.StatusBadGateway, reasonX, uiExecFailMsg(ctx, "dial relay", err))
+}
+`
+	fset := token.NewFileSet()
+	file, perr := parser.ParseFile(fset, "uigateway.go", src, 0)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	found := scanFileForLeaks(fset, "uigateway.go", file, []byte(src))
+	if got := len(found["uigateway.go:Server.dialRelay:uiFail"]); got != 1 {
+		t.Fatalf("want the err.Error() uiFail message flagged once, got %d: %v", got, found)
+	}
+	if len(found) != 1 {
+		t.Fatalf("the logged-message uiFail was flagged, or another key appeared: %v", found)
+	}
+}
+
+// TestServerErrorForwarders_ArgsMatchSignatures keeps the table honest: each
+// forwarder's msgArg indexes a string parameter and its statusArg (when it
+// has one) an int, read off the real declaration, so a forwarder renamed,
+// removed, or whose parameters shifted off a string/int is a failure here. It
+// cannot tell two string parameters apart (uiFail's reason from its msg):
+// TestScanFileForLeaks_FlagsUiFailMessage pins which one the table reads.
+func TestServerErrorForwarders_ArgsMatchSignatures(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	params := map[string][]string{} // forwarder -> parameter type names, receiver excluded
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		file, perr := parser.ParseFile(fset, e.Name(), nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", e.Name(), perr)
+		}
+		for _, d := range file.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if _, want := serverErrorForwarders[fd.Name.Name]; !want {
+				continue
+			}
+			var ptypes []string
+			for _, f := range fd.Type.Params.List {
+				for range max(1, len(f.Names)) {
+					ptypes = append(ptypes, exprSourceString(f.Type))
+				}
+			}
+			params[fd.Name.Name] = ptypes
+		}
+	}
+	for name, fwd := range serverErrorForwarders {
+		ptypes, ok := params[name]
+		if !ok {
+			t.Errorf("forwarder %q has no declaration in internal/api: remove it from serverErrorForwarders", name)
+			continue
+		}
+		if fwd.msgArg >= len(ptypes) || ptypes[fwd.msgArg] != "string" {
+			t.Errorf("forwarder %q: msgArg %d is not a string parameter (parameters: %v)", name, fwd.msgArg, ptypes)
+		}
+		if fwd.statusArg >= 0 && (fwd.statusArg >= len(ptypes) || ptypes[fwd.statusArg] != "int") {
+			t.Errorf("forwarder %q: statusArg %d is not an int parameter (parameters: %v)", name, fwd.statusArg, ptypes)
+		}
+	}
+}
+
+// exprSourceString renders a parameter type that is a plain identifier ("string",
+// "int") and anything else as "?", which is all the signature check compares.
+func exprSourceString(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return "?"
+}
+
 // is5xxStatusArg reports whether arg is a status this guard recognizes as a
 // 5xx: an http.StatusXxx selector naming one of server5xxStatusIdents, or a
 // raw integer literal in [500,599]. Anything else (a variable, a function
@@ -514,4 +611,59 @@ func exprSourceLine(src []byte, n int) string {
 		return ""
 	}
 	return lines[n-1]
+}
+
+// TestFixedDriverTextSitesStayFixed holds the files whose 5xx and run-failure messages were made
+// driver-text free (#2121 the run owner's authority re-check on revive, #2147 the Azure grant write,
+// and the rest of revive's 5xx refusals): a reviveRefused 5xx in run_owner_authority.go, run_revive.go
+// or run_mcp.go, or a refuse(...) in provider_azure.go, built from err.Error() fails here.
+// readFixedSite reads one source file for the guard below. A revert proof swaps this one line (through
+// go test -overlay) for a reader of a planted copy, since an overlay changes what compiles, not the files on disk.
+var readFixedSite = os.ReadFile
+
+func TestFixedDriverTextSitesStayFixed(t *testing.T) {
+	forwarders := map[string]serverErrorForwarder{
+		"reviveRefused": {statusArg: 0, msgArg: 2},  // reviveRefused(status, reason, msg)
+		"refuse":        {statusArg: -1, msgArg: 1}, // authorAzureInjection's local refuse(reason, msg)
+	}
+	// provider_azure.go's grant_scope arm reports why the injection did not compile: the text is the
+	// operator's own policy shape (config validation), not a driver error, and it is the one site.
+	allowed := map[string]bool{"provider_azure.go:Server.authorAzureInjection:refuse": true}
+	fset := token.NewFileSet()
+	for _, name := range []string{"run_owner_authority.go", "provider_azure.go", "run_revive.go", "run_mcp.go"} {
+		src, err := readFixedSite(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		file, err := parser.ParseFile(fset, name, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for key, sites := range scanFileForLeaksWith(forwarders, fset, name, file, src) {
+			if allowed[key] && len(sites) == 1 {
+				continue
+			}
+			t.Errorf("%s builds a refusal message from err.Error(): %v\nuse loggedMsg(ctx, \"<action>\", err)", key, sites)
+		}
+	}
+}
+
+// The guard sees both shapes it exists for: a reviveRefused 5xx and a refuse(...) built from err.Error().
+func TestFixedDriverTextSites_GuardFlagsBothShapes(t *testing.T) {
+	const src = `package api
+func (s *Server) a() error { return reviveRefused(http.StatusServiceUnavailable, "r", "x: "+err.Error()) }
+func (s *Server) b() { refuse("r", "x: "+err.Error()) }
+func (s *Server) c() error { return reviveRefused(http.StatusConflict, "r", "x: "+err.Error()) }
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := scanFileForLeaksWith(map[string]serverErrorForwarder{
+		"reviveRefused": {statusArg: 0, msgArg: 2}, "refuse": {statusArg: -1, msgArg: 1},
+	}, fset, "x.go", file, []byte(src))
+	if len(got) != 2 || len(got["x.go:Server.a:reviveRefused"]) != 1 || len(got["x.go:Server.b:refuse"]) != 1 {
+		t.Fatalf("flagged %v, want the 5xx reviveRefused and the refuse, not the 409", got)
+	}
 }

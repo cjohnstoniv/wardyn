@@ -59,6 +59,18 @@ function Harness({ kind }: { kind?: DirectorySearchKind }) {
   return <DirectoryCombobox label={PERM.FIELD_WHO} value={value} onChange={setValue} kind={kind} />;
 }
 
+// A caller that clears or replaces the value itself, as the People step does after a save.
+function ExternalHarness() {
+  const [value, setValue] = React.useState("");
+  return (
+    <>
+      <DirectoryCombobox label={PERM.FIELD_WHO} value={value} onChange={setValue} kind="group" />
+      <button type="button" onClick={() => setValue("")}>clear</button>
+      <button type="button" onClick={() => setValue("claim-from-row")}>replace</button>
+    </>
+  );
+}
+
 const field = () => screen.getByRole("textbox", { name: PERM.FIELD_WHO });
 
 // Every DIRECTORY string that has a rendering, so "no chrome" can be asserted
@@ -182,6 +194,22 @@ describe("DirectoryCombobox — searching", () => {
 
     // Typing invalidates the pick: the field no longer holds that group's id.
     await userEvent.type(field(), "x");
+    expect(screen.queryByText(DIRECTORY.GROUP_VALUE_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("a group pick's chip goes when the parent clears or replaces the value (#2597)", async () => {
+    searchMock.mockResolvedValue([PLATFORM]);
+    render(<ExternalHarness />);
+
+    await userEvent.type(field(), "plat");
+    await userEvent.click(await screen.findByRole("button", { name: row(PLATFORM) }));
+    expect(screen.getByText(DIRECTORY.GROUP_VALUE_NOTE)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "clear" }));
+    expect(screen.queryByText(DIRECTORY.GROUP_VALUE_NOTE)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "replace" }));
+    expect(field()).toHaveValue("claim-from-row");
     expect(screen.queryByText(DIRECTORY.GROUP_VALUE_NOTE)).not.toBeInTheDocument();
   });
 

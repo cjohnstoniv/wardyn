@@ -283,6 +283,41 @@ func TestScan_DoesNotFollowSymlinkedDir(t *testing.T) {
 	eq(t, "Languages", got.Languages, []string{"Go"})
 }
 
+// The symlink guard covers files as well as directories: a link named like a file the scan reads
+// (an unrecognized build descriptor, a dotenv template) is not opened, so the file it points at
+// outside the tree contributes nothing.
+func TestCollectFacts_DoesNotFollowSymlinkedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module x\n\ngo 1.22\n")
+	outside := t.TempDir()
+	writeFile(t, outside, "build", "from setuptools import setup\n")
+	writeFile(t, outside, "env", "OUTSIDE_ONLY_TOKEN=\n")
+	for name, target := range map[string]string{"setup.py": "build", ".env.example": "env"} {
+		if err := os.Symlink(filepath.Join(outside, target), filepath.Join(root, name)); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+	}
+	facts := CollectFacts(root)
+	if len(facts.UnrecognizedSamples) != 0 {
+		t.Errorf("a symlinked build descriptor was read: %+v", facts.UnrecognizedSamples)
+	}
+	if len(facts.SecretRequirements) != 0 {
+		t.Errorf("a symlinked dotenv template was read: %+v", facts.SecretRequirements)
+	}
+	// The control: the same files as regular files in the tree are read.
+	plain := t.TempDir()
+	writeFile(t, plain, "setup.py", "from setuptools import setup\n")
+	writeFile(t, plain, ".env.example", "OUTSIDE_ONLY_TOKEN=\n")
+	got := CollectFacts(plain)
+	if len(got.UnrecognizedSamples) == 0 || len(got.SecretRequirements) == 0 {
+		t.Errorf("regular files were not read (samples %d, requirements %d): the symlink assertions above prove nothing",
+			len(got.UnrecognizedSamples), len(got.SecretRequirements))
+	}
+}
+
 func TestScan_DepthCap(t *testing.T) {
 	root := t.TempDir()
 	deep := root

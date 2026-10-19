@@ -4,6 +4,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,11 +27,17 @@ import (
 func TestResidualDoc_MintRouteHonesty_GoDoc(t *testing.T) {
 	root := repoRootForTest(t)
 
-	src, err := os.ReadFile(filepath.Join(root, "cmd", "wardyn-git-helper", "main.go"))
+	// Only the package doc counts: the needles also occur in main.go's code (the mint route
+	// is dialled there), so a scan of the whole file would pass with the doc paragraph gone.
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "cmd", "wardyn-git-helper", "main.go"),
+		nil, parser.ParseComments|parser.PackageClauseOnly)
 	if err != nil {
-		t.Fatalf("read main.go: %v", err)
+		t.Fatalf("parse main.go: %v", err)
 	}
-	mustContain(t, "cmd/wardyn-git-helper/main.go", string(src),
+	if f.Doc == nil {
+		t.Fatal("cmd/wardyn-git-helper/main.go has no package doc")
+	}
+	mustContain(t, "cmd/wardyn-git-helper/main.go package doc", f.Doc.Text(),
 		"unauthenticated",
 		"/wardyn/v1/credentials/mint",
 		"not bound",

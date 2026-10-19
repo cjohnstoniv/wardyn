@@ -108,6 +108,14 @@ func TestPG_UpdateWorkspace_LeavesImageBuildAlone(t *testing.T) {
 		t.Fatalf("applied=%v err=%v", applied, err)
 	}
 	stale.Name += "-edited"
+	// Carry the current stamp so the update lands: the point here is that the stale
+	// struct's empty ImageBuild is not written, not the stale-snapshot refusal
+	// (TestPG_UpdateWorkspace_SnapshotOlderThanAClaimIsRefused).
+	cur, err := pg.GetWorkspace(ctx, ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.UpdatedAt = cur.UpdatedAt
 	if _, err := pg.UpdateWorkspace(ctx, ws.ID, stale, false); err != nil {
 		t.Fatal(err)
 	}

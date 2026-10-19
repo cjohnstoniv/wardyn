@@ -20,7 +20,8 @@ import (
 // parseWorkspaceSourceArg parses one --add TYPE:VALUE[@TARGET] argument into a
 // WorkspaceSource. TYPE is "dir" (local_dir), "repo", or "ephemeral"; VALUE is
 // the host path / repo slug (empty for ephemeral); an optional "@TARGET"
-// suffix sets the in-container mount/clone/scratch path. There is no
+// suffix sets the in-container mount/clone/scratch path. TARGET follows the LAST "@" and, like every
+// target, starts with "/", so an "@" inside VALUE (ssh://git@host/org/repo) stays part of it. There is no
 // per-source --ref/--writable in this grammar — onboard a single source
 // needing those with --kind/--source/--ref/--writable instead.
 func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
@@ -28,7 +29,10 @@ func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
 	if !ok {
 		return sdk.WorkspaceSource{}, fmt.Errorf("invalid --add %q: want TYPE:VALUE[@TARGET]", s)
 	}
-	value, target, _ := strings.Cut(rest, "@")
+	value, target := rest, ""
+	if i := strings.LastIndex(rest, "@"); i >= 0 && (i == len(rest)-1 || rest[i+1] == '/') {
+		value, target = rest[:i], rest[i+1:]
+	}
 	switch typ {
 	case "dir", "local_dir":
 		if value == "" {

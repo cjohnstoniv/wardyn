@@ -18,6 +18,7 @@ import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
+import { EGRESS } from "../../wardyn/copy";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
@@ -29,12 +30,12 @@ import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
-import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { resolvedModelProviders, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
+import { compositionSummary, resolvedModelProviders, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
 import { AllowedHostsCard } from "./allowed-hosts-card";
@@ -49,6 +50,9 @@ const POLL_MS = 2500;
 // Source column): this line always names the kind up front, matching the
 // approved mock verbatim for a repo (`repo · github.com/acme/api · main`).
 function detailSourceLine(ws: Workspace): string {
+  // A multi-source workspace leaves the derived kind/source mirror empty; the list's own summary names it.
+  const multi = compositionSummary(ws);
+  if (multi) return multi;
   if (!ws.source) return "empty — discarded after the run";
   const kindLabel = kindMetaOf(ws.kind)?.label ?? ws.kind;
   return ws.kind === "repo" && ws.ref ? `${kindLabel} · ${ws.source} · ${ws.ref}` : `${kindLabel} · ${ws.source}`;
@@ -236,15 +240,17 @@ export function WorkspaceDetailScreen() {
 
   // `hosts` is the subset the confirm dialog's checkboxes actually approved —
   // the server validates every one against the recording's promotable set
-  // (record.go's handlePromoteRecordEgress) and rejects anything else. No 404
+  // (record.go's handlePromoteRecordEgress): a model provider row's host is
+  // skipped (and named back in the toast), any other host outside it is rejected. No 404
   // fallback: the console ships baked into the server image, so there is no
   // version-skew window, and the retired fallback re-approved the FULL
   // observed union — every host the operator just unchecked included.
   const promoteEgress = async (taskKey: string, hosts: string[]) => {
     if (!ws) return;
     try {
-      setWs(await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts));
-      toast.success("Approved observed egress");
+      const { skipped_hosts: skipped, ...updated } = await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts);
+      setWs(updated as Workspace);
+      toast.success(skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress");
     } catch (e) {
       toast.error("Failed to promote egress", { description: getErrorMessage(e) });
     }
@@ -412,7 +418,6 @@ export function WorkspaceDetailScreen() {
             onClick={() => setConfirmDelete(true)}
           >
             <Trash2 className="size-4" />
-            {!canMutate && <OperatorOnlyHint />}
           </Button>
         </div>
 
@@ -422,6 +427,8 @@ export function WorkspaceDetailScreen() {
         {workspaceUnavailable && (
           <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
         )}
+        {/* The reason is visible text beside the control, never inside the 32px icon button (#2885). */}
+        {!canMutate && <p className="mt-2 text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
 
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-2/60 px-3 py-2.5">
           <div className="min-w-0 flex-1">
@@ -483,7 +490,7 @@ export function WorkspaceDetailScreen() {
         name={confirmDelete ? ws.name : null}
         allowed={canMutate}
         entity="workspace"
-        description="Existing runs keep their history and audit trail. New runs can no longer attach it; its requirements and recorded sessions are removed."
+        description={WORKSPACE_COPY_EXTRA.DELETE_BODY}
         onOpenChange={(o) => !o && setConfirmDelete(false)}
         onDelete={() => workspacesApi.deleteWorkspace(ws.id)}
         onDeleted={() => navigate("/workspaces")}

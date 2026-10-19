@@ -11,7 +11,8 @@
 | Tier | What runs on the laptop | Governed by | Named in the console and `wardyn setup status` as |
 | --- | --- | --- | --- |
 | Local only | A full `wardynd` with no org | The person at the keyboard | Local only — not governed by an organisation |
-| Client-mode runner | `wardyn-runnerd`, no control plane; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Runner for an organisation |
+| Client-mode runner | `wardyn-runnerd`, no control plane and no console of its own; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Nothing: the organisation's console shows "Organisation" |
+| Enrolled daemon (deprecated) | A full `wardynd` enrolled with `WARDYN_ORG_URL` | The org | Enrolled with an organisation (legacy) |
 | Org | The control plane itself, on a cluster or compose host | The org | Organisation |
 
 - Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
@@ -19,6 +20,8 @@
 ## Topology
 
 ![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
+
+The figure and the diagram below show the deprecated enrolled-daemon shape, where the laptop runs its own `wardynd` and takes policy from MDM. A client-mode runner runs no control plane: the organisation schedules its runs and writes its audit ([guide](operations/hybrid-laptops.md)).
 
 ```
        MDM (Jamf / Intune / …)
@@ -154,7 +157,7 @@ Three more the tier inherits rather than introduces:
 - `wardyn run ssh` works on a managed laptop as of 0.7.
 - The **browser** half of UI-in-container does not, and the envelope ships `WARDYN_UI_SANDBOX_LISTEN` commented out rather than pretending otherwise.
 - The reason is wiring, not images.
-- `agent-vscode` and `agent-novnc` publish starting with the next tagged release ([`release.yml`](../.github/workflows/release.yml)'s `images-ui-sandbox` job, #141), both `FROM` `agent-base`, never the unpublished `agent-claude-code`.
+- `agent-vscode` and `agent-novnc` are published with every release since 0.8.0 ([`release.yml`](../.github/workflows/release.yml)'s `images-ui-sandbox` job, #141), both `FROM` `agent-base`, never `agent-claude-code`.
 - But the desktop envelope's `WARDYN_AGENT_IMAGES` does not register either by default — they are opt-in, not part of the installer's default catalog —
   - and a managed laptop has no repo and no build path: the launcher runs `--no-build` specifically so it "refuses to fall back to building from source on a laptop with no repo checkout".
 - So enabling the listener here would still publish a port with nothing pinned to serve it, until an operator adds `agent-vscode`/`agent-novnc` to `WARDYN_AGENT_IMAGES` themselves.
@@ -218,7 +221,7 @@ Three more the tier inherits rather than introduces:
 | `WARDYN_USER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
 
 > [!WARNING]
-> Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** — boot warns and starts anyway (a malformed root, by contrast, refuses boot), and a root that wide leaves the credential-dotfile deny-list as the only thing between a member and `~/.ssh`.
+> Use a dedicated projects directory. **Never `$HOME`, never `/`**: a root that wide leaves the credential-dotfile deny-list alone between a member and `~/.ssh`. Boot warns on `/` and the daemon's `$HOME`, not a person's, and starts anyway (a malformed root refuses boot).
 
 - [ENV.md](ENV.md) carries the full semantics.
 
@@ -286,10 +289,13 @@ Three more the tier inherits rather than introduces:
 | File | Owner | Mode | Contents | Why |
 |---|---|---|---|---|
 | `/etc/wardyn/wardyn.env` | **MDM** | `0644` | the non-secret envelope — `WARDYN_LOCAL_MODE`, `WARDYN_LOCAL_OPERATOR`, `WARDYN_DEFAULT_POLICY`, `WARDYN_AGENT_IMAGES`, `WARDYN_LISTEN`, `WARDYN_RUNNER`, `WARDYN_WORKSPACES_ROOT`, `WARDYN_TRUSTED_CA_FILE` | fleet-uniform, non-sensitive; readable is fine and makes support tractable — a CA cert is public, unlike the age key below |
-| `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
+| `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables, in shell syntax (the launcher sources it, so single-quote a JSON or spaced value) — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
 | `/etc/wardyn/policy.json` | **MDM** | `0644` | the default `RunPolicySpec` — confinement class, allowed egress, eligible grant kinds ([POLICIES.md](POLICIES.md)) | this file *is* the managed ceiling; it is the reason the tier is called managed |
 | `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts and provider policy; see [below](#etcwardynsite-configjson). | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
+
+- The launcher runs as root and refuses to start while `wardyn.env`, `secret.env`, `policy.json` or `site-config.json` is not owned by root or is group- or world-writable.
+- It names the file and its mode; ship the file root-owned at the mode above and re-run.
 
 ### `/etc/wardyn/site-config.json`
 
@@ -378,6 +384,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 - Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root).
 - Registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
 - `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both.
+  - If neither the launcher nor `docker compose -p wardyn-desktop down` can stop the stack, `--uninstall` exits 1 and names the command to run once Docker answers.
 
 ### `com.wardyn.daemon.plist`
 
@@ -611,13 +618,17 @@ sudo DOCKER_HOST=unix:///run/user/1000/docker.sock ./install.sh
 - **Upgrade is an MDM rewrite of two lines.**
   - `wardyn.env` pins `WARDYN_WARDYND_IMAGE` and `WARDYN_PROXY_IMAGE` by digest; push a new envelope with new digests and the next timer tick brings the stack up on them.
   - No tag moves under the fleet, and the launcher runs `--pull missing`, so a laptop that is offline keeps running what it already has instead of failing to start.
-- **Rollback is the previous digest** — push the old envelope back.
+- **Rollback is the previous digest plus a restore of the pre-upgrade database dump.**
+  - Push the old envelope back with the old digests, then restore the `pg_dump` you took before the upgrade.
 
 > [!WARNING]
-> **Rollback does not roll the database back.**
-> There are **zero** down migrations (`ls internal/db/migrations | grep -c down` → 0) and no version guard, so an older `wardynd` starts against a schema a newer one has already migrated **forward**, unguarded.
-> It generally serves, because migrations have been additive — but that is a property of the migrations so far, not a promise.
-> Treat a rollback across a migration boundary as untested, and capture `wardyn support-bundle` before you do it.
+> **Rollback does not roll the database back, and an older `wardynd` refuses a newer database.**
+> There are **zero** down migrations.
+> The older `wardynd` exits at boot with `this database records N migration(s) this wardynd does not ship`.
+> The 300s converge timer and `restart: unless-stopped` turn that into a crash loop on every laptop.
+>
+> Take a `pg_dump` before you push a digest that crosses a migration (`wardyn support-bundle` is not a dump), and restore it on rollback.
+> `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` starts the older build anyway; it is break-glass and one-way, so read [the upgrade section](OPERATIONS.md#upgrades) first.
 
 **Stopping.**
 
@@ -672,8 +683,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.9.3|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.3|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.9.4|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.4|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

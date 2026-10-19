@@ -116,6 +116,13 @@ spec:
 ```
 
 - `WARDYN_PG_DSN` is the live database: the target checks probe it, and the two audit rows are written to it. Both `secretKeyRef` entries name the DSN Secret, under `postgres.dsn.key` and `age-key`; an external DSN Secret holds `age-key` only with `secrets.ageKeyFromSecret`, so use the `secrets.ageKeySecretRef` Secret for `WARDYN_AGE_KEY` if you set one.
+- `envFrom` takes the keys of the Secret `wardyn-keys` as they are named, so that Secret must use `WARDYN_*` key names. The chart does not create it, and it sets the key settings as `env` on the live `wardynd` container instead.
+- Copy from that container's `env` into the pod's `env:` block each key setting the deployment uses:
+  - `WARDYN_KEK` and `WARDYN_PRINCIPAL_KEYS`;
+  - for Vault Transit, `WARDYN_VAULT_TRANSIT_MOUNT` and `WARDYN_VAULT_TRANSIT_KEY`;
+  - for Azure Key Vault, the `WARDYN_AZURE_*` settings, including `WARDYN_AZURE_AUTH` and the client ids;
+  - for AWS KMS, `WARDYN_AWS_KMS_KEY`.
+- A pod without them cannot unwrap the restored rows, so the rehearsal fails and the restore stays unproven.
 - Delete the pod and the scratch database when the report is saved.
 
 ## What a pass proves
