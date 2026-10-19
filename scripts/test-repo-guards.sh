@@ -78,6 +78,8 @@
 #      MIT/BSD/Apache terms need the notice texts to travel with them.
 #  21. no workflow step pipes a download into a shell, and every syft install in
 #      release.yml checks a pinned sha256 — those jobs hold the signing identity.
+#  22. .dockerignore excludes every secret-bearing local file .gitignore names, so
+#      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -742,6 +744,19 @@ elif [ "$syft_versions" = 0 ] || [ "$syft_sums" != "$syft_versions" ] || [ "$syf
     bad "$RELEASE_YML: ${syft_versions} SYFT_VERSION pin(s), ${syft_sums} SYFT_SHA256 pin(s), ${syft_checks} sha256sum check(s) — every syft install must check its pinned sha256"
 else
     ok "no workflow pipes a download into a shell; all ${syft_versions} syft installs check a pinned sha256"
+fi
+
+# ── 22. secret-bearing local files stay out of the build context ────────────
+DOCKERIGNORE="${DOCKERIGNORE:-.dockerignore}"
+missing=""
+for want in .env '**/.env' .npmrc '**/.npmrc' local/ '**/.env.*.local' \
+    examples/composer-configs/anthropic-api.json examples/composer-configs/openai-api.json; do
+    grep -qxF -- "$want" "$DOCKERIGNORE" || missing="$missing $want"
+done
+if [ -n "$missing" ]; then
+    bad "$DOCKERIGNORE does not exclude:${missing} — a repo-root COPY . . would layer it into a builder stage"
+else
+    ok ".dockerignore excludes every secret-bearing local file .gitignore names"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
