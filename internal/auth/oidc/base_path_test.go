@@ -225,5 +225,13 @@ func TestBasePathRefusedSignInReturnsUnderTheBase(t *testing.T) {
 	if loc := cb.Header().Get("Location"); cb.Code != http.StatusFound || !strings.HasPrefix(loc, "/wardyn/?auth_error=") {
 		t.Fatalf("refused callback = %d Location %q, want 302 to /wardyn/?auth_error=…", cb.Code, loc)
 	}
-	assertCookiePaths(t, "refused callback", cb.Result().Cookies(), "/wardyn")
+	// The session is also cleared at "/", where a pre-base-path cookie lives; every other cookie
+	// stays under the base.
+	var underBase []*http.Cookie
+	for _, c := range cb.Result().Cookies() {
+		if c.Name != "wardyn_session" || c.Path != "/" || c.MaxAge >= 0 {
+			underBase = append(underBase, c)
+		}
+	}
+	assertCookiePaths(t, "refused callback", underBase, "/wardyn")
 }
