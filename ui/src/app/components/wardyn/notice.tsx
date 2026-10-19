@@ -25,23 +25,28 @@ export function Notice({
   title,
   live,
   actions,
+  className,
   children,
 }: {
   tone: Tone;
   title?: string;
   live?: boolean;
-  /** Controls for the reader (a command, a button, a link), laid out under the words. */
+  /** Controls for the reader (a command, a button, a link), beside the words or under them. */
   actions?: React.ReactNode;
+  className?: string;
   children: React.ReactNode;
 }) {
   const { box, glyph, Icon } = TONES[tone];
   return (
-    <div role={live ? "status" : undefined} className={cn("flex gap-2.5 rounded-lg border p-3 text-sm", box)}>
+    <div role={live ? "status" : undefined} className={cn("flex gap-2.5 rounded-lg border p-3 text-sm", box, className)}>
       <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", glyph)} />
-      <div className="min-w-0 space-y-0.5">
-        {title && <p className="font-medium text-foreground">{title}</p>}
-        <div className="text-foreground">{children}</div>
-        {actions && <div className="flex flex-wrap items-center gap-2 pt-1.5">{actions}</div>}
+      {/* Actions sit beside the words when there is room, and wrap under them when there is not. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1.5">
+        <div className="min-w-0 flex-1 basis-80 space-y-0.5">
+          {title && <p className="font-medium text-foreground">{title}</p>}
+          <div className="text-foreground">{children}</div>
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
     </div>
   );

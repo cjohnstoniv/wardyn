@@ -23,9 +23,9 @@ import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures"
 // beneath 744px, so Host opening alone is what tips it over.
 const VIEWPORT = { width: 1280, height: 744 };
 // Admin Settings draws three group headings (This host, Connections, People and access, #3048), which
-// take roughly 70px that the original nine bare rows did not; the promise is unchanged, the budget is
-// the page's own measured height plus that.
-const ADMIN_VIEWPORT = { width: 1280, height: 880 };
+// take roughly 70px that the original nine bare rows did not, and the e2e host's no-barrier notice is a
+// few px taller now it carries actions; the promise is unchanged, the budget is the measured height plus that.
+const ADMIN_VIEWPORT = { width: 1280, height: 900 };
 
 // runs.spec.ts's own "the page itself does not scroll" check notes the same
 // class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,

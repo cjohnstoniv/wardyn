@@ -16,7 +16,7 @@ test("Settings groups its cards, and Workspace providers and User drives are lin
     [SETTINGS_GROUPS.CONNECTIONS, ["model-providers-list", "providers-card", "user-drives-card"]],
     [SETTINGS_GROUPS.PEOPLE, ["approval-notify-card", "scim-card"]],
   ] as const) {
-    const section = page.getByRole("region", { name: group });
+    const section = page.getByRole("group", { name: group });
     await expect(section).toBeVisible();
     for (const id of testIds) await expect(section.getByTestId(id)).toBeVisible();
   }

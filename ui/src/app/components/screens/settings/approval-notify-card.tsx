@@ -16,7 +16,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Mono } from "../../wardyn/code-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { APPROVAL_NOTIFY as COPY } from "../../wardyn/copy/approval-notify";
-import { CARD_STATUS } from "../../wardyn/copy/card-status";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
 export function ApprovalNotifyCard() {
@@ -53,7 +52,6 @@ export function ApprovalNotifyCard() {
     <CollapsibleCard
       title={COPY.TITLE}
       summary={summary}
-      status={status === "ready" && channels.length === 0 ? { tone: "neutral", label: CARD_STATUS.NOT_SET_UP } : undefined}
       testId="approval-notify-card"
     >
       {status === "loading" ? (

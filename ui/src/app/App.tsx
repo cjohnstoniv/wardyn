@@ -536,9 +536,10 @@ export default function App() {
   // RETURNED, like refreshHealth below: usePoll's in-flight guard is
   // promise-based, so a void return would let a slow /setup/status — the
   // expensive endpoint — stack a second read on top of the first every tick.
-  const refreshSetupStatus = React.useCallback(() => {
+  const refreshSetupStatus = React.useCallback((forceSweep?: boolean) => {
     return setupApi
-      .getSetupStatus()
+      // `=== true`: usePoll and the model-access door call this with no or foreign arguments.
+      .getSetupStatus(forceSweep === true ? { recheck: true } : undefined)
       .then((status) => {
         // authRef, not a closed-over `auth` (the same ref H1's 401 handler
         // reads): /setup/status is the expensive endpoint and can still be in
@@ -678,7 +679,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
-              onRecheck={refreshSetupStatus}
+              onRecheck={() => void refreshSetupStatus(true)}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session

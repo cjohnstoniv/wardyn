@@ -20,6 +20,7 @@ export function NoBarrierNotice({ canFix, onRecheck }: { canFix: boolean; onRech
     <Notice
       tone="danger"
       live
+      className="rounded-none border-0 bg-transparent p-0"
       title={NO_BARRIER.BANNER_TITLE}
       actions={
         canFix && (

@@ -258,7 +258,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
   // SERVER says otherwise: the sandbox stays parked on it for up to
   // WARDYN_APPROVAL_EXPIRY_AFTER (24h default), so the page must never call
   // it dead sooner. 23 hours — just inside that ceiling — still reads
-  // "Needs your approval" with a Review link and the held subline.
+  // "1 decision needs you" with a Review link and the held subline.
   test("a tool_call PENDING for 23 hours still offers Review and states 'sandbox held'", async ({ page }) => {
     const solo = await createNamedRun(page, "e2e long-held solo", "long-held solo run");
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
@@ -273,7 +273,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held solo" });
       await expect(row).toBeVisible();
       await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
-      await expect(row.getByText("Needs your approval")).toBeVisible();
+      await expect(row.getByText("1 decision needs you")).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);

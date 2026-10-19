@@ -198,7 +198,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   };
 
   return (
-    <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
+    <section className="mt-6 overflow-clip rounded-xl border border-border bg-card">
       <div className="px-6 pt-5">
         <h2 className="text-sm font-medium text-foreground">{DELIVERY.TAB}</h2>
         <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DELIVERY.LEAD}</p>

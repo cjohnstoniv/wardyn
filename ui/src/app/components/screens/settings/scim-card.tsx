@@ -17,7 +17,6 @@ import { scim as scimApi } from "../../../lib/api/scim";
 import { appURL } from "../../../lib/base-path";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { SCIM, SCIM_LIST_CAP, SCIM_RUNBOOK_URL } from "../../../lib/scim-copy";
-import { CARD_STATUS } from "../../wardyn/copy/card-status";
 import type { SCIMStatus } from "../../../lib/types";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
@@ -190,7 +189,6 @@ export function ScimCard() {
     <CollapsibleCard
       title={SCIM.TITLE}
       summary={summary}
-      status={state === "ready" && status && !status.configured ? { tone: "neutral", label: CARD_STATUS.NOT_SET_UP } : undefined}
       testId="scim-card"
     >
       <p className="text-body leading-snug text-muted-foreground">{SCIM.LEAD}</p>

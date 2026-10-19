@@ -588,7 +588,7 @@ export function AppShell({
                 "unknown", not "no barrier", and the banner above already
                 says so. */}
             {!unreachable && noBarrier && (
-              <div className="relative z-50 shrink-0 border-b border-border px-4 py-2">
+              <div className="relative z-50 shrink-0 border-b border-border bg-danger-subtle px-4 py-2">
                 <NoBarrierNotice canFix={canReachEnvironmentStep} onRecheck={onRecheck} />
               </div>
             )}

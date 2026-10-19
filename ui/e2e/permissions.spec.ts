@@ -60,7 +60,7 @@ test.describe("permissions — the admin surface, end to end", () => {
     // also inside the "Enforcement Egress hosts" switch's own label.
     await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(WHO);
     await page.getByRole("textbox", { name: KIND.egress_host.valueLabel, exact: true }).fill(HOST);
-    await page.getByRole("button", { name: PERM.ADD_CTA }).click();
+    await page.getByRole("button", { name: PERM.ADD_CTA, exact: true }).click();
 
     // exact throughout: role names and text are SUBSTRING matches by default,
     // and the row's own Remove button carries the host in its label too.
@@ -168,7 +168,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
     await page.getByRole("combobox", { name: PERM.FIELD_CAPABILITY }).click();
     await page.getByRole("option", { name: KIND.workspace_provider.label }).click();
     await page.getByRole("textbox", { name: KIND.workspace_provider.valueLabel, exact: true }).fill(PROVIDER_ID);
-    await page.getByRole("button", { name: PERM.ADD_CTA }).click();
+    await page.getByRole("button", { name: PERM.ADD_CTA, exact: true }).click();
 
     const table = page.getByRole("table");
     await expect(table.getByRole("cell", { name: PROVIDER_ID, exact: true })).toBeVisible();
@@ -356,7 +356,7 @@ test.describe("Permissions — a security admin actually uses the write surface,
 
     await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(SEC_WHO);
     await page.getByRole("textbox", { name: KIND.egress_host.valueLabel, exact: true }).fill(SEC_HOST);
-    const addBtn = page.getByRole("button", { name: PERM.ADD_CTA });
+    const addBtn = page.getByRole("button", { name: PERM.ADD_CTA, exact: true });
     await expect(addBtn).toBeEnabled();
     await addBtn.click();
 

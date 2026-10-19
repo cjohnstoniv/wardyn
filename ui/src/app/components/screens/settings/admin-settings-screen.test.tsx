@@ -158,7 +158,7 @@ describe("AdminSettingsScreen", () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     const labels = SETTINGS_GROUPS;
-    const groupOf = (testId: string) => screen.getByTestId(testId).closest("section[aria-label]")?.getAttribute("aria-label");
+    const groupOf = (testId: string) => screen.getByTestId(testId).closest("[role=group]")?.getAttribute("aria-label");
     expect(groupOf("host-card")).toBe(labels.HOST);
     expect(groupOf("model-providers-list")).toBe(labels.CONNECTIONS);
     expect(groupOf("user-drives-card")).toBe(labels.CONNECTIONS);

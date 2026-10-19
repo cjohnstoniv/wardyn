@@ -105,10 +105,10 @@ function FactTile({
 // A small heading over the cards that belong together, so the page reads as three places, not nine rows.
 function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section aria-label={title} className="space-y-1">
+    <div role="group" aria-label={title} className="space-y-1">
       <SectionLabel>{title}</SectionLabel>
       {children}
-    </section>
+    </div>
   );
 }
 

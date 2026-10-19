@@ -38,8 +38,9 @@ test.describe("Run page — a QUEUED run", () => {
     await page.getByText("e2e fixture 0").click();
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
 
-    await expect(page.getByRole("img", { name: "Queued" })).toBeVisible();
-    await expect(page.getByRole("img", { name: "Stopped" })).toHaveCount(0);
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Queued", { exact: true })).toBeVisible();
+    await expect(header.getByText("Stopped", { exact: true })).toHaveCount(0);
     const hero = page.getByTestId("run-queued-wait");
     await expect(hero.getByText(RUN_WAIT.RECORDING_STORE_OFF())).toBeVisible();
     await expect(hero.getByRole("heading", { name: "Queued" })).toBeVisible();

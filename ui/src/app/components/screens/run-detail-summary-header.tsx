@@ -252,7 +252,7 @@ export function SummaryHeader({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
         <RunStateBadge state={run.state} />
         {sentence && (
-          <span data-testid="run-status-sentence" className="min-w-0 text-foreground">
+          <span data-testid="run-status-sentence" className="min-w-0 text-foreground [overflow-wrap:anywhere]">
             {sentence}
           </span>
         )}
@@ -311,7 +311,7 @@ export function SummaryHeader({
             {run.state === "RUNNING" && canAttach ? "Interactive — attachable" : "Interactive"}
           </Chip>
         )}
-        <span className="text-muted-foreground" aria-label={terminal ? "Total run time" : "Running for"}>
+        <span className="text-muted-foreground" aria-label={`${terminal ? "Total run time" : "Running for"} ${elapsed}`}>
           {terminal ? RUN_HEADER.RAN(elapsed, shortTime(run.updated_at)) : elapsed}
         </span>
       </div>
