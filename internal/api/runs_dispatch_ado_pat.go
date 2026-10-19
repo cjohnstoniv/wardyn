@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -189,7 +190,7 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	// whose renderings cannot be recorded is never handed out: it is revoked here.
 	if err := s.maskMintedValue(ctx, runID, []byte(pat.Token),
 		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+pat.Token))), []byte(adoRunPATValue(pat.Token))); err != nil {
-		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
+		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, "masking_unrecorded")
 		return adoPAT{}, fmt.Errorf("record the run token's masking renderings: %w", err)
 	}
 	if pat.ValidTo.IsZero() {
@@ -205,7 +206,7 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	if err != nil {
 		// An unrecorded token is never handed out: nothing could revoke it
 		// after a crash. Revoke it now, best-effort.
-		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
+		s.revokeNeverRecordedPAT(ctx, runID, client, sn.Organisation, access.AccessToken, pat.AuthorizationID, "row_unrecorded")
 		return adoPAT{}, fmt.Errorf("record the run's personal access token: %w", err)
 	}
 	why, ended, err := s.adoSignInEndedSince(ctx, sn.OwnerSubject, ends)
@@ -426,6 +427,20 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		}
 	}
 	return pat, nil
+}
+
+// revokeNeverRecordedPAT is the best-effort revoke of a token that was created but could not be
+// recorded, so no row exists for the sweep to find. A failure is logged and audited with the
+// authorization id: otherwise a live token nobody recorded is untraceable (#2802).
+func (s *Server) revokeNeverRecordedPAT(ctx context.Context, runID uuid.UUID, client adoPATClient, org, accessToken, authorizationID, reason string) {
+	err := client.Revoke(ctx, org, accessToken, authorizationID)
+	if err == nil {
+		return
+	}
+	slog.ErrorContext(ctx, "wardynd: revoking an unrecorded Azure DevOps run token failed; it lives to its valid_to",
+		slog.String("run_id", runID.String()), slog.String("authorization_id", authorizationID), slog.String("reason", reason), slog.Any("err", err))
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", adoPATAuditRevokeFailed, authorizationID, "failure",
+		mustJSON(map[string]any{"reason": reason, "authorization_id": authorizationID, "organisation": org, "error": err.Error(), "abandoned": true})))
 }
 
 // revokeUnrecordedRunPAT revokes a token mintRunPAT created whose value could not be recorded, so
