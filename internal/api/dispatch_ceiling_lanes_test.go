@@ -34,6 +34,10 @@ func (s *scanLaneStore) ClearSourceActiveRun(context.Context, uuid.UUID, uuid.UU
 	s.cleared++
 	return nil
 }
+func (s *scanLaneStore) SetSourceScanResult(_ context.Context, _ uuid.UUID, _ []byte, st types.WorkspaceStatus, _ uuid.UUID, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	s.cleared++ // the fenced write is how a failed launch releases the claim
+	return types.Source{Status: st}, nil
+}
 func (s *scanLaneStore) SetSourceScanResultUnfenced(_ context.Context, _ uuid.UUID, _ []byte, st types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
 	return types.Source{Status: st}, nil
 }

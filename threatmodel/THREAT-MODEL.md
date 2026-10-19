@@ -811,7 +811,7 @@ is not the deployment described above.**
   - All suffix parts share the run lock.
   - New opens and stat calls check the fence even if a raw file or row was recreated; a reader already opened before the erase may retain bytes.
   - Filesystem markers are synced before success and never retention-swept, nor are the persistent per-run `.lock` files.
-  - Local Unix advisory-lock support is required, and a failed directory sync refuses the operation. The one exception is a filesystem that cannot sync a directory at all (EINVAL or ENOTSUP: FUSE, 9p, older CIFS): there the erasure marker is written but not made durable against a host crash, the same trade a save takes.
+  - Local Unix advisory-lock support is required, and a failed directory sync refuses the operation, except where the filesystem cannot sync one (FUSE, 9p).
   - This covers cooperative Store/recorder writers on metadata whose integrity is protected.
   - Postgres tombstones likewise survive retention.
   - A shared-volume actor able to remove metadata can defeat that filesystem fence: this fallback is not a boundary against a writer controlling the recording root.
@@ -2191,7 +2191,7 @@ hiding them would repeat the failure mode we are designed to avoid.
         - Residual: a store with no generation falls back to in-process locks (`write_fence` `locks_only`), and a pre-upgrade daemon in a mixed fleet is unfenced.
       - **Outside every erasure scope (0.9):** the `created_by` and `updated_by` columns of organization runner pools and remote-hosted runners keep their name.
         - So does an Azure DevOps token row of their runs that is still live at the erasure: the sweep needs it to revoke the token. An erasure run again after the token is revoked or expired removes it.
-        - A person's saved preferences (`principal_prefs`) and cockpit layouts (`ui_run_layouts`) are not outside it: the `runner_pools` scope deletes them with the person's pools.
+        - The `runner_pools` scope deletes `principal_prefs` and `ui_run_layouts`.
       - **Who a name is (0.9):** every route that erases, deletes or assigns by name resolves the name once, through `PrincipalsNamed`.
         - The order is: an exact principal (sign-in, admin-created person, API-token owner, workspace owner); then `entra:<tenant>:<object>` from recorded ids; then the principal case-folded; then, only for a name with an `@`, every recorded email together.
         - Two principals in a tier, or an unreadable directory, refuses; nothing falls through to a guess.

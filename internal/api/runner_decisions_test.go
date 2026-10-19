@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -20,6 +21,11 @@ import (
 type spoolIngestStub struct {
 	store.Store
 	first bool
+}
+
+// GetSiteConfig fails the read: countReauthTimeout then counts the hold, as it does with no site config.
+func (spoolIngestStub) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("no site config in this stub")
 }
 
 func (s spoolIngestStub) IngestRunnerDecision(context.Context, uuid.UUID, runnerspool.Record, func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {

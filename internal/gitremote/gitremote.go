@@ -74,7 +74,7 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 		}
 		// Never descend a repo's .git internals: it is stat'd directly below, so
 		// re-walking it would make the scan O(git-objects) instead of O(repo-roots).
-		// The root itself is never skipped by name: a workspace folder called "vendor" is the workspace.
+		// The root itself is never skipped by name: a workspace folder called "node_modules" is the workspace.
 		if _, skip := skipDirNames[d.Name()]; (skip && p != root) || d.Name() == ".git" {
 			return fs.SkipDir
 		}

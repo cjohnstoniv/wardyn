@@ -205,9 +205,9 @@ func TestDetect_SkipsDependencyTrees(t *testing.T) {
 	}
 }
 
-// A workspace whose own folder carries a skipped name (a root called "vendor") is still scanned.
+// A workspace whose own folder carries a skipped name (a root called "node_modules") is still scanned.
 func TestDetect_RootNamedLikeADependencyTreeIsScanned(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "vendor")
+	root := filepath.Join(t.TempDir(), "node_modules")
 	writeRepo(t, root, "https://github.com/acme/app.git")
 	gh, _ := DetectGitHubRepos(root)
 	if want := []string{"acme/app"}; !reflect.DeepEqual(gh, want) {

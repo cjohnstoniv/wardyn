@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -546,9 +547,12 @@ func TestDelegation_ScopeIsTheRegisteredGroup(t *testing.T) {
 func TestDelegation_OutsideScopeRowFlagsATruncatedGroupSnapshot(t *testing.T) {
 	e := newDelegationPG(t)
 	portal, cred := e.registerPortal(t, delegGroup)
-	subject := e.subjectToken(t, delegPerson, delegPersonEmail, nil, func(c map[string]any) {
-		c["_claim_names"] = map[string]any{"groups": "src1"}
-	})
+	// More group names than the session snapshot holds, all sorting before the portal's group.
+	many := make([]string, 0, 400)
+	for i := range 400 {
+		many = append(many, fmt.Sprintf("a-filler-group-%04d", i))
+	}
+	subject := e.subjectToken(t, delegPerson, delegPersonEmail, many, nil)
 	if w := e.exchange(t, portal, cred, subject); w.Code != http.StatusForbidden {
 		t.Fatalf("%d %s, want 403", w.Code, w.Body.String())
 	}
