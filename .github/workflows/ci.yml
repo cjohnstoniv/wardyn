@@ -625,6 +625,11 @@ jobs:
           restore-keys: |
             go-ui-e2e-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-ui-e2e-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -1095,6 +1100,11 @@ jobs:
           restore-keys: |
             go-conformance-k8s-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-conformance-k8s-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
@@ -1321,6 +1331,11 @@ jobs:
           restore-keys: |
             go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-conformance-docker-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - name: Docker smoke check
         run: docker run --rm hello-world
       # T-33: the Vault Transit KEK and the Vault KV store against the official
@@ -1431,6 +1446,11 @@ jobs:
           restore-keys: |
             go-envbuild-integration-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-envbuild-integration-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Run envbuild integration test (docker)
@@ -1555,6 +1575,11 @@ jobs:
           restore-keys: |
             go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-test-pg-${{ matrix.shard }}-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
