@@ -82,6 +82,8 @@
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 #  23. an agent image that sets npm's proxy keys for an install deletes them again
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
+#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
+#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -107,6 +109,8 @@ ok()  { echo "ok: $*"; }
 # first time it actually meets a hosted runner's docker/compose. Add it back to
 # notify-new-lanes' needs: once it has gone green on a real nightly (same
 # posture PR #1245 used for daemon-proxy-secret-kind).
+# kind-acceptance-walks (#3110): kind-components-walk and kind-run-output-walk had no caller
+# until this job; none of its three legs has run on a hosted runner. Same promotion rule.
 # kind-survival-walk (#700), hybrid-walk (#701) and kind-upgrade-walk (#690)
 # are exempt for the SAME reason PR #1245 gave daemon-proxy-secret-kind: none
 # of the three has ever run on a real nightly yet, so watching them from day
@@ -128,7 +132,7 @@ ok()  { echo "ok: $*"; }
 # release is the fix for a red here. It is NOT in release.yml's watched= (so not in
 # notify-new-lanes.needs, which guard 13 pins to it); it opens its own issue.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent kind-survival-walk hybrid-walk kind-upgrade-walk k6-kind-conformance kind-acceptance-walks ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -694,6 +698,11 @@ else
     done
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
+    # ci.yml's train-suites job calls this workflow with scope=candidate (workflow_call), so the called
+    # input must exist, be a string (no choice type there) and default to full like the dispatch one.
+    [ "$(yq -r '.on.workflow_call.inputs.scope.default' "$NIGHTLY")" = full ] \
+        && [ "$(yq -r '.on.workflow_call.inputs.scope.type' "$NIGHTLY")" = string ] \
+        || { bad "$NIGHTLY: workflow_call input 'scope' must exist, be a string and default to full"; scope_fail=1; }
     if [ "$scope_fail" = 0 ]; then ok "nightly scope=candidate skips exactly the unwatched lanes"; fi
 fi
 
@@ -778,6 +787,37 @@ if [ -n "$leaky" ]; then
     bad "an agent image keeps npm's build proxy in its layer:${leaky} — delete proxy https-proxy in the RUN that sets them"
 else
     ok "every agent image that sets npm's proxy keys deletes them in the same RUN"
+fi
+
+# ── 24. every walk script has a caller ──────────────────────────────────────
+# Two kind acceptance walks sat unreferenced until #3110, so the properties they
+# assert had no gate. A walk is named by the Makefile or a workflow, or here with
+# the reason it cannot run on a hosted runner.
+HAND_RUN_WALKS="runner-laptop-walk.sh survival-walk.sh"
+# runner-laptop-walk.sh: needs Docker Desktop and a second engine for the org.
+# survival-walk.sh: restarts the host's Docker daemon, so it needs a spare host
+# (its kind leg, kind-survival-walk.sh, is the nightly's).
+# A line that is only a comment names a script without running it. (No `grep -q` on the pipe: under
+# pipefail it can SIGPIPE git grep and turn a match into a failure.)
+walk_called() {
+    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | grep -vE '^[[:space:]]*#' || true)" ]
+}
+orphan_walks=""
+for f in scripts/*-walk.sh; do
+    b="$(basename "$f")"
+    case " $HAND_RUN_WALKS " in *" $b "*) continue ;; esac
+    walk_called "$b" || orphan_walks="$orphan_walks $b"
+done
+for b in $HAND_RUN_WALKS; do
+    [ -f "scripts/$b" ] || bad "HAND_RUN_WALKS names '$b', which is not a script any more — drop it"
+    if walk_called "$b"; then
+        bad "HAND_RUN_WALKS names '$b', which the Makefile or a workflow now runs — drop it from the list"
+    fi
+done
+if [ -n "$orphan_walks" ]; then
+    bad "walk scripts that nothing runs:${orphan_walks} — wire each into the Makefile or a workflow (nightly.yml), or add it to HAND_RUN_WALKS with the reason"
+else
+    ok "every scripts/*-walk.sh has a caller or a stated reason it has none"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

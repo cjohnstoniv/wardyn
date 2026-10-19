@@ -280,7 +280,8 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
 - **[`scripts/k6-kind-conformance.sh`](../scripts/k6-kind-conformance.sh)** — the Kubernetes runner's kind conformance:
   - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
-  - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job; self-skips unless `WARDYN_TEST_K8S=1`.
+  - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job, one leg per kubelet and suite (`K6_SUITES`); self-skips unless `WARDYN_TEST_K8S=1`.
+- **[`scripts/kind-components-walk.sh`](../scripts/kind-components-walk.sh)** and **[`scripts/kind-run-output-walk.sh`](../scripts/kind-run-output-walk.sh)** each make and delete their own quickstart cluster, and run in `nightly.yml`'s `kind-acceptance-walks` job; self-skip unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
   - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
   - the released `wardyn-runnerd` serves a candidate runner's state directory and completes a run, then registers with this tree's organisation and completes one.
@@ -413,10 +414,11 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 ### Nightly scope and release runs
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
-- Nine jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
+- Ten jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
 - That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
+- `ci.yml` can call the nightly (`workflow_call`, inputs `scope` and `publish`). A called run's group ends in the caller's run id, so it never cancels a dispatched one, unless the caller itself runs on a schedule or dispatch. It restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only a dispatch with `publish` on (the default) stages and attests images.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
