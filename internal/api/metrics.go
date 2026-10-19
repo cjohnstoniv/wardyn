@@ -457,7 +457,7 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
-	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and unauthenticated ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
+	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) was dropped by a rate limiter: the shared one (about 1 row/sec) or, for refusals naming a registered SSH key, that key's own bucket. This series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
 		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
