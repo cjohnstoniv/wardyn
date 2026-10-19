@@ -3918,6 +3918,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
 - `0189` (`0189_run_containment_pending`) replaces the `binding` check on `runner_pending_actions` (`0139`'s table) so a `stop_proxy` may carry a node record in place of an outage loss, beside its new `run_containment_pending` and `run_node_records` tables.
 - `0191` (`0191_secrets_value_rev`) adds `secrets.value_rev` (`0001`'s table), an identity column every write of a value moves; adding it rewrites `secrets` once under an exclusive lock.
+- `0192` (`0192_deprovision_event_pin`) adds `audit_event_id` and `audit_event_at` to `deprovision_jobs` (`0127`'s table): the id and time of the audit event an owed row writes, pinned on its first drain and cleared when the row reopens.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
