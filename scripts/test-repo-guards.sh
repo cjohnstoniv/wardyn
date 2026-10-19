@@ -68,8 +68,6 @@
 #  18. nightly.yml's scope=candidate skips exactly the lanes a release does not
 #      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
 #      carries `if: inputs.scope != 'candidate'`, a job inside it never does.
-#  24. every scripts/*-walk.sh is run by the Makefile or a workflow, or is named
-#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
 #  19. every compose file that digest-pins an image sits in a directory the
 #      `docker-compose` entry of .github/dependabot.yml lists — the `docker`
 #      ecosystem reads Dockerfiles, so a compose pin outside that entry is never
@@ -84,6 +82,8 @@
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
 #  23. an agent image that sets npm's proxy keys for an install deletes them again
 #      in the same RUN, so a build proxy URL never stays in the shipped layer.
+#  24. every scripts/*-walk.sh is run by a Makefile recipe or a workflow step (a comment does not count), or is named
+#      in HAND_RUN_WALKS with the reason it cannot run on a hosted runner.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -698,7 +698,7 @@ else
     done
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
-    # ci.yml's train-gate calls this workflow with scope=candidate (workflow_call), so the called
+    # ci.yml's train-suites job calls this workflow with scope=candidate (workflow_call), so the called
     # input must exist, be a string (no choice type there) and default to full like the dispatch one.
     [ "$(yq -r '.on.workflow_call.inputs.scope.default' "$NIGHTLY")" = full ] \
         && [ "$(yq -r '.on.workflow_call.inputs.scope.type' "$NIGHTLY")" = string ] \
@@ -797,15 +797,20 @@ HAND_RUN_WALKS="runner-laptop-walk.sh survival-walk.sh"
 # runner-laptop-walk.sh: needs Docker Desktop and a second engine for the org.
 # survival-walk.sh: restarts the host's Docker daemon, so it needs a spare host
 # (its kind leg, kind-survival-walk.sh, is the nightly's).
+# A line that is only a comment names a script without running it. (No `grep -q` on the pipe: under
+# pipefail it can SIGPIPE git grep and turn a match into a failure.)
+walk_called() {
+    [ -n "$(git grep -hE "(^|[^A-Za-z0-9_-])$1" -- Makefile .github | grep -vE '^[[:space:]]*#' || true)" ]
+}
 orphan_walks=""
 for f in scripts/*-walk.sh; do
     b="$(basename "$f")"
     case " $HAND_RUN_WALKS " in *" $b "*) continue ;; esac
-    git grep -qE "(^|[^A-Za-z0-9_-])$b" -- Makefile .github || orphan_walks="$orphan_walks $b"
+    walk_called "$b" || orphan_walks="$orphan_walks $b"
 done
 for b in $HAND_RUN_WALKS; do
     [ -f "scripts/$b" ] || bad "HAND_RUN_WALKS names '$b', which is not a script any more — drop it"
-    if git grep -qE "(^|[^A-Za-z0-9_-])$b" -- Makefile .github; then
+    if walk_called "$b"; then
         bad "HAND_RUN_WALKS names '$b', which the Makefile or a workflow now runs — drop it from the list"
     fi
 done

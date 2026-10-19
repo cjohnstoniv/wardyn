@@ -20,7 +20,7 @@ on:
         description: "Stage the multi-arch images and attest them. Leave on for a release candidate; a hand run that must not touch the registry turns it off."
         type: boolean
         default: true
-  # ci.yml's train-gate calls this with scope=candidate on a train PR's head. The input is a
+  # ci.yml's train-suites job calls this with scope=candidate on a train PR's head. The input is a
   # string here (workflow_call has no choice type); a value other than candidate runs every lane.
   workflow_call:
     inputs:
