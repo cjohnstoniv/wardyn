@@ -269,6 +269,7 @@ func (la *localAttach) sync() {
 	var cols, rows uint16
 	if !observer {
 		if !s.maskCovered(ctx, wa.run.ID) {
+			la.ended.Store(true) // wa.fail closes the socket
 			la.resetTee()
 			wa.fail(errAttachUncovered, true)
 			return
@@ -335,7 +336,11 @@ func (la *localAttach) tee(sess runner.LocalSession, castTee io.Writer) {
 			// to record its own reason before naming this one.
 			la.pushMu.Lock()
 			la.pushMu.Unlock() //nolint:staticcheck // a barrier, not a critical section
-			la.stop("runner ended the session")
+			// An ender that reset the tee closes the socket itself: cancelling here would tear the
+			// connection down before its close frame, and the CLI would read a bare drop.
+			if !la.ended.Load() {
+				la.stop("runner ended the session")
+			}
 			return
 		}
 	}

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -105,7 +106,7 @@ func TestAttachLocalAcksOnlyWhatTheRecorderAccepted(t *testing.T) {
 	sess.mu.Unlock()
 
 	tee.mw.mu.Lock() // the recorder stops accepting once its queue is full
-	chunk := make([]byte, attachReadBuf)
+	chunk := bytes.Repeat([]byte("x"), attachReadBuf)
 	go func() {
 		for i := 0; i < (maskPipeMax/attachReadBuf)+4; i++ {
 			if _, err := sess.pw.Write(chunk); err != nil {
@@ -121,13 +122,16 @@ func TestAttachLocalAcksOnlyWhatTheRecorderAccepted(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // any ack the blocked chunk could cause has had its chance
 	tee.mw.mu.Unlock()
 	mu.Lock()
-	defer mu.Unlock()
-	if len(ahead) > 0 {
-		t.Fatalf("acks ran ahead of the recorder: %v", ahead)
+	got := append([]string(nil), ahead...)
+	mu.Unlock()
+	if len(got) > 0 {
+		t.Fatalf("acks ran ahead of the recorder: %v", got)
 	}
 	if len(sess.ackLog()) == 0 {
 		t.Fatal("no ack was sent for the accepted output")
 	}
+	_ = c.Close(websocket.StatusNormalClosure, "")
+	rig.detach(t) // the cast is saved before the row: nothing writes into the temp dir after
 }
 
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
@@ -159,6 +163,8 @@ func TestAttachLocalAcksAreBoundedByTheRoundTrip(t *testing.T) {
 			t.Fatalf("acks %v are not each newer than the last", acks)
 		}
 	}
+	_ = c.Close(websocket.StatusNormalClosure, "")
+	rig.detach(t)
 }
 
 // TestAttachLocalWithoutARecorderSendsNoAcks: an unrecorded session asks the runner for no tee, and

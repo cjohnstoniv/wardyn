@@ -331,7 +331,12 @@ func (rig *localRig) rows(action string) []types.AuditEvent {
 // detach waits for the one session.detach row and returns its data.
 func (rig *localRig) detach(t *testing.T) string {
 	t.Helper()
-	waitFor(t, "the session.detach row", func() bool { return len(rig.rows("session.detach")) > 0 })
+	// Longer than waitFor: a recorded session saves its cast before the row.
+	for deadline := time.Now().Add(10 * time.Second); len(rig.rows("session.detach")) == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the session.detach row")
+		}
+	}
 	rows := rig.rows("session.detach")
 	if len(rows) != 1 {
 		t.Fatalf("session.detach rows = %d, want 1", len(rows))
