@@ -32,6 +32,16 @@ export function deviceCodeOf(url: string): string {
   return /[?&]user_code=([^&#\s]+)/.exec(url)?.[1] ?? "";
 }
 
+// Which step the starting list is on, from the signals the run's audit rows
+// come from: the image pull (the run's status reason) and run.interactive.start
+// (the sandbox is up and idle). The audit row is read apart from the run's
+// state so a stale or failed state read cannot hold the list on step 1 for a
+// sandbox that has already started.
+export function signInStepOf({ pulling, interactiveStarted }: { pulling: boolean; interactiveStarted: boolean }): SignInStep {
+  if (interactiveStarted) return "wait";
+  return pulling ? "download" : "start";
+}
+
 function marksFor(step: SignInStep): [Mark, Mark, Mark | null] {
   switch (step) {
     case "start":
