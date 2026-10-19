@@ -759,6 +759,10 @@ func TestAdminAuthDisabledWhenNoToken(t *testing.T) {
 	if w := do(t, srv, http.MethodGet, "/api/v1/runs", "anything", ""); w.Code != http.StatusUnauthorized {
 		t.Errorf("disabled admin: code = %d, want 401", w.Code)
 	}
+	// Without single sign-on there is nothing to sign in to: the admin-token answer stays.
+	if w := do(t, srv, http.MethodGet, "/api/v1/runs", "", ""); decodeErrorBody(t, w).Reason != reasonAdminTokenNotConfigured {
+		t.Errorf("no token, no SSO: body = %s, want reason %s", w.Body, reasonAdminTokenNotConfigured)
+	}
 	// healthz still works.
 	if w := do(t, srv, http.MethodGet, "/healthz", "", ""); w.Code != http.StatusOK {
 		t.Errorf("healthz code = %d, want 200", w.Code)
