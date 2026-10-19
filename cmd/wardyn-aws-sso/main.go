@@ -67,8 +67,10 @@ func main() {
 		// Delivery failures are handled non-fatally inside run() (logged, exit
 		// 0), matching wardyn-scan: a login run that can't
 		// upload leaves nothing connected, an honest signal, without crashing
-		// the throwaway run.
+		// the throwaway run. The fail marker goes out too, or the login pane,
+		// which ends only on a marker, waits on a helper that already gave up.
 		fmt.Fprintln(os.Stderr, "wardyn-aws-sso:", err)
+		printFailure(err.Error())
 		os.Exit(1)
 	}
 }
