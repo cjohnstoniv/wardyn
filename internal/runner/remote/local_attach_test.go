@@ -127,6 +127,42 @@ func TestLocalAttachRoundTripModeAndTeeAck(t *testing.T) {
 	}
 }
 
+// An acknowledgement is cumulative: one at or below the last is a no-op that sends nothing.
+func TestLocalAttachTeeAckIsMonotonic(t *testing.T) {
+	sub, lr, ref := localRig(t, true)
+	ls, err := sub.LocalAttach(ctxT(t), ref, runner.LocalAttachRequest{Nonce: "n", Tee: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ls.Close()
+	lr.mu.Lock()
+	tee := lr.tee
+	lr.mu.Unlock()
+	if _, err := tee.Write([]byte("0123456789")); err != nil {
+		t.Fatal(err)
+	}
+	for read := 0; read < 10; {
+		n, err := ls.Read(make([]byte, 10-read))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read += n
+	}
+	for _, off := range []int64{5, 5, 3, 10} {
+		if err := ls.AckTee(ctxT(t), off); err != nil {
+			t.Fatalf("AckTee(%d) = %v", off, err)
+		}
+	}
+	if err := ls.AckTee(ctxT(t), 11); err == nil {
+		t.Fatal("acknowledged a byte never read")
+	}
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if len(lr.acks) != 2 || lr.acks[0].Offset != 5 || lr.acks[1].Offset != 10 {
+		t.Fatalf("acks sent = %+v, want offsets 5 then 10", lr.acks)
+	}
+}
+
 // An acknowledgement claims only bytes the org has read, and only for a session that has a tee.
 func TestLocalAttachTeeAckRefusals(t *testing.T) {
 	sub, lr, ref := localRig(t, true)
