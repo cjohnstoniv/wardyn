@@ -129,8 +129,10 @@ func TestGroundtruthForcesActorEvenIfSpoofed(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("code = %d, want 202; body=%s", w.Code, w.Body.String())
 	}
+	found := false
 	for _, ev := range h.audit.events {
 		if ev.Action == groundtruth.ActionProcessExec {
+			found = true
 			if ev.ActorType != types.ActorSystem {
 				t.Errorf("actor_type = %s, want system (forced)", ev.ActorType)
 			}
@@ -138,6 +140,9 @@ func TestGroundtruthForcesActorEvenIfSpoofed(t *testing.T) {
 				t.Errorf("actor = %s, want %s (forced)", ev.Actor, groundtruth.SensorActor)
 			}
 		}
+	}
+	if !found {
+		t.Fatal("process.exec event not recorded: the forced-actor checks above ran on nothing")
 	}
 }
 
@@ -230,6 +235,8 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintGroundtruthToken(t)
+	pinned := time.Date(2026, time.March, 4, 5, 6, 7, 0, time.UTC)
+	h.srv.cfg.Now = func() time.Time { return pinned }
 
 	future := time.Now().Add(100 * 24 * time.Hour)            // ~100 days ahead
 	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 0, nil) // kernel.* + NULL run_id => no DB needed
@@ -243,8 +250,8 @@ func TestGroundtruthClampsSuppliedFutureTime(t *testing.T) {
 	for _, ev := range h.audit.events {
 		if ev.Action == groundtruth.ActionSensorHeartbeat {
 			found = true
-			if !ev.Time.Before(future) {
-				t.Fatalf("supplied future Time was trusted (%s); server must clamp to its own clock so health can still degrade", ev.Time)
+			if !ev.Time.Equal(pinned) {
+				t.Fatalf("event Time = %s, want the server's own clock %s (the supplied future %s must not be trusted, so health can still degrade)", ev.Time, pinned, future)
 			}
 		}
 	}
