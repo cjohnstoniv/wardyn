@@ -171,10 +171,19 @@ test.describe("Credentials (Admin view)", () => {
     await page.reload();
     await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · everyone");
 
+    // Hold the DELETE for a second so the order below is forced, not luck: it must be over before the reload.
+    await page.route("**/key-domains/assignments/all/**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await route.continue();
+    });
     await card.getByRole("row").filter({ hasText: "everyone" }).getByRole("button", { name: "Remove" }).click();
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toContainText('Remove the domain assignment for "everyone"?');
     await confirm.getByRole("button", { name: "Remove" }).click();
+    // The dialog closes only once the DELETE has answered. Until then the modal hides the page from role
+    // queries, so a row count taken first reads 0 with the assignment still there, and the reload below
+    // cancels the DELETE.
+    await expect(confirm).toHaveCount(0);
     await expect(card.getByRole("row").filter({ hasText: "everyone" })).toHaveCount(0);
     await page.reload();
     await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · default");
