@@ -80,7 +80,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
 	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
 	// separate run.Repo-keyed lookup needed here.
-	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, owner, spec))
 }
 
 // deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches

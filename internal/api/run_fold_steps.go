@@ -124,7 +124,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.Store != nil {
 		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
 	}
-	carriers := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(f.r, ws) })
+	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
