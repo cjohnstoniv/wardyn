@@ -56,22 +56,22 @@ func backchannelServer(t *testing.T, on bool) (*Server, *atomic.Int64, func(key 
 	return New(Config{OIDC: auth, Now: func() time.Time { return fixed }}), &fetches, sign, priv
 }
 
-func postBackchannel(srv *Server, token string) int {
+func postBackchannel(t *testing.T, srv *Server, token string) int {
 	r := httptest.NewRequest(http.MethodPost, "/auth/backchannel-logout", strings.NewReader(url.Values{"logout_token": {token}}.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w.Code
 }
 
 // The logout route exists only when the operator turned it on.
 func TestBackchannelLogoutRouteMountedOnlyWhenOn(t *testing.T) {
 	off, _, _, _ := backchannelServer(t, false)
-	if code := postBackchannel(off, ""); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
+	if code := postBackchannel(t, off, ""); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
 		t.Errorf("flag off: POST /auth/backchannel-logout = %d, want 404 or 405", code)
 	}
 	on, _, _, _ := backchannelServer(t, true)
-	if code := postBackchannel(on, ""); code != http.StatusBadRequest {
+	if code := postBackchannel(t, on, ""); code != http.StatusBadRequest {
 		t.Errorf("flag on: POST with no token = %d, want the handler's 400", code)
 	}
 }
@@ -82,7 +82,7 @@ func TestBackchannelLogoutRouteMountedOnlyWhenOn(t *testing.T) {
 func TestBackchannelLogoutBoundsKeyFetchesFromForgedTokens(t *testing.T) {
 	srv, fetches, sign, priv := backchannelServer(t, true)
 	for i := range 3 * int(backchannelLogoutBurst) {
-		if code := postBackchannel(srv, sign(priv, "bc-key")); code != http.StatusOK {
+		if code := postBackchannel(t, srv, sign(priv, "bc-key")); code != http.StatusOK {
 			t.Fatalf("genuine logout %d = %d, want 200", i, code)
 		}
 	}
@@ -93,7 +93,7 @@ func TestBackchannelLogoutBoundsKeyFetchesFromForgedTokens(t *testing.T) {
 	forged := sign(other, "unknown-kid")
 	before, refused := fetches.Load(), 0
 	for range 20 {
-		if postBackchannel(srv, forged) == http.StatusTooManyRequests {
+		if postBackchannel(t, srv, forged) == http.StatusTooManyRequests {
 			refused++
 		}
 	}
