@@ -24,14 +24,30 @@ import (
 // tied to the profile it launched under.
 
 // sweepRunLimits is one pass of the re-clamp over every live run that captured
-// a profile. Each write is a compare-and-set on the values read, so every
-// replica can run it on its own tick and each re-clamp lands, and is audited,
-// once. A failed read changes nothing and is retried next tick.
+// a profile, then of the Wardyn boundary's maximum end over every other live
+// run. Each write is a compare-and-set on the values read, so every replica can
+// run it on its own tick and each re-clamp lands, and is audited, once. A
+// failed read changes nothing and is retried next tick.
 func (s *Server) sweepRunLimits(ctx context.Context) error {
 	rc, ok := s.cfg.Store.(store.RunLimitsReclamper)
 	if !ok {
 		return nil
 	}
+	// The Wardyn boundary's run-limit maximum binds every live run, whatever its profile or none.
+	capSec, err := s.boundaryMaxEndSec(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.cfg.Now()
+	if err := s.reclampProfiledRuns(ctx, rc, capSec, now); err != nil {
+		return err
+	}
+	return s.boundaryCapUnprofiledRuns(ctx, rc, capSec, now)
+}
+
+// reclampProfiledRuns takes each profile's current limits, held to the boundary's maximum capSec
+// (0 for none), into every live run that captured it.
+func (s *Server) reclampProfiledRuns(ctx context.Context, rc store.RunLimitsReclamper, capSec int, now time.Time) error {
 	runs, err := rc.ListProfiledLiveRuns(ctx)
 	if err != nil || len(runs) == 0 {
 		return err
@@ -52,12 +68,6 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 		}
 		current[p.Row.ID] = p.Resolved.Limits.RunLimits
 	}
-	// The Wardyn boundary's run-limit maximum binds every one of them as well, whatever its profile.
-	capSec, err := s.boundaryMaxEndSec(ctx)
-	if err != nil {
-		return err
-	}
-	now := s.cfg.Now()
 	for _, run := range runs {
 		// A deleted profile has no current limits to tighten to; the run keeps
 		// the ones it captured, held to the boundary's maximum.
@@ -71,6 +81,26 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 		if capSec > 0 {
 			l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false
 		}
+		s.reclampRun(ctx, rc, run, l, now)
+	}
+	return nil
+}
+
+// boundaryCapUnprofiledRuns holds every live run that captured no profile (an operator's, a super
+// admin's, a break-glass or otherwise ungoverned run) to the boundary's maximum capSec, as the
+// profiled pass does. With no maximum, in no_limits included, it reads nothing and changes nothing.
+func (s *Server) boundaryCapUnprofiledRuns(ctx context.Context, rc store.RunLimitsReclamper, capSec int, now time.Time) error {
+	ul, ok := rc.(store.UnprofiledLiveRunLister)
+	if capSec == 0 || !ok {
+		return nil
+	}
+	runs, err := ul.ListUnprofiledLiveRuns(ctx)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		l := run.RunLimits
+		l.MaxEndAheadSec, l.AllowNoEnd = composer.TighterSec(l.MaxEndAheadSec, capSec), false
 		s.reclampRun(ctx, rc, run, l, now)
 	}
 	return nil

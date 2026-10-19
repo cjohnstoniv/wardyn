@@ -49,7 +49,7 @@ The dry run calls the same function the resolve calls in `hard_limits`, so its r
 - An admin-token run is a break-glass run when the boundary is in `hard_limits` and at least one governance profile exists. It must carry a reason in the `X-Wardyn-Break-Glass-Reason` header (`wardyn run --break-glass-reason`), at most 512 characters.
 - Without a reason the run is refused with `400 break_glass_reason_required`, and so are its preflight and policy preview. With no profile the run lifts nothing, so no reason is asked and the run is not tagged.
 - The run record carries `break_glass: true`. The `run.break_glass.open` audit row and the run's `run.create` row record the reason.
-- In `hard_limits`, a run whose confinement class is below the boundary's floor is not dispatched, and a paused one is not revived (`409 confinement_class_conflict`). The run-limit sweep holds every profiled live run to `limits.max_end_ahead_sec`.
+- In `hard_limits`, a run whose confinement class is below the boundary's floor is not dispatched, and a paused one is not revived (`409 confinement_class_conflict`). The run-limit sweep holds every live run to `limits.max_end_ahead_sec`, profiled or not, a break-glass run's included, and a later change to a run's end is held to the maximum as it stands then.
 
 ## Not bound yet
 

@@ -235,13 +235,15 @@ func (s *Server) boundaryEndPlan(w http.ResponseWriter, r *http.Request, run typ
 	return run, false, true
 }
 
-// boundaryEndCap is the boundary's bound on a change to run's end, 0 for none: a break-glass run's
-// captured maximum always, any other run's the boundary's maximum in hard_limits when it names one.
+// boundaryEndCap is the boundary's bound on a change to run's end, 0 for none: the boundary's maximum
+// in hard_limits as it stands now, for every run. A break-glass run is also held to the maximum it
+// captured at create, so a boundary set or tightened later binds it and a loosened one frees nothing.
 func (s *Server) boundaryEndCap(ctx context.Context, run types.AgentRun) (int, error) {
-	if run.BreakGlass {
-		return run.RunLimits.MaxEndAheadSec, nil
+	capSec, err := s.boundaryMaxEndSec(ctx)
+	if err != nil || !run.BreakGlass {
+		return capSec, err
 	}
-	return s.boundaryMaxEndSec(ctx)
+	return composer.TighterSec(run.RunLimits.MaxEndAheadSec, capSec), nil
 }
 
 // boundaryMaxEndSec is the boundary's run-limit maximum in hard_limits, 0 for none.

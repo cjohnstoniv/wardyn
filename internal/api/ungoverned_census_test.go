@@ -132,6 +132,7 @@ func ungovernedCalls(name string, f *ast.File, into map[string]int) {
 		if !ok {
 			continue
 		}
+		// Scope: calls of the three predicates by callee name; a method value and isAdminTokenCaller are outside it.
 		ast.Inspect(fn, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {

@@ -201,3 +201,99 @@ func TestBoundaryRefusesAReviveBelowTheFloor(t *testing.T) {
 		t.Errorf("run.revive rows = %+v, want one denied", rows)
 	}
 }
+
+// breakGlassEndUnderALaterMaximum creates a break-glass run under a boundary whose maximum end is
+// atCreate (nil for none) and an end ten minutes out, then sets the boundary's maximum to later and
+// moves the run's end two days out with the admin token. It returns how far ahead the run's end landed.
+func breakGlassEndUnderALaterMaximum(t *testing.T, atCreate *int, later int) time.Duration {
+	t.Helper()
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	e.seedProfile("team", "pypi.org")
+	b := testBoundary(types.BoundaryHardLimits)
+	b.Limits.MaxEndAheadSec = atCreate
+	putBoundary(t, e, b)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","task":"t","ends_after_sec":600,"inline_policy":{"min_confinement_class":"CC3","allowed_domains":["api.anthropic.com"]}}`))
+	r.Header.Set("Authorization", "Bearer "+adminToken)
+	r.Header.Set(breakGlassReasonHeader, "prod outage INC-2")
+	w := httptest.NewRecorder()
+	panicFails(t, e.srv.Handler()).ServeHTTP(w, r)
+	var created createRunResponse
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &created) != nil || !created.BreakGlass {
+		t.Fatalf("break-glass create = %d %s", w.Code, w.Body)
+	}
+	b.Limits.MaxEndAheadSec = &later
+	putBoundary(t, e, b)
+	far := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	if w := e.admin(http.MethodPatch, "/api/v1/runs/"+created.ID.String(), `{"ends_at":"`+far+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("patch end = %d %s", w.Code, w.Body)
+	}
+	run, err := e.pg.GetRun(context.Background(), created.ID)
+	if err != nil || run.EndsAt == nil {
+		t.Fatalf("run = %+v (%v), want an end", run, err)
+	}
+	return time.Until(*run.EndsAt)
+}
+
+// TestBoundaryCapsABreakGlassRunsEndToALaterMaximum: a break-glass run created while the boundary
+// names no maximum end is held to the maximum set afterwards when its end moves.
+func TestBoundaryCapsABreakGlassRunsEndToALaterMaximum(t *testing.T) {
+	if ahead := breakGlassEndUnderALaterMaximum(t, nil, boundaryMaxEnd); ahead > boundaryMaxEnd*time.Second {
+		t.Errorf("ends %v ahead, want at most the later maximum %ds", ahead, boundaryMaxEnd)
+	}
+}
+
+// TestBoundaryCapsABreakGlassRunsEndToATightenedMaximum: a break-glass run created under a two-hour
+// maximum is held to the one-hour maximum the boundary tightened to afterwards.
+func TestBoundaryCapsABreakGlassRunsEndToATightenedMaximum(t *testing.T) {
+	twoHours := 2 * boundaryMaxEnd
+	if ahead := breakGlassEndUnderALaterMaximum(t, &twoHours, boundaryMaxEnd); ahead > boundaryMaxEnd*time.Second {
+		t.Errorf("ends %v ahead, want at most the tightened maximum %ds", ahead, boundaryMaxEnd)
+	}
+}
+
+// TestBoundarySweepCapsEveryUnprofiledLiveRun: an operator's live run and a break-glass live run,
+// neither of which captured a profile, are left alone by the sweep in no_limits and held to the
+// boundary's maximum end once it is set, as every profiled run is.
+func TestBoundarySweepCapsEveryUnprofiledLiveRun(t *testing.T) {
+	e := newGovEnvOn(t, throwawayPGPool(t))
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	live := func(owner string, breakGlass bool, end time.Time, limits types.RunLimits) types.AgentRun {
+		run, err := e.pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code",
+			ConfinementClass: types.CC3, State: types.RunRunning, RunnerTarget: "docker", Task: "t",
+			EndsAt: &end, RunLimits: limits, BreakGlass: breakGlass})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	operator := live("admin@corp.example", false, now.Add(20*time.Hour), types.RunLimits{})
+	glass := live("admin-token", true, now.Add(2*time.Hour), types.RunLimits{MaxEndAheadSec: 2 * boundaryMaxEnd})
+	ends := func() []*time.Time {
+		var out []*time.Time
+		for _, id := range []uuid.UUID{operator.ID, glass.ID} {
+			run, err := e.pg.GetRun(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, run.EndsAt)
+		}
+		return out
+	}
+	if err := e.srv.sweepRunLimits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := ends(); !got[0].Equal(*operator.EndsAt) || !got[1].Equal(*glass.EndsAt) {
+		t.Errorf("no_limits sweep moved ends to %v, %v; want them unchanged", got[0], got[1])
+	}
+	putBoundary(t, e, testBoundary(types.BoundaryHardLimits))
+	if err := e.srv.sweepRunLimits(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cut := time.Now().Add(boundaryMaxEnd * time.Second)
+	for i, end := range ends() {
+		if end == nil || end.After(cut) {
+			t.Errorf("run %d ends at %v, want at most %v", i, end, cut)
+		}
+	}
+}
