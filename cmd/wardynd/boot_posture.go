@@ -274,7 +274,7 @@ func resolveDirectoryConfig(provider, dirTenant, dirClientID, dirSecret, oidcIss
 				strings.Join(missing, " and "), plural(len(missing), "is", "are"))
 		}
 		return directory.EntraConfig{TenantID: dirTenant, ClientID: dirClientID, ClientSecret: dirSecret,
-			AppRolesAppID: strings.TrimSpace(oidcClientID)}, nil
+			AppRolesAppID: strings.TrimSpace(oidcClientID), NoSignInApp: strings.TrimSpace(oidcClientID) == ""}, nil
 	}
 
 	// Leg 2 of PF-29: nothing to derive from at all.
