@@ -320,9 +320,10 @@ const (
 	// above: the gateway host resolved to loopback/link-local/this proxy's own
 	// control-plane network, or did not resolve at all. Kept separate from
 	// "builtin:dial-failed" (the three genuine network-lost-it dials) so a
-	// config problem the operator's own gateway can never satisfy is excluded
-	// from wardyn_egress_denies_total alongside failures the network caused —
-	// see isPolicyDeny (internal/api/metrics.go).
+	// config problem the operator's own gateway can never satisfy is not mistaken
+	// for a failure the network caused. It still COUNTS in
+	// wardyn_egress_denies_total: a guard refusal is a denial like any other,
+	// and isPolicyDeny (internal/api/metrics.go) leaves it out of its exclusions.
 	ruleSourceGatewayVetFailed = "builtin:gateway-vet-failed"
 	// ruleSourceUpstreamProtocolMismatch marks a round trip that GOT AN ANSWER
 	// — an HTTP/2 frame on a connection that negotiated no ALPN — which this
