@@ -242,3 +242,30 @@ func TestHandler_ReplayStoreFailureIsLogged(t *testing.T) {
 		t.Errorf("status %d, log %q; want a 500 and the cause logged", rr.Code, logs.String())
 	}
 }
+
+type midStreamFailStore struct{ recording.Store }
+
+func (midStreamFailStore) OpenCast(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(io.MultiReader(strings.NewReader(`{"version":2,"width":80,"height":24}`+"\n"),
+		readerFunc(func([]byte) (int, error) { return 0, errors.New("disk gone") }))), nil
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+// A store failure after the 200 is sent aborts the transfer: a short cast is well-formed, so a
+// clean end would replay and download as if the session had stopped there.
+func TestHandler_ReplayFailurePartWayAbortsTransfer(t *testing.T) {
+	srv := httptest.NewServer(newTestRouter(midStreamFailStore{}))
+	defer srv.Close()
+	id := uuid.New().String()
+	resp, err := http.Get(srv.URL + "/api/v1/runs/" + id + "/recording/" + id + "~web")
+	if err != nil {
+		return // aborted before the buffered status line was flushed: failed, as wanted
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Errorf("status %d and a body that ended cleanly; want the transfer to fail part-way", resp.StatusCode)
+	}
+}
