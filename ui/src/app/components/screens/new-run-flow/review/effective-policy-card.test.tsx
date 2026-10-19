@@ -168,15 +168,15 @@ describe("Effective policy card", () => {
   it("says the harness's inner walls on the tools row, per harness when they differ", () => {
     const walled = (harness: string, inner_walls: object) => ({ ...harnessDefault(harness, "hold"), inner_walls });
     const access = (...h: object[]) => ({ ...SCENARIO_ACCESS.member, harnesses: h }) as never;
-    const gated = "Inner walls: harness sandbox off, approvals in Wardyn";
+    const gated = "Harness walls: harness sandbox off, approvals in Wardyn";
     const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: access(walled("claude-code", { sandbox_mode: "off", approvals: "wardyn" })) } as never} preview={null} />);
     expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent(gated);
     view.unmount();
     render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member,
       access: access(walled("claude-code", { sandbox_mode: "off", approvals: "harness" }), walled("codex-cli", { approvals: "harness" })) } as never} preview={null} />);
     const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
-    expect(tools).toHaveTextContent("claude-code: Inner walls: harness sandbox off, approvals in the harness");
-    expect(tools).toHaveTextContent("codex-cli: Inner walls: the harness's own sandbox, approvals in the harness");
+    expect(tools).toHaveTextContent("claude-code: Harness walls: harness sandbox off, approvals in the harness");
+    expect(tools).toHaveTextContent("codex-cli: Harness walls: the harness's own sandbox, approvals in the harness");
   });
 
   // #2428: the accept-edits source describes only the default for a tool no rule names. The sentence must not

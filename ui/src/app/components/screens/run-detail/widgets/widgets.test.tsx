@@ -683,10 +683,10 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   // recorded (no catalog harness, or created before the field) shows nothing there.
   it("the policy row says the run's inner walls when the run recorded them", () => {
     const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } as AgentRun, "me");
-    expect(screen.getByText("Inner walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
+    expect(screen.getByText("Harness walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
     view.unmount();
     renderAs(base, "me");
-    expect(screen.queryByText(/Inner walls/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Harness walls/)).not.toBeInTheDocument();
   });
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {

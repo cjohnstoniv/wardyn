@@ -262,7 +262,7 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
-  // AgentRun.InnerWalls (#2822, migration 0192): the harness's own walls the run launched with.
+  // AgentRun.InnerWalls (#2822): the harness's own walls the run launched with.
   // Absent for a run with no catalog harness, or one created before the field.
   inner_walls?: HarnessInnerWalls;
   // Run limits captured at create (migration 0072, #567): the lease end (null =
