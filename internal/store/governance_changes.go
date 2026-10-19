@@ -33,8 +33,8 @@ const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff
 	CASE WHEN state = 'pending' AND expires_at <= now() THEN 'expired' ELSE state END,
 	decided_by, decided_by_email, decided_at, reason`
 
-// maxGovernanceChangeList bounds one list read; the newest changes come first.
-const maxGovernanceChangeList = 500
+// MaxGovernanceChangeList bounds one list read; the newest changes come first.
+const MaxGovernanceChangeList = 500
 
 // ErrGovernanceChangePending is a proposal's refusal when a live change already holds the target: ID is
 // that change.
@@ -223,7 +223,7 @@ func (s PG) ListGovernanceChanges(ctx context.Context, state string) ([]types.Go
 		q = `SELECT * FROM (` + q + `) c WHERE c.state = $1`
 		args = append(args, state)
 	}
-	q += fmt.Sprintf(` ORDER BY proposed_at DESC, id LIMIT %d`, maxGovernanceChangeList)
+	q += fmt.Sprintf(` ORDER BY proposed_at DESC, id LIMIT %d`, MaxGovernanceChangeList)
 	return collect(ctx, s.Pool, "list", "governance changes", q, args, scanGovernanceChange)
 }
 

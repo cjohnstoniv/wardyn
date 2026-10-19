@@ -66,6 +66,12 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "list governance changes", err)
 		return
 	}
+	// The store returns its newest MaxGovernanceChangeList and the visibility filter below runs after
+	// that limit, so a full read may hide older changes from this caller: say so (the header the other
+	// capped lists set).
+	if len(all) >= store.MaxGovernanceChangeList {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
 		if s.canSeeGovernanceChange(r, ch) {

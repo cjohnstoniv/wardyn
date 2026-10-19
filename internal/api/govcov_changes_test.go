@@ -544,3 +544,22 @@ func TestGovCovDenyApproverAndRefusalError(t *testing.T) {
 		t.Errorf("security-tier denial = %d %q, want 403 security_admin_surface", w.Code, errorReason(w))
 	}
 }
+
+// A list read that hit the store's cap says it was cut, whatever the caller may see of it; a short one says nothing.
+func TestGovCovListChangesSaysWhenTheStoreHitItsCap(t *testing.T) {
+	full := make([]types.GovernanceChange, store.MaxGovernanceChangeList)
+	for i := range full {
+		full[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindProfile}
+	}
+	st := &govCovStore{changes: full}
+	s, _ := govCovServer(t, st)
+	w := do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if w.Code != http.StatusOK || w.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Errorf("a full read = %d, X-Wardyn-Truncated %q, want 200 and true", w.Code, w.Header().Get("X-Wardyn-Truncated"))
+	}
+	st.changes = full[:3]
+	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("a short read set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+}
