@@ -135,12 +135,12 @@ func TestSecretPlaceholders_OnKeepsTheValueAtTheProxy(t *testing.T) {
 	}
 	var outcomes []string
 	for _, ev := range audit.events {
-		if ev.Action == "run.secret.placeholder" {
+		if ev.Action == "run.secret_placeholder.resolve" {
 			outcomes = append(outcomes, ev.Outcome)
 		}
 	}
 	if !slices.Equal(outcomes, []string{"success", "failure", "failure"}) {
-		t.Errorf("run.secret.placeholder outcomes %v, want CORP_TOKEN placed and the other two fallbacks recorded", outcomes)
+		t.Errorf("run.secret_placeholder.resolve outcomes %v, want CORP_TOKEN placed and the other two fallbacks recorded", outcomes)
 	}
 }
 

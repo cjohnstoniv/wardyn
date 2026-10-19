@@ -589,6 +589,9 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 	if !secretNameRE.MatchString(sc.SecretName) {
 		return "", "", fmt.Errorf("env_secret secret_name %q is not a valid secret name", sc.SecretName)
 	}
+	if _, err = secretScopeHost(scope); err != nil {
+		return "", "", fmt.Errorf("env_secret %w", err)
+	}
 	return sc.Name, sc.SecretName, nil
 }
 
@@ -619,6 +622,9 @@ func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err 
 	}
 	if !secretNameRE.MatchString(sc.SecretName) {
 		return "", "", fmt.Errorf("file_secret secret_name %q is not a valid secret name", sc.SecretName)
+	}
+	if _, err = secretScopeHost(scope); err != nil {
+		return "", "", fmt.Errorf("file_secret %w", err)
 	}
 	return sc.File, sc.SecretName, nil
 }

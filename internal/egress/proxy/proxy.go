@@ -388,7 +388,6 @@ func newProxy(opts Options) *Proxy {
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
-
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
 	// control-plane transport (which must never traverse the corp proxy).

@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -482,11 +481,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	// Last of the env writers' credential work, after every injection above is
 	// authored, so its one-credential-per-host check sees them all.
-	var placeholderMITM []string
-	if s.cfg.EnvSecretPlaceholders {
-		placeholderMITM = s.placeEnvSecrets(ctx, run, policy, grantRows, secretEnvKeys, sandboxEnv,
-			proxy.CompilePolicy(sidecarPolicy(policy, p)).AllowedExactHost, &injections)
-	}
+	placeholderMITM := s.placeEnvSecrets(ctx, run, policy, p, grantRows, secretEnvKeys, sandboxEnv, &injections)
 	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)

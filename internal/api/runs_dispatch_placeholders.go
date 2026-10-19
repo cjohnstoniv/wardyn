@@ -69,23 +69,29 @@ func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun
 	return ph, runner.InjectionGrant{GrantID: grantID, Rule: rule}, net.JoinHostPort(host, "443"), ""
 }
 
-// recordPlaceholder writes run.secret.placeholder for one grant with a host.
+// recordPlaceholder writes run.secret_placeholder.resolve for one grant with a host.
 func (s *Server) recordPlaceholder(ctx context.Context, run types.AgentRun, kind types.GrantKind, secretName, host, why string) {
 	data := map[string]any{"kind": kind, "secret_name": secretName, "host": host}
 	outcome := "success"
 	if why != "" {
 		outcome, data["reason"] = "failure", why
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.secret.placeholder",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.secret_placeholder.resolve",
 		run.ID.String(), outcome, mustJSON(data)))
 }
 
 // placeEnvSecrets is WARDYN_ENV_SECRET_PLACEHOLDERS: each env_secret grant
 // with a host whose value resolveEnvSecretValues set (keys) gets a
 // placeholder in its variable instead. A runner-resident grant keeps the
-// runner's own placeholder. Returns the hosts to intercept.
-func (s *Server) placeEnvSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
-	keys []string, sandboxEnv map[string]string, allowed func(string) bool, injections *[]runner.InjectionGrant) []string {
+// runner's own placeholder. Returns the hosts to intercept; nil, and nothing
+// touched, with the switch off.
+func (s *Server) placeEnvSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, p dispatchParams, rows []types.CredentialGrant,
+	keys []string, sandboxEnv map[string]string, injections *[]runner.InjectionGrant) []string {
+	if !s.cfg.EnvSecretPlaceholders {
+		return nil
+	}
+	// The gate buildInjector applies, so an authored rule never fails the proxy's boot.
+	allowed := proxy.CompilePolicy(sidecarPolicy(policy, p)).AllowedExactHost
 	var mitm []string
 	seen := map[string]bool{}
 	for _, g := range policy.EligibleGrants {

@@ -658,9 +658,6 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if nameSinkReservedSecret(secretName) {
 			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
 		}
-		if _, herr := secretScopeHost(g.Scope); herr != nil {
-			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, herr)
-		}
 		if g.RequiresApproval {
 			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
 				"not minted, so there is no mint for an approval to gate", i)
@@ -685,9 +682,6 @@ func validateFileSecretScope(i int, g types.GrantSpec) error {
 	}
 	if nameSinkReservedSecret(secretName) {
 		return fmt.Errorf("eligible_grants[%d]: file_secret references reserved secret name %q", i, secretName)
-	}
-	if _, herr := secretScopeHost(g.Scope); herr != nil {
-		return fmt.Errorf("eligible_grants[%d]: file_secret scope invalid: %w", i, herr)
 	}
 	if g.RequiresApproval {
 		return fmt.Errorf("eligible_grants[%d]: file_secret cannot require approval — it is resolved at dispatch, "+

@@ -747,7 +747,7 @@ What the check does and does not settle:
 - `name` and `secret_name` are required.
 - The optional `host` names the one bare host the value is sent to. It is read only when the operator turns on `WARDYN_ENV_SECRET_PLACEHOLDERS` (off by default in 0.10.0):
   - the variable then holds a placeholder (`wardyn-placeholder:<id>`), and the run's proxy intercepts `host` and replaces the placeholder with the value wherever it appears in a request header;
-  - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret.placeholder` says which);
+  - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret_placeholder.resolve` says which);
   - only header bytes are filled: a placeholder inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
