@@ -398,7 +398,7 @@ export async function wfetch(
     });
     answered = true;
     // Optional: a test's stand-in Response may carry no headers.
-    noteSessionExpiry(res.headers?.get(SESSION_EXPIRES_HEADER));
+    noteSessionExpiry(res.headers?.get(SESSION_EXPIRES_HEADER), startedAt);
   } catch (e) {
     // A caller's OWN abort stays an abort (it is their control flow, not a
     // failure); only the deadline is reported as the unreachable-daemon case.
@@ -552,7 +552,13 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         policy?: unknown;
         tool?: unknown;
         cause?: unknown;
+        message?: unknown;
       };
+      // The host-capacity 503 keeps its older shape (error = the code, reason = the measured
+      // limits) and adds the sentence as message, so it is read here the way every other refusal is.
+      if (j.error === "host_capacity_refused" && typeof j.message === "string" && j.message) {
+        return { ...bare(j.message), reason: j.error };
+      }
       if (typeof j.error === "string" && j.error) {
         return {
           message: j.error,

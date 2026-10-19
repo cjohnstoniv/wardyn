@@ -335,11 +335,11 @@ const maxCaptureAuditEvents = 100000
 const captureAuditTruncatedNote = "audit-event capture reached its ceiling; the derived observations/profile " +
 	"may be incomplete for an exceptionally long run"
 
-// dispatchFailureReason scans a run's already-fetched audit events for the
-// LAST failed run.create/run.dispatch entry and returns its error/note field
-// — the honest "why the sandbox never started" for a record run whose
-// SandboxRef is empty. "" when no such event is
-// found (a truncated capture, or a failure mode that never audited a reason).
+// dispatchFailureReason is the record card's "why the sandbox never started"
+// for a record run whose SandboxRef is empty: the reason code of the LAST failed
+// run.create/run.dispatch entry. The card is member-visible, so only a
+// code-shaped reason passes; an entry's error and note carry store and daemon
+// text (host, port, SQLSTATE, host paths) and stay in the audit log.
 func dispatchFailureReason(events []types.AuditEvent) string {
 	reason := ""
 	for _, ev := range events {
@@ -347,25 +347,25 @@ func dispatchFailureReason(events []types.AuditEvent) string {
 			continue
 		}
 		var data struct {
-			Error string `json:"error"`
-			Note  string `json:"note"`
+			Reason string `json:"reason"`
 		}
 		if len(ev.Data) > 0 {
 			_ = json.Unmarshal(ev.Data, &data)
 		}
-		switch {
-		case data.Error != "":
-			reason = data.Error
-		case data.Note != "":
-			reason = data.Note
-		default:
-			continue
+		if reasonCodeShaped(data.Reason) {
+			reason = data.Reason
 		}
 	}
 	if reason == "" {
-		return "no dispatch-failure reason was audited"
+		return "the sandbox never started; the run's audit events carry the detail"
 	}
-	return reason
+	return "the sandbox never started (" + reason + "); the run's audit events carry the detail"
+}
+
+// reasonCodeShaped reports whether s reads as a reason code (lower-case
+// letters, digits and underscores), never free text.
+func reasonCodeShaped(s string) bool {
+	return s != "" && len(s) <= 64 && strings.Trim(s, "abcdefghijklmnopqrstuvwxyz0123456789_") == ""
 }
 
 // reconcileRecordRun captures a record run's evidence when it reaches a
@@ -435,7 +435,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 		// WSL2-mirrored-networking detour on a session that never even tried
 		// to reach the control plane.
 		if run.SandboxRef == "" {
-			res.FailureHint = "the sandbox never started: " + dispatchFailureReason(events)
+			res.FailureHint = dispatchFailureReason(events)
 		} else {
 			res.FailureHint = recordEmptyCaptureHint
 		}

@@ -105,7 +105,7 @@ func TestEgressBaselineRefusesAnythingButExactHostnames(t *testing.T) {
 		}
 	}
 	// A suffix is held to the same shape, must name a stored internal_hosts entry, and must not be a
-	// public suffix (it would mark every host under a registry-controlled name).
+	// public suffix (a registry-controlled name is no host anyone vouches for).
 	for _, bad := range []string{"*.corp.example", "corp.example:443", "10.1.2.3", "other.example", "co.uk", "github.io", "*", "com"} {
 		body, _ := json.Marshal(map[string]any{"internal_host_suffixes": []string{bad}})
 		w := doSSO(t, srv, http.MethodPut, egressBaselinePath, secAdmin, string(body))
@@ -226,7 +226,8 @@ func TestEgressGradeFollowsTheOperatorBaseline(t *testing.T) {
 	}{
 		{"nothing declared", types.SiteConfig{}, composer.RiskMedium},
 		{"upgrade default: an internal host not marked baseline", types.SiteConfig{InternalHosts: internal}, composer.RiskMedium},
-		{"internal host marked baseline", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, composer.RiskLow},
+		{"internal host marked baseline", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "llm.corp.example", Baseline: true}}}, composer.RiskLow},
+		{"a marked parent does not cover a host under it", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, composer.RiskMedium},
 		{"declared baseline host", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{"llm.corp.example"}}}, composer.RiskLow},
 	} {
 		if got := level(tc.sc); got != tc.want {
@@ -304,7 +305,8 @@ func TestEnforcedConfinementFloorFollowsTheBaseline(t *testing.T) {
 	}{
 		{"nothing declared", types.SiteConfig{}, types.CC3},
 		{"upgrade default: internal host not marked", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example"}}}, types.CC3},
-		{"marked internal host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, types.CC2},
+		{"marked internal host", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "llm.corp.example", Baseline: true}}}, types.CC2},
+		{"a marked parent does not lift a host under it", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example", Baseline: true}}}, types.CC3},
 		{"declared host", types.SiteConfig{Egress: &types.SiteEgress{BaselineHosts: []string{"llm.corp.example"}}}, types.CC2},
 	} {
 		got, _, err := enforcedConfinement(spec, types.CC2, nil, "", egressBaselineOf(tc.sc))

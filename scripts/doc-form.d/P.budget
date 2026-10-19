@@ -28,7 +28,13 @@
 # examples/policies/README.md 1374 = 1349 + 25, measured: the remote-workspace bullet names the shipped ceiling.
 # 0.9.4 L8: docs/POLICIES.md 18408 adds 26 over 18382: ssh_key delivery claims bounded.
 # 0.9.4 L8: examples/policies/README.md 1418 adds 69 over 1349: the repos-template note and the model-credential wording.
-docs/POLICIES.md=18420 share=12
+# docs/POLICIES.md 18598 adds 178 (0.10.0 SEC-1), measured: the optional host on env_secret and file_secret scopes, and the git_pat_broker_off_resident reason row.
+# docs/POLICIES.md 18614 adds 16 (0.10.0 SEC-1 round 2), measured: the placeholder fills only the Authorization header, and the response-echo caveat.
+# 0.10 API-3: docs/POLICIES.md 18559 adds 139 over 18420, measured: a push that adds no commits passes when the forge holds every commit it sets.
+# 0.10 API-3 round 2: docs/POLICIES.md 18597 adds 38 over 18559, measured: a now-denied path in a vouched commit, and a lightweight tag under git_push_any_branch.
+# 0.10 W1 train: docs/POLICIES.md tightened to 18590, measured at the train merge.
+# docs/POLICIES.md 18784 = ours 18614 + theirs 18590 - base 18420 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
+docs/POLICIES.md=18784 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

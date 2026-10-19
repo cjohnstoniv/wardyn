@@ -46,12 +46,12 @@ func TestSessionRejectionResponse(t *testing.T) {
 		{sessionExpired, true, sessionExpired, http.StatusUnauthorized, sessionExpiredMsg, true},
 		{sessionRevoked, false, sessionRevoked, http.StatusUnauthorized, sessionRevokedMsg, true},
 		{sessionInvalid, false, sessionInvalid, http.StatusUnauthorized, sessionInvalidMsg, true},
-		{"identity_deactivated", false, "identity_deactivated", http.StatusUnauthorized, "your access to Wardyn has been turned off — ask your Wardyn admin", true},
+		{"identity_deactivated", false, "identity_deactivated", http.StatusUnauthorized, "Your access to Wardyn has been turned off — ask your Wardyn admin", true},
 		// No cookie at all is not a rejection where an admin token exists: the bearer lane must keep its
 		// generic answer, or every CLI call would start claiming a session.
 		{"", false, "", 0, "", false},
 		// With single sign-on and no admin token, signing in is the only way in, and that is the answer.
-		{"", true, "sign_in_required", http.StatusUnauthorized, "sign-in required — sign in to Wardyn with single sign-on", true},
+		{"", true, "sign_in_required", http.StatusUnauthorized, "Sign-in required — sign in to Wardyn with single sign-on", true},
 		{"something_new_upstream", true, "", 0, "", false},
 	}
 	for _, tc := range cases {

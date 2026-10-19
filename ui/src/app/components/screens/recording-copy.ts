@@ -47,6 +47,4 @@ export const RECORDINGS = {
   NONE_BODY: "A run is recorded when its agent runs in a terminal.",
   EMPTY_TITLE: "No recordings yet",
   EMPTY_BODY: "Recordings appear once a run's terminal session is captured.",
-  SEARCH_DISABLED_HINT:
-    "Session recording is disabled on this deployment — there is nothing to search.",
 } as const;

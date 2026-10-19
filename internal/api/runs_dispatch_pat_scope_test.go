@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -32,7 +33,16 @@ func sshKeyRowFor(runID uuid.UUID, host string) types.CredentialGrant {
 
 // dispatchWithPATRows dispatches one run whose stored grants are rows(run) and
 // whose winning git_pat grants are winning(rows).
+// The run is an operator's, so the member-run broker-off refusal stays out of
+// the narrowing tests; dispatchWithPATRowsAs picks the launcher.
 func dispatchWithPATRows(t *testing.T, brokerOff bool, gitGrants map[string]uuid.UUID, rows func(runID uuid.UUID) []types.CredentialGrant,
+	winning func(rows []types.CredentialGrant) map[string]string,
+) (*fakeRunner, *dispatchTestStore, *recRecorder, types.AgentRun) {
+	t.Helper()
+	return dispatchWithPATRowsAs(t, true, false, brokerOff, gitGrants, rows, winning)
+}
+
+func dispatchWithPATRowsAs(t *testing.T, operator, refuseOff, brokerOff bool, gitGrants map[string]uuid.UUID, rows func(runID uuid.UUID) []types.CredentialGrant,
 	winning func(rows []types.CredentialGrant) map[string]string,
 ) (*fakeRunner, *dispatchTestStore, *recRecorder, types.AgentRun) {
 	t.Helper()
@@ -40,8 +50,9 @@ func dispatchWithPATRows(t *testing.T, brokerOff bool, gitGrants map[string]uuid
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // composition only: no agent exec, no completion watcher
 	srv.cfg.DisableGitPATBroker = brokerOff
+	srv.cfg.RefuseGitPATBrokerOff = refuseOff
 	st.grants = rows(run.ID)
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{Operator: operator}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		GitGrants: gitGrants, GitPATGrants: winning(st.grants),
 	})
@@ -106,6 +117,74 @@ func TestDispatchStillLaunchesAnUnnarrowedGrantWithTheBrokerOff(t *testing.T) {
 	}, winningByHost)
 	if fr.createCalls != 1 {
 		t.Fatalf("createCalls = %d, want the run dispatched", fr.createCalls)
+	}
+}
+
+// With the broker off the PAT would be minted into the sandbox: a member's run
+// is refused that (0.10.0), an operator's still launches unless
+// WARDYN_GIT_PAT_BROKER_OFF_REFUSED is set, and with the broker on nothing changes.
+func TestDispatchRefusesABrokerOffPATOnAMembersRun(t *testing.T) {
+	pat := func(runID uuid.UUID) []types.CredentialGrant {
+		return []types.CredentialGrant{patRowWith(uuid.New(), runID, "gitlab.corp.io", nil)}
+	}
+	for _, tc := range []struct {
+		name                           string
+		operator, refuseOff, brokerOff bool
+		refused                        bool
+	}{
+		{"member, broker off", false, false, true, true},
+		{"operator, broker off", true, false, true, false},
+		{"operator, broker off, off refused", true, true, true, true},
+		{"member, broker on", false, false, false, false},
+		{"member, broker on, off refused", false, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr, st, audit, run := dispatchWithPATRowsAs(t, tc.operator, tc.refuseOff, tc.brokerOff, nil, pat, winningByHost)
+			if tc.refused {
+				requireRefusedWith(t, fr, st, audit, run, reasonGitPATBrokerOffResident)
+				return
+			}
+			if fr.createCalls != 1 {
+				t.Fatalf("createCalls = %d, want the run dispatched", fr.createCalls)
+			}
+		})
+	}
+}
+
+// A runner_resident git_pat is the pool's delivery choice, not the broker-off
+// lane, and a host another lane serves never reaches that lane: neither is refused.
+func TestBrokerOffPATRefusalSkipsOtherLanes(t *testing.T) {
+	runID := uuid.New()
+	resident := patRowWith(uuid.New(), runID, "gitlab.corp.io", nil)
+	resident.Delivery = types.GrantDeliveryResident
+	env := patNarrowingEnv{residentRefused: true}
+	if reason, _ := brokerOffPATRefusal(brokeredLaneSpecs([]types.CredentialGrant{resident}), env); reason != "" {
+		t.Fatalf("a runner_resident git_pat refused (%s), want it left to the resident-class rules", reason)
+	}
+	ado := patRowWith(uuid.New(), runID, "dev.azure.com", nil)
+	if reason, _ := brokerOffPATRefusal(brokeredLaneSpecs([]types.CredentialGrant{ado}), env); reason != "" {
+		t.Fatalf("an Azure DevOps host refused (%s), want it left to that lane", reason)
+	}
+	plain := patRowWith(uuid.New(), runID, "gitlab.corp.io", nil)
+	if reason, _ := brokerOffPATRefusal(brokeredLaneSpecs([]types.CredentialGrant{plain}), env); reason != reasonGitPATBrokerOffResident {
+		t.Fatalf("reason = %q, want %s", reason, reasonGitPATBrokerOffResident)
+	}
+}
+
+// Review asks the broker-off refusal as dispatch does for a run on this
+// deployment's own substrate; a pooled run may take its git_pat runner_resident,
+// which only dispatch decides, so Review leaves that run to dispatch.
+func TestPATNarrowingAtDoorAsksTheBrokerOffRefusal(t *testing.T) {
+	srv := &Server{cfg: Config{DisableGitPATBroker: true}}
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{patGrantSpec("")}}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/preflight", nil)
+	for _, tc := range []struct {
+		operator, pooled bool
+		want             string
+	}{{false, false, reasonGitPATBrokerOffResident}, {true, false, ""}, {false, true, ""}} {
+		if reason, _ := srv.patNarrowingAtDoor(r, createRunRequest{}, spec, types.SiteConfig{}, tc.operator, tc.pooled); reason != tc.want {
+			t.Errorf("operator=%v pooled=%v: reason = %q, want %q", tc.operator, tc.pooled, reason, tc.want)
+		}
 	}
 }
 

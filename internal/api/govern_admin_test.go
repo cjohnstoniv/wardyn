@@ -335,6 +335,7 @@ var governSiteElsewhere = map[string]string{
 	"markGovernanceExempt":    "test: govern_admin_doors_test.go",
 	"meGovernanceContact":     "none: /me display read, no switch-on test",
 	"refuseNoTicketAttach":    "none: attach entry door, no switch-on test",
+	"revivePATNarrowing":      "test: run_revive_test.go",
 	"unionDirectGitHubEgress": "none: direct GitHub egress union, no switch-on test",
 }
 

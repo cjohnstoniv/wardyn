@@ -58,6 +58,11 @@ type Config struct {
 	Injection []InjectionConfig `json:"injection,omitempty"`
 	// Listen is the proxy listen address (default ":3128").
 	Listen string `json:"listen,omitempty"`
+	// AllowedPeers, when set, are the only source networks the proxy serves; a
+	// connection from any other address is closed before a byte is read. The
+	// Docker runner sets the run's own network here under
+	// WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY. Empty serves any peer.
+	AllowedPeers []netip.Prefix `json:"allowed_peers,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
 	// DecisionSpoolDir is a spool directory shared with runnerd, absent on org substrates. No runner
@@ -242,6 +247,12 @@ type Config struct {
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// ScrubResponses replaces every credential this proxy holds in the
+	// responses it relays from a destination on an intercepted or broker route
+	// (scrub.go), so an echo of a request header cannot hand the sandbox a
+	// value the proxy added. WARDYN_PROXY_RESPONSE_SCRUB at dispatch; false
+	// (the default) relays responses verbatim.
+	ScrubResponses bool `json:"scrub_responses,omitempty"`
 	// Attribution names the policy that governs this run, for the refusals the
 	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
 	// for a run under a governance profile, or any run when the site sets

@@ -622,7 +622,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates + console ESLint
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + actionlint gates + console ESLint
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -642,6 +642,9 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-image-pins.sh
 	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
 	./scripts/check-workflow-artifacts.sh
+	@echo "Running script-hazard gate (scripts/check-script-hazards.sh)..."
+	./scripts/check-script-hazards.sh --selftest
+	./scripts/check-script-hazards.sh
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
@@ -676,8 +679,11 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/nightly_ssh_e2e_test.sh
 	./scripts/lib/up_doctor_ports_test.sh
 	./scripts/test-check-managed-settings-drift.sh
+	./scripts/test-ci-cache-prune.sh
+	./scripts/test-ci-pick-dispatched-run.sh
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
+	./scripts/test-compose-cap-drop.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
@@ -701,6 +707,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-kind-follow-main.sh
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
@@ -719,6 +726,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
 	./scripts/test-setup-launch.sh
+	./scripts/test-up-seed-host-proxy.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
 	./scripts/test-ui-licenses-tsv.sh

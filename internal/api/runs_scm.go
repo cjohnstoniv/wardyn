@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -451,6 +452,10 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// PinRoutes is the method-and-path set form of the pin (the Azure
 		// route gate's rule); see egress.InjectionRule.PinRoutes.
 		PinRoutes []egress.PinRoute `json:"pin_routes"`
+		// Placeholder marks the grant dispatch authors for an env or file
+		// secret's placeholder (authorSecretPlaceholder); carried to the rule.
+		// validateEligibleGrantMode refuses it in any authored policy.
+		Placeholder string `json:"placeholder"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()
@@ -476,6 +481,7 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	return egress.InjectionRule{
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
 		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery, PinRoutes: sc.PinRoutes,
+		Placeholder: sc.Placeholder,
 	}, nil
 }
 
@@ -583,6 +589,9 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 	if !secretNameRE.MatchString(sc.SecretName) {
 		return "", "", fmt.Errorf("env_secret secret_name %q is not a valid secret name", sc.SecretName)
 	}
+	if _, err = secretScopeHost(scope); err != nil {
+		return "", "", fmt.Errorf("env_secret %w", err)
+	}
 	return sc.Name, sc.SecretName, nil
 }
 
@@ -598,6 +607,7 @@ func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err 
 	var sc struct {
 		File       string `json:"file"`
 		SecretName string `json:"secret_name"`
+		Host       string `json:"host"` // read by secretScopeHost
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()
@@ -613,7 +623,28 @@ func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err 
 	if !secretNameRE.MatchString(sc.SecretName) {
 		return "", "", fmt.Errorf("file_secret secret_name %q is not a valid secret name", sc.SecretName)
 	}
+	if _, err = secretScopeHost(scope); err != nil {
+		return "", "", fmt.Errorf("file_secret %w", err)
+	}
 	return sc.File, sc.SecretName, nil
+}
+
+// secretScopeHost is an env_secret or file_secret scope's optional `host`:
+// the one host its value is sent to, where the proxy fills in the placeholder
+// the sandbox holds instead (WARDYN_ENV_SECRET_PLACEHOLDERS,
+// WARDYN_FILE_SECRET_PLACEHOLDERS). Empty when unset; a set host must be a
+// bare exact host, the only shape the proxy injects on.
+func secretScopeHost(scope json.RawMessage) (string, error) {
+	var sc struct {
+		Host string `json:"host"`
+	}
+	if err := json.Unmarshal(scope, &sc); err != nil {
+		return "", err
+	}
+	if sc.Host != "" && (proxy.ValidDomainEntry(sc.Host) != nil || !bareExactHost(sc.Host)) {
+		return "", fmt.Errorf("host %q must be a bare host name: no scheme, port, path or wildcard", sc.Host)
+	}
+	return sc.Host, nil
 }
 
 // validFileSecretName is the file token grammar, [a-z0-9][a-z0-9_.-]{0,62},

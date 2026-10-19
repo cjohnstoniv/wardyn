@@ -50,6 +50,8 @@ test("a dragged line becomes an offer, and Copy writes exactly what was selected
   const offer = page.getByTestId("terminal-copy-offer");
   await expect(offer).toBeVisible();
   await expect(page.getByTestId("terminal-copy-offer-text")).toHaveText("alpha beta gamma");
+  // Focus stays in the terminal, so a screen reader hears the offer only through its polite status region.
+  await expect(offer.getByRole("status")).toHaveText("Copy selection. 16 characters. Ctrl+C copies.");
   expect(await clipboard(page)).toBe("");
   await offer.getByRole("button", { name: "Copy" }).click();
   expect(await clipboard(page)).toBe("alpha beta gamma");

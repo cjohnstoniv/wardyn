@@ -34,7 +34,8 @@
 # docs/operations/who-gets-in.md 1757 adds 5 over 1752, counted from the diff: a renewal sets the expiry to the original length from the request (0.9.3 console session lifetime, review).
 # docs/operations/who-gets-in.md 1789 = 1757 + 32, measured: same session-renewal limit in the sliding-session list
 # 0.9.4 L8: docs/operations/who-gets-in.md 1925 adds 136 over 1789: the session knobs and their trade-off.
-docs/operations/who-gets-in.md=1925 share=35
+# API-5: who-gets-in.md 1938 adds 13 over 1925 (the back-channel logout row), measured.
+docs/operations/who-gets-in.md=1938 share=35
 # docs/operations/admin-only-writes.md 3173 measured after F-1511-1510 merge.
 # docs/operations/admin-only-writes.md 3182 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/admin-only-writes.md 3299 adds 117 over 3182 (0.9 F-1508-M3): the invitation, service-identity and token-move tier rows.
@@ -64,7 +65,8 @@ docs/operations/admin-only-writes.md=3730 share=35
 # docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
-docs/operations/three-roles.md=4677 share=35
+# docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
+docs/operations/three-roles.md=4682 share=35
 docs/operations/provider-policy.md=1278 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
 docs/operations/ownership-and-offboarding.md=2414 share=35
@@ -119,7 +121,8 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 5191 adds 3 (0.9.4 final review): node_record_human_only also names the API token, as the code and docs/sdk.md do.
 # docs/operations/denials.md 5304 adds 113 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
-docs/operations/denials.md=5318 share=35
+# 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
+docs/operations/denials.md=5327 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

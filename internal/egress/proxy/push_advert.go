@@ -42,7 +42,9 @@ func (p *Proxy) noThinAdvert(r *http.Request, rest string) bool {
 
 // relayNoThinAdvert rewrites the head to add no-thin and streams the rest
 // untouched; an unrecognized head is relayed byte-for-byte instead.
-func relayNoThinAdvert(w http.ResponseWriter, resp *http.Response) {
+func (p *Proxy) relayNoThinAdvert(w http.ResponseWriter, resp *http.Response) {
+	w, done := p.scrubbed(w)
+	defer done()
 	head, rewritten := advertWithNoThin(resp)
 	dst := w.Header()
 	copyHeader(dst, resp.Header)

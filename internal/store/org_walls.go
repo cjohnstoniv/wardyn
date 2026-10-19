@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// OrgWallsStore reads the organisation walls (migration 0192). A side interface, as RunPATReader
+// OrgWallsStore reads the organisation walls (migration 0196). A side interface, as RunPATReader
 // is: a store that does not implement it has no walls, so every run resolves as before.
 type OrgWallsStore interface {
 	GetOrgWalls(ctx context.Context) (types.OrgWalls, error)

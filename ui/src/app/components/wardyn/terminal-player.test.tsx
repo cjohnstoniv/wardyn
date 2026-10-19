@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { Recording } from "../../lib/types";
 
 // asciinema-player drives real DOM/canvas terminal emulation — stub it so the
@@ -44,5 +45,19 @@ describe("TerminalPlayer", () => {
 
     const title = screen.getByText("bash");
     expect(title).not.toHaveClass("text-muted-foreground");
+  });
+
+  // The speed radios were three Tab stops with dead arrow keys.
+  it("makes the playback speed one Tab stop that the arrow keys move", async () => {
+    render(<TerminalPlayer recording={rec()} />);
+    const speed = (x: number) => screen.getByRole("radio", { name: `${x}x speed` });
+    expect(speed(1)).toHaveAttribute("tabindex", "0");
+    expect(speed(2)).toHaveAttribute("tabindex", "-1");
+    speed(1).focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(speed(2)).toHaveFocus();
+    expect(speed(2)).toHaveAttribute("aria-checked", "true");
+    await userEvent.keyboard("{End}");
+    expect(speed(4)).toHaveFocus();
   });
 });

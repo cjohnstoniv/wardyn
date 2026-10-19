@@ -118,7 +118,7 @@ async function walkNewRunToTools(page: Page, shape: "agent_task" | "environment"
   await page.locator("#nr-harness-0").selectOption("claude-code");
   if (shape === "agent_task") await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await next(NR_FILES.TITLE);
-  await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  await page.getByRole("checkbox", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
   const size = page.locator("#nr-main-drive-size");
   if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
   await next(NR_TOOLS.TITLE);

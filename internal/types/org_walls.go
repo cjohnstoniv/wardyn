@@ -5,7 +5,7 @@ package types
 
 import "time"
 
-// OrgWalls is the site-level organisation walls document (migration 0192): the outermost limit on
+// OrgWalls is the site-level organisation walls document (migration 0196): the outermost limit on
 // every run's effective policy, super admins' own runs included. Only the admin token's break-glass
 // run stands outside it. Enabled is false until a security admin turns it on, and a deployment with
 // no row has no walls, so either way every run resolves as it did before walls existed.

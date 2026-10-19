@@ -65,6 +65,27 @@ test.describe("Run output tab", () => {
     expect(calls).toBe(settled);
   });
 
+  test("one failed poll after a good read keeps the output on screen and the next read carries on", async ({ page }) => {
+    let calls = 0;
+    await page.route(OUTPUT_GLOB, async (route) => {
+      calls++;
+      if (calls === 2) return route.fulfill({ status: 502, json: { error: "bad gateway" } });
+      return route.fulfill({
+        json: calls < 2 ? body({ complete: false, captured_at: undefined, output: "$ first read" }) : body({ output: "$ third read" }),
+      });
+    });
+    await openOutputTab(page);
+    const pre = page.getByTestId("run-output-text");
+    await expect(pre).toContainText("$ first read");
+
+    // The failed poll lands, and the output is still there, with no error screen.
+    await expect.poll(() => calls, { timeout: POLL_MS * 2 }).toBeGreaterThanOrEqual(2);
+    await expect(pre).toContainText("$ first read");
+    await expect(page.getByText(RUN_COCKPIT.loadError)).toHaveCount(0);
+    // The next read (after the backed-off wait) brings the final output.
+    await expect(pre).toContainText("$ third read", { timeout: POLL_MS * 4 });
+  });
+
   test("a spliced pane snapshot: Last screen and its caption", async ({ page }) => {
     await page.route(OUTPUT_GLOB, (route) =>
       route.fulfill({ json: body({ source: "pane_snapshot", output: "user@sandbox:~$ " }) }),

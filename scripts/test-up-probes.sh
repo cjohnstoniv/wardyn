@@ -141,9 +141,9 @@ grep -qE '^wardynd_probe\(\) \{' "${UP_SH}" \
   || fail "scripts/up.sh has no wardynd_probe() — the post-boot probes must go through ONE helper that sends the loopback Host + bearer the gates require (ADV2-01/ADV2-02)"
 
 probe_body="$(sed -n '/^wardynd_probe() {/,/^}/p' "${UP_SH}")"
-printf '%s' "${probe_body}" | grep -q 'curlimages/curl' \
+printf '%s' "${probe_body}" | grep 'curlimages/curl' >/dev/null \
   || fail "the surviving curlimages/curl invocation is not inside wardynd_probe()"
-printf '%s' "${probe_body}" | grep -qE -- '-H "Host: (127\.0\.0\.1|localhost|\[::1\])' \
+printf '%s' "${probe_body}" | grep -E -- '-H "Host: (127\.0\.0\.1|localhost|\[::1\])' >/dev/null \
   || fail "wardynd_probe() does not override Host with a loopback authority — local mode's DNS-rebinding guard 403s the Docker-DNS authority 'wardynd:8080' (ADV2-01)"
 
 # ...and that ONE reference must be DIGEST-pinned and run --pull=never (F006 /
@@ -152,9 +152,9 @@ printf '%s' "${probe_body}" | grep -qE -- '-H "Host: (127\.0\.0\.1|localhost|\[:
 # credential — three times on every `make setup`. curlimages/curl is a community
 # Docker Hub repository, so `:latest` there is re-pointable by whoever holds
 # that account, and each `up` would silently fetch whatever it points at today.
-printf '%s' "${probe_body}" | grep -qE 'curlimages/curl@sha256:[0-9a-f]{64}' \
+printf '%s' "${probe_body}" | grep -E 'curlimages/curl@sha256:[0-9a-f]{64}' >/dev/null \
   || fail "wardynd_probe()'s curl image is not digest-pinned — a floating community tag is resolved fresh on every \`make setup\` and run ON wardyn-internal, where the local-mode forwarder answers the control-plane API with no credential (F006/F010/F152)"
-printf '%s' "${probe_body}" | grep -q -- '--pull=never' \
+printf '%s' "${probe_body}" | grep -- '--pull=never' >/dev/null \
   || fail "wardynd_probe()'s docker run does not pass --pull=never — the digest pin only binds if the run itself resolves nothing at probe time (F006/F010/F152)"
 eval "${probe_body}"
 
@@ -376,7 +376,7 @@ grep -q 'No such image' "${dir}/c1-probe.err" \
 # Pin the mechanism too: a re-added 2>/dev/null on the probe's docker run puts
 # the whole defect straight back, and the behavioural case above would still
 # pass against a stub that wrote nothing.
-if printf '%s' "${probe_body}" | grep -q '2>/dev/null'; then
+if printf '%s' "${probe_body}" | grep '2>/dev/null' >/dev/null; then
   fail "wardynd_probe redirects the probe container's stderr to /dev/null again (perf2-C3)"
 fi
 pass "C1 wardynd_probe reports the probe container's own failure and still yields 000"
@@ -396,11 +396,11 @@ pass "C1 wardynd_probe reports the probe container's own failure and still yield
 # printed only where that check returned 0.
 cv_body="$(sed -n '/^cosign_verify() {/,/^}/p' "${UP_SH}")"
 [ -n "${cv_body}" ] || fail "scripts/up.sh has no cosign_verify() — the pull path announces 'cosign-signed, SBOM-attested' and nothing in the script verifies anything (F005/F100)"
-printf '%s' "${cv_body}" | grep -q -- '--certificate-identity ' \
+printf '%s' "${cv_body}" | grep -- '--certificate-identity ' >/dev/null \
   || fail "cosign_verify() does not pin the certificate IDENTITY — a keyless signature verified against no identity says only 'somebody signed this' (docs/VERIFY.md s1)"
-! printf '%s' "${cv_body}" | grep -q 'identity-regexp' \
+! printf '%s' "${cv_body}" | grep 'identity-regexp' >/dev/null \
   || fail "cosign_verify() pins a certificate identity REGEXP — a signature from any other release tag would pass for the version being installed (#1496)"
-printf '%s' "${cv_body}" | grep -q 'verify-attestation' \
+printf '%s' "${cv_body}" | grep 'verify-attestation' >/dev/null \
   || fail "cosign_verify() checks the signature but not the SBOM attestation — 'SBOM-attested' is half the claim being made (docs/VERIFY.md s2)"
 
 # Drive it. cosign absent -> 2 (an ABSENT check, not a failed one); cosign
@@ -469,7 +469,7 @@ for svc in ${built_when_pulled}; do
   [ -n "${svc}" ] || continue
   img="$(svc_image "${svc}")"
   case "${img}" in \$\{*:-*\}) img="${img#*:-}"; img="${img%\}}" ;; esac
-  printf '%s\n' "${pulled_local}" | grep -qxF "${img}" \
+  printf '%s\n' "${pulled_local}" | grep -xF "${img}" >/dev/null \
     && fail "scripts/up.sh pulls ${img} and then rebuilds service '${svc}' anyway — the published image is discarded and 'Skipped the local build' is false for it (F099)"
 done
 
@@ -479,12 +479,12 @@ notpulled_branch="$(awk '/^    if \$pulled_all; then$/{g=1;next} g==1&&/^    els
 built_when_built="$( { printf '%s\n' "${notpulled_branch}" | grep -oE 'compose --profile build-only build [a-z0-9-]+' | awk '{print $NF}'
                        printf '%s\n' "${notpulled_branch}" | sed -nE 's/^ *_svcs="([a-z0-9 -]+)".*/\1/p' | tr ' ' '\n'; } | sort -u)"
 for svc in proxy-image agent-base agent-claude-code agent-codex-cli agent-aws-sso; do
-  printf '%s\n' "${built_when_built}" | grep -qxF "${svc}" \
+  printf '%s\n' "${built_when_built}" | grep -xF "${svc}" >/dev/null \
     || fail "with no published images to pull, scripts/up.sh no longer builds '${svc}' — the air-gapped / pre-push / WARDYN_BUILD_LOCAL path needs all five (F099)"
 done
 # ...and agent-claude-code is built on BOTH arms: Wardyn publishes no image
 # carrying the vendor CLI, so there is nothing to pull for it (docs/VERIFY.md).
-printf '%s\n' "${built_when_pulled}" | grep -qxF agent-claude-code \
+printf '%s\n' "${built_when_pulled}" | grep -xF agent-claude-code >/dev/null \
   || fail "the pulled arm skips agent-claude-code, which is never published — the one agent that MUST be built locally would be missing after \`make setup\` (F099)"
 pass "C5 no service whose image the pull-first block retags is rebuilt unconditionally"
 

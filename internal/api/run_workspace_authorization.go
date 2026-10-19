@@ -95,7 +95,7 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	if msg, reason := s.validateImageBuildRequest(*req); msg != "" {
 		return workspaceSeed{}, runError(http.StatusBadRequest, reason, msg)
 	}
-	if code, reason, err := s.validateWorkspaceSources(ctx, *spec); err != nil {
+	if code, reason, err := s.validateWorkspaceSources(ctx, *spec, s.launchCarrierRule(r, seed.attached)); err != nil {
 		return workspaceSeed{}, runError(code, reason, "workspace: "+err.Error())
 	}
 	// The caller-scoped twin of the onboarding gate above: onboarded is not the

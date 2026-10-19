@@ -1918,6 +1918,11 @@ var _ store.RunsByCreatorPager = (*authzStore)(nil)
 
 func (s *authzStore) Ping(_ context.Context) error { return nil }
 
+// RunCapacity answers the fleet capacity read so the matrix's admin probes reach the handler's 200.
+func (s *authzStore) RunCapacity(context.Context, store.RunCapacityOpts) (store.RunCapacity, error) {
+	return store.RunCapacity{}, nil
+}
+
 func (s *authzStore) CreateRun(_ context.Context, r types.AgentRun) (types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2377,8 +2382,8 @@ func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Tim
 func (s *authzStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	return g, nil
 }
-func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteCapabilityGrant(context.Context, uuid.UUID) (types.CapabilityGrant, error) {
+	return types.CapabilityGrant{}, store.ErrNotFound
 }
 func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
 	return nil, nil
@@ -2480,8 +2485,8 @@ func (s *authzStore) ListGovernanceProfiles(context.Context) ([]types.Governance
 func (s *authzStore) UpsertGovernanceAssignment(_ context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
 	return a, nil
 }
-func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) error {
-	return store.ErrNotFound
+func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) (types.GovernanceAssignment, error) {
+	return types.GovernanceAssignment{}, store.ErrNotFound
 }
 func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
 	return nil, nil

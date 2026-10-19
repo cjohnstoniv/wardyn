@@ -185,7 +185,7 @@ type Store interface {
 	// SECURITY: the resolver runs on the request path; the fail mode is a
 	// fail-open authz gate hiding in an untyped test double.
 	UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error)
-	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error
+	DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) (types.CapabilityGrant, error)
 	ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error)
 	// ListGroupDenyGrants returns the group-subject DENY rows of one kind, the only rows the
 	// unresolvable-group-deny refusal can match — separate from ListCapabilityGrants so that
@@ -269,7 +269,7 @@ type Store interface {
 	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no
 	// profile (the FK rejects it).
 	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
-	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
+	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) (types.GovernanceAssignment, error)
 	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
 	// Governance changes (migration 0126): a governance write held for a second human. Part of
 	// this interface, not an optional seam, because a store without them would let a covered write

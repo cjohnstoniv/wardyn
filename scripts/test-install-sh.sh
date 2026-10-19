@@ -32,7 +32,7 @@ READMES=("README.md" "deploy/helm/wardyn/README.md")
 # ── 1. It is a shell script, and it parses ────────────────────────────────
 [ -f "$INSTALL" ] || fail "$INSTALL is missing"
 # POSIX sh, deliberately — it runs on a machine we know nothing about.
-head -1 "$INSTALL" | grep -q 'env sh$' \
+head -1 "$INSTALL" | grep 'env sh$' >/dev/null \
   || fail "$INSTALL is no longer #!/usr/bin/env sh — it runs before anything of ours is installed, so it must not need bash"
 sh -n "$INSTALL" || fail "$INSTALL failed sh -n"
 if command -v shellcheck >/dev/null 2>&1; then

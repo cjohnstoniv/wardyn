@@ -272,3 +272,26 @@ func waitAdvisoryWaiters(ctx context.Context, t *testing.T, q pgx.Tx, n int) {
 		}
 	}
 }
+
+// A run that carries an intent is one transaction even with no identity guard on ctx: an intent insert
+// that fails leaves no run, through CreateRun and CreateRunUnderCap alike.
+func TestPG_LaunchIntentFailureLeavesNoRun(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION li_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'intent refused'; END $$;
+		CREATE TRIGGER li_refuse BEFORE INSERT ON run_launch_intents FOR EACH ROW EXECUTE FUNCTION li_refuse();`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRun(ctx, intentRun("alice", `{"agent":"claude-code"}`)); err == nil {
+		t.Fatal("CreateRun succeeded with a failing intent insert")
+	}
+	if _, err := st.CreateRunUnderCap(ctx, intentRun("alice", `{"agent":"claude-code"}`), 10); err == nil {
+		t.Fatal("CreateRunUnderCap succeeded with a failing intent insert")
+	}
+	var runs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs`).Scan(&runs); err != nil || runs != 0 {
+		t.Errorf("agent_runs holds %d row(s) (%v) after the intent inserts failed, want none", runs, err)
+	}
+}

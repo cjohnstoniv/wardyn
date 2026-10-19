@@ -100,8 +100,8 @@ async function openTemplates(page: Page) {
 }
 
 const list = (page: Page) => page.getByRole("region", { name: T.LIST_ARIA });
-const rowOf = (page: Page, name: string) => list(page).getByRole("listitem").filter({ has: page.getByText(name, { exact: true }) });
-const names = (page: Page) => list(page).getByRole("listitem").locator("strong");
+const rowOf = (page: Page, name: string) => list(page).getByRole("row").filter({ has: page.getByText(name, { exact: true }) });
+const names = (page: Page) => list(page).getByRole("row").locator("strong");
 
 test.describe("Templates: filters and rows", () => {
   test("All, Only me, Groups and Organisation; the kinds; and the name search narrow the list", async ({ page }) => {
@@ -129,10 +129,21 @@ test.describe("Templates: filters and rows", () => {
     await expect(names(page)).toHaveText([PLATFORM_BASELINE.name, ORG_BASELINE.name]);
   });
 
+  test("the list is a table: one named column header per column and a cell under each in every row", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openTemplates(page);
+    const table = list(page).getByRole("table", { name: T.LIST_ARIA });
+    await expect(table.getByRole("columnheader")).toHaveText([T.COL_NAME, T.COL_AVAILABLE, T.COL_INCLUDES, T.COL_UPDATED, T.COL_ACTIONS]);
+    await expect(table.getByRole("row").filter({ has: page.getByRole("cell") })).toHaveCount(CATALOGUE.length);
+    await expect(rowOf(page, NIGHTLY.name).getByRole("cell")).toHaveCount(5);
+  });
+
   test("a sign-in that cannot confirm the person's groups says so over the list, and says nothing otherwise", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: { ...ME_ONLY, groups_unverified: true } });
     await openTemplates(page);
     await expect(page.getByText(T.GROUPS_UNVERIFIED)).toBeVisible();
+    // #2830: the advice to sign in again is for an SSO sign-in only; a token session cannot act on it.
+    await expect(page.getByText("If you signed in with SSO, sign in again to see them.", { exact: false })).toBeVisible();
     await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });

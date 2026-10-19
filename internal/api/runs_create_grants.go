@@ -46,8 +46,7 @@ type grantWiring struct {
 	// / *.visualstudio.com bundle — see adoEgressDomains).
 	gitPATEgress []string
 	// sshGrants: host -> grant id, surfaced as WARDYN_SSH_GRANTS so agent-run
-	// can mint the resident private key at clone time (the key material is
-	// returned only through the brokered mint path and wiped after the clone).
+	// can wire the clone onto the proxy's ssh agent, which holds the key.
 	sshGrants map[string]string
 	// sshEgress collects the SSH-over-443 endpoints these grants need reachable.
 	sshEgress []string

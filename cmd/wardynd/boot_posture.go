@@ -355,7 +355,7 @@ func plural(n int, one, many string) string {
 // The TLS posture is taken rather than re-derived so this listener answers to
 // the SAME plaintext refusal the console does (refusePlaintextListen): the
 // relay session cookie is a bearer credential, and it travels on this address.
-func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
+func validateUISandboxConfig(uiListen, listen, internalListen, sshListen, originTemplate, stripCookies string, posture tlsPosture, allowPlaintextListen bool) error {
 	if uiListen == "" {
 		return nil // off: nothing to validate, no listener, no new surface
 	}
@@ -367,6 +367,9 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate, stripC
 			"the UI-sandbox gateway relays the SANDBOX's own pages, and serving them on the console's origin would let that "+
 			"sandbox-authored code read the console session and drive every admin action the operator can; "+
 			"give the gateway its own address (e.g. \":8081\") or unset WARDYN_UI_SANDBOX_LISTEN to disable it", uiListen)
+	}
+	if internalListen != "" && sameListenAddress(uiListen, internalListen) {
+		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -internal-listen; give each listener its own address", uiListen)
 	}
 	if sshListen != "" && sameListenAddress(uiListen, sshListen) {
 		return fmt.Errorf("refusing to start: -ui-sandbox-listen %q is the same address as -ssh-listen; give each gateway its own address", uiListen)
@@ -413,6 +416,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRemovedEnv(os.Environ()); err != nil {
 		return err
 	}
+	if err := refuseAWSSSOProxyInjectOff(f.awsSSOProxyInject); err != nil {
+		return err
+	}
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
@@ -425,7 +431,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHAPosture(f); err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {
@@ -434,10 +440,16 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateSSHProxyCommand(*f.sshProxyCommand); err != nil {
 		return err
 	}
+	if err := validateSyncFlags(f); err != nil {
+		return err
+	}
 	if f.sshMaxSessionsPerRun != nil {
 		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
 			return err
 		}
+	}
+	if err := validatePositiveBounds(f); err != nil {
+		return err
 	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
@@ -502,6 +514,16 @@ func refuseRemovedEnv(environ []string) error {
 		return nil
 	}
 	return fmt.Errorf("refusing to start: %s: removed in 0.9 and no longer read, so the setting would be silently lost — rename it before starting", strings.Join(left, ", "))
+}
+
+// refuseAWSSSOProxyInjectOff refuses the retired WARDYN_AWS_SSO_PROXY_INJECT=off, which wrote the AWS
+// sign-in token into the sandbox. A value the resolver reads as the default still boots.
+func refuseAWSSSOProxyInjectOff(raw *string) error {
+	if raw == nil || api.ResolveAWSSSOProxyInject(*raw) {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_AWS_SSO_PROXY_INJECT=%s was removed in 0.10.0: the AWS sign-in token now always stays at the proxy "+
+		"and the sandbox holds a placeholder. Unset WARDYN_AWS_SSO_PROXY_INJECT (or set it to on) before starting", strings.TrimSpace(*raw))
 }
 
 // validateHAPosture is the boot half of high availability, the half that still
@@ -780,4 +802,18 @@ func parseGovernAdminRunsExempt(csv string, governAdminRuns bool) ([]string, err
 		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS_EXEMPT is set but WARDYN_GOVERN_ADMIN_RUNS is not, so it does nothing.")
 	}
 	return out, nil
+}
+
+// validateSyncFlags checks the wardyn sync flags: the organisation's ignore
+// patterns and the local-folder seed wait.
+func validateSyncFlags(f *bootFlags) error {
+	if f.localFolderSeedWait != nil && *f.localFolderSeedWait <= 0 {
+		return fmt.Errorf("WARDYN_LOCAL_FOLDER_SEED_WAIT must be positive, got %s", *f.localFolderSeedWait)
+	}
+	if f.syncDeny != nil {
+		if _, err := api.ParseSyncDeny(*f.syncDeny); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -69,7 +69,8 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
 		// Stream: ignore the copy error — client may disconnect mid-stream. A STORE read
-		// error part-way ends the body short of its tail; the status is already sent, so log it.
+		// error part-way would end the body short of its tail after a 200, and a short cast is
+		// still a well-formed one; log it and abort the response so the client sees a failed transfer.
 		var readErr error
 		_, _ = io.Copy(w, readerFunc(func(p []byte) (int, error) {
 			n, err := rc.Read(p)
@@ -80,6 +81,7 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		}))
 		if readErr != nil {
 			slog.ErrorContext(req.Context(), "recording: replay read failed part-way", "run", prefix, "error", readErr)
+			panic(http.ErrAbortHandler)
 		}
 	})
 	return r

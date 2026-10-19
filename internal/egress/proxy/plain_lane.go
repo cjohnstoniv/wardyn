@@ -155,5 +155,5 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	relay(w, resp)
+	p.relay(w, resp)
 }

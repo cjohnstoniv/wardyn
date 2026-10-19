@@ -282,7 +282,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, d.allow)
 	allow.Scan = scanSummary
 	p.emitDialledAllow(allow, host)
-	relay(w, resp)
+	p.relay(w, resp)
 }
 
 func (p *Proxy) emitPATAPIDecision(r *http.Request, host string, port int, d egress.Decision, ruleSource string) {

@@ -119,7 +119,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var p types.RunPolicy
+			var p sdk.PolicySaved
 			verb := "created"
 			if hasID {
 				verb = "updated"
@@ -134,6 +134,7 @@ func policyCmd(client clientFn) *cobra.Command {
 				return emitJSON(cmd.OutOrStdout(), p)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s policy %s (%q, min %s)\n", verb, p.ID, p.Name, p.Spec.MinConfinementClass)
+			printMissingRequirements(cmd.ErrOrStderr(), p.Requirements)
 			return nil
 		},
 	}
@@ -297,4 +298,15 @@ func hasSpec(raw []byte) bool {
 	}
 	_, ok := probe["spec"]
 	return ok
+}
+
+// printMissingRequirements tells a saver which stored secrets their policy
+// names that the saver has not stored. The save is not refused for them, but the
+// first run on the policy fails at launch.
+func printMissingRequirements(w io.Writer, reqs []sdk.ComponentRequirement) {
+	for _, r := range reqs {
+		if r.Status == "missing" {
+			fmt.Fprintf(w, "warning: %s %q is not stored yet; a run on this policy fails at launch until it is (wardyn secret set %s)\n", r.Kind, r.Name, r.Name)
+		}
+	}
 }

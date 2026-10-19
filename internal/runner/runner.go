@@ -193,6 +193,7 @@ type ProxyConfig struct {
 	LLMChannelHosts      map[string]string         // model host -> vendor schema it is inspected as; never an LLMUpstreams entry (proxy.Config.LLMChannelHosts)
 	LLMUnavailableDetail string                    // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
+	ScrubResponses       bool                      // replace proxy-held credentials in relayed responses (proxy.Config.ScrubResponses)
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
@@ -234,6 +235,10 @@ type Resources struct {
 	// run has no cap. Only the k8s substrate reads it, as the run pods'
 	// activeDeadlineSeconds and the quota scope that deadline selects.
 	LifetimeCap time.Duration
+	// ProxyAzure says the run's proxy carries an Azure route gate, which raises the proxy's memory
+	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads
+	// ProxyConfig.AzureGates, so it never rides the runner wire.
+	ProxyAzure bool `json:"-"`
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).

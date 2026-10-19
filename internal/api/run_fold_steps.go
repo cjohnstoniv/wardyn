@@ -124,7 +124,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.Store != nil {
 		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
 	}
-	carriers := indexWorkspacesFor(all, func(ws types.Workspace) bool { return s.mayLaunchWorkspace(f.r, ws) })
+	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
@@ -523,7 +523,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite, f.ceiling.Operator, f.place.pooled); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}
@@ -558,7 +558,8 @@ func (s *Server) stepRunFit(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refused bool
-	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second, f.queued)
+	f.fitWarnings, refused = s.refuseRunFit(f.w, f.r, s.runFitSpec(f.spec, f.mainDrive), time.Duration(f.end.capSec)*time.Second,
+		runProxyAzure(f.mpChoice, f.harnessChoices), f.queued)
 	return !refused
 }
 

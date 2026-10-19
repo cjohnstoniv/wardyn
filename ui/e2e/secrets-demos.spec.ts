@@ -39,7 +39,7 @@ import { test, expect, ADMIN_TOKEN } from "./fixtures";
 //    bare deep link to either bounces back to the nearest surviving step
 //    (write-only-by-design, the section's own first demo) rather than
 //    opening a step whose Start would 422. The three per-kind needsSecret
-//    cards (rest-api-token, pat-stdout-only, ssh-briefly-resident) behave
+//    cards (rest-api-token, pat-stdout-only, ssh-at-the-proxy) behave
 //    identically, by the same one predicate — pinned deterministically in
 //    steps.test.ts rather than re-driven three more times here.
 //  - once the secret exists, both steps open, render their real

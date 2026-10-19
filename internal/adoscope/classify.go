@@ -420,17 +420,27 @@ var deniedAreas = map[string]Capability{
 func readWrite(r route) bool {
 	switch r.area {
 	case "wit":
-		return r.res == "wiql" || r.res == "workitemsbatch"
+		// wiql, workitemsbatch, and reporting/workitemrevisions (Read Reporting Revisions Post).
+		return r.res == "wiql" || r.res == "workitemsbatch" ||
+			r.res == "reporting" && r.at(3) == "workitemrevisions"
 	case "git":
-		// {project}/_apis/git/repositories/{repositoryId}/pullrequestquery
-		return r.res == "repositories" && r.at(4) == "pullrequestquery"
+		// {project}/_apis/git/repositories/{repositoryId}/{resource}
+		return r.res == "repositories" && slices.Contains(gitQueryResources, r.at(4))
+	case "graph":
+		// Subject Query and Subject Lookup on vssps resolve people and groups.
+		return r.res == "subjectquery" || r.res == "subjectlookup"
 	case "search":
-		// Code/work-item search lives on its own host; "search" under
-		// dev.azure.com is not a documented query door.
-		return strings.HasPrefix(r.host, "almsearch.")
+		// Search lives on its own host (almsearch.dev.azure.com, or the legacy
+		// <org>.almsearch.visualstudio.com); "search" under dev.azure.com is
+		// not a documented query door.
+		return strings.HasPrefix(r.host, "almsearch.") || strings.HasSuffix(r.host, ".almsearch.visualstudio.com")
 	}
 	return false
 }
+
+// gitQueryResources are the repository sub-resources whose POST only reads:
+// Pull Request Query, Get Commits Batch, Get Items Batch and Get Blobs Zip.
+var gitQueryResources = []string{"pullrequestquery", "commitsbatch", "itemsbatch", "blobs"}
 
 // classifyWrite names the capability a write needs, by area. DEFAULT is
 // CapUnclassifiedWrite: a new area is refused until someone adds it here,

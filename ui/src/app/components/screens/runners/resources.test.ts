@@ -8,7 +8,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import type { RemoteRunnerView, RunnerPool, RunnerPoolMemberView } from "../../../lib/types/runner-pools";
 import type { RunnerLimits, RunnerUsage, RunnerView } from "../../../lib/types/runners";
 import {
-  amountsText, barriersText, fmtAmount, fmtDur, fmtInUse, membersOf, narrowShort, narrowText, perRunShare, poolRes, proposeLimits, runnerRes, runTypesText, usedPct,
+  amountsText, barriersText, fmtAmount, fmtInUse, membersOf, narrowShort, narrowText, perRunShare, poolRes, proposeLimits, runnerRes, runTypesText, usedPct,
 } from "./resources";
 
 const G = 1024;
@@ -135,9 +135,5 @@ describe("limits setup", () => {
     expect(p.runs_at_once).toBe(4);
     expect(amountsText(p.total)).toBe("4 CPUs · 16 GB memory · 250 GB disk");
     expect(amountsText(p.per_run)).toBe("1 CPU · 4 GB memory · 62 GB disk");
-  });
-
-  it("writes a duration in its largest whole unit", () => {
-    expect([fmtDur(3600), fmtDur(86400), fmtDur(1800), fmtDur(172800), fmtDur(90)]).toEqual(["1 hour", "1 day", "30 minutes", "2 days", "90 seconds"]);
   });
 });

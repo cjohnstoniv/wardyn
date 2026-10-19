@@ -176,9 +176,12 @@ type AgentRun struct {
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
-	Reserved   RunnerAmounts `json:"-"`
-	SandboxRef string        `json:"sandbox_ref,omitempty"`
-	Image      string        `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	Reserved RunnerAmounts `json:"-"`
+	// LocalFolder is the folder on the creator's computer that `wardyn sync` seeds before the agent
+	// starts (0195, run_local_folder.go): written with the row, read back only by dispatch's hold.
+	LocalFolder *RunLocalFolder `json:"-"`
+	SandboxRef  string          `json:"sandbox_ref,omitempty"`
+	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -231,7 +234,7 @@ type AgentRun struct {
 	Preset          string `json:"preset,omitempty"`    // launch preset this run was expanded from; empty for an explicit-spec run
 	PresetVersion   int    `json:"preset_version,omitempty"`
 	OperatorOwned   bool   `json:"operator_owned,omitempty"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided; the console reads it for the no-personal-owner entry carve-out
-	// BreakGlass marks a run the admin token launched past the org walls (migration 0192): only set while the walls were on.
+	// BreakGlass marks a run the admin token launched past the org walls (migration 0196): only set while the walls were on.
 	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
@@ -262,9 +265,8 @@ const (
 	GrantAPIKey      GrantKind = "api_key"   // proxy-side injection only
 	// GrantGitPAT returns a stored PAT to the git credential helper for a non-GitHub host (ADO/GitLab), an opaque CONNECT tunnel the proxy can't inject into.
 	GrantGitPAT GrantKind = "git_pat"
-	// GrantSSHKey materializes a resident, agent-readable SSH private key for git-over-SSH — a DOCUMENTED EXCEPTION to the no-resident-secret invariant
-	// (no credential-helper seam for SSH). agent-run writes it 0400 just before the clone and wipes it right after; residual risk is code running as the
-	// agent uid during that window. See broker.mintSSHKey.
+	// GrantSSHKey is an SSH private key for git-over-SSH. SSH has no credential-helper seam, so the key stays in the run's proxy, whose ssh agent signs
+	// the start-up clone's SSH sign-in and then closes (internal/egress/proxy/ssh_agent.go); the key never enters the sandbox. See broker.mintSSHKey.
 	GrantSSHKey GrantKind = "ssh_key"
 	// GrantEnvSecret places a stored secret into the sandbox environment at dispatch — the second DOCUMENTED EXCEPTION to the no-resident-secret invariant.
 	// Unlike every other kind: NOT BROKERED (no mint/approval/TTL/JTI); RESIDENT FOR THE WHOLE RUN (readable via /proc/self/environ as the agent uid);
@@ -439,6 +441,9 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
+	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
+	LastRejoinedAt *time.Time `json:"-"`
 	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
 	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
 	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
@@ -491,7 +496,7 @@ type AuditEvent struct {
 }
 
 // SSHPublicKey is a human's registered public key for the SSH gateway, distinct from GrantSpec's
-// ssh_key grant (a resident private key for git-over-SSH — see GrantSSHKey). This is the gateway's
+// ssh_key grant (a private key for git-over-SSH, held by the run's proxy — see GrantSSHKey). This is the gateway's
 // trust root: it authenticates an incoming connection ONLY against rows here, then authorizes
 // owner-or-admin. Fingerprint is computed server-side from the parsed key, never client-supplied.
 // Role is the registering session's own role, stamped at registration and refreshed on every OIDC
@@ -608,3 +613,12 @@ type PersonList struct {
 // of at most 64 MiB (128 GiB) and a replay or list render at 2048 reads. The
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
+
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
+// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
+// agent until the first sync of that folder into RemoteDir has completed.
+type RunLocalFolder struct {
+	Name      string `json:"name"`
+	RemoteDir string `json:"remote_dir,omitempty"`
+}

@@ -262,6 +262,9 @@ func (e *ViaOrgEngine) ServeBroker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "via_org: not a brokered route", http.StatusForbidden)
 		return
 	}
+	// The control plane's listener sets no read timeout, so the request body
+	// gets the same bound a terminated tunnel's does.
+	rearmBodyDeadline(w)
 	e.srv.proxy.handleGitBroker(w, r)
 }
 

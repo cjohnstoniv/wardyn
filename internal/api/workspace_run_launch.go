@@ -26,7 +26,9 @@ import (
 // workspace id. The lookup is by workspaceSourceIndex (workspace_refs.go),
 // built from EVERY workspace's Sources — not the single-source Kind/Source
 // mirror, which is empty for a multi-source workspace.
-func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicySpec) []types.Workspace {
+// A source several workspaces carry resolves to one owner may launch (their own
+// or an operator's; every one for owner "", an operator), as at launch.
+func (s *Server) referencedWorkspaces(ctx context.Context, owner string, spec types.RunPolicySpec) []types.Workspace {
 	if s.cfg.Store == nil {
 		return nil
 	}
@@ -34,15 +36,14 @@ func (s *Server) referencedWorkspaces(ctx context.Context, spec types.RunPolicyS
 	if err != nil {
 		return nil
 	}
-	return referencedWorkspacesIn(all, spec)
+	var rule runCarrierRule
+	if owner != "" {
+		rule.mayLaunch = func(ws types.Workspace) bool { return ws.OwnedBy == "" || ws.OwnedBy == owner }
+	}
+	return referencedWorkspacesBy(rule.index(all), spec)
 }
 
-// referencedWorkspacesIn is referencedWorkspaces over a list already read.
-func referencedWorkspacesIn(all []types.Workspace, spec types.RunPolicySpec) []types.Workspace {
-	return referencedWorkspacesBy(indexWorkspacesBySource(all), spec)
-}
-
-// referencedWorkspacesBy is referencedWorkspacesIn over an index already built.
+// referencedWorkspacesBy is referencedWorkspaces over an index already built.
 func referencedWorkspacesBy(idx workspaceSourceIndex, spec types.RunPolicySpec) []types.Workspace {
 	var out []types.Workspace
 	seen := map[uuid.UUID]bool{}

@@ -284,6 +284,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if _, refusal := runRequestEnums(req); refusal.write(s, w, r) {
 		return
 	}
+	if s.localFolderRefusal(&req).write(s, w, r) {
+		return
+	}
 	// Same free-text field caps + control-character check launch runs over every
 	// caller-supplied string on this body (runs_create_fields.go): one loop, one
 	// 400 shape, shared so Review never previews a request the create door 400s.

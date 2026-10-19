@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -39,9 +40,23 @@ type syncReport struct {
 	Pulled    []string      `json:"pulled"`
 	Conflicts []string      `json:"conflicts"`
 	Refused   []syncRefusal `json:"refused"`
-	BytesOut  int64         `json:"bytes_to_sandbox"`
-	BytesIn   int64         `json:"bytes_from_sandbox"`
-	seenSet   map[string]bool
+	// DeletedRemote and Renamed are what this pass removed or renamed in the
+	// sandbox to follow the laptop; DeletedLocal is what --pull-deletes removed
+	// on the laptop (each kept under KeptIn).
+	DeletedRemote []string     `json:"deleted_in_sandbox"`
+	Renamed       []syncRename `json:"renamed_in_sandbox"`
+	DeletedLocal  []string     `json:"deleted_on_laptop"`
+	KeptIn        string       `json:"deleted_kept_in,omitempty"`
+	// Ignored counts the entries the ignore files left out, on both sides.
+	Ignored  int   `json:"ignored"`
+	BytesOut int64 `json:"bytes_to_sandbox"`
+	BytesIn  int64 `json:"bytes_from_sandbox"`
+	seenSet  map[string]bool
+}
+
+type syncRename struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type syncRefusal struct {
@@ -50,7 +65,8 @@ type syncRefusal struct {
 }
 
 func newSyncReport() *syncReport {
-	return &syncReport{Pushed: []string{}, Pulled: []string{}, Conflicts: []string{}, Refused: []syncRefusal{}, seenSet: map[string]bool{}}
+	return &syncReport{Pushed: []string{}, Pulled: []string{}, Conflicts: []string{}, Refused: []syncRefusal{},
+		DeletedRemote: []string{}, Renamed: []syncRename{}, DeletedLocal: []string{}, seenSet: map[string]bool{}}
 }
 
 func (r *syncReport) refuse(rel, reason string) {
@@ -61,13 +77,23 @@ func (r *syncReport) refuse(rel, reason string) {
 }
 
 func (r *syncReport) empty() bool {
-	return len(r.Pushed)+len(r.Pulled)+len(r.Conflicts)+len(r.Refused) == 0
+	return len(r.Pushed)+len(r.Pulled)+len(r.Conflicts)+len(r.Refused)+len(r.DeletedRemote)+len(r.Renamed)+len(r.DeletedLocal) == 0
 }
 
 type syncOptions struct {
 	remote       string // absolute, validated sandbox directory
 	pull         bool
 	maxPullBytes int64
+	// pullDeletes (--pull-deletes, needs pull) lets a sandbox delete remove the
+	// laptop's copy, at most maxPullDeletes per pass, moving each into trash.
+	pullDeletes    bool
+	maxPullDeletes int
+	trash          string
+	// orgDeny is the organisation's wall (GET /runs/{id} sync.deny): ignore
+	// patterns no file in the tree can take back.
+	orgDeny []string
+	// notify gets the list of laptop deletes before they are applied; nil drops it.
+	notify io.Writer
 }
 
 // syncer holds one sync's connections. Every read and write on the laptop goes
@@ -80,6 +106,7 @@ type syncer struct {
 	o         syncOptions
 	st        *syncState
 	stateFile string
+	ig        *syncIgnore // this pass's ignore rules, read by walkLocal
 }
 
 // listMeter counts the bytes the sftp client reads while a directory listing
@@ -178,13 +205,53 @@ type remoteView struct {
 	files   map[string]os.FileInfo
 	dirs    []string
 	blocked map[string]bool // refused entries (symlinks and the like): nothing is written there either
+	treeSeen
+}
+
+// treeSeen is what one side's walk saw: every entry it met, refused or left
+// out included, and the directories it listed in full ("." is the root).
+type treeSeen struct {
+	seen   map[string]bool
+	listed map[string]bool
+}
+
+func newTreeSeen() treeSeen {
+	return treeSeen{seen: map[string]bool{}, listed: map[string]bool{".": true}}
+}
+
+// gone reports that rel is not on this side: neither it nor any directory
+// between it and the nearest listed directory was met. An entry that was met
+// but not listed (a directory left out, unreadable or a symlink) keeps what is
+// under it, so nothing there is ever read as deleted.
+func (t treeSeen) gone(rel string) bool {
+	for p := rel; p != "."; p = path.Dir(p) {
+		if t.seen[p] {
+			return false
+		}
+		if t.listed[path.Dir(p)] {
+			return true
+		}
+	}
+	return true
+}
+
+// passView is both sides as one pass found them.
+type passView struct {
+	local      map[string]syncFile
+	localTree  treeSeen
+	remote     *remoteView
+	localGoing []string // --pull-deletes candidates, applied after the other paths
+	// localEmpty is a laptop directory with nothing in it, which deletes
+	// nothing: an unmounted drive or a checkout in progress looks the same.
+	localEmpty bool
 }
 
 // pass syncs once: it lists both sides, then pushes, and under --pull pulls.
 // Nothing is ever deleted on either side.
 func (sy *syncer) pass(ctx context.Context) (*syncReport, error) {
 	rep := newSyncReport()
-	local, localDirs, err := sy.walkLocal(rep)
+	sy.ig = newSyncIgnore(sy.o.orgDeny)
+	local, localDirs, localTree, err := sy.walkLocal(rep)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +259,7 @@ func (sy *syncer) pass(ctx context.Context) (*syncReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	v := &passView{local: local, localTree: localTree, remote: remote, localEmpty: len(localTree.seen) == 0}
 	all := map[string]bool{}
 	for rel := range local {
 		all[rel] = true
@@ -206,6 +274,13 @@ func (sy *syncer) pass(ctx context.Context) (*syncReport, error) {
 	slices.Sort(rels)
 	everything := slices.Concat(rels, localDirs, remote.dirs)
 	collide := syncCollisions(everything)
+	eligible := func(rel string) bool {
+		return !syncCollides(collide, rel) && !syncCollides(remote.blocked, rel)
+	}
+	renamed, err := sy.renames(ctx, rels, v, eligible, rep)
+	if err != nil {
+		return nil, err
+	}
 
 	pulled := int64(0)
 	for _, rel := range rels {
@@ -213,13 +288,23 @@ func (sy *syncer) pass(ctx context.Context) (*syncReport, error) {
 			return nil, err
 		}
 		switch {
+		case renamed[rel]:
 		case syncCollides(collide, rel):
 			rep.refuse(rel, "case collision")
 		case syncCollides(remote.blocked, rel):
 		default:
-			if err := sy.decide(ctx, rel, local, remote.files, rep, &pulled); err != nil {
+			if err := sy.decide(ctx, rel, v, rep, &pulled); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if err := sy.deleteLocal(ctx, v, rep); err != nil {
+		return nil, err
+	}
+	// A path both sides have lost needs no record.
+	for rel := range sy.st.Files {
+		if v.localTree.gone(rel) && remote.gone(rel) {
+			delete(sy.st.Files, rel)
 		}
 	}
 	if err := sy.st.save(sy.stateFile); err != nil {
@@ -238,10 +323,13 @@ func syncCollides(collide map[string]bool, rel string) bool {
 }
 
 // decide applies the direction and conflict rules to one path. The laptop
-// wins: a file changed on both sides is pushed, never pulled, and reported.
-func (sy *syncer) decide(ctx context.Context, rel string, local map[string]syncFile, remote map[string]os.FileInfo, rep *syncReport, pulled *int64) error {
-	l, hasL := local[rel]
-	r, hasR := remote[rel]
+// wins: a file changed on both sides is pushed, never pulled, and reported. A
+// file the laptop deleted is deleted in the sandbox only while the sandbox's
+// copy is still the one this sync put there; a sandbox edit keeps it, listed
+// as a conflict.
+func (sy *syncer) decide(ctx context.Context, rel string, v *passView, rep *syncReport, pulled *int64) error {
+	l, hasL := v.local[rel]
+	r, hasR := v.remote.files[rel]
 	seen, known := sy.st.Files[rel]
 	var rSide syncSide
 	if hasR {
@@ -249,6 +337,11 @@ func (sy *syncer) decide(ctx context.Context, rel string, local map[string]syncF
 	}
 	lChanged := hasL && (!known || l.side != seen.Local)
 	rChanged := hasR && (!known || rSide != seen.Remote)
+	if known {
+		if done, err := sy.deleted(ctx, rel, v, rep, hasL, hasR, lChanged, rChanged); done {
+			return err
+		}
+	}
 	switch {
 	case hasL && hasR && lChanged && rChanged && (known || sy.o.pull):
 		rep.Conflicts = append(rep.Conflicts, rel)
@@ -267,23 +360,201 @@ func (sy *syncer) decide(ctx context.Context, rel string, local map[string]syncF
 	return nil
 }
 
-func (sy *syncer) walkLocal(rep *syncReport) (files map[string]syncFile, dirs []string, err error) {
+// deleted handles a file this sync sent that one side has since deleted. A
+// laptop delete removes the sandbox copy unless the sandbox changed it; a
+// sandbox delete of a file the laptop left alone is queued for deleteLocal,
+// under --pull-deletes only. It reports whether rel was handled.
+func (sy *syncer) deleted(ctx context.Context, rel string, v *passView, rep *syncReport, hasL, hasR, lChanged, rChanged bool) (bool, error) {
+	switch {
+	case !hasL && hasR && v.laptopDeleted(rel):
+		if rChanged {
+			rep.Conflicts = append(rep.Conflicts, rel)
+			return true, nil
+		}
+		return true, sy.removeRemote(ctx, rel, v, rep)
+	case hasL && !hasR && !lChanged && sy.o.pullDeletes && len(v.remote.seen) > 0 && v.remote.gone(rel):
+		if syncIsIgnoreFile(rel) {
+			rep.refuse(rel, "ignore file")
+			return true, nil
+		}
+		v.localGoing = append(v.localGoing, rel)
+		return true, nil
+	}
+	return false, nil
+}
+
+// renames finds the files the laptop renamed since the last pass: a path this
+// sync put in the sandbox, gone from the laptop with the sandbox's copy
+// unchanged, paired with a new laptop path the sandbox lacks that has the same
+// size and modification time, when no other file shares them. Each pair is
+// renamed in the sandbox rather than deleted and sent again. It returns the
+// paths it handled.
+func (sy *syncer) renames(ctx context.Context, rels []string, v *passView, eligible func(string) bool, rep *syncReport) (map[string]bool, error) {
+	gone, fresh := map[syncSide][]string{}, map[syncSide][]string{}
+	for _, rel := range rels {
+		if !eligible(rel) {
+			continue
+		}
+		l, hasL := v.local[rel]
+		r, hasR := v.remote.files[rel]
+		seen, known := sy.st.Files[rel]
+		switch {
+		case !hasL && hasR && known && v.laptopDeleted(rel) && remoteSide(r) == seen.Remote:
+			gone[seen.Local] = append(gone[seen.Local], rel)
+		case hasL && !hasR && !known && v.remote.gone(rel):
+			fresh[l.side] = append(fresh[l.side], rel)
+		}
+	}
+	done := map[string]bool{}
+	for side, from := range gone {
+		to := fresh[side]
+		if len(from) != 1 || len(to) != 1 {
+			continue
+		}
+		if err := sy.renameRemote(ctx, from[0], to[0], v, rep); err != nil {
+			return nil, err
+		}
+		done[from[0]], done[to[0]] = true, true
+	}
+	return done, nil
+}
+
+func (sy *syncer) renameRemote(ctx context.Context, from, to string, v *passView, rep *syncReport) error {
+	dst := path.Join(sy.o.remote, to)
+	if err := sy.c.MkdirAll(path.Dir(dst)); err != nil {
+		return sy.pathFailed(ctx, rep, to, "create the directory in the sandbox", err)
+	}
+	if err := sy.c.Rename(path.Join(sy.o.remote, from), dst); err != nil {
+		return sy.pathFailed(ctx, rep, to, "rename in the sandbox", err)
+	}
+	rfi, err := sy.c.Stat(dst)
+	if err != nil {
+		return sy.pathFailed(ctx, rep, to, "stat in the sandbox", err)
+	}
+	delete(sy.st.Files, from)
+	sy.st.Files[to] = syncFileSeen{Local: v.local[to].side, Remote: remoteSide(rfi)}
+	rep.Renamed = append(rep.Renamed, syncRename{From: from, To: to})
+	sy.pruneRemoteDirs(from, v)
+	return nil
+}
+
+func (sy *syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *syncReport) error {
+	p := path.Join(sy.o.remote, rel)
+	// The agent may have written the file since the walk: only the copy the
+	// walk saw is deleted, and a changed one is kept as a conflict.
+	fi, err := sy.c.Lstat(p)
+	if err != nil {
+		return sy.pathFailed(ctx, rep, rel, "stat in the sandbox", err)
+	}
+	if !fi.Mode().IsRegular() || remoteSide(fi) != remoteSide(v.remote.files[rel]) {
+		rep.Conflicts = append(rep.Conflicts, rel)
+		return nil
+	}
+	if err := sy.c.Remove(p); err != nil {
+		return sy.pathFailed(ctx, rep, rel, "delete in the sandbox", err)
+	}
+	delete(sy.st.Files, rel)
+	rep.DeletedRemote = append(rep.DeletedRemote, rel)
+	sy.pruneRemoteDirs(rel, v)
+	return nil
+}
+
+// pruneRemoteDirs removes the sandbox directories above rel that the laptop no
+// longer has, while they are empty: a directory with anything left in it stays.
+func (sy *syncer) pruneRemoteDirs(rel string, v *passView) {
+	for dir := path.Dir(rel); dir != "." && v.localTree.gone(dir); dir = path.Dir(dir) {
+		if sy.c.RemoveDirectory(path.Join(sy.o.remote, dir)) != nil {
+			return
+		}
+	}
+}
+
+// deleteLocal applies --pull-deletes to the laptop files the sandbox deleted
+// that the laptop has not changed since the last sync. Over maxPullDeletes in
+// one pass, none is deleted. The list goes to notify before any is applied, and
+// each file is moved into trash, never unlinked.
+func (sy *syncer) deleteLocal(ctx context.Context, v *passView, rep *syncReport) error {
+	if len(v.localGoing) == 0 {
+		return nil
+	}
+	if len(v.localGoing) > sy.o.maxPullDeletes {
+		reason := fmt.Sprintf("deleted in the sandbox; %d deletes in one pass is over --max-pull-deletes (%d), so none is applied", len(v.localGoing), sy.o.maxPullDeletes)
+		for _, rel := range v.localGoing {
+			rep.refuse(rel, reason)
+		}
+		return nil
+	}
+	if sy.o.notify != nil {
+		for _, rel := range v.localGoing {
+			fmt.Fprintf(sy.o.notify, "deleting on this computer (deleted in the sandbox; kept in %s): %s\n", syncShown(sy.o.trash), syncShown(rel))
+		}
+	}
+	for _, rel := range v.localGoing {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		l := v.local[rel]
+		if !sy.unchangedLocally(rel, &l) {
+			rep.Conflicts = append(rep.Conflicts, rel)
+			continue
+		}
+		if err := sy.moveToTrash(rel); err != nil {
+			rep.refuse(rel, "delete on this computer: "+err.Error())
+			continue
+		}
+		delete(sy.st.Files, rel)
+		rep.DeletedLocal = append(rep.DeletedLocal, rel)
+		rep.KeptIn = sy.o.trash
+	}
+	return nil
+}
+
+// moveToTrash copies rel out of the root into trash, then removes it.
+func (sy *syncer) moveToTrash(rel string) error {
+	src, err := sy.root.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst := filepath.Join(sy.o.trash, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, src)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return sy.root.Remove(rel)
+}
+
+func (sy *syncer) walkLocal(rep *syncReport) (files map[string]syncFile, dirs []string, tree treeSeen, err error) {
 	files = map[string]syncFile{}
+	tree = newTreeSeen()
 	count := 0
 	err = fs.WalkDir(sy.root.FS(), ".", func(rel string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			if rel == "." {
 				return werr
 			}
+			delete(tree.listed, rel)
 			rep.refuse(rel, "unreadable: "+werr.Error())
 			return nil
 		}
 		if rel == "." {
+			sy.ig.load(sy.root, rel)
 			return nil
 		}
 		if count++; count > maxSyncEntries {
 			return fmt.Errorf("the local directory holds more than %d entries", maxSyncEntries)
 		}
+		tree.seen[rel] = true
 		switch {
 		case syncDenied(rel):
 			rep.refuse(rel, "denylist")
@@ -291,10 +562,18 @@ func (sy *syncer) walkLocal(rep *syncReport) (files map[string]syncFile, dirs []
 		case syncInvisible(d.Name()):
 			rep.refuse(rel, "invisible character in the name")
 			return skipIf(d.IsDir())
+		case sy.ig.orgDenied(rel, d.IsDir()):
+			rep.refuse(rel, "organisation rule")
+			return skipIf(d.IsDir())
+		case sy.ig.ignored(rel, d.IsDir()):
+			rep.Ignored++
+			return skipIf(d.IsDir())
 		case d.Type()&fs.ModeSymlink != 0:
 			rep.refuse(rel, "symlink")
 		case d.IsDir():
 			dirs = append(dirs, rel)
+			tree.listed[rel] = true
+			sy.ig.load(sy.root, rel)
 		case d.Type().IsRegular():
 			fi, ierr := d.Info()
 			if ierr != nil {
@@ -307,7 +586,7 @@ func (sy *syncer) walkLocal(rep *syncReport) (files map[string]syncFile, dirs []
 		}
 		return nil
 	})
-	return files, dirs, err
+	return files, dirs, tree, err
 }
 
 func skipIf(dir bool) error {
@@ -318,7 +597,7 @@ func skipIf(dir bool) error {
 }
 
 func (sy *syncer) walkRemote(ctx context.Context, rep *syncReport) (*remoteView, error) {
-	v := &remoteView{files: map[string]os.FileInfo{}, blocked: map[string]bool{}}
+	v := &remoteView{files: map[string]os.FileInfo{}, blocked: map[string]bool{}, treeSeen: newTreeSeen()}
 	count := 0
 	var walk func(abs, rel string) error
 	walk = func(abs, rel string) error {
@@ -337,6 +616,9 @@ func (sy *syncer) walkRemote(ctx context.Context, rep *syncReport) (*remoteView,
 			}
 			return fmt.Errorf("list %s in the sandbox: %w", abs, err)
 		}
+		if rel != "" {
+			v.listed[rel] = true
+		}
 		for _, fi := range entries {
 			if count++; count > maxSyncEntries {
 				return fmt.Errorf("the sandbox directory holds more than %d entries", maxSyncEntries)
@@ -347,9 +629,14 @@ func (sy *syncer) walkRemote(ctx context.Context, rep *syncReport) (*remoteView,
 				continue
 			}
 			childRel := path.Join(rel, name)
+			v.seen[childRel] = true
 			switch {
 			case syncDenied(childRel):
 				rep.refuse(childRel, "denylist")
+			case sy.ig.orgDenied(childRel, fi.IsDir()):
+				rep.refuse(childRel, "organisation rule")
+			case sy.ig.ignored(childRel, fi.IsDir()):
+				rep.Ignored++
 			case fi.Mode()&fs.ModeSymlink != 0:
 				rep.refuse(childRel, "symlink")
 				v.blocked[childRel] = true
@@ -422,6 +709,10 @@ func (sy *syncer) push(ctx context.Context, rel string, l syncFile, rep *syncRep
 // bit. The bytes counted against the budget are the bytes read, not the size
 // the sandbox listed.
 func (sy *syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *syncFile, rep *syncReport, pulled *int64) error {
+	if syncIsIgnoreFile(rel) {
+		rep.refuse(rel, "ignore file")
+		return nil
+	}
 	if err := syncCheckLocal(sy.root, rel); err != nil {
 		rep.refuse(rel, err.Error())
 		return nil
@@ -516,4 +807,10 @@ func (sy *syncer) localTemp(rel string) (string, *os.File, error) {
 	name := path.Join(path.Dir(rel), ".wardyn-sync-"+hex.EncodeToString(b[:]))
 	f, err := sy.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	return name, f, err
+}
+
+// laptopDeleted reports whether the laptop deleted rel: its walk read rel's
+// directory and found no rel, and the laptop tree is not empty as a whole.
+func (v *passView) laptopDeleted(rel string) bool {
+	return !v.localEmpty && v.localTree.gone(rel)
 }

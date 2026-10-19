@@ -190,7 +190,7 @@ TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
 
 1. **Browse `http://localhost:8480` — never the `127.0.0.1` URL `quickstart.sh` prints.**
    - OIDC state/PKCE cookies are host-scoped, and Entra only accepts `http://` on `localhost` specifically (Context above).
-   - Opening `127.0.0.1` starts the flow from one origin and completes it on another, and the ONLY symptom is a bare `400 invalid state parameter` with no further explanation.
+   - Opening `127.0.0.1` starts the flow from one origin and completes it on another, and the ONLY symptom is the sign-in page coming back with a generic "Sign-in failed" (the redirect carries `auth_error=sign_in_expired`).
    - If you see that error, this is the first thing to check, not an app-registration bug.
    - A related failure mode: `kind`'s `extraPortMappings` publish on the **IPv4** loopback only.
    - If this host's resolver returns `::1` first for `localhost` (common on a fresh Linux/WSL install), the browser will try IPv6 and get a connection refused before it ever reaches Entra.

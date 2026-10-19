@@ -12,7 +12,7 @@ import type { RunnerPoolAmount, RunnerPoolDuration, RunnerPoolLimits, RunnerPool
 import type { RunnerAmounts } from "../../../../lib/types/runners";
 import { BARRIER_LABEL } from "../../../../lib/runner-pool-refusals";
 import { POOL_DRAWER, POOL_FORM, RES } from "../../../wardyn/copy/runner-pools";
-import { fmtDur } from "../resources";
+import { formatDuration } from "../../../../lib/format";
 
 export type Unit = "seconds" | "minutes" | "hours" | "days";
 /** The unit words the form's selects show (the mock's option text). */
@@ -175,7 +175,7 @@ export function validate(v: FormValues, loaded?: RunnerPoolLimits): FormErrors {
       if (!noEnd && !keepD && !(dsec >= 1)) e[key] = POOL_FORM.ERR_DUR_DEFAULT(title, what);
       // A Maximum error is also filed under `${key}.max` so the form marks that input, not the Default.
       else if (!unl && !(msec >= 1)) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_MAX(title, what, never);
-      else if (!unl && dsec > msec) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
+      else if (!unl && dsec > msec) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_ORDER(title, what, formatDuration(Math.round(dsec) * 1000, "words"), formatDuration(Math.round(msec) * 1000, "words"));
     };
     dur("life", POOL_FORM.LIFETIME.toLowerCase(), POOL_FORM.NO_MAXIMUM);
     if (k === "it") dur("idle", POOL_FORM.IDLE.toLowerCase(), POOL_FORM.NEVER);

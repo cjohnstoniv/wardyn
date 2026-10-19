@@ -18,6 +18,7 @@ import * as React from "react";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { HttpError } from "../../../lib/api/core";
 import type { ApiToken } from "../../../lib/types/service-identities";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
@@ -29,8 +30,6 @@ const DAY = 86_400;
 const DEFAULT_LIFETIME = 90 * DAY;
 // The server's reason for a name it refuses; the field is marked invalid, the sentence stays the server's.
 const NAME_INVALID_REASON = "api_token_name_invalid";
-const SELECT_CLASS =
-  "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
 /** The request body of a claim or a mint. `ttl_seconds` is absent for "Longest the server allows". */
 export interface TokenRequest {
@@ -288,19 +287,18 @@ export function TokenDialog(props: TokenDialogProps) {
               htmlFor={`${uid}-ttl`}
               hint={isClaim ? (limitSeconds ? T.CLAIM_HINT_LIMITED(lifetimeWords(limitSeconds)) : T.CLAIM_HINT_OPEN) : T.MINT_HINT}
             >
-              <select
-                id={`${uid}-ttl`}
-                className={SELECT_CLASS}
-                value={ttl}
-                disabled={phase === "busy" || refusal?.final}
-                onChange={(e) => setTtl(Number(e.target.value))}
-              >
-                {lifetimeOptions(kind, limitSeconds).map(([seconds, label]) => (
-                  <option key={seconds} value={seconds}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+              <Select value={String(ttl)} disabled={phase === "busy" || refusal?.final} onValueChange={(v) => setTtl(Number(v))}>
+                <SelectTrigger id={`${uid}-ttl`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {lifetimeOptions(kind, limitSeconds).map(([seconds, label]) => (
+                    <SelectItem key={seconds} value={String(seconds)}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <DialogFooter>
               {refusal?.final ? (

@@ -122,7 +122,7 @@ fi
 for bin in docker kind kubectl helm curl; do
   command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
 done
-kind get clusters 2>/dev/null | grep -qx "${CLUSTER}" || die \
+kind get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null || die \
   "no kind cluster named ${CLUSTER}. This overlay never creates one — run:
     WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart"
 

@@ -17,7 +17,7 @@ import { fmtAmount, fmtInUse, RES_KEYS, RES_NAME, usedPct, type ResView } from "
 
 const HEAD = "border-b border-border py-1 pr-2 text-left align-bottom text-meta font-semibold text-muted-foreground";
 const CELL = "border-b border-border py-1 pr-2 align-middle max-sm:block max-sm:border-0 max-sm:p-0";
-const STACK_LABEL = "block text-meta uppercase tracking-[0.06em] text-muted-foreground sm:hidden";
+const STACK_LABEL = "block label-eyebrow sm:hidden";
 
 function Bar({ pct }: { pct: number }) {
   return (

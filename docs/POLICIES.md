@@ -253,6 +253,7 @@
 | `git_pat_narrowing_ssh_conflict` | the same policy holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge): SSH is a second push path the broker cannot see. Also refused when the policy is written |
 | `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. That is an Azure DevOps host, one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
+| `git_pat_broker_off_resident` | 0.10.0: `WARDYN_GIT_PAT_BROKER` is `off`, so the PAT would be minted into the sandbox, and the run is not an operator's (or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set). Narrowed or not; a `runner_resident` grant and a host another lane serves are not refused |
 
 
 - Dispatch is authoritative, because the broker posture is deployment-wide and can change after a policy was written, and `POST /runs/preflight` answers the same reasons.
@@ -331,10 +332,9 @@ What the table admits, under a repository the grant's `repos` names (an absent `
 - An `ssh_key` or `git_pat` grant for a **different** host (`gitlab.com` or a GHES host, say, alongside a `github.com` `github_token`) is untouched by any of it.
 - Every mechanism keys on the same forge, and that non-GitHub lane is what `git_pat` is for.
 - (An `ssh_key` grant for an Azure DevOps host is dropped at dispatch with a warning, and a stored git token for one is read from the run owner's own row only.)
-- There the old shape still applies for `ssh_key`: the key file is written for the clone and wiped after, and an approval-gated grant is delivered once ([CREDENTIALS.md](CREDENTIALS.md) bounds the other cases).
-- `agent-run` mints it, writes it `0400`, clones, then removes it (`shred -u` falling back to `rm -f`: a `0400` file is not writable, so the file is unlinked, not overwritten) and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
-- It is a real narrowing and not a confinement, since the grant id rides the sandbox env (`WARDYN_SSH_GRANTS`).
-- An auto-mintable grant is re-mintable by design (`MintForGrant` — only `requires_approval: true` makes it single-use).
+- There `ssh_key` signs in through the run proxy's SSH agent: the proxy holds the key, and the sandbox's `ssh` reaches the agent through a socket `wardyn-git-helper ssh-exec` opens for each Git command ([CREDENTIALS.md](CREDENTIALS.md#a-git-credential)).
+- `agent-run` writes an ssh config naming that socket and a known-hosts command, clones, closes the agent, then removes the config and unsets `GIT_SSH_COMMAND` before exec'ing the agent.
+- The grant id rides the sandbox env (`WARDYN_SSH_GRANTS`), but the proxy's mint route never answers an `ssh_key` grant with the key, and the broker issues it once per run unless the grant is approval-gated.
 - The proxy's mint route refuses only *brokered GitHub* grant ids (`isBrokeredGitGrant`).
 - That forge's key is bounded by the operator who supplied it, not by Wardyn ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a) — the honest scope for a non-brokered credential, unchanged by any of the above.
 
@@ -650,8 +650,8 @@ What the check does and does not settle:
 | `api_key` | `{"host":"…","header":"…","secret_name":"…","format":"…","require_tls":false}` | `host` and `secret_name` are required; `header` and `format` default to `Authorization` and `Bearer %s`, `require_tls` refuses plain-HTTP requests to `host`, and injection is proxy-side only. See [`api_key`](#api_key). |
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…","repos":[…],"access":"read","api":false,"forge":"generic"}` | `host` and `secret_name` are required; four optional axes (`repos`, `access`, `api`, `forge`) narrow the **run**, not the PAT. See [`git_pat`](#git_pat). |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` and `key_secret_ref` are required; `host` must be an SSH-over-443 provider Wardyn supports. A **documented exception** to the no-resident-secret rule. See [`ssh_key`](#ssh_key). |
-| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. See [`env_secret`](#env_secret). |
-| `file_secret` | `{"file":"token","secret_name":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
+| `env_secret` | `{"name":"MY_TOKEN","secret_name":"…","host":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. The optional `host` is read only under `WARDYN_ENV_SECRET_PLACEHOLDERS`. See [`env_secret`](#env_secret). |
+| `file_secret` | `{"file":"token","secret_name":"…","host":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
 
 ### `ttl_seconds`
 
@@ -743,7 +743,12 @@ What the check does and does not settle:
 
 ### `env_secret`
 
-- Both required.
+- `name` and `secret_name` are required.
+- The optional `host` names the one bare host the value is sent to. It is read only when the operator turns on `WARDYN_ENV_SECRET_PLACEHOLDERS` (off by default in 0.10.0):
+  - the variable then holds a placeholder (`wardyn-placeholder:<id>`), and the run's proxy intercepts `host` and replaces the placeholder with the value in the request's `Authorization` header;
+  - the value goes into the sandbox as before when `host` is not an exact `allowed_domains` entry, already carries another credential, or the value spans lines (`run.secret_placeholder.resolve` says which);
+  - only `Authorization` is filled: a placeholder in another header, inside Basic auth's base64, a URL or a body reaches `host` unchanged, and a plain-HTTP request to `host` is refused.
+  - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
 - Puts the stored secret's **value** into the sandbox environment under `name`, resolved at dispatch —
   - there is no mint, so `requires_approval` is **refused** rather than silently ignored, `ttl_seconds` means nothing, and the broker rejects the grant id outright if anything POSTs it at the mint route.
 - `name` must match `[A-Z_][A-Z0-9_]*` and may not start with `WARDYN_` (those configure the sandbox harness itself);
@@ -758,7 +763,7 @@ What the check does and does not settle:
 
 ### `file_secret`
 
-- Both `file` and `secret_name` are required, and no other key is accepted.
+- Both `file` and `secret_name` are required; the only other key accepted is `host`, which `WARDYN_FILE_SECRET_PLACEHOLDERS` reads exactly as `env_secret`'s `host` under its switch: the file then holds the placeholder.
 - `file` is a file name, never a path: `[a-z0-9][a-z0-9_.-]{0,62}`.
   - Wardyn writes it under `/run/wardyn/secrets`, so no grant can address anywhere else.
 - It follows `env_secret`'s rules: resolved at dispatch, no mint, `requires_approval` refused, reserved secret names refused.
@@ -1009,6 +1014,16 @@ So an entry a pattern matches is judged one of two ways:
 - No parent counts; or a read fails, answers other than `200`, comes back truncated, needs more than 64 reads, or takes longer than 20 seconds.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
+
+**A push that adds no commits.**
+
+- Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
+- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
+  - That includes a commit whose tree still holds a path `deny_paths` now names: the forge already has it in that history.
+  - Under `git_push_any_branch`, a lightweight tag at such a commit passes too; an annotated tag is still refused.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
 
 > [!WARNING]
 > **On a `git_pat` forge other than github.com, deny only paths the repository does not hold yet.**

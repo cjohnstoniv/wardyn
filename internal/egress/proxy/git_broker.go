@@ -241,10 +241,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if noThin {
-		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		p.relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
 		return
 	}
-	relay(w, resp) // stream the pack back
+	p.relay(w, resp) // stream the pack back
 }
 
 // isBrokeredGitGrant reports whether a sandbox-supplied mint body names one of

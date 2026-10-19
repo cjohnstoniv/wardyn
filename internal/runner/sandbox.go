@@ -206,6 +206,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LLMChannelHosts:      pc.LLMChannelHosts,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		Unattended:           pc.Unattended,
+		ScrubResponses:       pc.ScrubResponses,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,

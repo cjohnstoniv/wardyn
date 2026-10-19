@@ -46,19 +46,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
-// internalAudience is the audience run tokens are verified against on the
-// internal (sidecar) endpoints (RFC 8707 discipline).
-const internalAudience = "wardyn-internal"
-
-// groundtruthAudience is the SEPARATE audience the host-scoped eBPF
-// ground-truth sensor's token is verified against (RFC 8707 discipline). It is
-// distinct from internalAudience on purpose: a token minted for this audience
-// is accepted ONLY on POST /api/v1/internal/groundtruth (audit-write), and is
-// rejected by every mint/approval endpoint (which verify internalAudience).
-// This bounds the host sensor's authority to exactly "write ground-truth audit
-// events" and nothing else.
-const groundtruthAudience = "wardyn-groundtruth"
-
 // Config holds the API server's non-secret configuration and injected
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
@@ -143,6 +130,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerStreamHandshakesPerAddress caps one address's runner-stream handshakes
+	// in progress (WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS); 0 is the default.
+	RunnerStreamHandshakesPerAddress int
 	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
 	// token mint answers carry it; empty omits it.
 	ProxyImage string
@@ -287,6 +277,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
+	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
+	// capability ALLOW row written for a person's email matches them only when
+	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
+	// the match and logs it. Deny rows match the email either way.
+	CapabilityGrantsVerifiedEmail bool
+	// GovernanceProfilePutExistingOnly is WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY:
+	// PUT /governance/profiles/{id} replaces an existing profile only, and a
+	// new one is created through POST. Default false keeps create-at-id and logs it.
+	GovernanceProfilePutExistingOnly bool
+	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
+	// egress_host ALLOW row whose value carries a ":port" (written before the
+	// write boundary stored the host alone) is inert, marked and never matched.
+	// Default false keeps matching it by host and logs it. Deny rows keep matching.
+	EgressHostPortGrantsInert bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
@@ -522,11 +526,14 @@ type Config struct {
 	// publishes the port loopback-only (127.0.0.1:PORT), so a host UI/CLI request
 	// arrives at wardynd from the docker bridge gateway, not loopback. The LAN
 	// protection in that topology is the loopback PUBLISH (a LAN peer cannot reach a
-	// 127.0.0.1-bound host port at all), not the peer check — so the peer gate is a
-	// false positive there. The DNS-rebinding Host gate still applies. NEVER set this
-	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
-	// no-auth exposure the peer gate closes. Default false; set by compose only.
+	// 127.0.0.1-bound host port at all). Only peers inside LocalTrustedPeers pass,
+	// so another member of wardynd's network does not. The DNS-rebinding Host gate
+	// still applies. NEVER set this for a directly-bound host-mode wardynd on
+	// 0.0.0.0. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// LocalTrustedPeers are the non-loopback peers LocalTrustForwarder trusts, resolved
+	// at boot (WARDYN_LOCAL_TRUSTED_PEERS, else the gateway and own addresses).
+	LocalTrustedPeers []netip.Prefix
 	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
 	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
@@ -563,6 +570,20 @@ type Config struct {
 	// unexpectedly under that rewrite must not leave a fleet unable to clone.
 	// Reverting is a flag flip and a restart, not a redeploy.
 	DisableGitPATBroker bool
+	// RefuseGitPATBrokerOff (WARDYN_GIT_PAT_BROKER_OFF_REFUSED) refuses, while
+	// the broker is off, a resident PAT on an operator's run too; a member's
+	// run is refused it either way (patNarrowingRefusal).
+	RefuseGitPATBrokerOff bool
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
+	// proxy.Config.ScrubResponses on every new dispatch.
+	ScrubProxyResponses bool
+	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
+	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
+	// or file_secret grant whose scope names a host gets a placeholder in the
+	// sandbox, which the run's proxy fills on requests to that host
+	// (runs_dispatch_placeholders.go). Off = the value in the sandbox, as before.
+	EnvSecretPlaceholders  bool
+	FileSecretPlaceholders bool
 	// OIDCRoleMapConfigured reports whether WARDYN_OIDC_ROLE_MAP is non-empty —
 	// the sso_rbac /setup/status check's gate. Only the presence, never the
 	// mapping itself: the API layer has no use for individual entries, only
@@ -636,6 +657,18 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections and
+	// SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE) one address's handshakes; 0 is the default.
+	SSHMaxConnections         int
+	SSHMaxHandshakesPerSource int
+	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
+	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
+	// ignore file in the synced tree. Empty adds none.
+	SyncDeny []string
+	// LocalFolderSeedWait is WARDYN_LOCAL_FOLDER_SEED_WAIT: how long dispatch
+	// holds a run's agent for the first sync of its local folder, never past
+	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
+	LocalFolderSeedWait time.Duration
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
@@ -862,6 +895,8 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
+	backchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -895,10 +930,8 @@ type Server struct {
 	ssoRefreshSpent map[string]bool
 	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
 	// refresh tokens AWS last refused to renew with a re-auth code, to the code
-	// and description it answered, also under ssoRefreshMu.
-	// ponytail: process-local, so per replica and per restart: a replica or a
-	// restarted process that has not seen the refusal grades the session live
-	// and passes Review until its own dispatch is refused and re-marks it.
+	// and description it answered, also under ssoRefreshMu. Used only by a store
+	// with no store.AWSSSORefusedTokenStore; with one, the marks are shared there.
 	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).
@@ -933,54 +966,4 @@ type Server struct {
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
 	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
 	bgWaitBudget, signInCaptureKillGrace time.Duration
-}
-
-// New constructs a Server and builds its router. It does not start listening.
-func New(cfg Config) *Server {
-	if cfg.Now == nil {
-		cfg.Now = time.Now
-	}
-	if cfg.RunnerTarget == "" {
-		cfg.RunnerTarget = "docker"
-	}
-	if cfg.SSHRoleTTL <= 0 {
-		cfg.SSHRoleTTL = defaultSSHRoleTTL
-	}
-	if cfg.SSHMaxSessionsPerRun <= 0 {
-		cfg.SSHMaxSessionsPerRun = defaultSSHSessionsPerRun
-	}
-	if cfg.UISessionTTL <= 0 {
-		cfg.UISessionTTL = defaultUISessionTTL
-	}
-	if cfg.RunOutputTailBytes <= 0 {
-		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
-	}
-	if cfg.ExecOutputTailTTL <= 0 {
-		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
-	}
-	if cfg.BaseCtx == nil {
-		cfg.BaseCtx = context.Background()
-	}
-	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		deviceRouteState: newDeviceRouteState(),
-	}
-	s.scimState = newSCIMState()
-	s.defaultRunnerHooks()
-	if cfg.PreflightRatePerMin > 0 {
-		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
-	}
-	if cfg.PolicyPreviewRatePerMin > 0 {
-		s.policyPreviewLimiter = &principalLimiter{rate: float64(cfg.PolicyPreviewRatePerMin) / 60, burst: policyPreviewBurst, max: preflightLimiterMaxPeople}
-	}
-	s.router = s.routes()
-	s.registerLiveBus()
-	// drain the durable audit-fallback spool back into the store once it
-	// recovers, so a PG outage no longer leaves spooled events permanently invisible
-	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives
-	// individual requests and stops on shutdown. No-op unless both are wired.
-	if cfg.AuditSpool != nil && cfg.AuditDrainRecorder != nil {
-		go cfg.AuditSpool.StartDrain(cfg.BaseCtx, cfg.AuditDrainRecorder, auditSpoolDrainInterval, auditSpoolDrainBatch)
-	}
-	return s
 }

@@ -57,6 +57,8 @@ type Proxy struct {
 	// scanner is the OPTIONAL outbound content-inspection engine. Nil == off
 	// (the common case). It is consulted only on the brokered LLM routes.
 	scanner *contentscan.Engine
+	// scan is this engine's inspection slot and retained-bytes budget.
+	scan scanBudget
 	// ca is the OPTIONAL TLS-MITM certificate authority. Non-nil only when both a
 	// scanner and a CA are configured; it makes opaque CONNECT tunnels to known
 	// LLM hosts inspectable (subscription-OAuth path). Nil == opaque passthrough.
@@ -108,6 +110,8 @@ type Proxy struct {
 	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
 	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
 	maskKey uuid.UUID
+	// scrubResponses is Options.ScrubResponses (scrub.go).
+	scrubResponses bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -116,6 +120,9 @@ type Proxy struct {
 	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
 	brokeredPATGrantIDs []uuid.UUID
 	residentMints       map[uuid.UUID]ResidentMint // runner_resident mints answered locally (resident_mint.go)
+	// sshAgent holds the run's ssh_key grants' keys for the ssh agent route
+	// (ssh_agent.go).
+	sshAgent sshAgents
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
@@ -378,6 +385,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		scrubResponses:       opts.ScrubResponses,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
@@ -385,7 +393,6 @@ func newProxy(opts Options) *Proxy {
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
-
 	// directDial dials the vetted IP carried on the request context and never
 	// re-resolves — the ORIGINAL behavior, and the ONLY behavior of the
 	// control-plane transport (which must never traverse the corp proxy).
@@ -659,7 +666,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
-			default: // apPending / apNone / apCapped
+			default: // apPending / apNone / apCapped / apRefused / apExpired
 				log := decisionLog(req, egress.Pending, approvalPendingReason(r.State))
 				if r.ApprovalID != uuid.Nil {
 					id := r.ApprovalID

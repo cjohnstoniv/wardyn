@@ -106,6 +106,13 @@ func redirectPort(rawURL string) int {
 	return 443
 }
 
+// redirectToEntry is the port-qualified egress entry for a redirect's To host
+// (see substituteArtifactEgress): what a run reaches the mirror by, and the
+// redirect Test too, so both present its token on the same terms.
+func redirectToEntry(host, rawTo string) string {
+	return net.JoinHostPort(host, strconv.Itoa(redirectPort(rawTo)))
+}
+
 // redirectIsCleartext reports whether a redirect `to` asks for PLAIN HTTP — the
 // operator spelled `http://`. One predicate, two readers (redirectPort's 80/443
 // default and the injection scope's require_tls), because two hand-rolled

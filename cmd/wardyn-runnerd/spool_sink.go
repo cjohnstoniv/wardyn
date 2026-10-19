@@ -71,6 +71,8 @@ type spoolSink struct {
 	runs   map[uuid.UUID]*sinkRun
 	lns    []net.Listener
 	closed bool
+
+	handlers sync.WaitGroup // the session goroutines Serve started
 }
 
 type sinkRun struct {
@@ -261,7 +263,11 @@ func (s *spoolSink) Serve(ln net.Listener) error {
 			}
 			return err
 		}
-		go s.handle(tls.Server(c, s.tls))
+		s.handlers.Add(1)
+		go func() {
+			defer s.handlers.Done()
+			s.handle(tls.Server(c, s.tls))
+		}()
 	}
 }
 

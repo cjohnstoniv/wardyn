@@ -321,7 +321,8 @@ func TestDispatchHonoursTheGitPATBrokerFlag(t *testing.T) {
 		run.Task = "" // composition only: no agent exec, no completion watcher
 		winning := map[string]string{host: uuid.NewString()}
 		st.grants = patRowsFor(run.ID, winning)
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		// An operator's run: a member's is refused the broker-off lane (TestDispatchRefusesABrokerOffPATOnAMembersRun).
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{Operator: true}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest",
 			GitPATGrants: winning,
 		})

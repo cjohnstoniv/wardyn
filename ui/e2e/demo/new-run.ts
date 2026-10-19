@@ -81,7 +81,7 @@ export const startInHarness = (page: Page): Locator => page.getByRole("switch", 
 export const startingPrompt = (page: Page, index = 0): Locator => page.locator(`#nr-text-${index}`);
 
 /** Step 4: "No extra files", and the Add dialog: the Add button, a type, a source, Continue and Add. */
-export const noExtraFiles = (page: Page): Locator => page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) });
+export const noExtraFiles = (page: Page): Locator => page.getByRole("checkbox", { name: startsWith(NR_FILES.NO_EXTRA) });
 export const addFilesButton = (page: Page): Locator => page.getByRole("button", { name: NR_FILES.ADD_ARIA });
 export const addDialog = (page: Page): Locator => page.getByRole("dialog");
 export const sourceTypeButton = (page: Page, type: string): Locator => addDialog(page).getByRole("button", { name: startsWith(type) });

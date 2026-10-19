@@ -85,7 +85,7 @@ export function AuditRetentionDropDialog({
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && close(!!result)}>
+    <Dialog open onOpenChange={(o) => !o && !busy && close(!!result)}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

@@ -12,7 +12,7 @@ import (
 
 // scmProviderCheck grades against the safest-path ladder and must NEVER gate:
 // ok only for the App (nothing safer to recommend), warn only for standing
-// resident SSH keys, info everywhere else.
+// SSH keys, info everywhere else.
 func TestScmProviderCheck_Grading(t *testing.T) {
 	cases := []struct {
 		name       string

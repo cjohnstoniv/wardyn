@@ -39,6 +39,9 @@ var isOperatorCensus = map[string]int{
 	// Reach: organisation templates are written with the effective role, so the
 	// User view publishes to the organisation as the member it is.
 	"template_list.go:templateCallerOf": 1,
+	// Reach: a launch's carrier follows mayLaunchWorkspace, so an operator, who
+	// reaches every workspace, owes no person's own mount gate.
+	"workspace_refs.go:launchCarrierRule": 1,
 	// Credential namespace.
 	"runs_policy.go:secretOwnerFromRequest":         1,
 	"inline_policy_bounds.go:boundEnvSecretPosture": 1,
@@ -47,7 +50,8 @@ var isOperatorCensus = map[string]int{
 	"secrets.go:handleListSecrets":                  1,
 	// An operator reads every secret name, so removing one from a run is not an
 	// ownership question for it.
-	"run_overrides_apply.go:applySecretOverrides": 1,
+	// The second bounds a removal on stored policy content to the member's own grants.
+	"run_overrides_apply.go:applySecretOverrides": 2,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,
@@ -57,6 +61,8 @@ var isOperatorCensus = map[string]int{
 	// A member's Checks are redacted, so a member poll never probes the image store.
 	"setup_claude_signin_image.go:claudeSignInImageRows": 1,
 	"me.go:handleMe": 3,
+	// A member's backend row names neither the probe error nor the substrate.
+	"compose_setup.go:setupBackendItem": 1,
 	// Compares stamped tiers: the switch must not change whether a demotion
 	// revokes tokens.
 	"apitokens.go:roleSnapshotDrops": 2,

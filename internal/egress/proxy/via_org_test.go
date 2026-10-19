@@ -679,3 +679,41 @@ func TestViaOrg_ClosedEngineServesNothing(t *testing.T) {
 		t.Fatalf("a closed engine's broker answered %d, dialed %d, minted %d", w.Code, hits, f.org.mints)
 	}
 }
+
+// A forwarded broker request reaches the engine through the control plane's
+// listener, which sets no read timeout: its body is read under the same bound
+// a terminated tunnel's is, so a body that stops arriving ends the request.
+func TestViaOrg_BrokerBodyReadIsBounded(t *testing.T) {
+	prev := mitmReadTimeout
+	mitmReadTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { mitmReadTimeout = prev })
+	f := newViaOrgFixture(t, nil, nil)
+	served := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(served)
+		f.engine.ServeBroker(w, r)
+	}))
+	defer srv.Close()
+	body, stalled := io.Pipe()
+	defer stalled.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/wardyn/gh/octocat/hello-world/git-receive-pack", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if resp, err := srv.Client().Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	if _, err := stalled.Write([]byte("00")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-served:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a broker request whose body stopped arriving was still being read")
+	}
+	if hits, _, _ := f.up.seen(); hits != 0 {
+		t.Fatalf("a push whose body never finished reached github %d times", hits)
+	}
+}

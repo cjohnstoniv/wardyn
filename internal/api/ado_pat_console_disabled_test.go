@@ -126,3 +126,50 @@ func TestADODisconnect_UsableRowAlsoForgetsDisabledRowSignIns(t *testing.T) {
 		t.Errorf("ado_pat.disconnect rows = %+v, want the usable row then %q", rows, second.ID)
 	}
 }
+
+// adoWithdrawnStore restricts one provider row, so a person without an allow
+// naming it can no longer use it: the row is withdrawn from them.
+type adoWithdrawnStore struct {
+	adoConsoleStore
+	row string
+}
+
+func (s adoWithdrawnStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{capWorkspaceProvider: {s.row: true}}, nil
+}
+
+// A disconnect with a usable row also forgets the sign-in stored under a row withdrawn from the
+// caller: the person's every stored Azure DevOps sign-in goes, whatever its row's state.
+func TestADODisconnect_UsableRowAlsoForgetsWithdrawnRowSignIns(t *testing.T) {
+	fx := newADOConsoleLane(t, false)
+	git := fx.st.site.WorkspaceProviders.Git
+	second := git[0]
+	second.ID = "ado-row-2"
+	fx.st.site.WorkspaceProviders.Git = append(git, second)
+	fx.srv.cfg.Store = adoWithdrawnStore{adoConsoleStore{fx.st}, second.ID}
+	held := fx.srv.cfg.Secrets.For(fx.subject)
+	if err := held.Put(context.Background(), adoEntraSecretName(second.ID), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	keep, err := fx.srv.capFilter(withOIDCHuman(context.Background(), fx.subject), capWorkspaceProvider, []string{git[0].ID, second.ID})
+	if err != nil || !slices.Equal(keep, []string{git[0].ID}) {
+		t.Fatalf("rows the caller may use = %v, %v; want only %q (the second row withdrawn)", keep, err, git[0].ID)
+	}
+
+	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", w.Code, w.Body.String())
+	}
+	names, err := held.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{git[0].ID, second.ID} {
+		if slices.Contains(names, adoEntraSecretName(row)) {
+			t.Errorf("the sign-in under %q survived the disconnect", row)
+		}
+	}
+	rows := fx.audit.find(adoPATAuditDisconnect)
+	if len(rows) != 2 || rows[0].Target != git[0].ID || rows[1].Target != second.ID {
+		t.Errorf("ado_pat.disconnect rows = %+v, want the usable row then %q", rows, second.ID)
+	}
+}

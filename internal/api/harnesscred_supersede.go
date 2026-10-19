@@ -58,7 +58,7 @@ const (
 	supersedeCASAttempts = 3
 	// signInBusyRefusal is the 503 a sign-in launch or capture answers when the
 	// per-person lock could not be taken in time.
-	signInBusyRefusal = "another sign-in is in progress, so this one was not started or saved; try again in a moment"
+	signInBusyRefusal = "Another sign-in is in progress, so this one was not started or saved; try again in a moment"
 	// signInUnserializedReasonNoCapacity is auth.signin_unserialized's one
 	// reason: the pool could not spare a connection for the lock.
 	signInUnserializedReasonNoCapacity = "lock_no_capacity"
@@ -66,7 +66,7 @@ const (
 
 // errSignInBusy is lockLoginSupersede's refusal: the lock exists and could not
 // be taken, so the work it guards must not run.
-var errSignInBusy = errors.New(signInBusyRefusal)
+var errSignInBusy = errors.New("another sign-in is in progress")
 
 // lockLoginSupersede serializes ONE person's sign-in launches — and the
 // credential capture that belongs to one — across replicas, and returns the

@@ -199,6 +199,8 @@ const (
 	reasonRunTaskReserved                      = "run_task_reserved"                        // task names a server-reserved value (e.g. a probe/verify sentinel)
 	reasonConfinementClassUnknown              = "confinement_class_unknown"                // confinement_class is not CC1/CC2/CC3
 	reasonTaskModeUnknown                      = "task_mode_unknown"                        // task_mode is not "harness" or "exec"
+	reasonLocalFolderInvalid                   = "local_folder_invalid"                     // local_folder's name or remote_dir is malformed
+	reasonLocalFolderUnsupported               = "local_folder_unsupported"                 // local_folder on a run or deployment that cannot hold the agent for it
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
@@ -519,6 +521,7 @@ const (
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
+	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of
@@ -561,3 +564,11 @@ const (
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.
 const reasonSignInRequired = "sign_in_required"
+
+// A run launch refused because the host is short of memory or over its load ceiling
+// (writeHostCapacityRefusal): a wait, not a fault, so it is a 503 with a Retry-After.
+const reasonHostCapacityRefused = "host_capacity_refused"
+
+// PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
+// deny beats allow, so the approval would change nothing.
+const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"

@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -178,5 +179,76 @@ func TestMintSSHKey_RegistersMask(t *testing.T) {
 	}
 	if !foundKnownHosts {
 		t.Fatal("minted known_hosts material was not registered in the mask registry (W12-B-2)")
+	}
+}
+
+// TestMintSSHKey_AutoMintOncePerRun: an auto-mint ssh_key is issued once per
+// run. The second ask is ErrAlreadyMinted with one denied audit row and no
+// second success; a failed first preparation does not count, and a grant of
+// another run is unaffected.
+func TestMintSSHKey_AutoMintOncePerRun(t *testing.T) {
+	const key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"
+	secrets := newMemSecrets()
+	db := newFakeDB()
+	aud := &fakeAudit{}
+	b := New(db, secrets, aud, nil, &FakeGitHubMinter{})
+	runID := uuid.New()
+	gid := seedGrant(db, runID, sshKeySpec("github.com", "gh-ssh-key", "", ""))
+	ctx := context.Background()
+
+	// The key secret is not there yet: the preparation fails and records no success.
+	if _, err := b.MintForGrant(ctx, callerFor(runID), gid); err == nil {
+		t.Fatal("mint with no stored key: want an error")
+	}
+	secrets.m["gh-ssh-key"] = []byte(key)
+	if _, err := b.MintForGrant(ctx, callerFor(runID), gid); err != nil {
+		t.Fatalf("first mint after a failed preparation: %v", err)
+	}
+	denied := func() int {
+		aud.mu.Lock()
+		defer aud.mu.Unlock()
+		n := 0
+		for _, ev := range aud.events {
+			if ev.Action == "credential.mint" && ev.Outcome == "denied" && ev.Target == gid.String() {
+				n++
+			}
+		}
+		return n
+	}
+	minted, err := b.MintForGrant(ctx, callerFor(runID), gid)
+	if !errors.Is(err, ErrAlreadyMinted) || minted.Token != "" {
+		t.Fatalf("second mint = (%q, %v), want ErrAlreadyMinted and no value", minted.Token, err)
+	}
+	if n := denied(); n != 1 {
+		t.Fatalf("denied credential.mint rows = %d, want 1", n)
+	}
+	if n := len(db.mintAudits()); n != 1 {
+		t.Fatalf("in-tx credential.mint rows = %d, want the one success", n)
+	}
+
+	other := uuid.New()
+	ogid := seedGrant(db, other, sshKeySpec("github.com", "gh-ssh-key", "", ""))
+	if _, err := b.MintForGrant(ctx, callerFor(other), ogid); err != nil {
+		t.Fatalf("another run's grant: %v", err)
+	}
+
+	// A winner that commits while this mint is prepared is seen by the second
+	// transaction: refused there, with one denied row, not two.
+	raceDB := newFakeDB()
+	raceDB.sshWinnerAfter = 1
+	raceAud := &fakeAudit{}
+	rb := New(raceDB, secrets, raceAud, nil, &FakeGitHubMinter{})
+	rgid := seedGrant(raceDB, runID, sshKeySpec("github.com", "gh-ssh-key", "", ""))
+	if minted, err := rb.MintForGrant(ctx, callerFor(runID), rgid); !errors.Is(err, ErrAlreadyMinted) || minted.Token != "" {
+		t.Fatalf("mint losing the race = (%q, %v), want ErrAlreadyMinted", minted.Token, err)
+	}
+	n := 0
+	for _, ev := range raceAud.events {
+		if ev.Action == "credential.mint" && ev.Outcome == "denied" {
+			n++
+		}
+	}
+	if n != 1 || len(raceDB.mintAudits()) != 0 {
+		t.Fatalf("losing the race wrote %d denied rows and %d successes, want 1 and 0", n, len(raceDB.mintAudits()))
 	}
 }

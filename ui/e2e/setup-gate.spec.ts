@@ -8,6 +8,7 @@ import { test, expect, mockMemberRole, ADMIN_TOKEN } from "./fixtures";
 import { SITE } from "../src/app/components/wardyn/copy";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { WELCOME } from "../src/app/components/wardyn/copy/getting-started";
+import { T as INTEGRATIONS } from "../src/app/lib/integrations";
 
 /**
  * Count the /setup/status reads the page has actually made. The console
@@ -450,6 +451,30 @@ test.describe("setup gate — forced on access, never a prison", () => {
   });
 });
 
+// #2577: the Secrets step's link is read in the view the funnel is in. In the admin view /secrets is the User
+// view's page, which the admin token on an SSO install cannot enter.
+test.describe("setup Secrets step — the link stays in the admin view (#2577)", () => {
+  test("Secrets page links to /admin/secrets and opens the org secrets screen", async ({ page }) => {
+    await mockGatedStatus(page);
+    await skipHero(page);
+    await page.goto("/admin/setup");
+    // Secrets sits behind the Network gate (the e2e backend's `-runner none` answers no_runner, the one honest
+    // bypass), same walk as the rail test below.
+    const rail = page.getByRole("navigation", { name: /setup steps/i }).last();
+    await expect(rail).toBeVisible({ timeout: 15_000 });
+    await rail.getByRole("button", { name: /^Network/ }).click();
+    await page.getByRole("button", { name: /^Test connectivity$/i }).click();
+    await expect(page.getByRole("button", { name: /^Next:/i })).toBeEnabled();
+    await rail.getByRole("button", { name: /^Secrets/ }).click();
+
+    const link = page.getByRole("link", { name: "Secrets page" });
+    await expect(link).toHaveAttribute("href", "/admin/secrets");
+    await link.click();
+    await expect(page).toHaveURL(/\/admin\/secrets$/);
+    await expect(page.getByRole("heading", { name: "Secrets", exact: true })).toBeVisible();
+  });
+});
+
 // #213 — the step counter counts only what blocks a run, the rail keeps three
 // categories apart (Required / Optional setup / Demos, not one flat
 // "optional" list), and the barrier recommendation is derived from what the
@@ -700,5 +725,36 @@ test.describe("Corporate network step — site-config round trip and a stale sav
     expect((await after.json()).upstream_proxy_url).toBe(outsideUrl);
     // The draft is not reverted or cleared — the operator can just retry.
     await expect(page.getByLabel("Proxy URL")).toHaveValue(draftUrl);
+  });
+});
+
+// Values the server refuses must be recognised before Save: a password-only proxy URL is a credential (it is
+// masked and stored as a secret, not sent as plain configuration), and a From that differs from an existing one
+// only in case is a duplicate (the server lowercases the whole string).
+test.describe("Corporate network step — typed values the server would refuse (#2576, #2562)", () => {
+  test("a password-only proxy URL is masked and takes the store-as-secret path", async ({ page }) => {
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    const field = page.getByLabel("Proxy URL");
+    await field.fill("http://:s3cret@proxy.e2e-userinfo.invalid:8080");
+    await expect(field).toHaveAttribute("type", "password");
+    await expect(page.getByText(INTEGRATIONS.CRED_URL_NOTE)).toBeVisible();
+  });
+
+  test("a From that differs from an existing one only in path case is flagged before Add", async ({ page }) => {
+    await page.route("**/api/v1/site-config", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ json: { egress_redirects: [{ from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" }] } })
+        : route.fallback(),
+    );
+    await skipHero(page);
+    await page.goto("/admin/setup?step=corp_network");
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+    await page.getByRole("combobox").click();
+    await page.getByPlaceholder("https://…, host, or IP").last().fill("https://pypi.org/Simple");
+    await page.getByText("use as typed").click();
+    await page.getByPlaceholder(/artifactory\.corp\.internal/i).fill("https://mirror.corp.internal/pypi2");
+    await expect(page.getByText(/A redirect already exists for this From/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ Add redirect" })).toBeDisabled();
   });
 });
