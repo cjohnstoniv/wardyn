@@ -259,33 +259,36 @@ func (a *userauthAgent) Extension(string, []byte) ([]byte, error) {
 func isUserauthRequest(data []byte, user string, blob []byte) bool {
 	fields := make([][]byte, 0, 8)
 	rest := data
-	next := func() bool {
-		if len(rest) < 4 {
-			return false
+	// next reads k more strings into fields.
+	next := func(k int) bool {
+		for range k {
+			if len(rest) < 4 {
+				return false
+			}
+			n := binary.BigEndian.Uint32(rest)
+			if uint64(n) > uint64(len(rest)-4) {
+				return false
+			}
+			fields, rest = append(fields, rest[4:4+n]), rest[4+n:]
 		}
-		n := binary.BigEndian.Uint32(rest)
-		if uint64(n) > uint64(len(rest)-4) {
-			return false
-		}
-		fields, rest = append(fields, rest[4:4+n]), rest[4+n:]
 		return true
 	}
-	if !next() || len(rest) == 0 || rest[0] != 50 {
+	if !next(1) || len(rest) == 0 || rest[0] != 50 {
 		return false
 	}
 	rest = rest[1:]
-	if !next() || !next() || !next() || len(rest) == 0 || rest[0] != 1 {
+	if !next(3) || len(rest) == 0 || rest[0] != 1 {
 		return false
 	}
 	rest = rest[1:]
-	if !next() || !next() {
+	if !next(2) {
 		return false
 	}
 	method := string(fields[3])
 	switch method {
 	case "publickey":
 	case "publickey-hostbound-v00@openssh.com":
-		if !next() {
+		if !next(1) {
 			return false
 		}
 	default:

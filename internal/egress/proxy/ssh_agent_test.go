@@ -145,7 +145,7 @@ func TestSSHAgent_SignsUserauthOnly(t *testing.T) {
 		data := userauthData("git", pub, "publickey")
 		var sig *ssh.Signature
 		if rsaKey {
-			sig, err = client.(agent.ExtendedAgent).SignWithFlags(pub, data, agent.SignatureFlagRsaSha256)
+			sig, err = client.SignWithFlags(pub, data, agent.SignatureFlagRsaSha256)
 		} else {
 			sig, err = client.Sign(pub, data)
 		}
