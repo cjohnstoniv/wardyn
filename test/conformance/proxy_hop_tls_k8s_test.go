@@ -109,6 +109,12 @@ func TestProxyHopTLSK8s(t *testing.T) {
 		sb, err := sub.CreateSandbox(ctx, spec(string(other.CertPEM)))
 		if err == nil {
 			t.Cleanup(func() { _ = sub.KillSandbox(context.Background(), sb.Ref) })
+			t.Fatal("CreateSandbox succeeded with a control-plane CA the fake does not chain to: the proxy must exit at its startup resolve, so the create must fail")
+		}
+		// The proxy's startup resolve is the one TLS call; it died there, not in an image pull or a
+		// scheduling stall (those read "stuck waiting" or a deadline, never an exit before ready).
+		if !strings.Contains(err.Error(), "proxy container") || !strings.Contains(err.Error(), "exited before the proxy was ready") {
+			t.Fatalf("CreateSandbox failed, but not because the proxy exited at startup (the TLS refusal); a different failure would pass this subtest vacuously: %v", err)
 		}
 		time.Sleep(10 * time.Second) // past the proxy's startup resolve and its first restart
 		if after := resolves(); after != before {
