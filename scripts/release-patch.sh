@@ -423,10 +423,18 @@ report_red() {  # report_red <sha>: each red run with its red jobs and the rerun
   [ "$found" = 1 ] || echo "  no red ci.yml or nightly.yml run on $1. Push the branch, or: gh workflow run nightly.yml --ref $CAND -f scope=candidate"
 }
 
+# require_checked <sha>: prepare pushes before its local checks, so "pushed" no longer means "checked";
+# a real run (not a rehearsal) may wait on or publish a head only after the checks passed on it.
+require_checked() {
+  [ "$DRY_RUN" = 1 ] || [ "$(cat "$(git rev-parse --git-path release-patch-checked)" 2>/dev/null)" = "$1" ] \
+    || die "the local checks have not passed on ${1:0:12}: run PHASE=prepare"
+}
+
 phase_wait() {
   local sha out rc err reason
   sha="$(git rev-parse HEAD)"
   [ "$(remote_tip "$CAND")" = "$sha" ] || die "$CAND is not pushed at ${sha:0:12}: run PHASE=prepare first"
+  require_checked "$sha"
   begin "wait for CI and the nightly on ${sha:0:12}"
   err="$(mktemp)"
   while :; do
@@ -525,6 +533,7 @@ phase_publish() {
   local sha rtip rc id queued state body vout err prev gout nrun
   sha="$(git rev-parse HEAD)"
   [ "$(remote_tip "$CAND")" = "$sha" ] || die "$CAND is not pushed at ${sha:0:12}: run PHASE=prepare first"
+  require_checked "$sha"
   [ -n "$T0" ] || T0=$SECONDS
 
   begin "green-by-tree"

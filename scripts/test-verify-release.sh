@@ -174,6 +174,9 @@ CHART_UNSIGNED=1 run 0.8.3 v0.8.3 bundle
 APP_VER=0.8.2 run 0.8.3 v0.8.3 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep -q "^FAIL helm chart appVersion '0.8.2' is not 0.8.3$" \
   || fail "a chart whose appVersion is another release was accepted: rc=${rc}"
+run 0.8.3 v0.8.3 bundle
+grep -q '^helm show chart oci://ghcr.io/cjohnstoniv/charts/wardyn@sha256:0*1$' "${dir}/log" \
+  || fail "appVersion was not read from the cosign-verified digest: $(grep '^helm' "${dir}/log")"
 pass "the Helm chart's signature and appVersion are verified"
 
 # 4. a malformed V exits 2 BEFORE any network call, and never reaches a regexp.

@@ -647,6 +647,12 @@ rp V=0.8.4
 if [ "$RC" != 0 ] && out_has 'lane-preflight.sh --candidate failed'; then ok "AA: a failing local check stops prepare"; else bad "AA: failing check (rc=$RC)"; fi
 check "AA: the candidate was pushed and the nightly and PR started before the check ran" log_has preflight.log ' pushes=1 nightly=1 pr=1$'
 check "AA: the head is not marked as checked" bash -c "[ ! -s '$WK/.git/release-patch-checked' ]"
+# the pushed head is not a checked head: wait and publish refuse it, and nothing is tagged or edited
+for ph in wait publish; do
+  rp V=0.8.4 PHASE=$ph
+  if [ "$RC" != 0 ] && out_has 'local checks have not passed'; then ok "AA: PHASE=$ph refuses a head whose checks never passed"; else bad "AA: PHASE=$ph ran on an unchecked head (rc=$RC)"; sed 's/^/      /' "$FIX/out.txt"; fi
+done
+check "AA: nothing was tagged, fast-forwarded or published" bash -c "[ \"\$(wc -l <'$FIX/push.log')\" = 1 ] && ! grep -qE '^release edit|^run watch' '$FIX/gh.log'"
 echo 0 >"$FIX/preflight.rc"
 printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"in_progress","conclusion":null,"head_commit":{"tree_id":"%s"}}]}' "$(g -C "$WK" rev-parse 'HEAD^{tree}')" \
   >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
@@ -654,6 +660,15 @@ rp V=0.8.4 PHASE=prepare
 [ "$RC" = 0 ] && ok "AA: the re-run exits 0" || { bad "AA: re-run exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
 check "AA: the re-run repeated the local checks" bash -c "[ \"\$(wc -l <'$FIX/preflight.log')\" = 2 ]"
 check "AA: no second push, nightly or PR" bash -c "[ \"\$(wc -l <'$FIX/push.log')\" = 1 ] && [ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = 1 ] && [ \"\$(grep -c '^pr create' '$FIX/gh.log')\" = 1 ]"
+# the marker is keyed by the head: a pass on an older head skips nothing on a newer one
+OLDHEAD=$(g -C "$WK" rev-parse HEAD)
+check "AA: the marker holds the checked head" bash -c "[ \"\$(cat '$WK/.git/release-patch-checked')\" = '$OLDHEAD' ]"
+echo more >"$WK/MORE-WORK" && g -C "$WK" add MORE-WORK && g -C "$WK" commit -q -s -m "one more fix"
+NEWHEAD=$(g -C "$WK" rev-parse HEAD)
+rp V=0.8.4 PHASE=prepare
+[ "$RC" = 0 ] && ok "AA: prepare on a new head exits 0" || { bad "AA: new-head prepare exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
+check "AA: the checks ran again on the new head" bash -c "[ \"\$(wc -l <'$FIX/preflight.log')\" = 3 ]"
+check "AA: the marker holds the new head" bash -c "[ \"\$(cat '$WK/.git/release-patch-checked')\" = '$NEWHEAD' ] && [ '$NEWHEAD' != '$OLDHEAD' ]"
 keep_pushes
 
 # ── AB. PRERELEASE: auto reads the version; Latest only for the newest final ──

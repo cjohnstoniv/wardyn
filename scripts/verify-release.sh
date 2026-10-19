@@ -83,16 +83,19 @@ echo "--- install.sh URL"
 code=$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/cjohnstoniv/wardyn/releases/download/$TAG/install.sh"); echo "install.sh -> HTTP $code"; [[ "$code" == 302 || "$code" == 200 ]] || fails=$((fails+1))
 grep -c "releases/download/$TAG/install.sh" "$OUT/dl/install.sh" 2>/dev/null | sed 's/^/install.sh self-pin count: /'
 echo "--- helm chart"
-helm show chart "oci://$CHART_REF" --version "$V" >"$OUT/chart.txt" 2>&1
-grep -E '^(version|appVersion|name):' "$OUT/chart.txt" || { echo "FAIL helm chart"; fails=$((fails+1)); }
-# The OCI tag is mutable, so the signature is checked on the digest it resolves to now, as the images are, and the chart must be this release's.
-app=$(sed -n 's/^appVersion:[[:space:]]*//p' "$OUT/chart.txt" | tr -d "\"'")
-[[ "$app" == "$V" ]] || { echo "FAIL helm chart appVersion '$app' is not $V"; fails=$((fails+1)); }
+# The OCI tag is mutable, so the digest it resolves to now is signature-checked as the images are, and the chart's
+# own metadata is read from that same digest: the verified bytes must be this release's chart.
 cdigest=$(docker buildx imagetools inspect "$CHART_REF:$V" --format '{{json .Manifest.Digest}}' 2>"$OUT/imagetools-chart.err" | tr -d '"')
 if [[ -z "$cdigest" ]]; then echo "FAIL helm chart: no digest"; tail -3 "$OUT/imagetools-chart.err"; fails=$((fails+1))
-elif cosign verify "$CHART_REF@$cdigest" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-chart.json" 2>"$OUT/cosign-chart.err"; then
-  echo "OK   helm chart@$cdigest"
-else echo "FAIL helm chart cosign verify"; tail -3 "$OUT/cosign-chart.err"; fails=$((fails+1)); fi
+else
+  if cosign verify "$CHART_REF@$cdigest" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-chart.json" 2>"$OUT/cosign-chart.err"; then
+    echo "OK   helm chart@$cdigest"
+  else echo "FAIL helm chart cosign verify"; tail -3 "$OUT/cosign-chart.err"; fails=$((fails+1)); fi
+  helm show chart "oci://$CHART_REF@$cdigest" >"$OUT/chart.txt" 2>&1
+  grep -E '^(version|appVersion|name):' "$OUT/chart.txt" || { echo "FAIL helm chart"; fails=$((fails+1)); }
+  app=$(sed -n 's/^appVersion:[[:space:]]*//p' "$OUT/chart.txt" | tr -d "\"'")
+  [[ "$app" == "$V" ]] || { echo "FAIL helm chart appVersion '$app' is not $V"; fails=$((fails+1)); }
+fi
 echo "fails=$fails"
 if [[ $fails -eq 0 ]]; then rm -rf "$OUT"; else echo "evidence kept in $OUT"; fi
 exit $(( fails > 255 ? 255 : fails ))
