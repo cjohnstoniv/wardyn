@@ -139,8 +139,7 @@ func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var title, description, file string
-	var devcontainerRepo, devcontainerRef, modelProvider string
-	var localFolder, localFolderRemote string
+	var devcontainerRepo, devcontainerRef, modelProvider, localFolder, localFolderRemote string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout, maxWait time.Duration
 	var mode runModeFlags
@@ -206,11 +205,9 @@ func runCmd(client clientFn) *cobra.Command {
 					return fmt.Errorf("--wait and the document's interactive: true are mutually exclusive (an interactive run never finishes on its own)")
 				}
 			}
-			lf, err := localFolderRequest(localFolder, localFolderRemote, createJSON)
-			if err != nil {
+			if err := setLocalFolder(&body, localFolder, localFolderRemote, createJSON); err != nil {
 				return err
 			}
-			body.LocalFolder = lf
 			if err := applyQueueWait(&body, cmd.Flags().Changed("max-wait"), maxWait, wait, timeout); err != nil {
 				return err
 			}

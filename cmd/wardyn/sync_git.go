@@ -36,9 +36,6 @@ var syncGitBranch = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 var syncGitSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
-// maxSyncGitOutput bounds what a sandbox git command may print back.
-const maxSyncGitOutput = 64 << 10
-
 // syncGitSent is the branch and commit the last --git sent, kept in the sync state.
 type syncGitSent struct {
 	Branch string `json:"branch"`

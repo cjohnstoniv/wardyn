@@ -617,26 +617,27 @@ func (f syncFlags) check() error {
 	return nil
 }
 
-// localFolderRequest is --local-folder as the create request names it: the
-// folder's base name, never its path on this computer. No dir is no request.
-func localFolderRequest(dir, remoteDir string, createJSON bool) (*types.RunLocalFolder, error) {
+// setLocalFolder sets --local-folder on the create request as its folder's
+// base name, never its path on this computer. No dir sets nothing.
+func setLocalFolder(body *sdk.CreateRunRequest, dir, remoteDir string, createJSON bool) error {
 	if dir == "" {
-		return nil, nil
+		return nil
 	}
 	if createJSON {
-		return nil, errors.New("--local-folder prints the sync's progress, so it does not go with --json")
+		return errors.New("--local-folder prints the sync's progress, so it does not go with --json")
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if fi, err := os.Stat(abs); err != nil || !fi.IsDir() {
-		return nil, fmt.Errorf("--local-folder: %s is not a directory", dir)
+		return fmt.Errorf("--local-folder: %s is not a directory", dir)
 	}
 	if _, err := syncRemoteDir(remoteDir); err != nil {
-		return nil, fmt.Errorf("--local-folder-remote-dir: %w", err)
+		return fmt.Errorf("--local-folder-remote-dir: %w", err)
 	}
-	return &types.RunLocalFolder{Name: filepath.Base(abs), RemoteDir: remoteDir}, nil
+	body.LocalFolder = &types.RunLocalFolder{Name: filepath.Base(abs), RemoteDir: remoteDir}
+	return nil
 }
 
 // seedThenWait seeds a new run's local folder, if it has one, then waits for
