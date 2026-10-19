@@ -96,7 +96,9 @@ coverage verdict pointing back into this document.
    scope and audience.
 4. **Source code + the git push capability.**
    - The minted GitHub installation token is repo-scoped and permission-clamped (max
-     `contents:write` + `pull_requests:write`, 1h TTL).
+     `contents:write` + `pull_requests:write`, 1h TTL) on the git lane.
+     - A GitHub CLI grant's token is bounded by the grant's capabilities instead,
+       narrowed to the App's own permissions on the installation.
    - Bot-branch-namespace confinement (`wardyn/<run-id>/*`) is **[shipped, default-on]** at the
      git-broker proxy route: it parses the `git-receive-pack` pkt-line command section and refuses
      every ref outside `refs/heads/wardyn/<run-id>/` (including deletes) before the token is minted.

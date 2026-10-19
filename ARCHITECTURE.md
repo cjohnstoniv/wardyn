@@ -383,9 +383,10 @@ stateDiagram-v2
      - *see `cmd/wardyn-git-helper`.)*
 2. **Approval mints the credential.**
    - `CredentialGrant` = eligible.
-   - For a grant with `requires_approval: true`, the mint happens only in the SAME
-     Postgres transaction that verifies `approvals.state = 'APPROVED'` for this
-     run+scope, and writes `approvals.minted_jti` back.
+   - For a grant with `requires_approval: true`, the credential is issued only after
+     a snapshot shows `approvals.state = 'APPROVED'` for this run+scope, and is
+     returned only when the transaction that re-verifies that approval writes
+     `approvals.minted_jti` back; a credential that commit refuses is discarded.
    - A grant without `requires_approval` (the default) is auto-mintable: it creates
      no approval row, is re-mintable by design, is capped at a 1h TTL and is audited
      per mint.
@@ -481,8 +482,7 @@ sequenceDiagram
   API->>DB: approval state PENDING -> APPROVED (records the decision only)
   Sbx->>Br: MintForGrant(caller run identity, grantID)
   Note over Br: a grant without requires_approval skips this sequence and mints directly (auto-mint, audited per mint)
-  Br->>DB: BEGIN
-  Br->>DB: read grant + approval (state must be APPROVED, minted_jti empty)
+  Br->>DB: snapshot grant + approval (state must be APPROVED, minted_jti empty)
   alt not approved, or already minted
     DB-->>Br: no eligible row
     Br-->>Sbx: refuse (no widening, no second mint)
@@ -490,17 +490,22 @@ sequenceDiagram
     DB-->>Br: the exact approved scope
     Br->>M: mint short-lived credential (approved scope, 1h TTL)
     M-->>Br: token
-    Br->>DB: UPDATE approvals SET minted_jti (only while still empty)
-    Br->>DB: COMMIT
-    Br-->>Sbx: minted (scope == what the approver saw)
+    Br->>DB: BEGIN, re-read grant + approval (must equal the snapshot)
+    alt changed since the snapshot
+      Br->>M: revoke the token (discarded, never returned)
+    else unchanged
+      Br->>DB: UPDATE approvals SET minted_jti (only while still empty)
+      Br->>DB: COMMIT
+      Br-->>Sbx: minted (scope == what the approver saw)
+    end
   end
 ```
 
 - This describes a grant with `requires_approval: true`.
 - Approval records the human decision only; the credential is minted **later**,
   when the run's own proxy or git-helper requests it (`MintForGrant`) —
-  - inside
-    the same Postgres transaction that re-verifies the `APPROVED` approval for that
+  - and is returned only from
+    the Postgres transaction that re-verifies the `APPROVED` approval for that
     exact run and grant and claims `minted_jti`,
   - so the minted scope always equals
     the approved scope and a grant can never mint twice.
