@@ -322,8 +322,10 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 
 // signInCaptureKillGrace is how long a sign-in sandbox outlives its stored
 // capture: long enough for the helper to receive its 204 and print the DONE
-// line the console corroborates (signin-pane.sh) before the sandbox goes.
-const signInCaptureKillGrace = 30 * time.Second
+// line the console corroborates (signin-pane.sh) before the sandbox goes. The
+// sandbox holds a copy of the new credential until then, so it is short (0.10.0:
+// it was 30 s); the helper wipes its own caches first.
+const signInCaptureKillGrace = 5 * time.Second
 
 // signInCaptureReadTimeout bounds killSignInRunAfterCapture's own post-grace
 // run read (below) — a plain single-row read, nowhere near as long as the kill
