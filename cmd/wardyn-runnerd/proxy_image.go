@@ -59,13 +59,49 @@ func proxyImagePinned(image, identityImage string, flagGiven bool, getenv func(s
 	return !(ok && releaseVersion.MatchString(tag))
 }
 
+// imageReleaseTag is the release version an image reference is tagged with, or "" for a digest-only
+// reference, a development tag or anything else that is not X.Y.Z[-rc.N].
+func imageReleaseTag(image string) string {
+	ref, _, _ := strings.Cut(image, "@")
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref[i:], "/") {
+		return ""
+	}
+	if tag := ref[i+1:]; releaseVersion.MatchString(tag) {
+		return tag
+	}
+	return ""
+}
+
+// warnPinnedProxyImageSkew says, at startup, when the pinned proxy image is a release other than this
+// binary's own. Nothing else compares them: an older proxy refuses configuration fields a newer
+// runner sends, so runs fail to start.
+func warnPinnedProxyImageSkew(pinned, runnerVersion string) {
+	tag := imageReleaseTag(pinned)
+	if tag == "" || !releaseVersion.MatchString(runnerVersion) || tag == runnerVersion {
+		return
+	}
+	slog.WarnContext(context.Background(), "the pinned proxy image is a different release than this runner; runs may fail to start",
+		"pinned", pinned, "runner", runnerVersion, "fix", "run setup with --proxy-image set to the image the organisation names, or remove the pin (--proxy-image and WARDYN_PROXY_IMAGE_PINNED) to follow the organisation")
+}
+
 // followOrgProxyImage is the hook that takes the proxy image the organisation answers at each connect,
 // so an upgraded organisation's image reaches this runner without a reinstall. A pinned image wins,
 // and an unusable answer is ignored. current is the image already in use; set applies a new one to
-// the runs started from then on.
+// the runs started from then on. A pinned runner's hook never calls set: it warns, once for each
+// distinct answer, when the organisation names a different release than the pinned image's.
 func followOrgProxyImage(current string, pinned bool, set func(string)) func(string) {
 	if pinned {
-		return nil
+		warned := map[string]bool{}
+		return func(answered string) {
+			want, have := imageReleaseTag(answered), imageReleaseTag(current)
+			if want == "" || have == "" || want == have || warned[answered] {
+				return
+			}
+			warned[answered] = true
+			slog.WarnContext(context.Background(), "the organisation names a different proxy release than the one this runner is pinned to; runs may fail to start",
+				"pinned", current, "organisation", answered, "fix", "run setup with --proxy-image "+answered+", or remove the pin (--proxy-image and WARDYN_PROXY_IMAGE_PINNED) to follow the organisation")
+		}
 	}
 	return func(answered string) {
 		if answered == current {
