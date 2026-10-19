@@ -44,6 +44,24 @@ const (
 	// MethodSelftest runs a BYOI image's contract check on a runner that
 	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
 	MethodSelftest = "byoi_selftest"
+	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
+	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
+	// session's writer/observer mode and is answered once the runner has applied it;
+	// MethodLocalAttachTeeAck acknowledges the tee bytes the org has handed to its recorder.
+	MethodLocalAttach       = "local_attach"
+	MethodLocalAttachMode   = "local_attach_mode"
+	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+)
+
+// The tee window of a local attach session whose Tee is true. The runner shows at most
+// LocalAttachTeeWindowBytes of output ahead of the org's last acknowledgement, stops writing to the
+// CLI while that window is full, and ends the session when no acknowledgement arrives within
+// LocalAttachTeeWindowTimeout, so a stalled recorder cannot let unrecorded output reach the screen.
+// With Tee false there are no acknowledgements and no window. The timeout matches the api package's
+// attachLeaseCallTimeout, which this package cannot import.
+const (
+	LocalAttachTeeWindowBytes                = 64 << 10
+	LocalAttachTeeWindowTimeout time.Duration = 2 * time.Second
 )
 
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
@@ -216,4 +234,31 @@ type ExecutionResult struct {
 	Operation       string                       `json:"operation"`
 	ExecID          string                       `json:"exec_id"`
 	Attempted       bool                         `json:"attempted"`
+}
+
+// LocalAttachArgs asks the runner to attach the CLI that holds Nonce (granted on the runner's local
+// socket) to ref's sandbox. Tee says the org records the run: the runner then sends every output
+// chunk on the pty_tee stream before it shows it. With Tee false the stream carries no bytes and only
+// lets the org end the session.
+type LocalAttachArgs struct {
+	Ref     string               `json:"ref"`
+	Nonce   string               `json:"nonce"`
+	Options runner.AttachOptions `json:"options"`
+	Tee     bool                 `json:"tee,omitempty"`
+}
+
+// LocalAttachModeArgs sets the writer or observer mode of the session whose pty_tee stream is Stream.
+// Cols and Rows are the window size when the session becomes a writer.
+type LocalAttachModeArgs struct {
+	Stream   uint32 `json:"stream"`
+	Observer bool   `json:"observer"`
+	Cols     uint16 `json:"cols,omitempty"`
+	Rows     uint16 `json:"rows,omitempty"`
+}
+
+// LocalAttachTeeAckArgs acknowledges that the org has handed Offset bytes (cumulative) of the
+// session's pty_tee stream to its recorder.
+type LocalAttachTeeAckArgs struct {
+	Stream uint32 `json:"stream"`
+	Offset int64  `json:"offset"`
 }

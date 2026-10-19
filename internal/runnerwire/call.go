@@ -16,6 +16,7 @@ import (
 const MaxCalls = 256
 
 type pendingCall struct {
+	method    string // the call's method, which a runner-opened stream's kind may depend on
 	abandoned bool // the caller stopped waiting; guarded by Peer.mu
 	reply     chan Reply
 	notify    chan struct{}
@@ -91,7 +92,7 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 	if err != nil {
 		return err
 	}
-	pc := &pendingCall{reply: make(chan Reply, 1), notify: make(chan struct{}, 1)}
+	pc := &pendingCall{method: method, reply: make(chan Reply, 1), notify: make(chan struct{}, 1)}
 	for _, o := range opts {
 		o(pc)
 	}
