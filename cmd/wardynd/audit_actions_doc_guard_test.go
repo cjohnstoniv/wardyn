@@ -443,8 +443,8 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 	return nil
 }
 
-// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
-// ui.close Data-fields cells to what the emit passes: `duration_sec` is
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open, ui.close and
+// ui.start Data-fields cells to what the emit passes: `duration_sec` is
 // computed only at close (s.auditUI's caller at internal/api/uigateway.go
 // passes it in the ui.close call's map literal, not ui.open's), and
 // TestAuditActionsDocCitationsAreLive only checks citation proximity, never
@@ -482,16 +482,20 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 	}{
 		{"ui.open", regexp.MustCompile(`"ui\.open"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
 		{"ui.close", regexp.MustCompile(`"ui\.close"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
+		// ui.start emits from two call sites (success, failure); their literals are unioned.
+		{"ui.start", regexp.MustCompile(`"ui\.start"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
 	} {
-		m := tc.call.FindSubmatch(src)
-		if m == nil {
+		calls := tc.call.FindAllSubmatch(src, -1)
+		if calls == nil {
 			t.Fatalf("could not find the %s emit's map[string]any{...} literal in internal/api/uigateway.go — re-anchor this guard", tc.action)
 		}
 		emitted := map[string]bool{}
-		for _, kv := range mapLit.FindAllStringSubmatch(string(m[1]), -1) {
-			for _, k := range kv[1:] {
-				if k != "" {
-					emitted[k] = true
+		for _, m := range calls {
+			for _, kv := range mapLit.FindAllStringSubmatch(string(m[1]), -1) {
+				for _, k := range kv[1:] {
+					if k != "" {
+						emitted[k] = true
+					}
 				}
 			}
 		}
