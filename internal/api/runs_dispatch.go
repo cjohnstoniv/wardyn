@@ -165,7 +165,8 @@ type dispatchParams struct {
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
-// below every WIDENING phase — see its own ordering argument). The ProxyConfig
+// below every WIDENING phase — see its own ordering argument), and the final
+// seal after both meets the result with the outer layers. The ProxyConfig
 // snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
@@ -442,6 +443,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunSizing(ctx, run, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
+	// The final seal, after every phase that adds a host and after the ceiling's
+	// re-assertion: nothing below may widen policy (run_policy_seal.go).
+	s.sealRunPolicy(ctx, run, &policy)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
