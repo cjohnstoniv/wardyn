@@ -364,6 +364,10 @@ func TestSummarizeCapsAndFallsBack(t *testing.T) {
 	if s := summarize("Edit", json.RawMessage(`{"file_path":"a.go"}`)); s != `{"file_path":"a.go"}` {
 		t.Fatalf("non-bash fallback wrong: %q", s)
 	}
+	mcp := `{"command":"status","script":"echo hello"}`
+	if s := summarize("mcp__ops__run", json.RawMessage(mcp)); s != mcp {
+		t.Fatalf("a non-Bash tool with a command field must show its whole input, got %q", s)
+	}
 	long := strings.Repeat("x", maxCmdBytes+100)
 	if s := summarize("Bash", json.RawMessage(`{"command":"`+long+`"}`)); len(s) > maxCmdBytes+20 || !strings.HasSuffix(s, "…[truncated]") {
 		t.Fatalf("cap not applied: len=%d", len(s))

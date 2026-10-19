@@ -410,14 +410,15 @@ func (g *gate) state(id string) (string, error) {
 }
 
 // summarize renders the gated tool's input as the one-line decision context a
-// human reads on the approval row. Bash gets its literal command; everything
-// else gets its compact input JSON. Capped — context, not archive.
+// human reads on the approval row. Bash gets its literal command; every other
+// tool gets its compact input JSON, a "command" field included, since the allow
+// echoes every field. Capped — context, not archive.
 func summarize(tool string, input json.RawMessage) string {
 	var cmd struct {
 		Command string `json:"command"`
 	}
 	s := ""
-	if json.Unmarshal(input, &cmd) == nil && cmd.Command != "" {
+	if tool == "Bash" && json.Unmarshal(input, &cmd) == nil && cmd.Command != "" {
 		s = cmd.Command
 	} else {
 		s = string(input)
