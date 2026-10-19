@@ -466,6 +466,16 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 		t.Fatalf("read internal/api/uigateway.go: %v", err)
 	}
 	mapLit := regexp.MustCompile("`([a-z0-9_]+)`|\"([a-z0-9_]+)\":")
+	// auditUISession adds the portal and sponsor keys to every ui.* row after
+	// the call site's literal, so they are part of what the emit passes.
+	sessSrc, err := os.ReadFile(filepath.Join(root, "internal", "api", "uigateway_session.go"))
+	if err != nil {
+		t.Fatalf("read internal/api/uigateway_session.go: %v", err)
+	}
+	helperKeys := regexp.MustCompile(`data\["([a-z0-9_]+)"\]`).FindAllStringSubmatch(string(sessSrc), -1)
+	if len(helperKeys) == 0 {
+		t.Fatal("found no data[\"...\"] assignments in auditUISession — re-anchor this guard")
+	}
 	for _, tc := range []struct {
 		action string
 		call   *regexp.Regexp
@@ -487,6 +497,9 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 		}
 		if len(emitted) == 0 {
 			t.Fatalf("parsed 0 keys out of the %s emit's map literal — re-anchor this guard", tc.action)
+		}
+		for _, kv := range helperKeys {
+			emitted[kv[1]] = true
 		}
 		documented := dataFieldsCell(t, root, tc.action)
 		docSet := map[string]bool{}
