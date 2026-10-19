@@ -862,6 +862,8 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
+	backchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -895,10 +897,8 @@ type Server struct {
 	ssoRefreshSpent map[string]bool
 	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
 	// refresh tokens AWS last refused to renew with a re-auth code, to the code
-	// and description it answered, also under ssoRefreshMu.
-	// ponytail: process-local, so per replica and per restart: a replica or a
-	// restarted process that has not seen the refusal grades the session live
-	// and passes Review until its own dispatch is refused and re-marks it.
+	// and description it answered, also under ssoRefreshMu. Used only by a store
+	// with no store.AWSSSORefusedTokenStore; with one, the marks are shared there.
 	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).
@@ -962,8 +962,9 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		deviceRouteState: newDeviceRouteState(),
+		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
+		deviceRouteState:   newDeviceRouteState(),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()

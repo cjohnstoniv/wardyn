@@ -192,8 +192,8 @@ func TestHostCookies_PlantedSignInStateIsRefused(t *testing.T) {
 		auth.CallbackHandler(w, r)
 		return w
 	}
-	if w := callback(""); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid state parameter") {
-		t.Fatalf("planted plain-name sign-in cookies: %d %q, want 400 invalid state parameter", w.Code, w.Body.String())
+	if w := callback(""); w.Code != http.StatusFound || !strings.Contains(w.Header().Get("Location"), "auth_error=sign_in_expired") {
+		t.Fatalf("planted plain-name sign-in cookies: %d %q, want the sign_in_expired redirect", w.Code, w.Header().Get("Location"))
 	}
 	if w := callback("__Host-"); !strings.Contains(w.Body.String(), "missing code parameter") {
 		t.Fatalf("control: __Host- sign-in cookies: %d %q, want the state check passed and a stop at the empty code", w.Code, w.Body.String())

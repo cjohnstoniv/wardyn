@@ -30,9 +30,10 @@ import (
 //  6. Creates a signed Wardyn session cookie.
 //
 // User-actionable denials (5, 4) redirect to "/?auth_error=<code>" so the
-// sign-in screen can explain what to do next; the state/nonce/PKCE checks in
-// (1)-(3) stay http.Error since those are attack-shaped, not policy denials,
-// and should fail loudly rather than retry.
+// sign-in screen can explain what to do next. So does a missing or replaced
+// state cookie (1): expiry and a second tab are the common causes, and the
+// redirect starts no session. The nonce/PKCE checks stay http.Error since a
+// state that matches but loses its siblings is attack-shaped.
 // consumeCallbackCookies proves this redirect belongs to the browser that
 // started the login and spends the single-use state/nonce/PKCE cookies.
 //
@@ -50,7 +51,9 @@ func (a *Authenticator) consumeCallbackCookies(w http.ResponseWriter, r *http.Re
 	stateParam := r.URL.Query().Get("state")
 	stateCookie, err := r.Cookie(a.cookieName(stateCookieName))
 	if err != nil || stateCookie.Value == "" || stateParam != stateCookie.Value {
-		http.Error(w, "invalid state parameter", http.StatusBadRequest)
+		// Not redirectAuthError: a mismatch usually means a newer login owns the return_to cookie, and
+		// expiring it would cost that login its landing page.
+		http.Redirect(w, r, a.cfg.BasePath+"/?auth_error="+authErrorSignInExpired, http.StatusFound)
 		return "", "", false, false
 	}
 	nonceCookie, err := r.Cookie(a.cookieName(nonceCookieName))
