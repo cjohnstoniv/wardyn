@@ -206,7 +206,7 @@ function RedirectRowExpanded({
   return (
     <div className="space-y-2.5 bg-primary/5 p-3">
       <div className="flex items-center gap-2">
-        <span className="text-meta font-medium uppercase tracking-wide text-muted-foreground">Editing — full values</span>
+        <span className="label-eyebrow">Editing — full values</span>
         <span className="flex-1" />
         <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={onCancel}>
           collapse
