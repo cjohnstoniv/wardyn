@@ -6,7 +6,8 @@
 #   V=X.Y.Z scripts/verify-release.sh      (or: scripts/verify-release.sh X.Y.Z)
 # Every release image is cosign-verified BY INDEX DIGEST against the release workflow run for THIS tag (an exact
 # certificate identity, so another tag's signature is refused), the asset NAMES are compared with the expected set,
-# the SHA256SUMS blob is verified, the install.sh URL is fetched and the helm chart is shown. It never creates,
+# the SHA256SUMS blob is verified, the install.sh URL is fetched and the helm chart is cosign-verified by digest against the
+# same exact identity (docs/VERIFY.md section 4) with its appVersion compared to $V. It never creates,
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
 # expected assets are one sbom-<image>.cdx.json per image, every name on the release-assets job's `for want in`
@@ -30,7 +31,9 @@ case "$V" in 0.9.3-rc.1|0.9.3-rc.2) WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WA
 [ "$(printf '%s\n' "${V%%-*}" 0.9.3 | sort -V | head -1)" = 0.9.3 ] || WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT")
 # The licence tarball first shipped in 0.9.4.
 [ "$(printf '%s\n' "${V%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ] || WANT=$(grep -vx 'wardyn-licenses.tar.gz' <<<"$WANT")
-[ -n "$IMAGES" ] && [ -n "$WANT" ] || { echo "could not derive the image or asset list from $RELEASE_YML" >&2; exit 2; }
+# The chart ref is the one release.yml's chart job signs, `cosign sign --yes "<ref>@<digest>"`.
+CHART_REF=$(sed -n 's/.*cosign sign --yes "\(ghcr\.io\/[^@"]*charts[^@"]*\)@.*/\1/p' "$RELEASE_YML" | head -1)
+[ -n "$IMAGES" ] && [ -n "$WANT" ] && [ -n "$CHART_REF" ] || { echo "could not derive the image, asset or chart list from $RELEASE_YML" >&2; exit 2; }
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"
 fails=0
@@ -80,7 +83,16 @@ echo "--- install.sh URL"
 code=$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/cjohnstoniv/wardyn/releases/download/$TAG/install.sh"); echo "install.sh -> HTTP $code"; [[ "$code" == 302 || "$code" == 200 ]] || fails=$((fails+1))
 grep -c "releases/download/$TAG/install.sh" "$OUT/dl/install.sh" 2>/dev/null | sed 's/^/install.sh self-pin count: /'
 echo "--- helm chart"
-helm show chart oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$V" 2>&1 | grep -E '^(version|appVersion|name):' || { echo "FAIL helm chart"; fails=$((fails+1)); }
+helm show chart "oci://$CHART_REF" --version "$V" >"$OUT/chart.txt" 2>&1
+grep -E '^(version|appVersion|name):' "$OUT/chart.txt" || { echo "FAIL helm chart"; fails=$((fails+1)); }
+# The OCI tag is mutable, so the signature is checked on the digest it resolves to now, as the images are, and the chart must be this release's.
+app=$(sed -n 's/^appVersion:[[:space:]]*//p' "$OUT/chart.txt" | tr -d "\"'")
+[[ "$app" == "$V" ]] || { echo "FAIL helm chart appVersion '$app' is not $V"; fails=$((fails+1)); }
+cdigest=$(docker buildx imagetools inspect "$CHART_REF:$V" --format '{{json .Manifest.Digest}}' 2>"$OUT/imagetools-chart.err" | tr -d '"')
+if [[ -z "$cdigest" ]]; then echo "FAIL helm chart: no digest"; tail -3 "$OUT/imagetools-chart.err"; fails=$((fails+1))
+elif cosign verify "$CHART_REF@$cdigest" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-chart.json" 2>"$OUT/cosign-chart.err"; then
+  echo "OK   helm chart@$cdigest"
+else echo "FAIL helm chart cosign verify"; tail -3 "$OUT/cosign-chart.err"; fails=$((fails+1)); fi
 echo "fails=$fails"
 if [[ $fails -eq 0 ]]; then rm -rf "$OUT"; else echo "evidence kept in $OUT"; fi
 exit $(( fails > 255 ? 255 : fails ))

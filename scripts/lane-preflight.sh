@@ -18,10 +18,11 @@
 # catch are found before the push. Against the same merge base, in this order, each step timed and
 # the first failure ending the run (exit non-zero, the step named on stderr):
 #   lint, staticcheck, ui-typecheck | whole-tree guards | go test of changed packages |
-#   Postgres-gated tests of changed packages | vitest | changed Playwright specs x3.
+#   Postgres-gated tests of changed packages | vitest.
+# No Playwright: hosted ui-e2e is the e2e gate, and the candidate's PR runs it while these checks run.
 # The guard and Postgres test lists are built by grep (scripts/lib/candidate-tests.py), never by hand.
-# With GATE=<path> set and that file present, every go/pnpm/e2e command goes through it (a box's job
-# semaphore), so do NOT wrap the whole script in the gate (its e2e step takes the heavy slot itself); if
+# With GATE=<path> set and that file present, every go/pnpm command goes through it (a box's job
+# semaphore), so do NOT wrap the whole script in the gate; if
 # you must, set WARDYN_GATED=1 so the inner commands skip the gate. The script never sets it. A gate you
 # do not own, or one that others can write, is refused: it would run every command as you.
 # Roughly 15 minutes on a narrow diff; a wide one (BASE=v0.9.0) is far more. Still not a substitute
@@ -43,7 +44,7 @@ for arg in "$@"; do
   esac
 done
 
-# Candidate mode only: run each go/pnpm/e2e command through the gate GATE names, when it exists.
+# Candidate mode only: run each go/pnpm command through the gate GATE names, when it exists.
 G=()
 if [ "${candidate}" = 1 ] && [ -n "${GATE:-}" ] && [ -e "${GATE}" ] && [ "${WARDYN_GATED:-}" != 1 ]; then
   [ -O "${GATE}" ] && [ -x "${GATE}" ] && [ -z "$(find "${GATE}" -maxdepth 0 -perm /022)" ] \
@@ -187,35 +188,6 @@ if [ "${#ui_files[@]}" -gt 0 ]; then
   step "5 vitest related (${#ui_files[@]} files)" "${G[@]}" pnpm -C ui exec vitest related --run --maxWorkers=4 "${ui_files[@]}"
 else
   log "5/5 vitest related: no changed UI sources, skipped"
-fi
-
-if [ "${candidate}" = 1 ]; then
-  # Changed Playwright specs, three times each: a race shows as a failure on one of three fresh seeds.
-  # run-ui-e2e.sh takes no extra Playwright args, so the spec list is looped; the first pass builds
-  # the backend and the UI bundle, the others reuse them. A pass that needed a retry fails the run.
-  e2e_specs=()
-  while IFS= read -r f; do
-    [ -f "${f}" ] && e2e_specs+=("$(basename "${f}" .spec.ts)")
-  done < <(grep -E '^ui/e2e/[^/]+\.spec\.ts$' <<<"${changed}" || true)
-  if [ "${#e2e_specs[@]}" -gt 0 ]; then
-    ss -ltn 2>/dev/null | grep -q ':8088 ' && log "[candidate] note: :8088 is held by another process; run-ui-e2e.sh picks free ports itself, so this does not collide"
-    # As in ci.yml: governance-changes needs the second-human switch on in the daemon, which changes every
-    # other spec's writes, so it skips by name beside them and runs on its own with the switch on.
-    four_eyes=0
-    for s in "${e2e_specs[@]}"; do [ "${s}" = governance-changes ] && four_eyes=1; done
-    for pass in 1 2 3; do
-      if [ "${pass}" = 1 ]; then
-        step "6 playwright pass 1/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes scripts/run-ui-e2e.sh "${e2e_specs[@]}"
-      else
-        step "6 playwright pass ${pass}/3 (${e2e_specs[*]})" "${G[@]}" env WARDYN_E2E_ALLOW_ALL_SKIPPED=governance-changes WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh "${e2e_specs[@]}"
-      fi
-      if [ "${four_eyes}" = 1 ]; then
-        step "6 playwright pass ${pass}/3 (governance-changes, second-human switch on)" "${G[@]}" env WARDYN_GOVERNANCE_SECOND_HUMAN=true WARDYN_E2E_SKIP_BUILD=1 WARDYN_E2E_NO_UI_BUILD=1 scripts/run-ui-e2e.sh governance-changes
-      fi
-    done
-  else
-    log "[candidate] 6 playwright: no changed spec under ui/e2e, skipped"
-  fi
 fi
 
 log "preflight passed (not a substitute for hosted CI or the coverage floor)"

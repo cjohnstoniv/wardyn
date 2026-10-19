@@ -10,9 +10,9 @@
 # fast-forward, tag, published Release) and skips it, so a crash or a usage
 # limit resumes instead of restarting.
 #   prepare  candidate branch off origin/release/X.Y, merge MERGE, the release
-#            commit, local checks (lane-preflight.sh --candidate), push, nightly
-#            dispatch (scope=candidate, so it starts beside the PR's CI), PR into
-#            release/X.Y
+#            commit, push, nightly dispatch (scope=candidate), PR into release/X.Y,
+#            and only then the local checks (lane-preflight.sh --candidate), so
+#            hosted CI and the nightly run while the local checks do
 #   wait     every WAIT_INTERVAL s (60) scripts/green-by-tree.sh with
 #            NEED_STAGING=1 on the candidate head; exit 0 starts the clock (T0)
 #   publish  green-by-tree again, fast-forward release/X.Y, tag, watch release.yml,
@@ -22,7 +22,10 @@
 # origin/release/X.Y); MERGE (ref to merge, e.g. origin/main); NOTES (CHANGELOG
 # paste file); BODY (release body file, default: the new CHANGELOG section);
 # HIGHLIGHTS (ROADMAP row text, needed when the row is missing); ISSUES (numbers;
-# one `Closes #N` per line in the PR body); PHASE; DRY_RUN=1.
+# one `Closes #N` per line in the PR body); PHASE; DRY_RUN=1; PRERELEASE
+# (auto|true|false, default auto: an X.Y.Z-rc.N publishes as a GitHub pre-release,
+# a final X.Y.Z as a full release, and as Latest when it is newer than every other
+# final tag).
 #
 # DRY_RUN=1 rehearses: no release commit (release-commit.sh --dry-run only warns
 # when it would refuse), no PR, no push to release/*, no tag, no Release. The
@@ -55,6 +58,7 @@ HIGHLIGHTS="${HIGHLIGHTS:-}"
 ISSUES="${ISSUES:-}"
 PHASE="${PHASE:-all}"
 DRY_RUN="${DRY_RUN:-0}"
+PRERELEASE="${PRERELEASE:-auto}"
 WAIT_INTERVAL="${WAIT_INTERVAL:-60}"
 RUN_POLL_INTERVAL="${RUN_POLL_INTERVAL:-5}"
 NIGHTLY_MAX_AGE=82800 # seconds (23 h); release.yml's promote preflight refuses older staging
@@ -90,6 +94,7 @@ XY="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
 RB="release/$XY"
 case "$PHASE" in prepare|wait|publish|all) ;; *) die "PHASE must be prepare, wait, publish or all (got '$PHASE')" ;; esac
 case "$DRY_RUN" in 0|1) ;; *) die "DRY_RUN must be 0 or 1 (got '$DRY_RUN')" ;; esac
+case "$PRERELEASE" in auto|true|false) ;; *) die "PRERELEASE must be auto, true or false (got '$PRERELEASE')" ;; esac
 [ -z "$ISSUES" ] || [[ "$ISSUES" =~ ^[0-9]+([ ,]+[0-9]+)*$ ]] || die "ISSUES must be issue numbers separated by spaces or commas (got '$ISSUES')"
 [ -z "$NOTES" ] || [ -r "$NOTES" ] || die "NOTES file '$NOTES' is not readable"
 if [ -n "$BODY" ]; then
@@ -274,7 +279,7 @@ PY
 }
 
 phase_prepare() {
-  local sha tree rtip n body state
+  local sha tree rtip n body state checked
 
   if [ -n "$MERGE" ]; then
     begin "merge $MERGE"
@@ -316,18 +321,9 @@ phase_prepare() {
   sha="$(git rev-parse HEAD)"
   rtip="$(remote_tip "$CAND")"
 
-  begin "local checks"
-  if [ "$DRY_RUN" = 1 ]; then finish "skipped (DRY_RUN)"
-  elif [ "$rtip" = "$sha" ]; then finish "skipped (already pushed)"
-  else
-    grep -q -- '--candidate' "$HERE/lane-preflight.sh" \
-      || die "scripts/lane-preflight.sh has no --candidate mode on this branch. Merge the branch that adds it (the candidate preflight replaces the old local release gate) and re-run: prepare resumes here"
-    BASE="origin/$RB" "$HERE/lane-preflight.sh" --candidate || die "lane-preflight.sh --candidate failed"
-    make dco DCO_RANGE="HEAD ^origin/main ^origin/$RB" || die "make dco failed"
-    go test -count=1 ./cmd/wardyn/ -run 'TestVersionMatchesChangelog|TestShippedVersionStringsAgree' || die "the version tests failed"
-    ./scripts/test-claims-match-code.sh || die "test-claims-match-code.sh failed"
-    finish ok
-  fi
+  # Refused before anything is pushed: the checks now run after the push.
+  [ "$DRY_RUN" = 1 ] || grep -q -- '--candidate' "$HERE/lane-preflight.sh" \
+    || die "scripts/lane-preflight.sh has no --candidate mode on this branch. Merge the branch that adds it (the candidate preflight replaces the old local release gate) and re-run: prepare resumes here"
 
   begin "push $CAND"
   if [ "$rtip" = "$sha" ]; then finish "skipped (already pushed)"
@@ -368,6 +364,21 @@ phase_prepare() {
       rm -f "$body"
       finish ok
     fi
+  fi
+
+  # Run last: the push, the nightly and the PR's CI are already going. A marker keyed by the head sha
+  # records a pass, because a pushed branch no longer implies the checks ran (a crash in them resumes here).
+  begin "local checks"
+  checked="$(git rev-parse --git-path release-patch-checked)"
+  if [ "$DRY_RUN" = 1 ]; then finish "skipped (DRY_RUN)"
+  elif [ "$(cat "$checked" 2>/dev/null)" = "$sha" ]; then finish "skipped (already passed on this head)"
+  else
+    BASE="origin/$RB" "$HERE/lane-preflight.sh" --candidate || die "lane-preflight.sh --candidate failed"
+    make dco DCO_RANGE="HEAD ^origin/main ^origin/$RB" || die "make dco failed"
+    go test -count=1 ./cmd/wardyn/ -run 'TestVersionMatchesChangelog|TestShippedVersionStringsAgree' || die "the version tests failed"
+    ./scripts/test-claims-match-code.sh || die "test-claims-match-code.sh failed"
+    echo "$sha" >"$checked"
+    finish ok
   fi
 }
 
@@ -493,6 +504,23 @@ forward-port (printed, never run):
 EOF
 }
 
+# release_flags: sets flags to gh release edit's pre-release / latest arguments. PRERELEASE=auto reads
+# the version: an X.Y.Z-rc.N is a pre-release, a final is not. A final is also marked Latest only when
+# no other final tag is newer, so a patch to an older line leaves Latest where it is.
+release_flags() {
+  local pre="$PRERELEASE" t newest=""
+  [ "$pre" != auto ] || { [[ "$V" == *-rc.* ]] && pre=true || pre=false; }
+  if [ "$pre" = true ]; then flags=(--prerelease); return 0; fi
+  while IFS= read -r t; do
+    [ "$t" = "v$V" ] && continue
+    [[ "${t#v}" != *-* ]] || continue
+    [ -n "$(vkey "${t#v}" 2>/dev/null)" ] || continue
+    if [ -z "$newest" ] || [[ "$(vkey "${t#v}")" > "$(vkey "$newest")" ]]; then newest="${t#v}"; fi
+  done < <(git tag -l 'v*')
+  if [ -z "$newest" ] || [[ "$(vkey "$V")" > "$(vkey "$newest")" ]]; then flags=(--prerelease=false --latest)
+  else flags=(--prerelease=false --latest=false); fi
+}
+
 phase_publish() {
   local sha rtip rc id queued state body vout err prev gout nrun
   sha="$(git rev-parse HEAD)"
@@ -576,12 +604,13 @@ phase_publish() {
   finish "ok (run $id)"
 
   begin "publish the Release"
+  flags=(); release_flags
   state="$(gh release view "v$V" --json isDraft --jq .isDraft)" || state=""
   if [ "$state" = false ]; then finish "skipped (already published)"
   else
     body=""
     [ "$state" != true ] || body="$(release_body)" || die "no release body"
-    if [ "$state" != true ] || ! gh release edit "v$V" --draft=false --prerelease --title "Wardyn v$V" --notes-file "$body"; then
+    if [ "$state" != true ] || ! gh release edit "v$V" --draft=false "${flags[@]}" --title "Wardyn v$V" --notes-file "$body"; then
       echo "release-patch: no draft for v$V, which release-assets should have made. The releases:" >&2
       gh api -X GET "repos/$REPO/releases" --jq '.[] | [.tag_name, .draft, .prerelease, .name] | @tsv' >&2 || echo "release-patch: the listing failed too" >&2
       die "gh release edit v$V could not publish the draft"

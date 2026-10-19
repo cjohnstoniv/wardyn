@@ -154,7 +154,7 @@ STUB
   cat >scripts/lane-preflight.sh <<'STUB'
 #!/usr/bin/env bash
 # stub: the real script's --candidate mode is what release-patch.sh requires
-echo "args=$* BASE=${BASE:-}" >>"$FIX/preflight.log"
+echo "args=$* BASE=${BASE:-} pushes=$(grep -c . "$FIX/push.log" 2>/dev/null) nightly=$(grep -c '^workflow run nightly' "$FIX/gh.log" 2>/dev/null) pr=$(grep -c '^pr create' "$FIX/gh.log" 2>/dev/null)" >>"$FIX/preflight.log"
 exit "$(cat "$FIX/preflight.rc" 2>/dev/null || echo 0)"
 STUB
   chmod +x scripts/*.sh
@@ -232,7 +232,8 @@ check "A: main merged --no-ff with a Signed-off-by" \
   bash -c "g() { '$REAL_GIT' \"\$@\"; }; g -C '$OR' log --merges --format=%B refs/heads/chore/release-0.8.4 | grep -q '^Signed-off-by: '"
 check "A: release commit sits on the candidate" \
   bash -c "'$REAL_GIT' -C '$OR' log -1 --format=%s refs/heads/chore/release-0.8.4 | grep -qx 'release: 0.8.4'"
-check "A: the candidate preflight ran against the release line" log_has preflight.log '^args=--candidate BASE=origin/release/0\.8$'
+check "A: the candidate preflight ran against the release line" log_has preflight.log '^args=--candidate BASE=origin/release/0\.8 '
+check "A: the push, the nightly and the PR all came before the local checks" log_has preflight.log ' pushes=1 nightly=1 pr=1$'
 check "A: make dco ran over the release's own range" log_has dco.log '^HEAD \^origin/main \^origin/release/0\.8$'
 check "A: version go test ran" log_has go.log "^test -count=1 \./cmd/wardyn/ -run TestVersionMatchesChangelog\|TestShippedVersionStringsAgree\$"
 check "A: claims script ran" log_has claims.log '^run$'
@@ -246,7 +247,7 @@ check "A: pushed the tag, and it peels to the candidate" bash -c "[ \"\$('$REAL_
 check "A: green-by-tree got NEED_STAGING=1, the watched list, the repo" log_has green.log 'WATCHED=\[w1 w2 w3\] NEED_STAGING=1 REPO=acme/wardyn$'
 check "A: green-by-tree ran in wait and again in publish" bash -c "[ \"\$(grep -c . '$FIX/green.log')\" -ge 2 ]"
 check "A: watched the tag's release.yml run" log_has gh.log '^run watch 901 --exit-status$'
-check "A: published the draft as a pre-release" log_has gh.log '^release edit v0\.8\.4 --draft=false --prerelease --title Wardyn v0\.8\.4 --notes-file '
+check "A: published the final as a full release and Latest" log_has gh.log '^release edit v0\.8\.4 --draft=false --prerelease=false --latest --title Wardyn v0\.8\.4 --notes-file '
 check "A: release body is the new CHANGELOG section only" \
   bash -c "grep -q 'notes for 0.8.4' '$FIX/release_body.txt' && ! grep -q '0.8.3' '$FIX/release_body.txt'"
 check "A: release edit came after the run watch" bash -c "[ \$(grep -n '^run watch 901' '$FIX/gh.log' | cut -d: -f1 | head -1) -lt \$(grep -n '^release edit' '$FIX/gh.log' | cut -d: -f1 | head -1) ]"
@@ -260,9 +261,10 @@ keep_pushes
 TREE=$(g -C "$WK" rev-parse 'HEAD^{tree}')
 printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"in_progress","conclusion":null,"head_commit":{"tree_id":"%s"}}]}' "$TREE" \
   >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
-P0=$(lines "$FIX/push.log"); R0=$(lines "$FIX/rc.log"); N0=$(grep -c '^pr create' "$FIX/gh.log"); E0=$(grep -c '^release edit' "$FIX/gh.log"); W0=$(grep -c '^workflow run' "$FIX/gh.log")
+PF0=$(lines "$FIX/preflight.log"); P0=$(lines "$FIX/push.log"); R0=$(lines "$FIX/rc.log"); N0=$(grep -c '^pr create' "$FIX/gh.log"); E0=$(grep -c '^release edit' "$FIX/gh.log"); W0=$(grep -c '^workflow run' "$FIX/gh.log")
 rp V=0.8.4 MERGE=origin/main ISSUES="12 15" HIGHLIGHTS="Fixes things" NOTES="$WORK/notes.md"
 [ "$RC" = 0 ] && ok "B: re-run exits 0" || { bad "B: re-run exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
+check "B: the local checks that passed on this head are not run again" bash -c "[ \"\$(wc -l <'$FIX/preflight.log')\" = $PF0 ]"
 check "B: no new push" bash -c "[ \"\$(wc -l <'$FIX/push.log')\" = $P0 ]"
 check "B: release commit not made again" bash -c "[ \"\$(wc -l <'$FIX/rc.log')\" = $R0 ]"
 check "B: no second PR" bash -c "[ \"\$(grep -c '^pr create' '$FIX/gh.log')\" = $N0 ]"
@@ -637,6 +639,45 @@ for dry in 0 1; do
   check "Z: local candidate is unchanged" test "$(g -C "$WK" rev-parse HEAD)" = "$RESUME_TIP"
   check "Z: pushed candidate is unchanged" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$RESUME_TIP"
 done
+
+# ── AA. the checks run after the push; a failure leaves the branch pushed and a re-run repeats them ──
+mkfix AA
+echo 1 >"$FIX/preflight.rc"
+rp V=0.8.4
+if [ "$RC" != 0 ] && out_has 'lane-preflight.sh --candidate failed'; then ok "AA: a failing local check stops prepare"; else bad "AA: failing check (rc=$RC)"; fi
+check "AA: the candidate was pushed and the nightly and PR started before the check ran" log_has preflight.log ' pushes=1 nightly=1 pr=1$'
+check "AA: the head is not marked as checked" bash -c "[ ! -s '$WK/.git/release-patch-checked' ]"
+echo 0 >"$FIX/preflight.rc"
+printf '{"workflow_runs":[{"id":9,"event":"workflow_dispatch","status":"in_progress","conclusion":null,"head_commit":{"tree_id":"%s"}}]}' "$(g -C "$WK" rev-parse 'HEAD^{tree}')" \
+  >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+rp V=0.8.4 PHASE=prepare
+[ "$RC" = 0 ] && ok "AA: the re-run exits 0" || { bad "AA: re-run exit $RC"; sed 's/^/      /' "$FIX/out.txt"; }
+check "AA: the re-run repeated the local checks" bash -c "[ \"\$(wc -l <'$FIX/preflight.log')\" = 2 ]"
+check "AA: no second push, nightly or PR" bash -c "[ \"\$(wc -l <'$FIX/push.log')\" = 1 ] && [ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = 1 ] && [ \"\$(grep -c '^pr create' '$FIX/gh.log')\" = 1 ]"
+keep_pushes
+
+# ── AB. PRERELEASE: auto reads the version; Latest only for the newest final ──
+mkfix AB1
+rp V=0.8.4 PRERELEASE=true
+check "AB: PRERELEASE=true publishes a final as a pre-release" log_has gh.log '^release edit v0\.8\.4 --draft=false --prerelease --title '
+mkfix AB2
+printf '[{"databaseId":902,"headBranch":"v0.8.4-rc.1","status":"completed","event":"push"}]' >"$FIX/run_list_release.yml.json"
+rp V=0.8.4-rc.1 PRERELEASE=false
+check "AB: PRERELEASE=false publishes an rc as a full release" log_has gh.log '^release edit v0\.8\.4-rc\.1 --draft=false --prerelease=false --latest --title '
+mkfix AB3
+g -C "$WK" tag v0.9.0 main
+g -C "$WK" tag v0.10.0-rc.1 main
+rp V=0.8.4
+check "AB: a patch to an older line does not take Latest" log_has gh.log '^release edit v0\.8\.4 --draft=false --prerelease=false --latest=false --title '
+mkfix AB4
+g -C "$WK" tag v0.7.9 main
+g -C "$WK" tag v0.9.0-rc.1 main
+rp V=0.8.4
+check "AB: an older tag and a newer rc leave the final Latest" log_has gh.log '^release edit v0\.8\.4 --draft=false --prerelease=false --latest --title '
+mkfix AB5
+rp V=0.8.4 PRERELEASE=maybe
+refused "AB: refuses a bad PRERELEASE" 'PRERELEASE must be'
+keep_pushes
 
 # ── Q. the script text and every recorded push ───────────────────────────────
 check "Q: the script text never forces a push" bash -c "! grep -nE 'push[^#]*(--force|-f |--mirror| \\+)' '$SCRIPT'"
