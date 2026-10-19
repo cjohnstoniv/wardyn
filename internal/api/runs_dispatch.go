@@ -598,6 +598,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			HarnessToolRules:   p.HarnessToolRules,

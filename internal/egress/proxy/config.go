@@ -242,6 +242,12 @@ type Config struct {
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// ScrubResponses replaces every credential this proxy holds in the
+	// responses it relays from a destination on an intercepted or broker route
+	// (scrub.go), so an echo of a request header cannot hand the sandbox a
+	// value the proxy added. WARDYN_PROXY_RESPONSE_SCRUB at dispatch; false
+	// (the default) relays responses verbatim.
+	ScrubResponses bool `json:"scrub_responses,omitempty"`
 	// Attribution names the policy that governs this run, for the refusals the
 	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
 	// for a run under a governance profile, or any run when the site sets

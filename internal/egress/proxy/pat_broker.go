@@ -202,10 +202,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if noThin {
-		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		p.relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
 		return
 	}
-	relay(w, resp)
+	p.relay(w, resp)
 }
 
 // forwardBrokeredGit is the outbound leg both /wardyn/git/ lanes share: it

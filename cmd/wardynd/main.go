@@ -499,6 +499,7 @@ func run() error {
 		// "no", or a misspelling) leaves the broker ON.
 		DisableGitPATBroker:   strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		RefuseGitPATBrokerOff: *f.gitPATBrokerOffRefused,
+		ScrubProxyResponses:   *f.proxyResponseScrub,
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:       storesExternally(secrets),
