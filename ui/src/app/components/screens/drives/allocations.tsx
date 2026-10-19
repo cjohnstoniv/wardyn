@@ -132,7 +132,11 @@ export function AllocationsBlock({
   const driveName = (id: string) => drives.find((d) => d.id === id)?.name ?? id;
   const typeName = useUserTypeName();
 
+  // Two clicks in one tick must remove once: the second would meet a 404 and toast over a removal that went through.
+  const inFlight = React.useRef(false);
   const remove = async (g: UserDriveGrant) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     try {
       await api.deleteGrant(g.id);
@@ -141,6 +145,7 @@ export function AllocationsBlock({
     } catch (e) {
       toast.error(PERM.REMOVE, { description: getErrorMessage(e) });
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
@@ -235,17 +240,18 @@ export function AllocationsBlock({
 
       <DrivePreview />
 
-      <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && setToRemove(null)}>
+      <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && !busy && setToRemove(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{confirmHead}</AlertDialogTitle>
             <AlertDialogDescription>{confirmBody}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{PEOPLE.CANCEL}</AlertDialogCancel>
             {/* outline, never destructive: nothing on the drive is deleted. */}
             <AlertDialogAction
               className={buttonVariants({ variant: "outline" })}
+              disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toRemove) void remove(toRemove);

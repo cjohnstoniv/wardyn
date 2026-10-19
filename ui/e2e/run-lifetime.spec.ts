@@ -91,6 +91,24 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
   });
 });
 
+test.describe("Run lifetime — the Change dialog's date", () => {
+  // A cleared date used to reach Save and fail with a toast reading "Invalid time value".
+  test("clearing the date holds Save back, and a real date releases it", async ({ page }) => {
+    await gotoConsole(page);
+    const id = await seedRun(page, "run-lifetime e2e empty date " + randomUUID().slice(0, 8));
+    await navToRoute(page, `/runs/${id}`);
+    await page.getByTestId("run-ends-row").getByRole("button", { name: "Set an end…" }).click();
+    const dialog = page.getByRole("dialog", { name: "When this run ends" });
+    const input = dialog.locator('input[type="datetime-local"]');
+    const save = dialog.getByRole("button", { name: "Save" });
+    await expect(save).toBeEnabled();
+    await input.fill("");
+    await expect(save).toBeDisabled();
+    await input.fill("2099-01-02T03:04");
+    await expect(save).toBeEnabled();
+  });
+});
+
 test.describe("Run lifetime — lost and revive", () => {
   // Overlay via a MUTABLE splice this test itself controls (not stubRunDetail's
   // cache-once helper), so Revive's success can be followed by a real redraw:

@@ -112,6 +112,37 @@ test.describe("Audit retention (security admin)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
+  test("Escape while a drop is in flight keeps the dialog open so the result is seen", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    const real = await page.request.get("/api/v1/audit/retention", { headers: auth });
+    expect(real.status(), await real.text()).toBe(200);
+    const status = await real.json();
+    status.partitions[0].eligible = true;
+    delete status.partitions[0].refusal;
+    await page.route("**/api/v1/audit/retention", (route: Route) => route.fulfill({ json: status }));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/audit/retention/drop", async (route: Route) => {
+      await held;
+      await route.fulfill({
+        status: 200,
+        json: { partition: "audit_events_legacy", rows: 7, seq_lo: 1, seq_hi: 7, digest: "0".repeat(64), event_seq: 8 },
+      });
+    });
+    await openRetention(page);
+
+    await page.getByRole("row").filter({ hasText: "audit_events_legacy" }).getByRole("button", { name: "Drop" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Digest from the archive's footer").fill("0".repeat(64));
+    await dialog.getByRole("button", { name: "Drop partition" }).click();
+
+    // The request is held open: Escape must not dismiss the dialog and hide the outcome.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog.getByText("Dropped 7 events.")).toBeVisible();
+  });
+
   test("a member does not see the Retention tab, and the route refuses them", async ({ page }) => {
     await asRealMember(page);
     await gotoConsole(page, "user");

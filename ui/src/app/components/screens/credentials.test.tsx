@@ -8,7 +8,7 @@
 // assertion reads its expected string from the copy modules (INVENTORY/ERASE,
 // wardyn/copy/credentials.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -211,6 +211,21 @@ describe("erasing a listed person (design F-5)", () => {
     expect(eraseMock).toHaveBeenCalledWith("sub-alice");
     expect(await screen.findByText("Erased 4 credentials for alice@corp.example.")).toBeInTheDocument();
     expect(screen.getByText(ERASE.DONE_AUDIT)).toBeInTheDocument();
+  });
+
+  // #2499: Escape or an outside click while the erase runs must not hide the result the admin is waiting for.
+  it("stays open through Escape while the erase runs, then shows the result", async () => {
+    let finish!: (v: { count: number }) => void;
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockReturnValue(new Promise((r) => (finish = r)));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => finish({ count: 4 }));
+    expect(await screen.findByText("Erased 4 credentials for alice@corp.example.")).toBeInTheDocument();
   });
 
   it("count 0: nothing was stored, so nothing was erased", async () => {

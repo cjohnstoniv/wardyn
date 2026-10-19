@@ -287,6 +287,21 @@ describe("DrivesScreen — allocations", () => {
     );
   });
 
+  // #2501: a second click on the confirm met a 404 and toasted an error over a removal that had gone through.
+  it("the Remove confirm is disabled while the delete runs, so it is sent once", async () => {
+    let finish!: () => void;
+    deleteGrantMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderScreen();
+    await screen.findByText("wardyn.platform");
+    await userEvent.click(screen.getByRole("button", { name: `${PERM.REMOVE} wardyn.platform` }));
+    const confirm = within(await screen.findByRole("alertdialog")).getByRole("button", { name: PERM.REMOVE });
+    await userEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(deleteGrantMock).toHaveBeenCalledTimes(1);
+    finish();
+  });
+
   it("Remove is outline and reversible: it confirms with the frozen sentence and deletes no data", async () => {
     deleteGrantMock.mockResolvedValue(undefined);
     renderScreen();

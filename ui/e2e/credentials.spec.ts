@@ -221,6 +221,28 @@ test.describe("Stored credentials (Admin view)", () => {
     await expect(retryDialog).toBeVisible();
   });
 
+  test("Escape while an erase is in flight keeps the dialog open so the result is seen", async ({ page }) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/people/*/credentials", async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      await held;
+      await route.fulfill({ status: 200, json: { count: 3, deleted: 3 } });
+    });
+    await asRealSecurityAdmin(page);
+    await openCredentials(page);
+
+    await page.getByRole("button", { name: "Erase someone's credentials" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Email or subject").fill("held-erase@e2e.wardyn.invalid");
+    await dialog.getByRole("button", { name: "Erase credentials" }).click();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog.getByText("Erased 3 credentials for held-erase@e2e.wardyn.invalid.")).toBeVisible();
+  });
+
   test("a member is refused at the route", async ({ page }) => {
     await asRealMember(page);
     await page.goto("/admin/credentials");

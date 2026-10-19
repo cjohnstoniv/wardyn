@@ -96,4 +96,17 @@ describe("ReasonDialog", () => {
     expect(field.value).toBe("2031-01-02T03:04");
     expect(screen.getByRole("button", { name: "24 hours" })).toHaveAttribute("aria-pressed", "false");
   });
+
+  it("holds Approve back for a time that has already passed", async () => {
+    open(true);
+    await userEvent.click(screen.getByRole("radio", { name: /^Until/ }));
+    const field = screen.getByLabelText("Pick a time") as HTMLInputElement;
+    expect(field.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    fireEvent.change(field, { target: { value: "2001-01-02T03:04" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("That time has already passed. Pick a later one.");
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    fireEvent.change(field, { target: { value: "2099-01-02T03:04" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
+  });
 });

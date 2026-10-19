@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { GOVERNANCE as GOV, PERM, PREVIEW } from "../src/app/lib/governance-copy";
 import { aheadByHours } from "../src/app/lib/test-clock";
@@ -88,5 +88,45 @@ test.describe("Governance: an answer or a refusal is acted on once, and only for
     await answered;
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     await expect(page.getByText(GOV.PREVIEW_RESULT(PLATFORM.name, GOV.MATCHED_GROUP))).toHaveCount(0);
+  });
+});
+
+test.describe("Components: a delete is sent once, and its dialog holds until it answers", () => {
+  test("Escape and a second click during a held delete neither dismiss nor re-send", async ({ page }) => {
+    const component = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Payments API",
+      version: 1,
+      created_at: aheadByHours(-24),
+      updated_at: aheadByHours(-24),
+      definition: { hosts: ["api.pay.example"] },
+    };
+    let gone = false;
+    await page.route("**/api/v1/components", (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: gone ? [] : [component] }) : route.fallback(),
+    );
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let deletes = 0;
+    await page.route(`**/api/v1/components/${component.id}`, async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      deletes += 1;
+      await held;
+      gone = true;
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/components");
+
+    await page.getByRole("button", { name: "Delete Payments API" }).click();
+    const dialog = page.getByRole("alertdialog");
+    const confirm = dialog.getByRole("button", { name: "Delete component" });
+    await confirm.click();
+    await expect(confirm).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog).toHaveCount(0);
+    expect(deletes).toBe(1);
   });
 });

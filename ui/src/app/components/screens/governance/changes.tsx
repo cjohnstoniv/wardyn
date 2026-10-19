@@ -154,7 +154,7 @@ export function ChangesTab({
                   <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                     {relativeTime(c.proposed_at)}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground" title={c.expires_at}>
+                  <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.expires_at)}>
                     {relativeTime(c.expires_at)}
                   </TableCell>
                 </TableRow>

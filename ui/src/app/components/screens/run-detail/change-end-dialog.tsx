@@ -51,6 +51,9 @@ export function ChangeEndDialog({
     }
   }, [open]);
 
+  // A cleared or half-typed field parses to nothing; Save waits for a real date (or No end) instead of throwing.
+  const invalid = !noEnd && Number.isNaN(Date.parse(changeValue));
+
   const submit = async () => {
     setBusy(true);
     try {
@@ -75,7 +78,7 @@ export function ChangeEndDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{RL.ENDS_DIALOG_TITLE}</DialogTitle>
-          <DialogDescription>{maxDays ? RL.endsHint(maxDays) : "Pick a date, or turn this run's end off."}</DialogDescription>
+          <DialogDescription>{maxDays ? RL.endsHint(maxDays) : allowNoEnd ? "Pick a date, or turn this run's end off." : "Pick a date."}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           {allowNoEnd && (
@@ -98,7 +101,7 @@ export function ChangeEndDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy}>
+          <Button onClick={() => void submit()} disabled={busy || invalid}>
             Save
           </Button>
         </DialogFooter>

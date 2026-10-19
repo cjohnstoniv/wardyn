@@ -858,6 +858,65 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
     }
   });
 
+  test("a capability_egress_host refusal turns the row's buttons off and the strip names the admin", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("f12-cap");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    // The grant is withheld by an admin; the refusal is the daemon's envelope, stubbed because the e2e install
+    // has no capability enforcement to switch on.
+    await page.route(`**/api/v1/approvals/${id}/approve`, (route) =>
+      route.fulfill({
+        status: 403,
+        json: { error: `you are not granted egress host ${marker} — an admin decides this one, or can grant it to you`, reason: "capability_egress_host" },
+      }),
+    );
+    try {
+      await page.goto(`/runs/${runId}`);
+      const row = page.getByTestId("live-approval-row").filter({ hasText: markerRe(marker) });
+      const panel = page.getByTestId("live-approvals");
+      await expect(row.getByRole("button", { name: "Approve" })).toBeEnabled();
+      await expect(panel.getByText("Requires the admin role.", { exact: true })).toHaveCount(0);
+
+      await row.getByRole("button", { name: "Approve" }).click();
+      await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
+      await expect(panel.getByText("Requires the admin role.", { exact: true })).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("the Until picker refuses a time that has passed, and a card's hover reads as a date, not raw ISO", async ({ page }) => {
+    clearPending();
+    const marker = uniqueMarker("until-past");
+    const id = seedPending({ kind: "egress_domain", scope: { domain: marker, port: 443 } });
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      const card = page.getByText(markerRe(marker)).first();
+      await expect(card).toBeVisible();
+
+      // #3173: the requested-at hover is formatted, never the wire string.
+      const hovers = await page.locator("[title]").evaluateAll((els) => els.map((el) => el.getAttribute("title") ?? ""));
+      expect(hovers.filter((t) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(t))).toEqual([]);
+
+      await page.getByRole("button", { name: "Approve" }).first().click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("radiogroup", { name: "Decision scope" }).getByRole("radio", { name: /^Until…/ }).click();
+      const field = dialog.getByLabel("Pick a time");
+      const approve = dialog.getByRole("button", { name: "Approve", exact: true });
+      await field.fill("2001-01-02T03:04");
+      await expect(dialog.getByRole("alert")).toHaveText("That time has already passed. Pick a later one.");
+      await expect(approve).toBeDisabled();
+      await field.fill("2099-01-02T03:04");
+      await expect(dialog.getByRole("alert")).toHaveCount(0);
+      await expect(approve).toBeEnabled();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
   test("real member decides own egress but not foreign or tool approvals", async ({ page }) => {
     clearPending();
     await asRealSecurityAdmin(page);

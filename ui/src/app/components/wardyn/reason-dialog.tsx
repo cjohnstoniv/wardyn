@@ -32,6 +32,7 @@ import {
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
   SECURITY_ONLY_REASON,
+  UNTIL_PAST,
   UNTIL_PRESETS,
 } from "./copy";
 
@@ -105,6 +106,10 @@ export function ReasonDialog({
   // Rule 2 (server-side): until demands an expiry. Mirrored here so the
   // confirm button can't submit a scope the server will 400.
   const untilMissing = scope === "until" && !until;
+  // Re-render so untilPast is read against the clock at the moment of the click.
+  const [, recheck] = React.useReducer((n: number) => n + 1, 0);
+  // A time that is already past is refused by the server (decision_expires_at in the past), after the dialog has closed on it.
+  const untilPast = scope === "until" && !!until && Date.parse(until) <= Date.now();
   // One Tab stop for the scope radios, arrows move between them; the disabled "always" is skipped.
   const choosable = APPROVAL_SCOPE_ORDER.filter((s) => !(s === "always" && alwaysDisabled));
   const scopeGroup = useRovingRadio(choosable.length, Math.max(0, choosable.indexOf(scope)), (i) => setScope(choosable[i]));
@@ -113,6 +118,8 @@ export function ReasonDialog({
   // button spinning forever — the user can retry or cancel after the toast
   // reports the error.
   const submit = async () => {
+    // The time may have passed while the dialog sat open: a re-render shows the hint, and nothing is sent.
+    if (scope === "until" && until && Date.parse(until) <= Date.now()) return recheck();
     setBusy(true);
     try {
       await onSubmit(reason.trim(), scope, scope === "until" ? (until ?? undefined) : undefined);
@@ -189,12 +196,18 @@ export function ReasonDialog({
                   type="datetime-local"
                   aria-label="Pick a time"
                   className="h-7 w-auto flex-1 min-w-[10rem] text-xs"
+                  min={toDatetimeLocalValue(new Date())}
                   value={until ? toDatetimeLocalValue(new Date(until)) : ""}
                   onChange={(e) => {
                     setPreset(null);
                     setUntil(e.target.value ? new Date(e.target.value).toISOString() : null);
                   }}
                 />
+                {untilPast && (
+                  <p role="alert" className="w-full text-meta text-danger">
+                    {UNTIL_PAST}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -218,7 +231,7 @@ export function ReasonDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={submitDisabled || (!approve && !reason.trim()) || untilMissing}
+            disabled={submitDisabled || (!approve && !reason.trim()) || untilMissing || untilPast}
             variant={approve ? "default" : "destructive"}
           >
             {showSpinner ? <Loader2 className="size-4 animate-spin" /> : approve ? <Check className="size-4" /> : <X className="size-4" />}
