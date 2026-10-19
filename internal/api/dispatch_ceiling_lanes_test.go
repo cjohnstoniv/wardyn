@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -232,5 +233,39 @@ func TestDispatchCeilingIsRequiredAtEveryLane(t *testing.T) {
 	}
 	if total == 0 {
 		t.Fatal("found no dispatch call sites at all — this test stopped scanning what it claims to scan")
+	}
+}
+
+// releaseTrackingScanStore records how a failed launch gives the source back.
+type releaseTrackingScanStore struct {
+	*scanLaneStore
+	fenced, unfenced int
+	fencedRun        uuid.UUID
+}
+
+func (s *releaseTrackingScanStore) SetSourceScanResult(_ context.Context, _ uuid.UUID, _ []byte, st types.WorkspaceStatus, runID uuid.UUID, _ map[string]types.WorkspaceRequirement) (types.Source, error) {
+	s.fenced++
+	s.fencedRun = runID
+	return types.Source{Status: st}, nil
+}
+
+func (s *releaseTrackingScanStore) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, p []byte, st types.WorkspaceStatus, seed map[string]types.WorkspaceRequirement) (types.Source, error) {
+	s.unfenced++
+	return s.scanLaneStore.SetSourceScanResultUnfenced(ctx, id, p, st, seed)
+}
+
+// A scan launch that fails after the claim restores the source's status through the FENCED write
+// (the claim's own run id), never the unfenced setter that could overwrite a newer claim's result.
+func TestSourceScanLaunchFailureReleasesWithTheFencedWrite(t *testing.T) {
+	srv, st, _ := govEscapeFixture(t, &capStore{})
+	srv.cfg.Runner = &fakeRunner{capsErr: errors.New("runner unreachable")}
+	rt := &releaseTrackingScanStore{scanLaneStore: &scanLaneStore{govEscapeStore: st}}
+	srv.cfg.Store = rt
+	src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
+	if _, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src, nil); err == nil {
+		t.Fatal("launch succeeded against an unreachable runner")
+	}
+	if rt.fenced != 1 || rt.fencedRun == uuid.Nil || rt.unfenced != 0 {
+		t.Errorf("release: fenced writes %d (run %s), unfenced writes %d; want one fenced write and no unfenced one", rt.fenced, rt.fencedRun, rt.unfenced)
 	}
 }
