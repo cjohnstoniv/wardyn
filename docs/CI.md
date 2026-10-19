@@ -389,6 +389,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `ci-ran` | – | pending | pending | 10 |
 | `train-suites` | – | pending | pending | 10 |
 | `train-gate` | – | pending | pending | 10 |
+| `go-modules` | – | pending | pending | 15 |
 | `go-cache-prune` | – | pending | pending | 10 |
 | `multi-arch build (agent-claude-code)`, nightly | 60 | 3.5 | 3.8 | 45 |
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
@@ -396,7 +397,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 
 - `helm-install-test` now also runs the old `desktop-envelope` job's proof (#472).
 - Before the merge the two took 3.2 and 2.5 minutes at most, so 20 minutes clears twice their sum.
-- Fill in its row once the merged job has about ten green runs.
+- Fill in its row after about ten green runs.
 
 Re-measure (job name, runs, median and maximum over successful jobs):
 
