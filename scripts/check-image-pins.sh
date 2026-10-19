@@ -94,7 +94,7 @@ while IFS= read -r df; do
   done < <(grep -iE '^FROM ' "$df")
 done < <(printf '%s\n' "${dockerfiles[@]}")
 
-# ── every curl artifact is checked before use, in the same logical RUN ──────
+# ── every curl or wget download is checked before use, in the same logical RUN
 python3 scripts/lib/image_downloads.py "${dockerfiles[@]}" || fail=1
 
 # ── compose registry images (base AND every overlay: ci-run.sh starts the stack
