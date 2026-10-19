@@ -212,7 +212,12 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 		t.Fatalf("pull busybox: %v", err)
 	}
 
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve tempdir: %v", err)
+	}
+	// The probe runs the drive mount ceiling first, as a launch does: the share root is the deployment's.
+	d.cfg.UserDriveHostRoots = []string{root}
 	// Both directories are made by a plain (unmodified) busybox container,
 	// which runs as root by default — so a bind-mounted mkdir lands root-owned
 	// on the HOST, exactly the shape a misconfigured NAS export takes.
@@ -221,7 +226,7 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 
 	t.Run("a 0700 root-owned directory is refused", func(t *testing.T) {
 		probe, err := d.ProbeDrive(ctx, types.DriveMount{
-			Backend: types.DriveBackendHostPath, ObjectName: blocked, Target: runner.DriveTarget})
+			Backend: types.DriveBackendHostPath, ObjectName: blocked, HostRoot: root, Target: runner.DriveTarget})
 		if err != nil {
 			t.Fatalf("ProbeDrive: %v", err)
 		}
@@ -233,7 +238,7 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 
 	t.Run("a world-readable directory is readable", func(t *testing.T) {
 		probe, err := d.ProbeDrive(ctx, types.DriveMount{
-			Backend: types.DriveBackendHostPath, ObjectName: open, Target: runner.DriveTarget})
+			Backend: types.DriveBackendHostPath, ObjectName: open, HostRoot: root, Target: runner.DriveTarget})
 		if err != nil {
 			t.Fatalf("ProbeDrive: %v", err)
 		}
