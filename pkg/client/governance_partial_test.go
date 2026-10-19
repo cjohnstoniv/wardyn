@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -50,9 +51,11 @@ func TestApplyGovernance_FailureAfterAHeldWriteKeepsTheHeldChange(t *testing.T) 
 // A decided change keeps who decided it, when, and a rejection's reason through the SDK, so
 // changes list --json prints them.
 func TestGovernanceChange_KeepsTheDecision(t *testing.T) {
+	decided := time.Now().UTC().Truncate(time.Second)
+	at := func(d time.Duration) string { return decided.Add(d).Format(time.RFC3339) }
 	in := `{"id":"00000000-0000-0000-0000-000000000001","target_kind":"governance_profile","op":"create",` +
-		`"target_key":"p","state":"rejected","proposed_by":"alice","proposed_at":"2026-10-01T00:00:00Z",` +
-		`"expires_at":"2026-10-04T00:00:00Z","diff":{},"decided_by":"bob","decided_at":"2026-10-02T00:00:00Z","reason":"too wide"}`
+		`"target_key":"p","state":"rejected","proposed_by":"alice","proposed_at":"` + at(-24*time.Hour) + `",` +
+		`"expires_at":"` + at(48*time.Hour) + `","diff":{},"decided_by":"bob","decided_at":"` + at(0) + `","reason":"too wide"}`
 	var c client.GovernanceChange
 	if err := json.Unmarshal([]byte(in), &c); err != nil {
 		t.Fatal(err)
@@ -61,7 +64,7 @@ func TestGovernanceChange_KeepsTheDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"decided_by":"bob"`, `"decided_at":"2026-10-02T00:00:00Z"`, `"reason":"too wide"`} {
+	for _, want := range []string{`"decided_by":"bob"`, `"decided_at":"` + at(0) + `"`, `"reason":"too wide"`} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("round trip = %s, want %s", out, want)
 		}
