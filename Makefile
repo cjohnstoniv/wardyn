@@ -708,6 +708,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
 	./scripts/test-test-report.sh
+	./scripts/test-test-drive.sh
 	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
