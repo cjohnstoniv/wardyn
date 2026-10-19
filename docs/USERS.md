@@ -17,6 +17,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 
 - Your console session ends when your identity provider's sign-in expires, or after `WARDYN_OIDC_SESSION_TTL` if your operator set one. An operator may also send you back through sign-in sooner with `WARDYN_ROLE_STAMP_TTL`. The knobs are in [ENV.md](ENV.md#wardyn_oidc_session_ttl) and [ENV.md](ENV.md#wardyn_role_stamp_ttl).
 - With `WARDYN_OIDC_SESSION_RENEW_CAP` set, using the console keeps the session going, up to that long after you signed in. A terminal open across a renewal reconnects on its own.
+- With `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` set, a console tab left with no activity for that long is signed out, even before the session would otherwise lapse. The knob is in [ENV.md](ENV.md#wardyn_oidc_session_idle_timeout).
 - When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it.
 - **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens, SSH keys and runs keep working, except a console-launched run still waiting in a pool queue, which fails when it would start.
 - Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: Wardyn has no front- or back-channel logout. A session ends at expiry, at your sign-out, or when an admin or SCIM deprovisioning cuts it.

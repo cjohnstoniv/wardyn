@@ -9,7 +9,7 @@
 // Security constraints:
 //   - All path construction goes through safeRunPath, which rejects any runID
 //     containing path separators or dot-sequences (path-traversal prevention).
-//   - Reads use os.OpenInRoot because shared-mount writers can create symlinks;
+//   - Reads open through os.OpenRoot and Root.Open because shared-mount writers can create symlinks;
 //     lexical validation alone cannot keep reads inside the recording directory.
 //   - OpenCast returns (nil, ErrNotFound) for absent recordings so callers can
 //     distinguish "never recorded" from storage errors.

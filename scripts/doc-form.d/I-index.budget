@@ -24,4 +24,4 @@ docs/README.md=810 share=35
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
 # 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
-docs/TRY-IT.md=3371 share=35
+docs/TRY-IT.md=3377 share=35

@@ -34,7 +34,8 @@ registration:
   # The chart never templates it. Mounted optional, so deleting it after registration does not block restarts.
   existingSecret: ""
 
-# Register's limit flags. Zero leaves a flag out, so register proposes the value.
+# Register's limit flags. Zero leaves a flag out. Nothing is measured on Kubernetes, so register
+# requires the three totals (totalCPU, totalMemory, totalDisk) to be set.
 limits:
   maxRuns: 0
   totalCPU: 0

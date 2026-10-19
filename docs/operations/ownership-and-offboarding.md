@@ -38,6 +38,7 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
   - Treat it like creating the workspace.
 - **Offboarding a USER DRIVE is two halves, only one of them a product action — and the ORDER is not the obvious one.**
   - Run `POST /drives/preview` **first, while the allocation still exists**, and write the object name down.
+  - On a `host_path` drive the preview blanks `object_name` unless a super admin runs it: the name is a path under the drive's host root, which only a super admin is shown.
   - The preview answers "what does this deployment say about THIS principal" by running the ordinary resolver (`resolveUserDriveFor`, [`internal/api/user_drives_resolve.go`](../../internal/api/user_drives_resolve.go)), and the resolver matches on the **grant**:
     - delete the allocation first and the preview resolves nothing,
     - so the one call that names the object a person is about to lose stops being able to name it.

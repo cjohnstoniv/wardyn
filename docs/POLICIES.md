@@ -313,7 +313,7 @@ What the table admits, under a repository the grant's `repos` names (an absent `
   - **Dispatch.** For a policy stored before this rule existed, `confineGitBrokerEgress` denies the forge's `ssh.<forge>` endpoint alongside the HTTPS hosts above.
   - `dropBrokeredGrants` withholds that forge's `ssh_key` **and** `git_pat` grants from the sandbox env entirely.
   - The credential is never minted, not merely unable to reach its forge, logging an `slog` warning and a `run.ssh.drop` / `run.git_pat.drop` audit event so neither withholding is ever silent.
-  - **Mint.** `POST /api/v1/internal/credentials/mint` refuses either kind for a brokered forge before it opens the broker transaction (`brokeredForgeMintKind`, [`internal/api/internal.go`](../internal/api/internal.go)).
+  - **Mint.** `POST /api/v1/internal/credentials/mint` refuses either kind for a brokered forge before it opens the broker transaction (`brokeredForgeMintKind`, [`internal/api/internal_mint.go`](../internal/api/internal_mint.go)).
   - This is the seam that matters most for `git_pat`.
   - The proxy's own mint refusal (`isBrokeredGitGrant`) matches `github_token` grant ids only, and its `git_pat` refusal (`isBrokeredPATGrant`) applies only while the PAT broker is on.
   - So a caller that POSTs the mint route directly — rather than going through `wardyn-git-helper`, which every GitHub host on a brokered run already refuses — used to be answered with the PAT.
@@ -834,7 +834,7 @@ What the check does and does not settle:
 **Provider admission is decided WITHOUT reading this policy.**
 
 - Since 0.7.2 the org's `site_config.workspace_providers.git` rows decide which clone URLs this deployment admits at all.
-- The check runs at run create over the RESOLVED spec ([`internal/api/runs.go:477-478`](../internal/api/runs.go)) — so it sees the repositories a hand-authored `inline_policy` asked for exactly as it sees a stored policy's.
+- The check runs at run create over the RESOLVED spec (`seedAuthorizedWorkspace`, [`internal/api/run_workspace_authorization.go`](../internal/api/run_workspace_authorization.go)) — so it sees the repositories a hand-authored `inline_policy` asked for exactly as it sees a stored policy's.
 - Neither can argue with it, because nothing in the spec is an input to the verdict: the only things it reads are the clone URL and the org's provider rows.
 - A repository whose host no enabled row admits is refused with a `422` for an OPERATOR, listing the allowed addresses (or naming the row that claims the host and refused anyway).
 - It is refused with a `403` for a MEMBER that names nothing but the fact — `GET /workspace-providers` is a security-tier door precisely because base URLs name corporate topology.
@@ -1187,7 +1187,8 @@ So an entry a pattern matches is judged one of two ways:
 
 - Operator-declared secret **names**, resolved against the at-rest secret store.
 - This is what you author — the storable form of the detection corpus.
-- A name is not sensitive the way a value is, so it round-trips freely through a stored policy, a read, or a proposal.
+- A name is not sensitive the way a value is, so it round-trips through a stored policy, a proposal and an operator's read.
+- A member's read of a policy strips these names (`redactSpecForUser`, [`internal/api/policies.go`](../internal/api/policies.go)).
 - A **reserved platform-internal name** (`wardyn-signing-key`, `wardyn-session-key`, the harness OAuth blobs, the resident AWS SigV4 secrets, every per-person model-provider credential `wardyn-provider-*`) is refused at write time and skipped at dispatch —
   - resolution puts the value in the proxy sidecar, so this field is a credential sink and takes the same reserved-name guard every other sink does.
 

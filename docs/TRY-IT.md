@@ -168,7 +168,7 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 ```
 
 - Before you run step 3, list the repository in the `github_token` grant's `scope.repos` in `claude-llm.json` (it ships `"repos": []`, which the broker cannot mint against), or the clone fails; see [POLICIES.md](POLICIES.md#github_token).
-- What happens: the run's policy carries an auto-mintable `api_key` grant for `api.anthropic.com`;
+- What happens: the run's model provider (`--model-provider anthropic`) supplies your own credential for `api.anthropic.com`, not a policy grant;
   - the proxy resolves the key **at startup, into proxy memory only** (the sandbox never sees it — check: `docker exec
     wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel `wardyn-proxy-injected`, never your key);
   - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and logs every model call as a `brokered:llm` decision in the audit trail

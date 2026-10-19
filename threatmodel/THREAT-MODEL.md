@@ -3656,7 +3656,7 @@ The web console (`ui/`) authenticates to the control plane one of two ways, with
 
 ```
 default-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none';
-connect-src 'self' ws: wss:;
+connect-src 'self' ws://<console host> wss://<console host>;
 media-src 'self' https://github.com https://release-assets.githubusercontent.com;
 script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';
 font-src 'self' data:
@@ -3665,18 +3665,19 @@ font-src 'self' data:
 `frame-ancestors 'none'` plus `X-Frame-Options` is why a hostile page cannot frame
 the console to clickjack an approve.
 
-**Mitigations that do NOT yet exist (honest gaps).** Six, not two — every
+**Mitigations that do NOT yet exist (honest gaps).** Five, not two — every
 directive above that is looser than `'self'` is a gap this section has to price,
 since the asset it is pricing is a full-admin bearer token readable by any script
-in this origin:
+in this origin. `connect-src` is not among them: it names only the console's own host, plus the one UI-sandbox bind endpoint when the gateway is on.
 
 - **No HSTS.** The default posture is plain http on loopback, where an HSTS header
   would poison every other `localhost` port.
 - **`style-src 'unsafe-inline'`.** xterm injects a theme `<style>` at runtime.
-- **`connect-src 'self' ws: wss:` — the broadest of the six.**
-  - A bare scheme-source matches ANY host with that scheme under CSP Level 3, so this does not restrict WebSocket destinations to the console's own origin at all.
-  - Injected script in this origin may open a WebSocket to an attacker-controlled host, which is precisely the exfiltration path this section exists to model.
-  - The two `'self'` fetch/XHR halves are narrow; the WebSocket half is not.
+- **`connect-src` is bounded, and a bare `ws:`/`wss:` is never emitted.**
+  - It is `'self'` plus `ws://<request host> wss://<request host>` (the legacy-WebKit fallback for the PTY-attach WebSocket), plus the UI-sandbox bind URL when the gateway is on (host mode writes its per-run label as a wildcard label under the relay domain; `cspConnectSrc`, `cspUIBindSrc`, [`internal/api/security_headers.go`](../internal/api/security_headers.go)).
+  - A bare scheme source would match ANY host under CSP Level 3, which is why it is not used.
+  - A request `Host` that is empty or carries an unsafe byte collapses to `'self'` alone, never to the wildcard.
+  - Injected script therefore cannot open a WebSocket or fetch to an arbitrary host from the console origin.
 - **`script-src 'wasm-unsafe-eval'`.** Permits WebAssembly compilation (the
   recording replay player's WASM VT core needs it) but not JS `eval`/`Function`, so
   scripts stay same-origin — a real narrowing, and still a relaxation.

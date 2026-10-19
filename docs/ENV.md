@@ -102,7 +102,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_VAULT_ROLE` | string | (unset) | Kubernetes-auth role wardynd logs in as (flag `-vault-role`); required with `WARDYN_VAULT_AUTH=kubernetes` |
 | `WARDYN_VAULT_ROLE_PLATFORM` | string | (unset) | optional second Kubernetes-auth role (flag `-vault-role-platform`, chart `secretStore.vault.rolePlatform`) for wardynd's own signing, session and SSH host keys. **Recommended**. [Details](#wardyn_vault_role_platform) |
 | `WARDYN_VAULT_K8S_TOKEN_FILE` | string | (unset; the chart sets `/var/run/secrets/wardyn-vault/token`) | the projected service-account token (audience `vault`) for Kubernetes auth (flag `-vault-k8s-token-file`); re-read at every login. [Details](#wardyn_vault_k8s_token_file) |
-| `WARDYN_VAULT_TOKEN_FILE` | string | (unset) | a file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read on every 403. [Details](#wardyn_vault_token_file) |
+| `WARDYN_VAULT_TOKEN_FILE` | string | (unset) | a file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read when Vault answers 401 or 403, at most once every 30s. [Details](#wardyn_vault_token_file) |
 | `WARDYN_VAULT_CACERT_FILE` | string | (unset) | PEM bundle added to the system roots for the Vault client only (flag `-vault-cacert-file`); unset, `WARDYN_TRUSTED_CA_FILE` is used, else the system roots. The Vault client's TLS config is its own, never shared |
 | `WARDYN_VAULT_KV_MOUNT` | string | `wardyn` | the KV v2 mount (flag `-vault-kv-mount`) |
 | `WARDYN_VAULT_KV_PREFIX` | string | `wardyn`; the chart sets the release namespace | this install's path prefix under the mount (flag `-vault-kv-prefix`). Values live at `<prefix>/platform/<name>` (Wardyn's boot keys), `<prefix>/operator/<name>` and `<prefix>/people/<owner in base32hex>/<name>`. Fixed once rows exist, as is `WARDYN_VAULT_KV_MOUNT` (wardynd warns at boot) |
@@ -410,7 +410,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_VAULT_TOKEN_FILE`
 
-- A file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read on every 403.
+- A file holding a Vault token, for `WARDYN_VAULT_AUTH=token-file` (a Vault Agent sink or a CSI file; flag `-vault-token-file`); re-read when Vault answers 401 or 403, at most once every 30s.
 - Each read refuses a group- or world-writable file, or one wardynd's own non-root uid owns that others can read — the `_FILE` rule (`cliutil.ReadSecretFile`); surrounding whitespace is trimmed.
 
 ### `WARDYN_KEK`

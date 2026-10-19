@@ -200,7 +200,7 @@ the ADMIN pre-authorized.
 - `If-Match` is optional, and the write is audited either way.
 
 - **"Available to" (0.8).**
-- `workspace`, `image`, `agent` and `workspace_provider` values can each be restricted one at a time (migration `0081_capability_restrictions`).
+- `workspace`, `image`, `agent`, `workspace_provider`, `model_provider`, `feature`, `policy` and `component` values can each be restricted one at a time (migration `0081_capability_restrictions` began it with the first four).
 - **A restricted value is closed whatever its kind's enforcement switch says.** Its kind counts as enforced for that value (`capRead.enforced` is true when the switch is on or the value is restricted), so the "not enforced ⇒ permitted" step never applies to it. An unenforced `feature` kind does not open `service_attach` or `self_host_runner`.
 - Only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
 - `GET /permissions` does not show which values are restricted; [`GET /permissions/explain`](#get-permissionsexplain) does (`restricted: true`), with each subject's resulting state.

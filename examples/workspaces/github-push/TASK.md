@@ -28,7 +28,8 @@ PR from it. Demonstrating that refusal is a stronger property than the PR.)
 ## What to watch
 
 - UI > Approvals tab: a credential approval request (kind=credential) appears
-  when wardyn-git-helper calls the mint route.  The scope shows the requested
+  when the proxy's git broker first needs the token (it mints server-side; the
+  sandbox's wardyn-git-helper does not serve a GitHub host for a brokered run).  The scope shows the requested
   GitHub permissions.  (Raising it is not itself an audit event — the decision
   and the mint are.)
 - UI > Audit tab: events in order --
@@ -76,8 +77,8 @@ Stock demo (no GitHub App configured):
 5. No GitHub token appears in docker exec env output (verify: docker exec <sandbox> env | grep -i token is empty).
 
 With GitHub App configured AND a write-scoped policy (contents:write +
-pull_requests:write, e.g. examples/policies/claude-llm.json — NOT read-only
-demo.json):
+pull_requests:write; no shipped example has one, and claude-llm.json and
+demo.json are both contents READ):
 1-2. Same as above.
 3. Audit contains credential.mint success with a short-lived JTI.
 4. Branch `wardyn/<run-id>/work` appears in the repository — the run's own
