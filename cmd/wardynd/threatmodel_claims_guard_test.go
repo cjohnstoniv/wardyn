@@ -401,15 +401,17 @@ func exceptionRows(s string) int {
 
 func TestArchitectureDocDoesNotCopyTheResidentSecretTable(t *testing.T) {
 	arch := readRepoFile(t, "ARCHITECTURE.md")
-	if !strings.Contains(arch, "authoritative, complete table") {
-		return
+	const anchor = "authoritative, complete list"
+	idx := strings.Index(arch, anchor)
+	if idx < 0 {
+		t.Fatalf("ARCHITECTURE.md no longer contains %q, so this guard checks nothing: re-key it to the sentence that points at THREAT-MODEL §5.1a", anchor)
 	}
 	// Count the rows of any table ARCHITECTURE.md prints under that sentence,
-	// and of the table it defers to. A shorter copy beside the word "complete"
-	// is the drift surface the R6 review found.
-	idx := strings.Index(arch, "authoritative, complete table")
+	// up to the next numbered invariant, and of the table it defers to. A
+	// shorter copy beside the word "complete" is the drift surface the R6
+	// review found.
 	tail := arch[idx:]
-	if end := strings.Index(tail, "\n\n   Secret values are masked"); end > 0 {
+	if end := strings.Index(tail, "\n2. **"); end > 0 {
 		tail = tail[:end]
 	}
 	copied := exceptionRows(tail)
@@ -417,14 +419,18 @@ func TestArchitectureDocDoesNotCopyTheResidentSecretTable(t *testing.T) {
 		return // the pointer alone: nothing to drift.
 	}
 	tm := readRepoFile(t, "threatmodel/THREAT-MODEL.md")
-	sec := tm[strings.Index(tm, "Resident-secret exceptions"):]
+	start := strings.Index(tm, "Resident-secret exceptions")
+	if start < 0 {
+		t.Fatal(`threatmodel/THREAT-MODEL.md no longer contains "Resident-secret exceptions", the table this guard compares against`)
+	}
+	sec := tm[start:]
 	if end := strings.Index(sec, "\n\n**`ssh_key` and `git_pat`"); end > 0 {
 		sec = sec[:end]
 	}
 	authoritative := exceptionRows(sec)
 	if copied != authoritative {
 		t.Errorf("ARCHITECTURE.md prints %d resident-secret exception rows while calling §5.1a's %d-row table "+
-			"\"the authoritative, complete table\" — drop the copy or print all of it", copied, authoritative)
+			"\"the authoritative, complete list\" — drop the copy or print all of it", copied, authoritative)
 	}
 }
 
