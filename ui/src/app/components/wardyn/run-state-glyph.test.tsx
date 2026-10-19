@@ -53,7 +53,7 @@ describe("RunStateGlyph", () => {
     const { container } = render(<RunStateGlyph state="RUNNING" signals={{ held: true }} />);
     const el = container.querySelector("[data-attention]");
     expect(el?.getAttribute("data-attention")).toBe("permission");
-    expect(el?.getAttribute("aria-label")).toBe("Needs you");
+    expect(el?.getAttribute("aria-label")).toBe("Needs a decision");
   });
   it("a QUEUED run reads Queued, never Stopped", () => {
     const { container } = render(<RunStateGlyph state="QUEUED" />);

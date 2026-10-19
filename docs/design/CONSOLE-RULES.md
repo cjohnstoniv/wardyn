@@ -134,7 +134,7 @@ is the one badge for board, table, and detail header (`primitives.tsx#RunStateBa
 | `PENDING` | Pending | neutral | dot |
 | `STARTING` | Starting | info | dot + pulse |
 | `RUNNING` | Running | success | dot + pulse |
-| `WAITING_FOR_CONFIRMATION` (running, approval held) | Awaiting confirmation | warning | dot + pulse |
+| `WAITING_FOR_CONFIRMATION` (running, approval held) | Needs a decision | warning | dot + pulse |
 | `COMPLETED` | Completed | success | `Check` |
 | `STOPPED` | Stopped | neutral | `Square` |
 | `ARCHIVED` | Archived | neutral | `Archive` |
@@ -254,6 +254,13 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **One phrase for a waiting decision.** Wherever a person can act, the noun is "decision" and the verb
+  is "needs": "Needs a decision" (the row word, the glyph, the run-state badge, the approval badge),
+  "Needs 2 decisions", "1 needs a decision" in a count line. "sandbox held" is only ever the modifier for a
+  parked sandbox ("Needs a decision · sandbox held"). The Runs section and filter that gather every kind
+  of attention (sign-ins, lost runs, decisions) keep "Needs you". "Needs your approval", "N waiting",
+  "N held", "Sandbox is waiting", "Awaiting confirmation" and a bare "Pending" on an approval are retired
+  (`wardyn/copy/run-wait.ts`).
 - **A bulk action names what it skipped.** Approving observed egress skips a model provider's own
   hosts; the toast reads "Approved 3 hosts. Skipped 1 model-provider host: <host>" (`EGRESS.PROMOTED_SKIPPED`
   in the copy module) instead of reporting success for the whole click.

@@ -416,12 +416,12 @@ export function SummaryHeader({
             never terminal at the same time (the kill/fail cascade cancels
             them — runs_lifecycle.go), so this chip and a disabled Kill never
             actually share the bar; capped anyway, on the same reasoning as
-            repo/failure_hint, so a long "N waiting · sandbox held" can never
+            repo/failure_hint, so a long "Needs N decisions · sandbox held" can never
             be the thing that pushes something ELSE off-screen. The cap
             widens from 1400px, where the bar has room for the whole
-            "1 waiting · sandbox held"; 1280 stays at the width floor. */}
+            "Needs a decision · sandbox held"; 1280 stays at the width floor. */}
         {pendingApprovalCount > 0 && (
-          <Chip tone="warning" className="h-7 max-w-[130px] gap-1 min-[1400px]:max-w-[200px]">
+          <Chip tone="warning" className="h-7 max-w-[130px] gap-1 min-[1400px]:max-w-[240px]">
             <ShieldAlert className="size-3 shrink-0" />
             <span data-testid="pending-approval-chip-text" className="block min-w-0 truncate">
               {awaitingAdoConsent

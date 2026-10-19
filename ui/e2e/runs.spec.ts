@@ -36,7 +36,7 @@ import type { Page } from "@playwright/test";
 // the old title-grouped board needed one. State is asserted via the row's own
 // status WORD (runs/runs-model.ts's rowPresentation), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
-//   WAITING_FOR_CONFIRMATION "Needs your approval", COMPLETED "Completed",
+//   WAITING_FOR_CONFIRMATION "Needs a decision", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".
 // Barriers, the agent monogram and the Run ID moved to the run page — none of
 // them render on this page anymore (design.md §4).
@@ -55,7 +55,7 @@ const FIXTURES = [
   { task: "e2e fixture 0", badge: "Pending", terminal: false },
   { task: "e2e fixture 1", badge: "Starting", terminal: false },
   { task: "e2e fixture 2", badge: "Running", terminal: false },
-  { task: "e2e fixture 3", badge: "Awaiting confirmation", terminal: false },
+  { task: "e2e fixture 3", badge: "Needs a decision", terminal: false },
   { task: "e2e fixture 4", badge: "Completed", terminal: true },
   { task: "e2e fixture 5", badge: "Stopped", terminal: true },
   { task: "e2e fixture 6", badge: "Failed", terminal: true },
@@ -149,7 +149,7 @@ test.describe("Killing an active run", () => {
     PENDING: "Pending",
     STARTING: "Starting",
     RUNNING: "Running",
-    WAITING_FOR_CONFIRMATION: "Awaiting confirmation",
+    WAITING_FOR_CONFIRMATION: "Needs a decision",
   };
 
   test("killing an active run from its detail page surfaces a toast and reconciles", async ({ page }) => {
@@ -258,7 +258,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
   // SERVER says otherwise: the sandbox stays parked on it for up to
   // WARDYN_APPROVAL_EXPIRY_AFTER (24h default), so the page must never call
   // it dead sooner. 23 hours — just inside that ceiling — still reads
-  // "Needs your approval" with a Review link and the held subline.
+  // "Needs a decision" with a Review link and the held subline.
   test("a tool_call PENDING for 23 hours still offers Review and states 'sandbox held'", async ({ page }) => {
     const solo = await createNamedRun(page, "e2e long-held solo", "long-held solo run");
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
@@ -273,7 +273,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held solo" });
       await expect(row).toBeVisible();
       await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
-      await expect(row.getByText("Needs your approval")).toBeVisible();
+      await expect(row.getByText("Needs a decision", { exact: true })).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);

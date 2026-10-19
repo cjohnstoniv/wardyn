@@ -30,7 +30,7 @@ export type RowAction = "review" | "sign-in" | "revive" | null;
 export interface RowPresentation {
   hue: RowHue;
   word: string;
-  /** The held-count subline ("1 waiting · sandbox held") — approval kind only. */
+  /** The held-count subline ("Needs a decision · sandbox held") — approval kind only. */
   subword?: string;
   action: RowAction;
   /** Whether THIS viewer can clear the hold — the section-placement fact. */
