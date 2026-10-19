@@ -1953,6 +1953,9 @@ jobs:
             go-notices-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-notices-${{ runner.os }}-
       - run: go mod download
+      - name: Fetch gate tools
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh notices
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -2008,6 +2011,12 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+      # The gate's own `go run tool@version` dependencies, fetched here so a network
+      # stall fails fast under this name instead of eating the job timeout. The
+      # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
+      - name: Fetch gate tools
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
@@ -2284,9 +2293,12 @@ jobs:
   # ~/go/pkg/mod depends only on go.mod/go.sum, so one entry serves every job
   # instead of a copy in each job's build cache. This job saves it on a push to
   # main when no entry has the key yet. No restore-keys, so a new entry never
-  # carries modules an older go.sum needed. The `go run tool@version` tools are
-  # left out: they would triple the entry (200 to 630 MB compressed) for a few
-  # seconds of download in the jobs that run them.
+  # carries modules an older go.sum needed. It also holds the modules of the
+  # pinned `go run tool@version` gate tools (scripts/fetch-gate-tools.sh), which
+  # add about 365 MB compressed: their cold fetch from the network stalled one gate
+  # past its job timeout and failed another on a checksum-database read. The key
+  # hashes the tool versions too, so a bump re-saves the entry; the other jobs
+  # restore the newest `gomod-<os>-` entry by prefix, as before.
   go-modules:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -2299,27 +2311,39 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Name the module cache entry (go.mod, go.sum and the gate tool versions)
+        id: key
+        run: |
+          set -euo pipefail
+          sum="$({ cat go.mod go.sum; scripts/fetch-gate-tools.sh --list; } | sha256sum | cut -d' ' -f1)"
+          echo "key=gomod-${RUNNER_OS}-${sum}" >> "$GITHUB_OUTPUT"
       - name: Is this module cache saved already?
         id: have
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          key: ${{ steps.key.outputs.key }}
           lookup-only: true
       - name: Download the modules
         if: steps.have.outputs.cache-hit != 'true'
         run: go mod download && du -sh ~/go/pkg/mod
+      - name: Fetch gate tools
+        if: steps.have.outputs.cache-hit != 'true'
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh && du -sh ~/go/pkg/mod
       - name: Save the module cache
         id: save
         if: steps.have.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
-          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          key: ${{ steps.key.outputs.key }}
       - name: Name the entry this run saved
         id: saved
         if: steps.save.outcome == 'success'
-        run: echo "key=gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+        env:
+          KEY: ${{ steps.key.outputs.key }}
+        run: echo "key=${KEY}" >> "$GITHUB_OUTPUT"
 
   # ── one Go cache generation per job ───────────────────────────────────────
   # Each green push to main saves its Go caches under its run id. The

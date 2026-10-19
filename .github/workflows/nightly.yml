@@ -231,7 +231,10 @@ jobs:
           boot="$(docker run --rm --runtime=runsc busybox:latest dmesg)"
           grep -q gVisor <<<"${boot}" || { echo "::error::--runtime=runsc did not boot gVisor: ${boot}"; exit 1; }
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
-        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+        run: |
+          export WARDYN_BUILD_GOMODCACHE="$(go env GOMODCACHE)"
+          source scripts/lib/image-build.sh
+          wardyn_go_image_build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
