@@ -100,7 +100,9 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-footer"
       className={cn(
-        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        // Pinned to the bottom of the scrolling dialog so the primary action never leaves the screen; the
+        // negative margins stretch the bar over DialogContent's p-6 so scrolled fields don't show beside it.
+        "bg-background sticky bottom-0 -mx-6 -mb-6 flex flex-col-reverse gap-2 border-t border-border px-6 py-4 sm:flex-row sm:justify-end",
         className,
       )}
       {...props}

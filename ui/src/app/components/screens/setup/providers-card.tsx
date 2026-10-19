@@ -39,6 +39,7 @@ import { adoRowNeedsChoice } from "../../../lib/ado-pat-display";
 import { Button } from "../../ui/button";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
@@ -183,12 +184,16 @@ export function ProvidersCard({
   );
 
   if (compact) {
+    // Settings only links out to the providers page, so it is a navigation row; a provider the upgrade
+    // switched off still says so on its face.
     return (
-      <CollapsibleCard title={PROVIDERS.TITLE} summary={summary || undefined} testId="providers-card">
-        <p className="text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
-        {attentionLines}
-        {openButton}
-      </CollapsibleCard>
+      <CollapsibleCard
+        title={PROVIDERS.TITLE}
+        summary={summary || undefined}
+        status={attention.length > 0 ? { tone: "attention", label: CARD_STATUS.NEEDS_ATTENTION } : undefined}
+        to="/admin/providers"
+        testId="providers-card"
+      />
     );
   }
   return (

@@ -12,7 +12,7 @@
 // run" pins the same shape for kill/get).
 import { randomUUID } from "node:crypto";
 import { test, expect, asRealMember, consoleAPI, gotoConsole, navToRoute } from "./fixtures";
-import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 
 // Seeds a fresh run as whoever the page is currently authenticated as (the
 // admin token by default) via the real create door — same helper shape
@@ -64,9 +64,9 @@ test.describe("Run rename", () => {
     // getByText matches two elements (strict-mode violation, caught once as
     // a flake below).
     await expect(page.getByTestId("run-summary-header").getByText("Killed", { exact: true })).toBeVisible();
-    // A terminal run's Kill button is disabled, but Rename is not — a title
+    // An ended run leads with starting another like it, but Rename is still there — a title
     // is a display field, not part of the lease (design.md §3.4).
-    await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
 
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     await page.getByLabel("Title").fill("Renamed after ending");
@@ -87,12 +87,11 @@ test.describe("Run rename", () => {
   // renders the edit form as its own full-width row BELOW the bar instead
   // (matching the mock's own layout), so it never competes with Kill for
   // the bar's own tight width budget at any tested width.
-  test("the open edit row never pushes Kill off-screen, at 1280 and 1536", async ({ page }) => {
+  test("the open edit row never pushes the primary action off-screen, at 1280 and 1536", async ({ page }) => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-rename e2e width " + randomUUID().slice(0, 8));
     // A TERMINAL run, not a live one: the Clone button (RUN.CLONE_CTA, "Start
-    // a run like this one") joins Kill in the action cluster then, the same
-    // worst-case combination the review measured Kill's right edge under.
+    // a run like this one") is the longest action the header carries.
     const killed = await consoleAPI(page, "POST", `/api/v1/runs/${id}/kill`, {});
     expect(killed.status, killed.text).toBe(202);
     await navToRoute(page, `/runs/${id}`);
@@ -107,13 +106,13 @@ test.describe("Run rename", () => {
 
     for (const width of [1280, 1536]) {
       await page.setViewportSize({ width, height: 720 });
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
-      await expect(killBtn, `Kill visible at ${width}px with the editor open`).toBeVisible();
-      const killBox = await killBtn.boundingBox();
-      expect(killBox, `Kill boundingBox at ${width}px`).not.toBeNull();
+      const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
+      await expect(cloneBtn, `clone visible at ${width}px with the editor open`).toBeVisible();
+      const cloneBox = await cloneBtn.boundingBox();
+      expect(cloneBox, `clone boundingBox at ${width}px`).not.toBeNull();
       expect(
-        killBox!.x + killBox!.width,
-        `Kill right edge at ${width}px with the editor open`,
+        cloneBox!.x + cloneBox!.width,
+        `clone right edge at ${width}px with the editor open`,
       ).toBeLessThanOrEqual(width);
       // The editor itself is still open, on-screen and usable — the fix
       // must not have hidden it to make Kill fit.

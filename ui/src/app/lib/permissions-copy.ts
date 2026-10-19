@@ -225,6 +225,11 @@ export const PERM = {
   // lockout risk this dialog exists to state. Same sentence, minus the number.
   ENFORCE_ON_BODY_UNKNOWN:
     "Members are bounded by the grants below from their next request. Anything not granted starts being refused.",
+  // The owner's ruling on enforcing with nothing granted: warn on the row, then ask to confirm.
+  ENFORCE_ZERO_CONFIRM: "Enforcing it refuses everyone until grants exist.",
+  ROW_GRANTS: (n: number) => `${n} grant${n === 1 ? "" : "s"}`,
+  ROW_ZERO: "0 grants · Add a grant first. Enforcing now refuses everyone.",
+  HOW_TITLE: "How permissions work",
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",
   // The off-dialog needs its own title, not a reuse of ENFORCE_ON_TITLE — the

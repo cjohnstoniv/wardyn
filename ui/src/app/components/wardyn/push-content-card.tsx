@@ -7,7 +7,7 @@
 // built on #180/#494's server side): a brokered git push that matched
 // push_rules.require_review_paths and is parked at the proxy for an admin's
 // decision (internal/egress/proxy/push_hold.go). Shared by
-// screens/approvals.tsx's PendingCard and live-approvals.tsx's strip, the
+// screens/approvals.tsx's ApprovalCard and live-approvals.tsx's strip, the
 // same two-mount pattern ado-capability-card.tsx uses and for the same
 // reason: a held push needs fields (repository, branch, the paths under
 // review) neither surface's generic row can show.
@@ -19,7 +19,7 @@
 // stop (see internal/api/approvals_push.go's own doc). So this card takes no
 // run-owner/viewerPrincipal props at all, only `run.state` — to withdraw the
 // decision pair once the run has ended, the same defensive check
-// screens/approvals.tsx's generic PendingCard makes for every other kind.
+// screens/approvals.tsx's generic ApprovalCard makes for every other kind.
 //
 // NO SCOPE MENU: a push decision covers this push only (decide's rule 4
 // refuses a decision_scope on this kind — approvals_push.go). Approve/Deny
@@ -132,7 +132,7 @@ export function unquoteGitPath(raw: string): string {
 }
 
 // The run this card needs to know about — only whether it has ENDED (the
-// same defensive re-check screens/approvals.tsx's generic PendingCard makes:
+// same defensive re-check screens/approvals.tsx's generic ApprovalCard makes:
 // a terminal run's PENDING approvals are cancelled by the lifecycle cascade a
 // beat later, so offering Approve/Deny in that window would be a dead
 // control). No `created_by`: decidability here is role-only, never ownership.

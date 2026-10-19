@@ -21,7 +21,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { setup as setupApi } from "../../lib/api/setup";
 import { usePoll } from "../../lib/use-poll";
 import { deriveReadiness } from "../../lib/readiness";
-import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
+import { RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
@@ -156,7 +156,7 @@ export function RunsScreen() {
   // carries the "alive" fact now.
   usePoll(refresh, POLL_MS, status !== "ready");
 
-  // Setup status backs the noBarrier banner and RunsFirstRun's own content
+  // Setup status backs RunsFirstRun's own content
   // (readiness/confinementClasses/secretNames) — NOT the true-first-run
   // decision itself. `has_runs` is a bare deployment-wide existence check
   // (internal/api/setup.go), so it is the wrong signal for a member, or an
@@ -227,8 +227,6 @@ export function RunsScreen() {
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
-      {noBarrier && <NoBarrierBanner onRecheck={loadSetupStatus} />}
-
       <PageHeader title="Runs" description={description} />
 
       {adminView && <AdminOlderLimitsCard />}

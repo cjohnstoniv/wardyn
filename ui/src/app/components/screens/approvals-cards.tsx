@@ -35,14 +35,24 @@ import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBad
 import { APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { KIND_ICON, capabilityLabel, deriveTitle, deriveBanner, str } from "./approvals";
 
-export function PendingCard({
+/**
+ * The one card for a request waiting on a person: the Approvals screen and a run's Approvals tab both render it.
+ * `run` is passed by a caller that already holds the run (the run page); the card then drops its run row and
+ * reads the ended-run rule off it instead of fetching.
+ */
+export function ApprovalCard({
   item,
   caps,
+  run: runProp,
+  tokenWidens,
   onAct,
   onAdoDecide,
   onPushDecide,
 }: {
   item: ApprovalRequest;
+  run?: RunDetail;
+  // A run that holds Azure DevOps tokens widens one when access is approved.
+  tokenWidens?: boolean;
   // The viewer's own capability set, or null when the question doesn't apply
   // (an admin, or an answer still in flight).
   caps: MeCapabilities | null;
@@ -110,7 +120,9 @@ export function PendingCard({
   // both leave the controls exactly as they were: the screen withdraws them on
   // a KNOWN terminal state, never on a guess, which is the same direction the
   // rest of this card errs in.
-  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const run = runProp ?? fetchedRun;
+  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
   // The hold's provider is the run's own, so its name rides the run read (#996,
   // model_provider_name) for a viewer whose setup status does not list it. It is
   // not on the hold: that scope is the dedup key, identity only.
@@ -150,12 +162,13 @@ export function PendingCard({
   if ((isAdoCapabilityRequest(item) || isAdoConsentRequest(item)) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
-        <RunContextRow runId={item.run_id} onRun={setRun} />
+        {runRow}
         <AdoCapabilityCard
           item={item}
           securityOperator={securityOperator}
           viewerPrincipal={principal}
           run={run}
+          tokenWidens={tokenWidens}
           busy={adoBusy}
           onApprove={async (opts) => {
             setAdoBusy("approve");
@@ -179,7 +192,7 @@ export function PendingCard({
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
-        <RunContextRow runId={item.run_id} onRun={setRun} />
+        {runRow}
         <PushContentCard
           item={item}
           securityOperator={securityOperator}
@@ -229,7 +242,7 @@ export function PendingCard({
         <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
       )}
 
-      <RunContextRow runId={item.run_id} onRun={setRun} />
+      {runRow}
 
       {/* Blast-radius banner (D1) — derived from the real scope above. */}
       <div className="mt-3 space-y-1 rounded-lg border border-border bg-background px-3 py-2.5 text-sm leading-relaxed">
@@ -258,7 +271,8 @@ export function PendingCard({
           <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
           <Code2 className="size-3.5" /> View requested scope
         </summary>
-        <JsonBlock value={scope} className="mt-2" />
+        {/* Wrapped, never cut off: the command is what the person is deciding on (#2924). */}
+        <JsonBlock value={scope} className="mt-2 [&_pre]:whitespace-pre-wrap [&_pre]:break-all" />
       </details>
 
       {/* P0.3 (R3-F001/F108/F145) — an egress_domain approval is host-wide, and
@@ -325,7 +339,8 @@ export function PendingCard({
   );
 }
 
-export function DecidedRow({ item }: { item: ApprovalRequest }) {
+// `showRun` is false on a run's own page, where the run is the context and a link back to it is noise.
+export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; showRun?: boolean }) {
   const scope = item.requested_scope ?? {};
   // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
   // it), so it reads with the same "by …" prefix an expiry-with-a-writer does —
@@ -343,13 +358,15 @@ export function DecidedRow({ item }: { item: ApprovalRequest }) {
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
-      <Link
-        to={runPath(view, item.run_id)}
-        className="font-mono text-xs text-muted-foreground hover:text-foreground"
-        title={`Open run ${item.run_id}`}
-      >
-        {item.run_id.slice(0, 8)}
-      </Link>
+      {showRun && (
+        <Link
+          to={runPath(view, item.run_id)}
+          className="font-mono text-xs text-muted-foreground hover:text-foreground"
+          title={`Open run ${item.run_id}`}
+        >
+          {item.run_id.slice(0, 8)}
+        </Link>
+      )}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>

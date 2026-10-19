@@ -18,6 +18,7 @@
 import type { AgentRun, RunState } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { RUN_HEADER } from "../../wardyn/copy/run-header";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
@@ -57,7 +58,7 @@ export function isLiveRunState(state: RunState): boolean {
  * offers Review either way, and the decision card underneath is where the
  * real ceiling is enforced — same as today).
  */
-export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentation {
+export function rowPresentation(run: AgentRun): RowPresentation {
   // a lease-ended run (lost_reason "ended") stays RUNNING until
   // the ended-run grace stops it, but it has no network and is already OVER
   // — the server excludes it from the live set (store_runs_filtered.go's
@@ -75,11 +76,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
       case "approval":
         return {
           hue: "amber",
-          word: you
-            ? adminView
-              ? RUNS_ROW_WORD.NEEDS_DECISION
-              : RUNS_ROW_WORD.NEEDS_APPROVAL
-            : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
+          word: you ? RUN_HEADER.DECISIONS_NEED_YOU(Math.max(1, a.pending)) : RUNS_ROW_WORD.WAITING_FOR_ADMIN,
           subword: RUN_WAIT.waitingHeld(a.pending),
           action: you ? "review" : null,
           needsYou: you,

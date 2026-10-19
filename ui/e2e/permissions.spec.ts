@@ -34,7 +34,8 @@ test.describe("permissions — the admin surface, end to end", () => {
 
     await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(PERM.DEFAULT_POSTURE)).toBeVisible();
-    // The two standing facts — the doctrine and the admin exemption.
+    // The two standing facts — the doctrine and the admin exemption — one click away (#3053).
+    await page.getByText(PERM.HOW_TITLE, { exact: true }).click();
     await expect(page.getByText(PERM.DOCTRINE)).toBeVisible();
     await expect(page.getByText(PERM.EXEMPT)).toBeVisible();
     await expect(page.getByText(PERM.EMPTY_TITLE)).toBeVisible();
@@ -120,6 +121,16 @@ test.describe("permissions — the admin surface, end to end", () => {
     await expect(page.getByText(PERM.EMPTY_BODY)).toBeVisible();
   });
 
+  test("a capability row shows its grant count, warns at zero, and Add grant picks that capability (#3053)", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Permissions");
+
+    const row = page.getByTestId(`capability-row-${"workspace"}`);
+    await expect(row.getByText(PERM.ROW_ZERO)).toBeVisible();
+    await row.getByRole("button", { name: `${PERM.ADD_CTA} ${KIND.workspace.label}` }).click();
+    await expect(page.getByRole("textbox", { name: KIND.workspace.valueLabel, exact: true })).toBeVisible();
+  });
+
   test("enforcing with nothing granted is the lockout guard, and it is unmissable", async ({ page }) => {
     await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
@@ -127,6 +138,7 @@ test.describe("permissions — the admin surface, end to end", () => {
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog.getByText(PERM.ENFORCE_ON_ZERO)).toBeVisible();
+    await expect(dialog.getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeVisible();
     // Walk away from it: nothing was written.
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByText(PERM.CHIP_ON, { exact: true })).toHaveCount(0);

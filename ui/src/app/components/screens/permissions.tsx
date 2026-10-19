@@ -216,6 +216,7 @@ export function PermissionsScreen() {
   // to retry.
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
+  const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
@@ -293,11 +294,6 @@ export function PermissionsScreen() {
     <div className="mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
-      <div className="space-y-2">
-        <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
-        <Fact icon={Info}>{PERM.EXEMPT}</Fact>
-      </div>
-
       {submitted && <SubmittedNote />}
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
@@ -330,6 +326,10 @@ export function PermissionsScreen() {
                   grants={grantsFor(kind)}
                   disabled={!securityOperator}
                   onToggle={(next) => setConfirm({ kind, next })}
+                  onAddGrant={() => {
+                    setPresetKind(kind);
+                    document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
+                  }}
                 />
               ))}
               {/* The `custom_component` feature value: default on, so its switch is "no deny row". */}
@@ -363,6 +363,15 @@ export function PermissionsScreen() {
           )}
         </div>
       </section>
+
+      {/* The doctrine is the most common misread of the feature, so it stays one click away right under the rows. */}
+      <details data-testid="how-permissions-work" className="mt-2 rounded-xl border border-border bg-card px-6 py-3">
+        <summary className="cursor-pointer text-body text-foreground">{PERM.HOW_TITLE}</summary>
+        <div className="mt-3 space-y-2">
+          <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
+          <Fact icon={Info}>{PERM.EXEMPT}</Fact>
+        </div>
+      </details>
 
       <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <div className="px-6 pt-5">
@@ -453,6 +462,7 @@ export function PermissionsScreen() {
           load();
         }}
         onSubmitted={load}
+        presetKind={presetKind}
       />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
@@ -505,26 +515,39 @@ function KindRow({
   grants,
   disabled,
   onToggle,
+  onAddGrant,
 }: {
   kind: CapabilityKind;
   enforced: boolean;
   grants: CapabilityGrant[];
   disabled: boolean;
   onToggle: (next: boolean) => void;
+  /** Jumps to the add form with this capability already chosen. */
+  onAddGrant: () => void;
 }) {
   const copy = KIND[kind];
   const hasDeny = grants.some((g) => g.effect === "deny");
   const hasAllow = grants.some((g) => g.effect === "allow");
   return (
-    <div className="grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0">
+    <div
+      data-testid={`capability-row-${kind}`}
+      className={cn(
+        "grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0",
+        grants.length === 0 && "bg-warning-subtle",
+      )}
+    >
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-body font-medium text-foreground">{copy.label}</h3>
-          <Chip tone={enforced ? "warning" : "neutral"} dot>
+          <Chip tone={enforced ? "success" : "neutral"} dot>
             {enforced ? PERM.CHIP_ON : PERM.CHIP_OFF}
           </Chip>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{copy.blurb}</p>
+        {/* Zero grants is the risky cell, so it says why in the row before the switch is touched. */}
+        <p className={cn("mt-1 text-body", grants.length === 0 ? "text-warning" : "text-foreground")}>
+          {grants.length === 0 ? PERM.ROW_ZERO : PERM.ROW_GRANTS(grants.length)}
+        </p>
         <p className={cn("mt-2 max-w-[76ch] text-body", enforced ? "text-foreground" : "text-muted-foreground")}>
           {enforced ? copy.enforced : copy.unenforced}
         </p>
@@ -535,12 +558,23 @@ function KindRow({
         {/* The dangerous cell: enforced with nothing granted. */}
         {enforced && !hasAllow && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
       </div>
-      <Switch
-        checked={enforced}
-        disabled={disabled}
-        onChange={onToggle}
-        label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
-      />
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          variant={grants.length === 0 ? "default" : "outline"}
+          disabled={disabled}
+          onClick={onAddGrant}
+          aria-label={`${PERM.ADD_CTA} ${copy.label}`}
+        >
+          {PERM.ADD_CTA}
+        </Button>
+        <Switch
+          checked={enforced}
+          disabled={disabled}
+          onChange={onToggle}
+          label={`${PERM.ENFORCEMENT_TITLE} ${copy.label}`}
+        />
+      </div>
     </div>
   );
 }
@@ -573,7 +607,9 @@ function ConfirmEnforcement({
             {(turningOn ? PERM.ENFORCE_ON_TITLE : PERM.ENFORCE_OFF_TITLE)(state ? KIND[state.kind].label : "")}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {turningOn
+            {lockout
+              ? PERM.ENFORCE_ZERO_CONFIRM
+              : turningOn
               ? memberCount === null
                 ? PERM.ENFORCE_ON_BODY_UNKNOWN
                 : PERM.ENFORCE_ON_BODY(memberCount)
@@ -628,6 +664,7 @@ export function AddGrantForm({
   onSubmitted,
   fixed,
   hideTitle,
+  presetKind,
 }: {
   disabled: boolean;
   onAdded: () => void;
@@ -635,6 +672,8 @@ export function AddGrantForm({
   onSubmitted?: () => void;
   fixed?: FixedGrantSubject;
   hideTitle?: boolean;
+  /** A capability's own Add grant button chooses its kind here (ignored once `fixed`). */
+  presetKind?: CapabilityKind;
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
   const [subject, setSubject] = React.useState(fixed?.subject ?? "");
@@ -650,6 +689,10 @@ export function AddGrantForm({
   const [error, setError] = React.useState<string | null>(null);
   // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
   const [submitted, setSubmitted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (presetKind && !fixed) setKind(presetKind);
+  }, [presetKind, fixed]);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -817,7 +860,7 @@ export function AddGrantForm({
 
   if (hideTitle) return body;
   return (
-    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
+    <section id="permissions-add-grant" className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
       <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
       {body}
     </section>

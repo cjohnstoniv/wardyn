@@ -11,7 +11,6 @@ import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { CHANGES, GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { PROVIDERS_SUPER_ONLY } from "../src/app/components/wardyn/copy/console-view";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
-import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 import { POOL_FORM } from "../src/app/components/wardyn/copy/runner-pools";
 
@@ -249,8 +248,7 @@ test.describe("Quiet empty states inside cards (#2873)", () => {
     );
     await gotoConsole(page, "admin");
     await navToRoute(page, "/admin/settings");
-    await expandCard(page, "Workspace providers");
-    await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
+    await page.getByTestId("providers-card").getByRole("link").click();
     await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
     const tile = page.getByTestId("empty-state-tile");
     await expect(tile).toBeVisible();

@@ -16,6 +16,7 @@ vi.mock("../../../lib/api/approval-notify", () => ({
   approvalNotify: { getStatus: (...a: unknown[]) => getStatusMock(...a) },
 }));
 
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 import { ApprovalNotifyCard } from "./approval-notify-card";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -71,7 +72,8 @@ describe("ApprovalNotifyCard", () => {
   it("shows the not-set-up summary and body when no channel is configured", async () => {
     getStatusMock.mockResolvedValue({ channels: [] } satisfies ApprovalNotifyStatus);
     render(<ApprovalNotifyCard />);
-    await screen.findByText(COPY.SUMMARY_OFF);
+    expect(await screen.findByTestId("approval-notify-card-summary")).toHaveTextContent(COPY.SUMMARY_OFF);
+    expect(screen.getByTestId("approval-notify-card-status")).toHaveTextContent(CARD_STATUS.NOT_SET_UP);
     await expandCard(COPY.TITLE);
     expect(screen.getByText(COPY.ENV_NAME)).toBeInTheDocument();
     expect(screen.getByText(COPY.OFF_BODY[1].trim(), { exact: false })).toBeInTheDocument();

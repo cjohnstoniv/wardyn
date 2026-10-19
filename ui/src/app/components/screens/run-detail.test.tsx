@@ -752,7 +752,8 @@ describe("RunDetailScreen — Copy link keeps the base path", () => {
       </MemoryRouter>,
     );
     await screen.findAllByText(RUN.task);
-    await user.click(screen.getByRole("button", { name: "Copy link to this run" }));
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Copy link to this run" }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
     return write.mock.calls[0][0];
   }

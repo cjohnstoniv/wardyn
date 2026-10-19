@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   type ApprovalRequest,
   type AuditEvent,
@@ -28,6 +29,7 @@ const DETAIL_POLL_MS = 4000;
 const KILL_SETTLE_MS = 120_000;
 
 export type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
+const TABS: readonly string[] = ["overview", "approvals", "policy", "audit", "recording", "output"];
 
 export function useRunDetail(id: string) {
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
@@ -53,7 +55,12 @@ export function useRunDetail(id: string) {
   const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
   const [grantsReadable, setGrantsReadable] = React.useState(false);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [tab, setTab] = React.useState<Tab>("overview");
+  // ?tab= opens the page on that tab (the Runs list's Review button lands on Approvals).
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = React.useState<Tab>(() => {
+    const asked = searchParams.get("tab") ?? "";
+    return TABS.includes(asked) ? (asked as Tab) : "overview";
+  });
   // Recording is fetched lazily the first time the Recording tab opens.
   const [recording, setRecording] = React.useState<Recording | null>(null);
   const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");

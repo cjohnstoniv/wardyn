@@ -172,7 +172,7 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
 
     await expect(page.getByRole("heading", { name: /Needs you/ })).toBeVisible();
     await expect(page.getByText("Held approval")).toBeVisible();
-    await expect(page.getByText("Needs your approval")).toBeVisible();
+    await expect(page.getByText("1 decision needs you")).toBeVisible();
     // Both "a1" (by=you) and "a5" (H-3's by=admin) carry this same subword —
     // the design table doesn't differ on it, only on the WORD above it.
     await expect(page.getByText("1 waiting · sandbox held").first()).toBeVisible();

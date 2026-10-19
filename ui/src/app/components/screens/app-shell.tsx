@@ -5,7 +5,6 @@
 
 import * as React from "react";
 import {
-  Link,
   NavLink,
   Outlet,
   useLocation,
@@ -13,7 +12,6 @@ import {
 } from "react-router-dom";
 import {
   Activity,
-  AlertOctagon,
   AlertTriangle,
   CircleUser,
   Compass,
@@ -35,7 +33,7 @@ import {
   Users,
   UsersRound,
 } from "lucide-react";
-import { NO_BARRIER, SHELL } from "../wardyn/copy";
+import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarLowerLinks } from "./sidebar-settings-link";
@@ -62,6 +60,7 @@ import { useMeta, type ShellMeta } from "./use-shell-meta";
 export type { ShellMeta } from "./use-shell-meta";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import { NoBarrierNotice } from "./no-barrier-notice";
 import type { SetupStatus } from "../../lib/types";
 import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
@@ -429,6 +428,7 @@ export function AppShell({
   unreachable,
   lastOkAt,
   noBarrier,
+  onRecheck,
   tier,
 }: {
   pendingApprovals: number;
@@ -449,6 +449,8 @@ export function AppShell({
   // than guess, where this is a deployment-wide fact that is always resolved
   // once setupStatus has landed. False/undefined renders nothing.
   noBarrier?: boolean;
+  // Re-reads the setup status for the no-barrier notice's Re-check.
+  onRecheck?: () => void;
   // SetupStatus.tier, for the top bar's account menu and local-only chip.
   tier?: SetupStatus["tier"];
 }) {
@@ -553,7 +555,6 @@ export function AppShell({
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
-                noBarrier={!unreachable && !!noBarrier}
                 tier={tier}
               />
             )}
@@ -587,23 +588,8 @@ export function AppShell({
                 "unknown", not "no barrier", and the banner above already
                 says so. */}
             {!unreachable && noBarrier && (
-              <div
-                role="status"
-                className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-danger-subtle px-4 py-2 text-sm text-danger"
-              >
-                <AlertOctagon className="mt-0.5 size-4 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
-                  <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
-                </div>
-                {canReachEnvironmentStep && (
-                  <Link
-                    to={NO_BARRIER.ADMIN_ROUTE}
-                    className="ml-auto shrink-0 font-medium underline underline-offset-2"
-                  >
-                    {NO_BARRIER.CTA}
-                  </Link>
-                )}
+              <div className="relative z-50 shrink-0 border-b border-border px-4 py-2">
+                <NoBarrierNotice canFix={canReachEnvironmentStep} onRecheck={onRecheck} />
               </div>
             )}
             {/* B1 — the settled-but-unknown identity, beside the unreachable

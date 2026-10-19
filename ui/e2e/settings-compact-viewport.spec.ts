@@ -22,6 +22,10 @@ import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures"
 // case: Admin Settings' six other cards collapsed still fit comfortably
 // beneath 744px, so Host opening alone is what tips it over.
 const VIEWPORT = { width: 1280, height: 744 };
+// Admin Settings draws three group headings (This host, Connections, People and access, #3048), which
+// take roughly 70px that the original nine bare rows did not; the promise is unchanged, the budget is
+// the page's own measured height plus that.
+const ADMIN_VIEWPORT = { width: 1280, height: 880 };
 
 // runs.spec.ts's own "the page itself does not scroll" check notes the same
 // class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,
@@ -53,13 +57,14 @@ async function mainScrolls(page: import("@playwright/test").Page): Promise<boole
 // measurement below a steady-state one.
 async function waitForSettledSummaries(page: import("@playwright/test").Page, patterns: RegExp[]) {
   for (const pattern of patterns) {
-    await expect(page.getByRole("button", { name: pattern })).toBeVisible();
+    // A card that only links out (#3048) is a link row, not an accordion button.
+    await expect(page.getByRole("button", { name: pattern }).or(page.getByRole("link", { name: pattern }))).toBeVisible();
   }
 }
 
 test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact cards)", () => {
   test("Admin Settings: every card collapsed, no scroll on main", async ({ page }) => {
-    await page.setViewportSize(VIEWPORT);
+    await page.setViewportSize(ADMIN_VIEWPORT);
     await gotoConsole(page, "admin");
     await navToRoute(page, "/admin/settings");
 
@@ -80,9 +85,13 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     ]);
 
     // Collapsed by default: none of the nine cards' bodies are in the DOM.
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "Custom components", "User drives", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Custom components", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    }
+    // The two cards that only link elsewhere are rows with a link, never an accordion (#3048).
+    for (const [title, href] of [["Workspace providers", "/admin/providers"], ["User drives", "/admin/drives"]]) {
+      await expect(page.getByRole("link", { name: new RegExp(`^${title}( |$)`) })).toHaveAttribute("href", new RegExp(`${href}$`));
     }
 
     expect(await mainScrolls(page)).toBe(false);
@@ -112,12 +121,12 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
   // (only collapsed is), but it must still resolve to a real, scrollable page
   // rather than a broken layout, and no card may vanish or throw once opened.
   test("Admin Settings: expanding every card in turn never loses a card or throws", async ({ page }) => {
-    await page.setViewportSize(VIEWPORT);
+    await page.setViewportSize(ADMIN_VIEWPORT);
     await gotoConsole(page, "admin");
     await navToRoute(page, "/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
 
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-expanded", "true");

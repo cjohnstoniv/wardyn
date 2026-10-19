@@ -56,6 +56,23 @@ import { Mono } from "./code-block";
 // isHeld now lives in lib/types/approvals.ts (see its doc there for why);
 // re-exported so this module stays the place a reader of the strip looks.
 export { isHeld };
+
+// Whether the strip renders this pending request as a row of its own. The run page's decision bar covers
+// the rest, so the two together account for every pending request.
+export function stripCarries(a: ApprovalRequest): boolean {
+  return (
+    a.kind === "egress_domain" ||
+    a.kind === "tool_call" ||
+    // credential_reauth is raised MID-RUN, about THIS run's own model credential, and the surface the
+    // person is already watching is where the sign-in belongs.
+    a.kind === "credential_reauth" ||
+    // #181 — a held push parks git on the open connection for at most push_rules.hold_seconds (isHeld's own
+    // push_content doc, lib/types/approvals.ts), and the row then stays a decidable passive pending the rest
+    // of the way; a retry of the same push rejoins this same row and re-enters the hold.
+    a.kind === "push_content" ||
+    (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")
+  );
+}
 import { Chip, SectionLabel } from "./primitives";
 import { useSecurityOperator, usePrincipal } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
@@ -179,7 +196,7 @@ export function LiveApprovals({
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
-  // record-pane.tsx's two) — see approvals.tsx's PendingCard for the
+  // record-pane.tsx's two) — see approvals.tsx's ApprovalCard for the
   // queue-screen equivalent.
   //
   // useSecurityOperator, not useOperator (0.7 §B): authorizeUserDecision
@@ -241,9 +258,9 @@ export function LiveApprovals({
       // twice in record-pane, where a mid-run mint's blast-radius banner (the
       // git_pat "the agent's process can read this" nuance, the resident-key
       // TTL) is the whole point of deciding it — a bare one-click host row
-      // there would be a regression. Those route via the run detail's "Waiting
-      // for your confirmation" banner to the Approvals screen's kind-aware
-      // card instead.
+      // there would be a regression. The run page's decision bar carries those
+      // (stripCarries is false for them) and opens the Approvals tab's
+      // kind-aware card.
       // The one "it worked" moment for a re-auth row. The row simply VANISHES
       // from the PENDING list on the next 4s poll — whether the person signed
       // in, the run ended, or the 24h sweeper aged it out — so without this the
@@ -277,23 +294,7 @@ export function LiveApprovals({
           // run_id is a belt-and-braces no-op now that the fetch above carries
           // ?run_id=; it stays so a backend that ignored the predicate cannot
           // surface another run's holds on this run's strip.
-          (a) =>
-            a.run_id === runId &&
-            (a.kind === "egress_domain" ||
-              a.kind === "tool_call" ||
-              // credential_reauth is raised MID-RUN, about THIS run's own model
-              // credential, and the surface the person is already watching is
-              // where the sign-in belongs — the same
-              // decision-visible-where-it-happens rule the rows above follow.
-              a.kind === "credential_reauth" ||
-              // #181 — a held push parks git on the open connection for at
-              // most push_rules.hold_seconds (isHeld's own push_content doc,
-              // lib/types/approvals.ts), and the row then stays a decidable
-              // passive pending the rest of the way — still surfaced here
-              // either way, since a retry of the same push rejoins this same
-              // row and re-enters the hold.
-              a.kind === "push_content" ||
-              (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
+          (a) => a.run_id === runId && stripCarries(a),
         ),
       );
       setPollError(false);
@@ -487,7 +488,7 @@ export function LiveApprovals({
         // (round 2): `pending` (this component's own state) is already
         // PENDING-only (refresh() fetches listApprovals("PENDING", runId)),
         // but the check is explicit here too — same reasoning as
-        // approvals.tsx's PendingCard.
+        // approvals.tsx's ApprovalCard.
         if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
           return (
             <AdoCapabilityCard
@@ -563,7 +564,7 @@ export function LiveApprovals({
                 doc), credential and tool_call stay admin-only regardless. */}
             <Button
               size="sm"
-              variant="outline"
+              variant="info"
               className="h-7 rounded-r-none border-r-0"
               disabled={!canDecide(a) || busy === a.id}
               onClick={() => decide(a, true)}

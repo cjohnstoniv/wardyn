@@ -48,6 +48,7 @@ import {
   type NameFormat,
 } from "../../../lib/branding";
 import { BRAND_NAME, BRANDING } from "../../../lib/branding-copy";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 interface Draft {
   orgName: string;
@@ -267,6 +268,7 @@ export function BrandingCard() {
     <CollapsibleCard
       title={BRANDING.TITLE}
       summary={brandingSummary}
+      status={!loadFailed && !brand ? { tone: "neutral", label: CARD_STATUS.DEFAULT } : undefined}
       headingId="branding-title"
       aria-labelledby="branding-title"
     >

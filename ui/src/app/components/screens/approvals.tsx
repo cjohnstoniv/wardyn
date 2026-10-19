@@ -46,7 +46,7 @@ import {
   credentialKind,
   egressBlastRadius,
 } from "../wardyn/copy";
-import { PendingCard, DecidedRow } from "./approvals-cards";
+import { ApprovalCard, DecidedRow } from "./approvals-cards";
 
 type Filter = "PENDING" | "decided";
 type Scope = Record<string, unknown>;
@@ -138,7 +138,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
     // painted a blast-radius banner over a row that grants nothing.
     case "credential_reauth":
       return REAUTH_TITLE;
-    // Only reached by DecidedRow — PendingCard's own push_content branch
+    // Only reached by DecidedRow — ApprovalCard's own push_content branch
     // returns before this function is ever called (it renders PUSH.CARD_TITLE
     // directly, which is PENDING-tense and would read wrong on a decided row).
     case "push_content": {
@@ -159,7 +159,7 @@ interface Banner {
 const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
-// PendingCard calls it before any scope has been chosen (the picker lives
+// ApprovalCard calls it before any scope has been chosen (the picker lives
 // inside ReasonDialog, a separate component this one never sees into), so it
 // always previews what a plain Approve — today's, and the default's,
 // behavior — actually grants. There is deliberately no decisionScope
@@ -258,7 +258,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
       //
       // STAYS TRUE HERE: an Azure DevOps escalation never reaches this
       // branch — isAdoCapabilityRequest routes it to AdoCapabilityCard
-      // before deriveBanner is ever called (see PendingCard below), because
+      // before deriveBanner is ever called (see ApprovalCard below), because
       // for THAT one lane the claim above is false (ADO.
       // TOOL_CALL_NOTE, rendered once on this screen, says why). Every other
       // tool_call still lands here, and the sentence below is still honest
@@ -535,7 +535,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         ) : (
           <div className="space-y-3.5">
             {pendingItems.map((a) => (
-              <PendingCard
+              <ApprovalCard
                 key={a.id}
                 item={a}
                 caps={caps}

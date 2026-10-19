@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, expandCard, gotoConsole, sidebarLink } from "./fixtures";
+import { test, expect, gotoConsole, sidebarLink } from "./fixtures";
 import { MEMBER_DRIVES, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 
@@ -18,8 +18,7 @@ async function openStorageTab(page: Page): Promise<void> {
   await sidebarLink(page, "Settings").click();
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
-  await expandCard(page, "Workspace providers");
-  await card.getByText(PROVIDERS.CARD_OPEN).click();
+  await card.getByRole("link").click();
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
   await page.getByRole("button", { name: PROVIDERS.STORAGE_TAB }).click();
   await expect(page.getByLabel(MEMBER_DRIVES.FIELD_MAX)).toBeVisible();

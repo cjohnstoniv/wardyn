@@ -109,7 +109,7 @@ function RunDetailPage({ id }: { id: string }) {
   // own "Save as policy" persists it via POST /policies. Local open-state only.
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
-  const { copied, copyAsync } = useCopyToClipboard(1400);
+  const { copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -280,8 +280,8 @@ function RunDetailPage({ id }: { id: string }) {
             // DevOps consent row (isAdoConsentRequest is also credential_reauth).
             awaitingReauth={pending.some((p) => p.kind === "credential_reauth" && !isAdoConsentRequest(p))}
             awaitingAdoConsent={pending.some(isAdoConsentRequest)}
+            onGoApprovals={() => setTab("approvals")}
             onCopyLink={copyLink}
-            linkCopied={copied}
             onKill={kill}
             canKillAgain={killAgain}
             onClone={view === "user" ? () => void onClone() : undefined}
@@ -346,6 +346,7 @@ function RunDetailPage({ id }: { id: string }) {
               onGoAudit={() => setTab("audit")}
               onGoPolicy={() => setTab("policy")}
               onGoRecording={() => setTab("recording")}
+              onGoApprovals={() => setTab("approvals")}
             />
           </TabsContent>
 

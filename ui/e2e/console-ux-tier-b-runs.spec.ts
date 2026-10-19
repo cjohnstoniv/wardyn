@@ -155,6 +155,8 @@ test.describe("Tier B run header", () => {
     const chip = page.getByTestId("pending-approval-chip-text");
     await expect(chip).toBeVisible();
     expect(await chip.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    // The chip is a link to the Approvals tab (#3032).
+    await expect(chip).toHaveText(/Review/);
   });
 });
 

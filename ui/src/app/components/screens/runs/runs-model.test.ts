@@ -30,28 +30,28 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
 });
 
 describe("rowPresentation — held approval (design.md §2.2 row 1)", () => {
-  it("by=you in the user view: Needs your approval, amber, Review, needsYou", () => {
+  it("by=you: the decision phrase, amber, Review, needsYou", () => {
     const r = run({ attention: { kind: "approval", by: "you", pending: 1 } });
-    const p = rowPresentation(r, false);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs your approval", action: "review", needsYou: true });
+    const p = rowPresentation(r);
+    expect(p).toMatchObject({ hue: "amber", word: "1 decision needs you", action: "review", needsYou: true });
     expect(p.subword).toBe("1 waiting · sandbox held");
   });
 
-  it("by=you in the admin view: Needs a decision, still Review", () => {
+  it("by=you with several pending: the plural phrase", () => {
     const r = run({ attention: { kind: "approval", by: "you", pending: 2 } });
-    const p = rowPresentation(r, true);
-    expect(p).toMatchObject({ hue: "amber", word: "Needs a decision", action: "review", needsYou: true });
+    const p = rowPresentation(r);
+    expect(p).toMatchObject({ hue: "amber", word: "2 decisions need you", action: "review", needsYou: true });
   });
 
   it("by=admin (H-3): Waiting for an admin, amber, no action, NOT needs-you — in either view", () => {
     const r = run({ attention: { kind: "approval", by: "admin", pending: 1 } });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Waiting for an admin",
       action: null,
       needsYou: false,
     });
-    expect(rowPresentation(r, true)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Waiting for an admin",
       action: null,
@@ -63,7 +63,7 @@ describe("rowPresentation — held approval (design.md §2.2 row 1)", () => {
 describe("rowPresentation — reauth / ado_consent (design.md §2.2 rows 2-3)", () => {
   it("by=you (user view): the owner's own AWS sign-in hold, Sign in, needsYou", () => {
     const r = run({ attention: { kind: "reauth", by: "you", pending: 1 } });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Waiting for your AWS sign-in",
       action: "sign-in",
@@ -73,7 +73,7 @@ describe("rowPresentation — reauth / ado_consent (design.md §2.2 rows 2-3)", 
 
   it("by=owner (admin view): the OWNER's sign-in, no action, not needs-you", () => {
     const r = run({ attention: { kind: "reauth", by: "owner", pending: 1 } });
-    expect(rowPresentation(r, true)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Waiting for the owner's AWS sign-in",
       action: null,
@@ -83,14 +83,14 @@ describe("rowPresentation — reauth / ado_consent (design.md §2.2 rows 2-3)", 
 
   it("ado_consent mirrors reauth with the Azure DevOps sentence", () => {
     const r = run({ attention: { kind: "ado_consent", by: "you", pending: 1 } });
-    expect(rowPresentation(r, false).word).toBe("Waiting for your Azure DevOps sign-in");
+    expect(rowPresentation(r).word).toBe("Waiting for your Azure DevOps sign-in");
   });
 });
 
 describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () => {
   it("by=you: Sandbox stopped, amber, needsYou, action revive", () => {
     const r = run({ attention: { kind: "lost", by: "you", pending: 0 } });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Sandbox stopped",
       action: "revive",
@@ -100,12 +100,12 @@ describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () =
 
   it("by=owner: no action — nobody but the owner can revive it", () => {
     const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
-    expect(rowPresentation(r, true)).toMatchObject({ action: null, needsYou: false });
+    expect(rowPresentation(r)).toMatchObject({ action: null, needsYou: false });
   });
 
   it("in the admin view, a lost run is never by=you (the server forces owner)", () => {
     const r = run({ attention: { kind: "lost", by: "owner", pending: 0 } });
-    expect(rowPresentation(r, true).needsYou).toBe(false);
+    expect(rowPresentation(r).needsYou).toBe(false);
   });
 
   // F18 (PR #1317 round-2 review): no k8s revive in 0.8 (L6) — the run
@@ -113,7 +113,7 @@ describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () =
   // revivable, so the row must not offer a button the run page won't honour.
   it("by=you on a k8s run: still Needs you, but no action — needsYou survives without a button", () => {
     const r = run({ attention: { kind: "lost", by: "you", pending: 0 }, runner_target: "k8s" });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Sandbox stopped",
       action: null,
@@ -125,7 +125,7 @@ describe("rowPresentation — lost (F1, PR #1317 review: Revive-from-row)", () =
 describe("rowPresentation — a lease-ended run", () => {
   it("reads grey 'Ended at its end time', never the live blue Running word — even though state is still RUNNING", () => {
     const r = run({ state: "RUNNING", lost_reason: "ended", lost_at: new Date(NOW - 3600_000).toISOString() });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "grey",
       word: "Ended at its end time",
       action: null,
@@ -137,12 +137,12 @@ describe("rowPresentation — a lease-ended run", () => {
 describe("rowPresentation — STARTING/PENDING carry the substrate's stage line", () => {
   it("STARTING with a status_detail gets it as the subword", () => {
     const r = run({ state: "STARTING", status_detail: "image: Pulling: acme/agent:latest", status_reason: "Pulling" });
-    expect(rowPresentation(r, false).subword).toBeTruthy();
+    expect(rowPresentation(r).subword).toBeTruthy();
   });
 
   it("PENDING/STARTING with no status_detail has no subword (never an empty string)", () => {
     const r = run({ state: "STARTING" });
-    expect(rowPresentation(r, false).subword).toBeUndefined();
+    expect(rowPresentation(r).subword).toBeUndefined();
   });
 });
 
@@ -157,7 +157,7 @@ describe("rowPresentation — plain state words with no attention", () => {
     ["STOPPED", "grey", "Stopped"],
     ["ARCHIVED", "grey", "Archived"],
   ] as const)("%s -> hue %s, word %s", (state, hue, word) => {
-    const p = rowPresentation(run({ state }), false);
+    const p = rowPresentation(run({ state }));
     expect(p.hue).toBe(hue);
     expect(p.word).toBe(word);
     expect(p.action).toBeNull();
@@ -168,7 +168,7 @@ describe("rowPresentation — plain state words with no attention", () => {
 describe("rowPresentation — RL-15: the board's own ends-soon warning (design.md §2.3)", () => {
   it("10 minutes left: amber 'Ends in 10 minutes', no attention needed", () => {
     const r = run({ state: "RUNNING", ends_at: new Date(NOW + 9 * 60_000).toISOString() });
-    expect(rowPresentation(r, false)).toMatchObject({
+    expect(rowPresentation(r)).toMatchObject({
       hue: "amber",
       word: "Ends in 10 minutes",
       action: null,
@@ -178,7 +178,7 @@ describe("rowPresentation — RL-15: the board's own ends-soon warning (design.m
 
   it("1 hour left: amber 'Ends in 1 hour'", () => {
     const r = run({ state: "RUNNING", ends_at: new Date(NOW + 45 * 60_000).toISOString() });
-    expect(rowPresentation(r, false).word).toBe("Ends in 1 hour");
+    expect(rowPresentation(r).word).toBe("Ends in 1 hour");
   });
 
   it("24 hours left on a lease over 2 days: amber 'Ends in 24 hours'", () => {
@@ -187,7 +187,7 @@ describe("rowPresentation — RL-15: the board's own ends-soon warning (design.m
       state: "RUNNING",
       ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
     });
-    expect(rowPresentation(r, false).word).toBe("Ends in 24 hours");
+    expect(rowPresentation(r).word).toBe("Ends in 24 hours");
   });
 
   it("24 hours left on a short (<= 2 day) lease: no warning yet — plain Running", () => {
@@ -196,17 +196,17 @@ describe("rowPresentation — RL-15: the board's own ends-soon warning (design.m
       state: "RUNNING",
       ends_at: new Date(NOW + 20 * 3600_000).toISOString(),
     });
-    expect(rowPresentation(r, false).word).toBe("Running");
+    expect(rowPresentation(r).word).toBe("Running");
   });
 
   it("no end (ends_at absent): plain Running, never a warning", () => {
     const r = run({ state: "RUNNING" });
-    expect(rowPresentation(r, false).word).toBe("Running");
+    expect(rowPresentation(r).word).toBe("Running");
   });
 
   it("a run already past its end (should have been marked ended/lost): no warning, not negative", () => {
     const r = run({ state: "RUNNING", ends_at: new Date(NOW - 60_000).toISOString() });
-    expect(rowPresentation(r, false).word).toBe("Running");
+    expect(rowPresentation(r).word).toBe("Running");
   });
 });
 
@@ -362,12 +362,12 @@ describe("rowPresentation — a local run is presented as any other (RS8)", () =
   const local = (over: Partial<AgentRun>) => run({ placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7", ...over });
 
   it.each([true, false, undefined])("a running local run reads the same with runner_online=%s", (online) => {
-    expect(rowPresentation(local({ runner_online: online }), false)).toEqual(rowPresentation(run(), false));
+    expect(rowPresentation(local({ runner_online: online }))).toEqual(rowPresentation(run()));
   });
 
   it("a lost local run keeps the lost word and action", () => {
     const attention = { kind: "lost", by: "you", pending: 0 } as const;
-    expect(rowPresentation(local({ runner_online: false, attention }), false)).toEqual(rowPresentation(run({ attention }), false));
+    expect(rowPresentation(local({ runner_online: false, attention }))).toEqual(rowPresentation(run({ attention })));
   });
 });
 
@@ -375,13 +375,13 @@ describe("rowPresentation — a QUEUED run (DR-0259)", () => {
   const queue = { pool_id: "p", queued_at: "", deadline_at: "", position: 2, reason: "runner_pool_at_capacity" };
 
   it("says Queued in the live blue, not the raw state in grey, with its place in line", () => {
-    const p = rowPresentation(run({ state: "QUEUED" as RunState, queue }), false);
+    const p = rowPresentation(run({ state: "QUEUED" as RunState, queue }));
     expect(p).toMatchObject({ hue: "blue", word: "Queued", subword: "3rd in line", action: null, needsYou: false });
     expect(glyphKindFor(p.hue, p.word, "QUEUED")).toBe("ring");
   });
 
   it("says just Queued when the wire carries no queue", () => {
-    const p = rowPresentation(run({ state: "QUEUED" as RunState }), false);
+    const p = rowPresentation(run({ state: "QUEUED" as RunState }));
     expect(p).toMatchObject({ hue: "blue", word: "Queued" });
     expect(p.subword).toBeUndefined();
   });

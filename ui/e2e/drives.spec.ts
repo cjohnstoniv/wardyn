@@ -11,7 +11,6 @@ import {
   MEMBER_PRINCIPAL,
   asRealMember,
   ignoreMissingRunner,
-  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -595,12 +594,11 @@ test.describe("drives — the registry is SUPER's, and no super admin's nav list
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
-    await expandCard(page, DRIVES.TITLE);
-    await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
+    // A link row (#3048), not an accordion: the count rides its face.
     // It counts ALLOCATIONS, never people — and with none it says so rather
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
-    await card.getByText(DRIVES.CARD_OPEN).click();
+    await card.getByRole("link").click();
     await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 

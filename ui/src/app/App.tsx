@@ -678,6 +678,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              onRecheck={refreshSetupStatus}
               tier={setupStatus?.tier}
               onSignOut={async (sso) => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session

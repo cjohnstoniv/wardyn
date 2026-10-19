@@ -7,7 +7,6 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
-  expandCard,
   gotoConsole,
   mockMemberRole,
   mockSecurityAdminRole,
@@ -60,8 +59,7 @@ async function gotoProviders(page: Page): Promise<void> {
   await navToRoute(page, "/admin/settings");
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
-  await expandCard(page, "Workspace providers");
-  await card.getByText(PROVIDERS.CARD_OPEN).click();
+  await card.getByRole("link").click();
   await expect(page).toHaveURL(/\/providers$/);
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
 }
@@ -121,8 +119,6 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
-    await expandCard(page, "Workspace providers");
-    await expect(card.getByText(PROVIDERS.CARD_LEAD)).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_EMPTY)).toBeVisible();
   });
 });
@@ -390,7 +386,6 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
-    await expandCard(page, "Workspace providers");
     await expect(card.getByText(PROVIDERS.CARD_PROVIDERS(enabledCount))).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_EMPTY)).toHaveCount(0);
   });

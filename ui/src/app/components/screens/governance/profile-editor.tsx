@@ -18,7 +18,6 @@
 // Every product string comes from the copy modules. This file adds none.
 import { nonNegativeInt } from "../../../lib/format";
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
@@ -30,7 +29,7 @@ import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
-import { Button } from "../../ui/button";
+import { FormActions, SectionAnchors } from "../../wardyn/form-actions";
 import { DurationField } from "../../wardyn/duration-field";
 import { Input } from "../../ui/input";
 import { makeMono, Mono } from "../../wardyn/code-block";
@@ -164,6 +163,7 @@ export function ProfileEditor({
       if (!profile) {
         const seeded = specText(minimalSpec(providers));
         setSpec((prev) => (prev === specText(STARTER_SPEC) ? seeded : prev));
+        if (opened.current.spec === specText(STARTER_SPEC)) opened.current.spec = seeded;
       }
     });
     return () => {
@@ -173,6 +173,23 @@ export function ProfileEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const dockerUncapped = isUncappedEnforcement(enforcement);
+
+  // What the form opened with, per section, so the action bar can count what changed. The new-profile
+  // starter follows the model providers once they load; that re-seed is not an edit.
+  const opened = React.useRef({
+    name: profile?.name ?? "",
+    spec: spec,
+    composition: JSON.stringify([base, overlay, overlayLimits]),
+    limits: JSON.stringify(limits),
+    contact: JSON.stringify(contact),
+  });
+  const changeCount = [
+    name !== opened.current.name,
+    !composed && spec !== opened.current.spec,
+    JSON.stringify([base, overlay, overlayLimits]) !== opened.current.composition,
+    JSON.stringify(limits) !== opened.current.limits,
+    JSON.stringify(contact) !== opened.current.contact,
+  ].filter(Boolean).length;
 
   const save = async () => {
     const parsed = ceiling;
@@ -251,6 +268,14 @@ export function ProfileEditor({
         {profile ? GOV.EDITOR_TITLE_EDIT(profile.name) : GOV.EDITOR_TITLE_NEW}
       </h3>
 
+      <SectionAnchors
+        items={[
+          { id: "governance-section-ceiling", label: GOV.CEILING_TITLE },
+          { id: "governance-section-limits", label: GOV.LIMITS_TITLE },
+          { id: "governance-section-contact", label: GOV.CONTACT_TITLE },
+        ]}
+      />
+
       <div className="mt-4">
         <Field label={GOV.FIELD_NAME} htmlFor="governance-profile-name" hint={GOV.NAME_HINT} required>
           <Input
@@ -300,7 +325,7 @@ export function ProfileEditor({
         </Field>
       </div>
 
-      <section className="mt-6">
+      <section id="governance-section-ceiling" className="mt-6 scroll-mt-4">
         <h4 className="text-body font-medium text-foreground">{GOV.CEILING_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.CEILING_LEAD}</p>
         {composed ? (
@@ -333,7 +358,7 @@ export function ProfileEditor({
         )}
       </section>
 
-      <section className="mt-6">
+      <section id="governance-section-limits" className="mt-6 scroll-mt-4">
         <h4 className="text-body font-medium text-foreground">{GOV.LIMITS_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.LIMITS_LEAD}</p>
         {composed ? (
@@ -513,7 +538,7 @@ export function ProfileEditor({
       {/* Read-only, as of the last save: a composed profile's binding policy is its base, narrowed. */}
       {profile?.overlay && composed && <EffectiveView profile={profile} />}
 
-      <section className="mt-6" data-testid="governance-profile-contact">
+      <section id="governance-section-contact" className="mt-6 scroll-mt-4" data-testid="governance-profile-contact">
         <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -576,17 +601,17 @@ export function ProfileEditor({
         </Note>
       )}
 
-      <div className="mt-5 flex justify-end gap-2">
-        <Button variant="ghost" onClick={onCancel} disabled={saving}>
-          {PEOPLE.CANCEL}
-        </Button>
-        {/* The surface's ONE `default` button while the editor is open — the
-            add-assignment form below collapses and takes its teal with it. */}
-        <Button onClick={save} disabled={disabled || saving || !name.trim() || ceiling?.ok === false}>
-          {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-          {GOV.SAVE}
-        </Button>
-      </div>
+      {/* The surface's ONE `default` button while the editor is open — the add-assignment form below
+          collapses and takes its teal with it. */}
+      <FormActions
+        changeCount={changeCount}
+        onCancel={onCancel}
+        onSave={save}
+        saving={saving}
+        saveDisabled={disabled || !name.trim() || ceiling?.ok === false}
+        saveLabel={GOV.SAVE}
+        cancelLabel={PEOPLE.CANCEL}
+      />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { getErrorMessage } from "../../../../lib/format";
 import type { RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
 import { POOL_DRAWER, POOL_FORM, POOLS } from "../../../wardyn/copy/runner-pools";
 import { Field } from "../../../wardyn/form-primitives";
+import { countChanged, FormActions } from "../../../wardyn/form-actions";
 import { PageHeader } from "../../../wardyn/page-header";
 import { Button } from "../../../ui/button";
 import { Checkbox } from "../../../ui/checkbox";
@@ -80,6 +81,8 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
   const [loaded, setLoaded] = React.useState(!id);
   const [loadFailed, setLoadFailed] = React.useState("");
   const [values, setValues] = React.useState<FormValues>(() => fromPool());
+  // What the form opened with, for the unsaved-change count.
+  const opened = React.useRef<FormValues>(values);
   const [errors, setErrors] = React.useState<FormErrors>({});
   const [top, setTop] = React.useState("");
   const [stale, setStale] = React.useState(false);
@@ -92,6 +95,7 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
         setPool(p);
         setMembers(m);
         setValues(fromPool(p));
+        opened.current = fromPool(p);
         setErrors({});
         setTop("");
         setStale(false);
@@ -254,14 +258,15 @@ export function PoolFormScreen({ scope }: { scope: "admin" | "mine" }) {
         </div>
         {values.bgOn && <RtSection rt="bg" values={values.bg} errors={errors} biggest={biggest} onPatch={patchRt("bg")} />}
         {values.itOn && <RtSection rt="it" values={values.it} errors={errors} biggest={biggest} onPatch={patchRt("it")} />}
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" disabled={saving}>
-            {pool ? POOL_FORM.SAVE : POOL_FORM.CREATE}
-          </Button>
-          <Button type="button" variant="ghost" onClick={back}>
-            {POOL_FORM.CANCEL}
-          </Button>
-        </div>
+        <FormActions
+          submit
+          className="mx-0 px-0"
+          changeCount={countChanged(values, opened.current)}
+          onCancel={back}
+          saving={saving}
+          saveLabel={pool ? POOL_FORM.SAVE : POOL_FORM.CREATE}
+          cancelLabel={POOL_FORM.CANCEL}
+        />
       </form>
     </div>
   );

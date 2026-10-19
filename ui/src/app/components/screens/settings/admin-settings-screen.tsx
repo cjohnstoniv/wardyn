@@ -60,7 +60,8 @@ import { ViewNotice } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
 import { HOST_CARD } from "../../wardyn/copy/host-card";
-import { Chip } from "../../wardyn/primitives";
+import { CARD_STATUS, SETTINGS_GROUPS } from "../../wardyn/copy/card-status";
+import { Chip, SectionLabel } from "../../wardyn/primitives";
 
 type FactTone = "success" | "warning" | "neutral";
 
@@ -98,6 +99,16 @@ function FactTile({
         </span>
       )}
     </div>
+  );
+}
+
+// A small heading over the cards that belong together, so the page reads as three places, not nine rows.
+function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section aria-label={title} className="space-y-1">
+      <SectionLabel>{title}</SectionLabel>
+      {children}
+    </section>
   );
 }
 
@@ -163,7 +174,12 @@ function HostCard({
     : `Runs default to ${CC_META[selected].label}`;
 
   return (
-    <CollapsibleCard title="Host" summary={hostSummary} testId="host-card">
+    <CollapsibleCard
+      title="Host"
+      summary={hostSummary}
+      status={noRunner ? { tone: "danger", label: CARD_STATUS.CANT_LAUNCH } : undefined}
+      testId="host-card"
+    >
       <div className="flex items-start justify-between gap-3" data-testid="host-header">
         <div className="flex items-center gap-3">
           <span
@@ -371,51 +387,52 @@ export function AdminSettingsScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        // space-y-1 and pb-4, not -2 and py-8: nine collapsed cards plus this
-        // page's own header must fit 744px (the approved mock's §4, #1200).
-        <div className="space-y-1">
-          <HostCard
-            status={status}
-            siteConfig={configFailed ? "error" : siteConfig}
-            onRecheck={load}
-          />
-          {/* #1125 (B-1): beside Host and Model providers, super admin only —
-              the server refuses anyone else's save regardless. Unconditional
-              on role now: this whole screen is super-admin-only (S-5). */}
-          <BrandingCard />
-          {/* #536: the Admin view only, and it stays there — admin
-              configuration, never a person's own connection.
-              #538: the Claude subscription kind is disabled on the editor's
-              kind step until the sign-in image resolves — undefined status
-              (an older daemon with no such check) reads as available. */}
-          <ModelProvidersList
-            harnesses={status.harnesses}
-            subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
-          />
-          {/* The Providers card replaces Git host: the git credential
-              lanes moved into a provider row on /providers, and this card is
-              the same shared component the funnel's `providers` step body
-              renders (setup/providers-card.tsx). */}
-          <ProvidersCard harnesses={status?.harnesses} compact />
-          {/* 0.8.9 components (C16): the org's policy for custom components, after the providers
-              it sits beside; the card reads its own site-config snapshot for the ETag it saves with. */}
-          <ComponentsSettingsCard />
-          {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
-              the SAME component the setup funnel's Workspaces step renders,
-              summarising and linking exactly as the Corporate proxy disclosure
-              above does. SUPER-only; it renders nothing for anyone else, which
-              is why the position is pinned in the suite rather than left to
-              read off the source. */}
-          <UserDrivesCard compact />
-          {/* M-5 (#636, packet S-1): the sixth and last card — where an admin
-              adds an SSH key that reaches other people's runs, now that Your
-              account is the only door left for a personal one. */}
-          <AdminSshKeysCard />
-          {/* notify-e4 (packet M6 S3): the seventh card — read-only channel
-              health for the approval notifications WARDYN_APPROVAL_NOTIFY sets. */}
-          <ApprovalNotifyCard />
-          {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
-          <ScimCard />
+        // Cards sit tight (space-y-1) so the collapsed groups fit 744px (the approved mock's §4, #1200).
+        <div className="space-y-5">
+          <SettingsGroup title={SETTINGS_GROUPS.HOST}>
+            <HostCard
+              status={status}
+              siteConfig={configFailed ? "error" : siteConfig}
+              onRecheck={load}
+            />
+            {/* #1125 (B-1): beside Host and Model providers, super admin only —
+                the server refuses anyone else's save regardless. Unconditional
+                on role now: this whole screen is super-admin-only (S-5). */}
+            <BrandingCard />
+          </SettingsGroup>
+          <SettingsGroup title={SETTINGS_GROUPS.CONNECTIONS}>
+            {/* #536: the Admin view only, and it stays there — admin
+                configuration, never a person's own connection.
+                #538: the Claude subscription kind is disabled on the editor's
+                kind step until the sign-in image resolves — undefined status
+                (an older daemon with no such check) reads as available. */}
+            <ModelProvidersList
+              harnesses={status.harnesses}
+              subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
+            />
+            {/* The Providers card replaces Git host: the git credential
+                lanes moved into a provider row on /providers, and this card is
+                the same shared component the funnel's `providers` step body
+                renders (setup/providers-card.tsx). A navigation row here. */}
+            <ProvidersCard harnesses={status?.harnesses} compact />
+            {/* 0.8.9 components (C16): the org's policy for custom components, after the providers
+                it sits beside; the card reads its own site-config snapshot for the ETag it saves with. */}
+            <ComponentsSettingsCard />
+            {/* The SAME component the setup funnel's Workspaces step renders, a navigation row here.
+                SUPER-only; it renders nothing for anyone else, which is why the position is pinned in the
+                suite rather than left to read off the source. */}
+            <UserDrivesCard compact />
+            {/* M-5 (#636, packet S-1): where an admin adds an SSH key that reaches other people's runs, now
+                that Your account is the only door left for a personal one. */}
+            <AdminSshKeysCard />
+          </SettingsGroup>
+          <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
+            {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications
+                WARDYN_APPROVAL_NOTIFY sets. */}
+            <ApprovalNotifyCard />
+            {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
+            <ScimCard />
+          </SettingsGroup>
         </div>
       )}
     </div>

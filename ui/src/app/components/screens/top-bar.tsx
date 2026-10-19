@@ -14,7 +14,6 @@ import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-rea
 import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
-import { NO_BARRIER } from "../wardyn/copy";
 import { SHELL, TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
@@ -54,7 +53,6 @@ export function TopBar({
   pendingApprovals,
   attentionCount,
   onNewRun,
-  noBarrier,
   tier,
 }: {
   onSignOut: () => void;
@@ -62,9 +60,6 @@ export function TopBar({
   pendingApprovals: number;
   attentionCount: number;
   onNewRun: () => void;
-  /** #214 — see AppShell's own doc. Renders only in the User view, beside
-   *  New run itself (which the Admin view never offers either). */
-  noBarrier?: boolean;
   /** SetupStatus.tier; absent until setup status lands (nothing is guessed). */
   tier?: keyof typeof TIER.LABEL;
 }) {
@@ -154,24 +149,6 @@ export function TopBar({
         {/* The Admin view never launches (§3's fourth cue). */}
         {view === "user" && (
           <>
-            {/* #214 — the top bar's own route to the Environment step, beside
-                New run rather than disabling or relabelling it: New run
-                itself stays reachable, since disabling it would hide this
-                explanation behind the one control that carries it.
-                #1328 review round 2, R2-1 — gated the same way as the shell
-                banner (app-shell.tsx's own doc): only an operator or a super
-                admin in the User view (#1335) can reach
-                NO_BARRIER.ADMIN_ROUTE at all, so anyone else — a security
-                admin in the User view included — sees no link here (New run
-                itself stays the only control). */}
-            {noBarrier && (meta.operator || (access === "session-user" && meta.userViewSuperAdmin)) && (
-              <Link
-                to={NO_BARRIER.ADMIN_ROUTE}
-                className="hidden text-xs font-medium text-info hover:underline sm:inline"
-              >
-                {NO_BARRIER.CTA}
-              </Link>
-            )}
             <Button onClick={onNewRun} size="sm" aria-label="New run">
               <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
             </Button>

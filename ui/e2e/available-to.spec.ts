@@ -39,8 +39,7 @@ const PARTIAL = "ghcr.io/acme/e2e-partial:2.0";
 async function gotoImages(page: Page): Promise<void> {
   await gotoConsole(page);
   await navToRoute(page, "/admin/settings");
-  await expandCard(page, "Workspace providers");
-  await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
+  await page.getByTestId("providers-card").getByRole("link").click();
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
   await page.getByRole("button", { name: IMAGES.TAB, exact: true }).click();
 }

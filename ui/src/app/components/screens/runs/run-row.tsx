@@ -68,7 +68,7 @@ export function RunRow({ run }: { run: AgentRun }) {
   const operator = useOperator();
   const eligible = mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended";
   const [waitingSignIn, setWaitingSignIn] = React.useState(false);
-  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run, adminView);
+  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run);
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);
@@ -155,7 +155,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             onClick={(e) => {
               e.stopPropagation();
               if (p.action === "revive") void revive(e);
-              else void navigate(href);
+              // Review lands on the decision, not on an Overview with nothing to decide.
+              else void navigate(p.action === "review" ? `${href}?tab=approvals` : href);
             }}
           >
             {actionLabel}

@@ -350,7 +350,9 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
 
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
     const routes = page.getByRole("link", { name: NO_BARRIER.CTA });
-    await expect(routes).toHaveCount(2); // the shell banner + the top bar
+    await expect(routes).toHaveCount(1); // the shell notice alone: no top-bar twin, no in-page card
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(1);
+    await expect(page.getByRole("button", { name: NO_BARRIER.RECHECK })).toBeVisible();
     for (const link of await routes.all()) {
       await expect(link).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
     }

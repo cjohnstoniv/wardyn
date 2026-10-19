@@ -24,11 +24,14 @@ export function Notice({
   tone,
   title,
   live,
+  actions,
   children,
 }: {
   tone: Tone;
   title?: string;
   live?: boolean;
+  /** Controls for the reader (a command, a button, a link), laid out under the words. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const { box, glyph, Icon } = TONES[tone];
@@ -38,6 +41,7 @@ export function Notice({
       <div className="min-w-0 space-y-0.5">
         {title && <p className="font-medium text-foreground">{title}</p>}
         <div className="text-foreground">{children}</div>
+        {actions && <div className="flex flex-wrap items-center gap-2 pt-1.5">{actions}</div>}
       </div>
     </div>
   );

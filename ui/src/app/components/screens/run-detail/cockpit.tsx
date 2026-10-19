@@ -17,7 +17,8 @@ import {
 } from "../../../lib/types";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { type HeldCredentials } from "../../../lib/held-credentials";
-import { LiveApprovals, isHeld } from "../../wardyn/live-approvals";
+import { LiveApprovals, isHeld, stripCarries } from "../../wardyn/live-approvals";
+import { DecisionBar } from "../../wardyn/decision-bar";
 import {
   useOperator,
   useOperatorResolved,
@@ -26,6 +27,7 @@ import {
 } from "../../wardyn/operator-context";
 import { type ConsoleView } from "../../wardyn/console-view";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
+import { deriveTitle } from "../approvals";
 import { RunCanvas } from "./canvas";
 import { RunFailureBlock } from "./failure-block";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -56,6 +58,7 @@ export function Cockpit({
   onGoAudit,
   onGoPolicy,
   onGoRecording,
+  onGoApprovals,
 }: {
   run: RunDetail;
   view: ConsoleView; // M-7: no relaunch/SSH/credential door in admin view.
@@ -79,6 +82,7 @@ export function Cockpit({
   onGoAudit: () => void;
   onGoPolicy: () => void;
   onGoRecording: () => void;
+  onGoApprovals: () => void;
 }) {
   const principal = usePrincipal();
   // The run's REQUEST-scoped facts, off its run.create audit row — the only
@@ -126,6 +130,9 @@ export function Cockpit({
   // on AgentRun) — this page already holds the full trail, so the pane can
   // speak honestly about a no-harness run for free.
   const execMode = createRequest.task_mode === "exec";
+  // Pending requests the strip below does not carry (a git or SSH credential mint, say): without a bar here
+  // the person would see a run waiting on them and nothing to decide.
+  const notOnStrip = pending.filter((a) => !stripCarries(a));
   const terminalPane = (
     <>
       {/* M7(b): above the terminal, because on a run that ended badly the
@@ -146,6 +153,15 @@ export function Cockpit({
         onGoRecording={onGoRecording}
         execMode={execMode}
       />
+      {!terminal && notOnStrip.length > 0 && (
+        <div className="shrink-0 pt-2.5">
+          <DecisionBar
+            count={notOnStrip.length}
+            title={deriveTitle(notOnStrip[0].kind, notOnStrip[0].requested_scope ?? {})}
+            onReview={onGoApprovals}
+          />
+        </div>
+      )}
       {run.state === "RUNNING" && (
         <div className="shrink-0 space-y-2 pt-2.5">
           {/* Said once, where a viewer actually feels the consequence: the

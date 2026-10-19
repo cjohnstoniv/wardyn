@@ -389,6 +389,30 @@ describe("RunDetailScreen — Approvals tab empty card", () => {
   });
 });
 
+// The Runs list's Review button opens a run on its Approvals tab (?tab=approvals).
+describe("RunDetailScreen — ?tab= picks the opening tab", () => {
+  function renderAt(search: string) {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={[`/runs/run-1${search}`]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it("opens on Approvals when asked", async () => {
+    renderAt("?tab=approvals");
+    expect(await screen.findByRole("tab", { name: /approvals/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ignores a tab it does not know", async () => {
+    renderAt("?tab=nonsense");
+    expect(await screen.findByRole("tab", { name: /overview/i })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
 // #2924: the requested scope of a pending tool call wraps, so the command being decided on is fully on screen.
 describe("RunDetailScreen — Approvals tab requested scope", () => {
   it("wraps a long command instead of scrolling it out of sight", async () => {
