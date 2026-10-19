@@ -862,6 +862,8 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
+	backchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -960,8 +962,9 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		deviceRouteState: newDeviceRouteState(),
+		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
+		deviceRouteState:   newDeviceRouteState(),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()

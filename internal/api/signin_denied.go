@@ -61,3 +61,29 @@ func (s *Server) auditIdPLogout(r *http.Request, sub string, err error) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, oidcCallbackActor, "session.revoke", sub, outcome, mustJSON(data)))
 }
+
+// backchannelLogoutRatePerSec and backchannelLogoutBurst bound, process-wide, the logout tokens that
+// fail to verify on the anonymous back-channel logout route: each one can make the verifier refetch
+// the provider's keys. Past the bound a POST is refused before it is verified. A token that verifies
+// gives its charge back, so a provider's own burst of logouts is refused only while forged ones are.
+const (
+	backchannelLogoutRatePerSec = 1.0
+	backchannelLogoutBurst      = 5.0
+)
+
+// backchannelLogout serves POST /auth/backchannel-logout within backchannelLimiter, with 429 past it.
+func (s *Server) backchannelLogout() http.HandlerFunc {
+	next := s.cfg.OIDC.BackchannelLogoutHandler(s.isReservedPrincipal, func(r *http.Request, sub string, err error) {
+		s.backchannelLimiter.refund("", s.cfg.Now())
+		s.auditIdPLogout(r, sub, err)
+	})
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.backchannelLimiter.allow("", s.cfg.Now()) {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "temporarily_unavailable", "error_description": "too many logout tokens; retry later"})
+			return
+		}
+		next(w, r)
+	}
+}

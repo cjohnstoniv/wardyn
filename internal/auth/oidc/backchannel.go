@@ -80,13 +80,14 @@ func (a *Authenticator) logoutTokenSub(ctx context.Context, raw string) (sub, pr
 		return "", "the logout token did not verify"
 	}
 	var claims map[string]json.RawMessage
-	var events map[string]json.RawMessage
+	var events, event map[string]json.RawMessage
 	if err := tok.Claims(&claims); err != nil || json.Unmarshal(claims["events"], &events) != nil {
 		return "", "the logout token claims are unreadable"
 	}
 	switch {
-	case events[backchannelLogoutEvent] == nil:
-		return "", "the logout token carries no back-channel logout event"
+	// The event's value must be a JSON object: null, a string or a number is not one.
+	case json.Unmarshal(events[backchannelLogoutEvent], &event) != nil || event == nil:
+		return "", "the logout token carries no back-channel logout event object"
 	case claims["nonce"] != nil:
 		return "", "a logout token carries no nonce"
 	case len(claims["jti"]) == 0:

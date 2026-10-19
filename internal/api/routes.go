@@ -56,7 +56,7 @@ func (s *Server) routes() chi.Router {
 		// The identity provider's back-channel logout, authenticated by its signed logout token
 		// and absent unless WARDYN_OIDC_BACKCHANNEL_LOGOUT is on.
 		if s.cfg.OIDC.BackchannelLogoutEnabled() {
-			r.Post("/auth/backchannel-logout", s.cfg.OIDC.BackchannelLogoutHandler(s.isReservedPrincipal, s.auditIdPLogout))
+			r.Post("/auth/backchannel-logout", s.backchannelLogout())
 		}
 	}
 

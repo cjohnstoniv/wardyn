@@ -106,7 +106,8 @@ const awsSSORefusedMax = 1024
 // outlive a renewal another replica made, since a renewal can keep the same refresh token.
 
 // markAWSSSORefused records a refusal under owner, the secret-store namespace the blob was read from.
-// A failed write is logged and the mark is lost for the other replicas, as it was before they shared it.
+// A failed write (no table, or no grant on it) is logged and no replica holds the mark, this one included;
+// AWS still refuses the dispatch.
 func (s *Server) markAWSSSORefused(ctx context.Context, fingerprint, owner, detail string) {
 	if st, ok := s.cfg.Store.(store.AWSSSORefusedTokenStore); ok {
 		if err := st.MarkAWSSSOTokenRefused(ctx, fingerprint, owner, detail, s.cfg.Now().UTC()); err != nil {
