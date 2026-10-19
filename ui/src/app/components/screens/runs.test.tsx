@@ -165,7 +165,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // filters/ageing — the shown rows plus the two hidden counts, not just
     // runsList.length (home-runs-1197-packet.html:672, design §2.1).
     expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
-    expect(screen.getByText("Needs a decision")).toBeInTheDocument();
+    expect(screen.getByText("Needs your approval")).toBeInTheDocument();
     expect(screen.getByText("Still running")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { exact: true }).length).toBeGreaterThan(0);
     expect(screen.getByText("All done")).toBeInTheDocument();

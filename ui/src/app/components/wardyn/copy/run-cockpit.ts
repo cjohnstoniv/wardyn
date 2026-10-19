@@ -180,7 +180,7 @@ export const RUN_COCKPIT = {
   // anything — which is the whole point of the strip on this board.
   egress: "egress",
   allow: (n: number) => `${n} allow`,
-  held: (n: number) => `${n} ${n === 1 ? "needs" : "need"} a decision`,
+  held: (n: number) => `${n} held`,
   deny: (n: number) => `${n} deny`,
   failed: (n: number) => `${n} failed`,
   credentials: "credentials",

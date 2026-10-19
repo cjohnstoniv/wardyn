@@ -163,8 +163,8 @@ test.describe("Approvals screen", () => {
     // ("Credential"), not the raw wire token (ui-approvals-2, copy.ts's
     // APPROVAL_KIND_LABEL via WIRE_TO_COPY).
     await expect(page.getByText("Credential", { exact: true }).first()).toBeVisible();
-    // The PENDING state badge says what the person is being asked for (#3040).
-    await expect(page.getByText("Needs a decision", { exact: true }).first()).toBeVisible();
+    // The PENDING state badge renders capitalized ("Pending").
+    await expect(page.getByText("Pending", { exact: true }).first()).toBeVisible();
     // The egress pending card's derived title carries its unique scope domain.
     await expect(page.getByText(markerRe("ro-pending.example.com")).first()).toBeVisible();
 
@@ -608,7 +608,7 @@ test.describe("Approvals — a deny confirmation whose request vanishes (run coc
 // ---------------------------------------------------------------------------
 test.describe("the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
   // ticket: B3
-  test("1 PENDING + 1 APPROVED on the same run reads '1 needs a decision', never 2", async ({ page }) => {
+  test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
     clearPending();
     const runId = runningRunId();
     // tool_call is ALWAYS held (isHeld is true for any PENDING tool_call) — the
@@ -629,10 +629,10 @@ test.describe("the egress widget's held chip and the Approvals tab badge count L
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
 
-      // The Egress widget's chip: exactly "1 needs a decision" — a stale audit-count
+      // The Egress widget's chip: exactly "1 held" — a stale audit-count
       // implementation would read "2" here (one row per decision recorded),
       // or would count the APPROVED row's own historical egress.hold audit
-      // entry as still "held" forever. "N need(s) a decision" is this widget's own phrase
+      // entry as still "held" forever. "N held" is this widget's own phrase
       // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
       await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
       await expect(page.getByText(RUN_COCKPIT.held(2), { exact: true })).toHaveCount(0);

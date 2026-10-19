@@ -10,13 +10,7 @@
 // states, evidence widgets, focus mode, ...) into the entry chunk. RUN_COCKPIT
 // spreads this in below, so run-detail's cockpit still reads
 // RUN_COCKPIT.waiting/.waitingHeld unchanged.
-// #3040: one phrase for "a person has to decide" everywhere a person can act — the noun is "decision",
-// the verb is "needs" — and "sandbox held" only ever follows it as the modifier for a parked sandbox.
-function needsDecision(n: number): string {
-  return n === 1 ? "Needs a decision" : `Needs ${n} decisions`;
-}
-
 export const RUN_WAIT = {
-  waiting: needsDecision,
-  waitingHeld: (n: number) => `${needsDecision(n)} · sandbox held`,
+  waiting: (n: number) => `${n} waiting`,
+  waitingHeld: (n: number) => `${n} waiting · sandbox held`,
 } as const;

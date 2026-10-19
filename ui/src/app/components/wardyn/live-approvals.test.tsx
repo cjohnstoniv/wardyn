@@ -60,7 +60,7 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText("held.example")).toBeInTheDocument();
     expect(within(panel).queryByText("other.example")).not.toBeInTheDocument(); // filtered by runId
     expect(within(panel).getByText("waiting")).toBeInTheDocument(); // per-row held badge (exact)
-    expect(within(panel).getByText(/sandbox held/i)).toBeInTheDocument(); // header
+    expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
   // The proxy's real hold times out at 30s
@@ -75,7 +75,7 @@ describe("LiveApprovals", () => {
     const panel = await screen.findByTestId("live-approvals");
     expect(within(panel).getByText("stale.example")).toBeInTheDocument();
     expect(within(panel).queryByText("waiting")).not.toBeInTheDocument();
-    expect(within(panel).queryByText(/sandbox held/i)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
   });
 
   // A poll failure must not render the same affirmative
@@ -205,12 +205,12 @@ describe("LiveApprovals", () => {
 
     // The toolgate blocks the agent ON the PENDING row, so a tool-only strip is
     // a HELD strip (isHeld) and takes the held heading — never the egress one.
-    it("never claims off-policy egress over a tool-only strip, and says the sandbox is held", async () => {
+    it("never claims off-policy egress over a tool-only strip, and says the sandbox is waiting", async () => {
       listApprovalsMock.mockResolvedValue([toolRow()]);
       render(<LiveApprovals runId="r1" />);
       const panel = await screen.findByTestId("live-approvals");
       expect(within(panel).queryByText(/off-policy egress/i)).not.toBeInTheDocument();
-      expect(within(panel).getByText(/sandbox held/i)).toBeInTheDocument();
+      expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument();
       // …and the row flags the live hold, like a wait_for_review egress row.
       expect(within(panel).getByText("waiting")).toBeInTheDocument();
     });
