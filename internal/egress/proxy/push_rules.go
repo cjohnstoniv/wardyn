@@ -370,7 +370,7 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 // what a held push's approval names as repository and identity.
 //
 // The returned release MUST be deferred by the caller (like
-// scanBufferedBody's): the buffer stays charged to scanRetained until the
+// scanBufferedBody's): the buffer stays charged to the retained budget until the
 // forwarded request is done with it. Always non-nil, safe to call more than
 // once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
@@ -388,7 +388,7 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 		return nil, noRelease, false
 	}
 	// Held outside the inspection slot (already released by inspectPush): a
-	// hold lasts minutes and the slot belongs to the whole sidecar.
+	// hold lasts minutes and the slot belongs to the whole engine.
 	if len(review.paths) > 0 && !p.holdPush(w, r, rules, review, target, subject, deny) {
 		release()
 		return nil, noRelease, false
@@ -416,29 +416,31 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	// the sidecar runs under a hard 256 MiB cgroup cap, and a push is a small
 	// body that can inflate to what gitpack's ceilings allow (four compressed
 	// 31 MiB blobs is a 34 KB request and 124 MiB of heap; three at once
-	// OOM-kill the run's only network path). A wait that expires fails closed
-	// — the push is refused, never forwarded unread.
-	ctx, cancel := context.WithTimeout(r.Context(), scanQueueWait)
-	defer cancel()
+	// OOM-kill the run's only network path). The body is read before the slot,
+	// charged to the byte budget until the caller releases it. A wait that
+	// expires fails closed — the push is refused, never forwarded unread.
 	busy := func() {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusServiceUnavailable,
 			"wardyn: cannot enforce push content rules: timed out waiting to inspect this push\nretry it")
 	}
-	select {
-	case scanSlots <- struct{}{}:
-		defer func() { <-scanSlots }()
-	case <-ctx.Done():
+	// One byte past the ceiling is how "over it" is known without reading what
+	// is past it.
+	buf, release, err := p.scan.readBody(r.Context(), body, r.ContentLength, rules.inspectMax)
+	if errors.Is(err, errScanBusy) {
 		busy()
 		return nil, pushReview{}, noRelease, false
 	}
-	// One byte past the ceiling is how "over it" is known without reading what
-	// is past it.
-	buf, err := io.ReadAll(io.LimitReader(body, rules.inspectMax+1))
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules: the push body could not be read")
 		return nil, pushReview{}, noRelease, false
 	}
+	kept := false
+	defer func() {
+		if !kept {
+			release()
+		}
+	}()
 	if int64(len(buf)) > rules.inspectMax {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("wardyn: this push is larger than the %d MiB its content rules can inspect"+
@@ -446,6 +448,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				rules.inspectMax>>20))
 		return nil, pushReview{}, noRelease, false
 	}
+	free, err := p.scan.takeSlot(r.Context())
+	if err != nil {
+		busy()
+		return nil, pushReview{}, noRelease, false
+	}
+	defer free()
 	res, err := gitpack.Inspect(buf)
 	if errors.Is(err, gitpack.ErrTooLarge) {
 		remedy := "push fewer commits at a time"
@@ -457,10 +465,32 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		return nil, pushReview{}, noRelease, false
 	}
 	var absent *gitpack.MissingObjectError
-	if errors.As(err, &absent) {
+	if errors.As(err, &absent) && absent.Commands == nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			missingTargetsBody(absent.Refs))
 		return nil, pushReview{}, noRelease, false
+	}
+	if absent != nil {
+		// The request carries no object at all: it adds no content exactly when
+		// the forge already holds every commit it points a ref at (forgeRepo.held).
+		// The branch rules ran before this; the content rules have nothing to read.
+		fctx, fcancel := context.WithTimeout(r.Context(), forgeReadWait)
+		why := forge.held(fctx, absent.Commands)
+		fcancel()
+		if forge != nil && forge.reads > 0 {
+			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
+		}
+		if why != "" {
+			p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+				noNewCommitsBody(absent.Refs, why))
+			return nil, pushReview{}, noRelease, false
+		}
+		slog.InfoContext(r.Context(), "wardyn-proxy: git push carries no new content; the forge holds every commit it sets",
+			slog.String("run_id", p.runID.String()),
+			subject,
+			slog.Int("refs", len(absent.Refs)))
+		res, err = gitpack.Result{Commands: absent.Commands}, nil
 	}
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
@@ -499,13 +529,8 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
-	// Buffer outlives the slot, forwarded or held from here; charged while
-	// the slot is still held so scanRetained keeps one acquirer.
-	release, ok := retainScanBuffer(ctx, len(buf))
-	if !ok {
-		busy()
-		return nil, pushReview{}, noRelease, false
-	}
+	// The buffer outlives the slot, forwarded or held from here, and stays charged.
+	kept = true
 	return buf, review, release, true
 }
 
@@ -770,6 +795,14 @@ func (p *Proxy) pushSetsForHost(host string) []types.PushRuleSet {
 // what decides whether a receive-pack advertisement is rewritten.
 func (p *Proxy) anyPushRules() bool {
 	return p.policy.PushRulesSet() || len(p.pushSets) > 0 || p.pushBase != nil
+}
+
+// noNewCommitsBody is the refusal for a push that carries no object, when the
+// broker could not confirm the forge already holds what its refs point at.
+func noNewCommitsBody(refs []string, why string) string {
+	return "wardyn: This push adds no new commits; the remote already has them." +
+		"\nwardyn could not confirm that, so it cannot enforce push content rules on: " + strings.Join(refs, ", ") +
+		"\n" + why
 }
 
 // missingTargetsBody is the refusal for refs set to a commit the request does

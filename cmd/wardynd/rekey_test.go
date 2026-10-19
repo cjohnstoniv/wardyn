@@ -41,6 +41,7 @@ func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 		azure:                   azureFlags{kekKey: new(string), kekSigningKey: new(string), kekKeyPlatform: new(string), kekSigningKeyPlatform: new(string), clientIDPlatform: new(string)},
 		rewrapRetirePlatformKey: new(bool),
 		rewrapAdoptBootKeys:     new(bool),
+		migrateTo:               new(string),
 	}
 }
 

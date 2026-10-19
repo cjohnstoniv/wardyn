@@ -31,7 +31,7 @@ import { ChevronRight, ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEnding, RunEndingKind } from "../../../lib/types";
 import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
 import { runEndingFromAudit } from "../../../lib/api/audit";
-import { absoluteTime } from "../../../lib/format";
+import { absoluteTime, formatDuration } from "../../../lib/format";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
@@ -42,7 +42,6 @@ import { useOperatorResolved } from "../../wardyn/operator-context";
 import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import { resolveDoor, type DoorTarget } from "../../../lib/model-access";
-import { formatElapsed } from "../run-detail-summary-header";
 import { stripCriWrapper } from "../run-status-detail";
 
 // Copy change (M7): the two labels, the action, and the four reason bodies.
@@ -322,7 +321,7 @@ export function RunFailureBlock({
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to the run's last update, which is what the
   // command bar's own clock freezes at.
-  const elapsed = formatElapsed(
+  const elapsed = formatDuration(
     new Date(ending.time ?? run.updated_at).getTime() - new Date(run.created_at).getTime(),
   );
 

@@ -479,14 +479,34 @@ func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, ses
 	if err != nil {
 		return 0, err
 	}
-	tips, err := collect(ctx, tx, "list", "deferred run kills", `SELECT `+actionCols+` FROM runner_pending_actions a
-		WHERE runner_id = $1 AND subject = 'run' AND binding_version = 1 AND kind = 'kill' AND outcome = 'deferred'
-		AND settled_at IS NULL AND NOT superseded
-		AND NOT EXISTS (SELECT 1 FROM runner_retirements r WHERE r.obligation_id = a.obligation_id)
-		ORDER BY queue_seq LIMIT $2`, []any{runnerID, runnerActionPageLimit}, scanAction)
-	if err != nil {
-		return 0, err
+	// Every deferred tip is visited, a page at a time past the last one read: a tip the rechecks
+	// below skip stays deferred and unchanged, and must not hide the eligible ones queued after it.
+	queued := 0
+	for after := int64(0); ; {
+		tips, err := collect(ctx, tx, "list", "deferred run kills", `SELECT `+actionCols+` FROM runner_pending_actions a
+			WHERE runner_id = $1 AND subject = 'run' AND binding_version = 1 AND kind = 'kill' AND outcome = 'deferred'
+			AND settled_at IS NULL AND NOT superseded AND queue_seq > $3
+			AND NOT EXISTS (SELECT 1 FROM runner_retirements r WHERE r.obligation_id = a.obligation_id)
+			ORDER BY queue_seq LIMIT $2`, []any{runnerID, runnerActionPageLimit, after}, scanAction)
+		if err != nil {
+			return 0, err
+		}
+		n, err := reissueDeferredKillPage(ctx, tx, runnerID, tips)
+		if err != nil {
+			return 0, err
+		}
+		queued += n
+		if len(tips) < runnerActionPageLimit {
+			return queued, tx.Commit(ctx)
+		}
+		if err := tx.QueryRow(ctx, `SELECT queue_seq FROM runner_pending_actions WHERE id = $1`, tips[len(tips)-1].ID).Scan(&after); err != nil {
+			return 0, fmt.Errorf("store: page deferred kills: %w", err)
+		}
 	}
+}
+
+// reissueDeferredKillPage is ReissueDeferredRunKills for one page of tips, in its transaction.
+func reissueDeferredKillPage(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, tips []types.RunnerPendingAction) (int, error) {
 	queued := 0
 	for _, tip := range tips {
 		// The shared order: runner, run, then the action.
@@ -523,5 +543,5 @@ func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, ses
 		}
 		queued++
 	}
-	return queued, tx.Commit(ctx)
+	return queued, nil
 }

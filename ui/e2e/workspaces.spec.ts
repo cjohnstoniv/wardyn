@@ -49,7 +49,41 @@ test.describe("Workspaces — the four-column list", () => {
   });
 });
 
+test.describe("Workspaces — search", () => {
+  // #2592: a multi-source workspace has no single `source`, so the search reads each attached source.
+  test("finds a multi-source workspace by one of its source paths", async ({ page }) => {
+    await page.route(/\/api\/v1\/workspaces(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const mono = {
+        id: "e2e-mono-ws",
+        name: "mono",
+        kind: "local_dir",
+        source: "",
+        status: "scanned",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        sources: [{ type: "local_dir", path: "/srv/api" }, { type: "repo", source: "org/lib" }],
+      };
+      await route.fulfill({ response, json: [...(await response.json()), mono] });
+    });
+    await gotoConsole(page);
+    await page.goto("/workspaces");
+    await page.getByPlaceholder(/search by name or source/i).fill("org/lib");
+    await expect(page.getByRole("row", { name: /mono/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: /payments/ })).toHaveCount(0);
+  });
+});
+
 test.describe("Add workspace dialog", () => {
+  // The Source cards are aria-pressed toggle buttons: a radiogroup would announce radios the buttons are not.
+  test("the Source choices are a group of toggle buttons, not a radiogroup", async ({ page }) => {
+    const dlg = await openAddWorkspaceDialog(page);
+    const source = dlg.getByRole("group", { name: "Source" });
+    await expect(source.getByRole("button", { name: /^Repository/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(dlg.getByRole("radiogroup")).toHaveCount(0);
+  });
+
   test("Add workspace is disabled until a Repository URL is entered", async ({ page }) => {
     const dlg = await openAddWorkspaceDialog(page);
     const add = dlg.getByRole("button", { name: "Add workspace" });

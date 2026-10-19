@@ -357,6 +357,26 @@ func TestCreatePolicy_Success(t *testing.T) {
 	}
 }
 
+// TestCreatePolicy_ReturnsRequirements: the save answers which stored secrets
+// the policy's grants name, present or missing; the SDK must not drop them.
+func TestCreatePolicy_ReturnsRequirements(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id": uuid.New(), "name": "p", "spec": map[string]any{},
+			"requirements": []map[string]any{{"kind": "secret", "name": "stripe", "status": "missing", "fix": "add_secret"}},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).CreatePolicy(context.Background(), client.PolicyRequest{Name: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Requirements) != 1 || got.Requirements[0].Name != "stripe" || got.Requirements[0].Status != "missing" {
+		t.Errorf("Requirements = %+v, want the missing stripe secret", got.Requirements)
+	}
+}
+
 // --------------------------------------------------------------------------
 // UpdatePolicy
 // --------------------------------------------------------------------------

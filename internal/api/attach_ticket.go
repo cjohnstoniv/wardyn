@@ -214,11 +214,15 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	// The session caps (per run, and per principal on a run more than one principal can attach to) are
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them
-	// again, since slots can fill between the ticket and the upgrade.
+	// again, since slots can fill between the ticket and the upgrade. A ticket asked for a UI app
+	// (?purpose=ui) skips them: a UI session holds no terminal slot, and a ticket that names ui but is
+	// spent on a terminal still meets the upgrade's own check.
 	at, principal := actorFromRequest(r)
-	if refused := s.attachSlotsFull(run, principal); refused != "" {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
-		return
+	if r.URL.Query().Get("purpose") != "ui" {
+		if refused := s.attachSlotsFull(run, principal); refused != "" {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
+			return
+		}
 	}
 	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
 	// holder does not own" (attach.go's == oidc.RoleAdmin consume check), never

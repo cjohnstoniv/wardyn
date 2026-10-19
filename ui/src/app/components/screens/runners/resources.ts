@@ -155,15 +155,6 @@ export function barriersText(limits: RunnerPoolLimits | undefined): string {
   return classes.map((c) => BARRIER_LABEL[c as keyof typeof BARRIER_LABEL] ?? c).join(", ");
 }
 
-/** "1 hour", "30 minutes", "2 days": a duration in its largest whole unit. */
-export function fmtDur(sec: number): string {
-  const unit = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
-  if (sec >= 86400 && sec % 86400 === 0) return unit(sec / 86400, "day");
-  if (sec >= 3600 && sec % 3600 === 0) return unit(sec / 3600, "hour");
-  if (sec % 60 === 0) return unit(sec / 60, "minute");
-  return unit(sec, "second");
-}
-
 /** Each run's share of a total (display units) when n run side by side: at least 1 CPU and 1 GB, disk in whole GB, never past the total. */
 export function perRunShare(total: { cpu: number; mem: number; disk: number }, n: number): { cpu: number; mem: number; disk: number } | null {
   if (!(total.cpu > 0 && total.mem > 0 && total.disk > 0 && Number.isInteger(n) && n >= 1)) return null;

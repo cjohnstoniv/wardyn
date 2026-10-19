@@ -49,7 +49,6 @@ const CHECK_FALLBACK =
 
 const rendered: Record<string, string> = {
   OPERATOR_ONLY_REASON: OPERATOR_ONLY_REASON,
-  "RECORDINGS.SEARCH_DISABLED_HINT": RECORDINGS.SEARCH_DISABLED_HINT,
   "RECORDINGS.EMPTY_TITLE": RECORDINGS.EMPTY_TITLE,
   "RECORDINGS.EMPTY_BODY": RECORDINGS.EMPTY_BODY,
   RECORDING_DISABLED_TITLE: RECORDING_DISABLED_TITLE,
@@ -58,8 +57,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("announced-failures-copy — announced-failures-canon.md, #490", () => {
-  it("finds all 7 frozen keys in the doc", () => {
-    expect(doc.size).toBe(7);
+  it("finds all 6 frozen keys in the doc", () => {
+    expect(doc.size).toBe(6);
   });
 
   it.each(Object.keys(rendered))("%s is byte-exact", (key) => {

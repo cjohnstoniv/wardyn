@@ -76,7 +76,8 @@ function withToolRules(
 
 // The effect picker. A native <select>: three fixed wire words, one per row, and
 // the current value has to carry its own tint — the same reason the Title field
-// takes a native <datalist> rather than a combobox library.
+// takes a native <datalist> rather than a combobox library. #3070 decided this one stays native; every
+// other admin dropdown is the shared Select.
 function EffectSelect({
   value,
   label,

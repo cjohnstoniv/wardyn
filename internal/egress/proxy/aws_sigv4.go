@@ -285,27 +285,22 @@ func (p *Proxy) serveAWSSigV4(w http.ResponseWriter, r *http.Request, host strin
 	}
 	var body []byte
 	if plan.payload == "" && r.Body != nil && r.Body != http.NoBody {
-		charge := awsSigV4MaxHashedBody
-		if r.ContentLength >= 0 && r.ContentLength < awsSigV4MaxHashedBody {
-			charge = int(r.ContentLength) + 1
-		}
-		release, ok := retainScanBuffer(r.Context(), charge)
-		if !ok {
+		// Charged to the engine's retained-bytes budget for as long as the request holds it.
+		buf, release, err := p.scan.readBody(r.Context(), r.Body, r.ContentLength, awsSigV4MaxHashedBody)
+		defer release()
+		switch {
+		case errors.Is(err, errScanBusy):
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, "Wardyn had no room to hold its body to sign it; retry")
 			return
-		}
-		defer release()
-		var err error
-		body, err = io.ReadAll(io.LimitReader(r.Body, awsSigV4MaxHashedBody+1))
-		switch {
 		case err != nil:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4Payload, "Wardyn could not read its body to sign it")
 			return
-		case len(body) > awsSigV4MaxHashedBody:
+		case len(buf) > awsSigV4MaxHashedBody:
 			p.refuseAWSSigV4(w, r, host, port, scope, awsSigV4BodyTooLarge, fmt.Sprintf(
 				"its body is over %d MiB and carries no x-amz-content-sha256 header, so Wardyn would have to hold all of it to sign it", awsSigV4MaxHashedBody>>20))
 			return
 		}
+		body = buf
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
 		r.Header.Del("Transfer-Encoding")
 	}

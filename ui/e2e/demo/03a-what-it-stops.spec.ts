@@ -710,7 +710,7 @@ test("V03a conclusion", async () => {
   // [OWNER SLOT — drafted]
   await caption(page, "Authorized, then issued: that key gated by an approval, then a Git token issued into a pipe — on demand, never stored.");
   await beat(page, PACE.read);
-  await caption(page, "And 'The kinds that can't use a header' — including the one credential that must touch a file, briefly. If you clone over SSH, that one is yours.");
+  await caption(page, "And 'The kinds that can't use a header' — including the SSH key that stays at the proxy. If you clone over SSH, that one is yours.");
   await beat(page, PACE.read);
   await caption(page, "Nothing later depends on them.");
   await beat(page, PACE.read);

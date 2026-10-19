@@ -111,6 +111,27 @@ const mi = int64(1) << 20
 
 // TestCheckFit_RunObjectsCountAgainstObjectQuotas: CreateSandbox makes one Secret and two
 // NetworkPolicies per run, so an object-count quota on them is predicted, counted once per run.
+// TestCheckFit_AzureGatedProxyCountsItsOwnEnvelope: the proxy pod of an Azure-gated run is created with
+// runner.AzureProxyMemoryMiB (sandbox.go), so the fit counts that, not the default proxy's memory.
+func TestCheckFit_AzureGatedProxyCountsItsOwnEnvelope(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	seed(t, cs, quota("memory", corev1.ResourceList{corev1.ResourceRequestsMemory: resource.MustParse("3Gi")}, nil))
+	for _, tc := range []struct {
+		azure bool
+		proxy int64
+	}{{false, runner.DefaultProxyMemoryMiB}, {true, runner.AzureProxyMemoryMiB}} {
+		res := fitRes
+		res.ProxyAzure = tc.azure
+		fit, err := d.CheckFit(context.Background(), res)
+		if err != nil || len(fit.Quota) != 1 {
+			t.Fatalf("azure=%v: fit = %+v, %v", tc.azure, fit, err)
+		}
+		if a, _ := axisOf(fit.Quota[0], "requests.memory"); a.Need != (2048+tc.proxy)*mi {
+			t.Errorf("azure=%v: requests.memory need = %d, want %d (agent + a %d MiB proxy)", tc.azure, a.Need, (2048+tc.proxy)*mi, tc.proxy)
+		}
+	}
+}
+
 func TestCheckFit_RunObjectsCountAgainstObjectQuotas(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	seed(t, cs, quota("objects", corev1.ResourceList{

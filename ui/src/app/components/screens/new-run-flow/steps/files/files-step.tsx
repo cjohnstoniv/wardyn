@@ -20,7 +20,7 @@ import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
-import { attachDrive, chooseNothing, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
+import { attachDrive, chooseNothing, clearNothing, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { issue, type StepIssue } from "../../lenses/step-issues";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -232,11 +232,11 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
             <div className="px-[15px] py-3">
               <label className={cn("flex items-start gap-2.5 rounded-[10px] border border-border bg-muted px-[15px] py-3.5", noExtra && "border-warning bg-warning-subtle")}>
                 <input
-                  type="radio"
+                  type="checkbox"
                   name="nr-files-choice"
                   className="mt-0.5 size-[17px] accent-primary"
                   checked={noExtra}
-                  onChange={() => edit(chooseNothing)}
+                  onChange={(e) => edit(e.target.checked ? chooseNothing : clearNothing)}
                 />
                 <span className="flex flex-col gap-[5px]">
                   <strong className="text-sm font-semibold">{NR_FILES.NO_EXTRA}</strong>

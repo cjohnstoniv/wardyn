@@ -49,6 +49,13 @@ for arg in "$@"; do
   esac
 done
 
+# --purge destroys data, so it never rides along with an install: alone it would
+# fall through to the install branch and converge the stack instead.
+if [ "${PURGE}" = 1 ] && [ "${MODE}" != uninstall ]; then
+  echo "install.sh: --purge only works with --uninstall (sudo ./install.sh --uninstall --purge)" >&2
+  exit 1
+fi
+
 if [ "$(id -u)" != "0" ]; then
   echo "install.sh: must run as root (sudo ./install.sh) — it writes /etc/wardyn and the system init directory" >&2
   exit 1
@@ -166,6 +173,22 @@ else
   command -v systemctl >/dev/null 2>&1 || { echo "install.sh: systemctl not found — this Linux path targets systemd. docs/DESKTOP.md covers running wardyn-desktop.sh from another supervisor." >&2; exit 1; }
 fi
 command -v docker >/dev/null 2>&1 || { echo "install.sh: docker not found on PATH — install Docker Desktop, Colima or Docker Engine first" >&2; exit 1; }
+# wardyn-desktop.sh runs `docker compose`, the v2 plugin: a docker CLI without it
+# registers a converge job that fails on every tick.
+docker compose version >/dev/null 2>&1 || { echo "install.sh: 'docker compose' is not available — install the Docker Compose v2 plugin (docker-compose-plugin, or docker-compose-v2 on Debian/Ubuntu) first" >&2; exit 1; }
+# Docker Compose 2.24.4 is the first release where the `!override` in
+# docker-compose.ports.yaml replaces a published-port list; 2.24.0 merges it and
+# still publishes 5432, 5010 and 8081 (#2165). Succeeds when the installed plugin
+# is older. A version string it cannot parse is not treated as too old.
+compose_too_old() {
+  _cv="$(docker compose version --short 2>/dev/null)"; _cv="${_cv#v}"
+  case "${_cv}" in [0-9]*.[0-9]*.[0-9]*) ;; *) return 1 ;; esac
+  _cr="${_cv#*.}"; _cp="${_cr#*.}"
+  [ $(( ${_cv%%.*} * 1000000 + ${_cr%%.*} * 1000 + ${_cp%%[!0-9]*} )) -lt 2024004 ]
+}
+if compose_too_old; then
+  echo "install.sh: Docker Compose $(docker compose version --short) is older than 2.24.4, which the desktop stack needs to drop the Postgres, registry and relay port publishes — upgrade the Compose plugin first" >&2; exit 1
+fi
 
 # ── Which Docker socket (enrolment half) ───────────────────────────────────
 # This installer runs as ROOT, and Docker Desktop, Colima, rootless Docker and

@@ -15,7 +15,7 @@
 # never deployed.
 #
 # A deploy that fails after helm changed the release is rolled back to the
-# revision it replaced and recorded, so the next run waits for a newer green
+# revision it replaced (unless it adds migrations: see adds_migrations) and recorded, so the next run waits for a newer green
 # commit instead of breaking the cluster again every tick. A failure before
 # helm was touched (a build, the daemon, gh) is neither rolled back nor
 # recorded: the next run simply tries again.
@@ -74,13 +74,25 @@ if grep -qx "${SHA}" "${FAILED_FILE}"; then
   exit 0
 fi
 
+# A deploy that adds migrations may have run them before it failed, and the
+# wardynd it replaced refuses a database that records migrations it does not ship
+# (internal/db/db.go), so rolling back would only swap one failing pod for another.
+adds_migrations() {
+  [[ -n "$(git -C "${ROOT}" diff --diff-filter=A --name-only "$1" "$2" -- internal/db/migrations)" ]]
+}
+
 rev() { helm --kube-context "${CTX}" -n wardyn history wardyn --max 1 -o json | jq -r '.[0].revision'; }
 REV="$(rev)"
 if ! "${ROOT}/05-kind-deploy.sh" "${SHA}"; then
   if [[ "$(rev)" != "${REV}" ]]; then
     echo "==> deploy of ${SHA} failed after changing the release; rolling back to revision ${REV}" >&2
     echo "${SHA}" >>"${FAILED_FILE}"
-    helm --kube-context "${CTX}" -n wardyn rollback wardyn "${REV}" --wait --timeout 5m
+    if adds_migrations "${DEPLOYED}" "${SHA}"; then
+      echo "==> not rolling back: ${SHA} adds migrations, so it may have migrated the database and revision ${REV}'s wardynd would refuse to boot on it." >&2
+      echo "    Restore the pre-upgrade dump and roll back by hand, or fix forward with a newer green commit." >&2
+    else
+      helm --kube-context "${CTX}" -n wardyn rollback wardyn "${REV}" --wait --timeout 5m
+    fi
   else
     echo "==> deploy of ${SHA} failed before changing the release; the next run retries it" >&2
   fi

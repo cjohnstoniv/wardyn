@@ -94,3 +94,21 @@ describe("Egress redirection — a refused save keeps the draft (#492)", () => {
     await waitFor(() => expect(screen.queryByText(/editing — full values/i)).not.toBeInTheDocument());
   });
 });
+
+// #2562: only a From the server would call a duplicate (lowercased, whole string) is flagged; a different path is not.
+describe("Egress redirection: a different From is not a collision", () => {
+  const typeFrom = async (user: ReturnType<typeof userEvent.setup>, value: string) => {
+    await user.click(screen.getByRole("combobox"));
+    setField(screen.getByPlaceholderText("https://…, host, or IP"), value);
+    await user.click(await screen.findByText(value));
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal");
+  };
+
+  it("a different path is allowed", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderEgress({ egress_redirects: [{ from: "https://pypi.org/simple", to: "https://mirror.corp.internal/pypi" }] }, vi.fn());
+    await typeFrom(user, "https://pypi.org/other");
+    expect(screen.queryByText(/A redirect already exists for this From/)).toBeNull();
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
+  });
+});

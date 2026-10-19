@@ -243,8 +243,12 @@ type (
 
 	// PolicyRef is the policy a ceiling refusal names: the leaf profile (or the
 	// deployment) that bound the caller, plus the contact it published.
-	// APIError.Policy carries one.
+	// APIError.Policy carries one, with the layer kind that refused.
 	PolicyRef = policyref.Ref
+
+	// PolicyProvenance is which layer set one value of a run's policy
+	// (RunPolicyView.Provenance).
+	PolicyProvenance = policyref.Provenance
 
 	// GovernanceAssignment binds one profile to one subject
 	// (GovernanceDocument.Assignments). Returned by GetGovernance and

@@ -446,6 +446,43 @@ func TestPG_RunnerActions_DeferredKillContinuesOncePerCompletedInventory(t *test
 	}
 }
 
+// A page of deferred kills that the rechecks skip (their run's ref was cleared since) stays deferred
+// and unchanged; an eligible kill queued after a full page of them is still reissued.
+func TestPG_RunnerActions_StaleDeferredKillsDoNotStarveLaterOnes(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	defer_ := func(run types.AgentRun) types.RunnerPendingAction {
+		t.Helper()
+		kill := f.mustQueue(t, f.action(run, types.RunnerActionKill, f.issue(t, run)))
+		if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, kill.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+		return kill
+	}
+	for range 100 { // runnerActionPageLimit
+		stale := f.run(t)
+		defer_(stale)
+		if err := f.st.SetSandboxRef(ctx, stale.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+		// Ended, so it frees its slot on the runner for the next one.
+		if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET state = 'FAILED' WHERE id = $1`, stale.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := defer_(f.run(t))
+	finalInventory(t, f.st, f.rn, uuid.NewString())
+	if n, err := f.st.ReissueDeferredRunKills(ctx, f.rn.ID, uuid.NewString()); err != nil || n != 1 {
+		t.Fatalf("reissue behind 100 stale tips = %d, %v; want 1", n, err)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE supersedes = $1`, last.ID); n != 1 {
+		t.Fatalf("the eligible kill got %d successors, want 1", n)
+	}
+	if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE outcome = 'deferred' AND NOT superseded AND settled_at IS NULL`); n != 100 {
+		t.Fatalf("%d stale tips left as they were, want 100: an unproved obligation is never settled to make progress", n)
+	}
+}
+
 func TestPG_RunnerActions_StopProxySuccessAuditsInTheSameTransaction(t *testing.T) {
 	for name, issued := range map[string]bool{"issued-execution": true, "before-first-execution": false} {
 		t.Run(name, func(t *testing.T) {

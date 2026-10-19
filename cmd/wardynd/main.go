@@ -438,6 +438,8 @@ func run() error {
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
 
+		// The runner stream's anonymous in-flight bound per client address.
+		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
 		GovernAdminRunsExempt: knobs.governAdminRunsExempt,
 
@@ -510,6 +512,7 @@ func run() error {
 		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:             lm.loopback,
 		LocalTrustForwarder:       *f.localTrustFwd,
+		LocalTrustedPeers:         lm.trustedPeers,
 		OIDCRoleMapConfigured:     strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:           *f.oidcRedirectURL,
 		OIDCSecureCookies:         posture.secureCookies,
@@ -524,8 +527,13 @@ func run() error {
 		SSHHostKey:           feats.sshHostKey,
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
+		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
+		// The SSH gateway's established-connection ceiling and per-source handshake bound.
+		SSHMaxConnections:         *f.sshMaxConns,
+		SSHMaxHandshakesPerSource: *f.sshPerSource,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
@@ -567,8 +575,9 @@ func run() error {
 		return err
 	}
 
-	// Refuse a metrics bind failure before workers or optional gateways start.
-	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
+	// Refuse a metrics or UI-sandbox gateway bind failure before workers or the other gateways start.
+	uiLn, err := bindOptionalListeners(rootCtx, f, srv)
+	if err != nil {
 		return err
 	}
 
@@ -582,7 +591,7 @@ func run() error {
 
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
-	startUISandboxGateway(rootCtx, f, posture, srv)
+	startUISandboxGateway(rootCtx, f, posture, srv, uiLn)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the

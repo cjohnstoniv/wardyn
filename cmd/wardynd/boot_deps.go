@@ -513,6 +513,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			SilentReauth:         orZero(f.sessionLife.silentReauth),
 			LoginHint:            orZero(f.sessionLife.loginHint),
 			BrowserSessionCookie: orZero(f.sessionLife.browserSession),
+			BackchannelLogout:    orZero(f.sessionLife.backchannelLogout),
 			RoleMap:              roleMap,
 			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS

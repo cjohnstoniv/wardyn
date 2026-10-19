@@ -16,9 +16,9 @@ import (
 )
 
 // gatedPush is a push body that parks at its end until the test lets it go.
-// The end is read by applyPushRules' buffering, which runs under the same hold
-// of the inspection slot as gitpack.Inspect — confinePush before it reads only
-// the command section — so a body parked there is one push inside the slot.
+// The end is read by applyPushRules' buffering, which runs before the
+// inspection slot is taken — confinePush before it reads only the command
+// section — so a body parked there holds bytes, never the slot.
 type gatedPush struct {
 	r       *bytes.Reader
 	atEnd   chan<- struct{}
@@ -36,21 +36,16 @@ func (g *gatedPush) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// TestPushRulesInspectOnePushAtATime pins the concurrency half of #250: one
-// inspection's memory is bounded by internal/gitpack's ceilings, and total
-// inspection memory is that figure times how many run at once — which the agent
-// would choose if nothing capped it. Several pushes sent together are each
-// inspected and forwarded, but never two inside the slot at the same time.
-func TestPushRulesInspectOnePushAtATime(t *testing.T) {
+// A push body is read before the inspection slot is taken, so several pushes
+// whose bodies are still arriving are all buffered at once, and a slow one
+// holds no other push back. Each is then inspected and forwarded.
+func TestPushRulesReadBeforeTheInspectionSlot(t *testing.T) {
 	up := newGitBrokerUpstream(t, "gh-inst-token")
 	p, _ := newGitBrokerProxyWithSpec(t,
 		map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv),
 		contentRulesSpec(".github/workflows/**"))
 	body := recordedPush(t, BranchNSPrefix(p.runID)+"work", map[string]string{"src/app.go": "package main\n"})
 
-	if cap(scanSlots) != 1 {
-		t.Fatalf("scanSlots admits %d inspections at once, want 1 (maxConcurrentScans)", cap(scanSlots))
-	}
 	const pushes = 4
 	atEnd, proceed := make(chan struct{}), make(chan struct{})
 	recs := make([]*httptest.ResponseRecorder, pushes)
@@ -58,22 +53,21 @@ func TestPushRulesInspectOnePushAtATime(t *testing.T) {
 	for i := range pushes {
 		req := mustLocalReq(t, http.MethodPost, "/wardyn/gh/octocat/hello-world/git-receive-pack",
 			&gatedPush{r: bytes.NewReader(body), atEnd: atEnd, proceed: proceed})
+		// git declares the length of a push smaller than its post buffer, and
+		// a declared length is what the buffer budget charges up front.
+		req.ContentLength = int64(len(body))
 		recs[i] = httptest.NewRecorder()
 		wg.Go(func() { p.ServeHTTP(recs[i], req) })
 	}
-	// Each push in turn parks at its end; while it does, the slot must be held,
-	// and held by it alone. A read of the end outside the slot finds it empty.
+	// Every push parks at its end before any is let go.
 	for i := range pushes {
 		select {
 		case <-atEnd:
 		case <-time.After(10 * time.Second):
-			t.Fatalf("only %d of %d pushes reached the inspection read", i, pushes)
+			t.Fatalf("only %d of %d pushes reached the end of their body at once: a parked read holds the others back", i, pushes)
 		}
-		if held := len(scanSlots); held != 1 {
-			t.Errorf("a push read its end with %d inspection slots held, want 1", held)
-		}
-		proceed <- struct{}{}
 	}
+	close(proceed)
 	wg.Wait()
 
 	for i, rec := range recs {

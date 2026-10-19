@@ -7,12 +7,15 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // bootFlags holds every wardynd CLI flag / env pair, resolved by parseBootFlags.
@@ -32,6 +35,7 @@ type bootFlags struct {
 	localMode            *bool
 	localOperator        *string
 	localTrustFwd        *bool
+	localTrustedPeers    *string
 	// allowLocalModeWithOIDC is the escape hatch (see validateOperatorPosture's
 	// allowOIDCNoOperatorList for the sibling pattern) for the refusal in
 	// resolveLocalMode: an explicit -local-mode alongside a configured
@@ -60,6 +64,7 @@ type bootFlags struct {
 	// meaningless without it.
 	orgURL         *string
 	runnerOrgURL   *string
+	runnerPerAddr  *int
 	trustedProxies *string
 	// orgEnrolToken is WARDYN_ORG_ENROLMENT_TOKEN — a secret, so never logged
 	// and never echoed in a boot refusal.
@@ -360,6 +365,14 @@ type bootFlags struct {
 	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
 	// validateSSHMaxSessionsPerRun.
 	sshMaxSessionsPerRun *int
+	// sshMaxConns and sshPerSource are the gateway's established-connection
+	// ceiling and per-source handshake bound.
+	sshMaxConns  *int
+	sshPerSource *int
+	// syncDeny is api.Config.SyncDeny before ParseSyncDeny splits and checks it.
+	syncDeny *string
+	// localFolderSeedWait is api.Config.LocalFolderSeedWait.
+	localFolderSeedWait *time.Duration
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -419,7 +432,8 @@ func parseBootFlags() *bootFlags {
 		adminToken:             flagEnv("admin-token", "WARDYN_ADMIN_TOKEN", "", "admin bearer token gating the public API"),
 		localMode:              flagBool("local-mode", "WARDYN_LOCAL_MODE", false, "bypass public-API auth (no SSO/token) and attribute actions to the local operator; single-developer localhost use only, refused on a publicly-routable bind. Auto-enabled when no auth is configured and the bind is loopback (default false)"),
 		localOperator:          flagEnv("local-operator", "WARDYN_LOCAL_OPERATOR", "", "operator principal stamped on runs/approvals/audit in -local-mode (default local:<os-user>)"),
-		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
+		localTrustedPeers:      flagEnv("local-trusted-peers", "WARDYN_LOCAL_TRUSTED_PEERS", "", "with -local-trust-forwarder, the only non-loopback peers trusted (IPs or CIDRs, comma-separated); empty resolves them at boot: the default route's gateway and wardynd's own addresses"),
+		localTrustFwd:          flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, also accept the forwarder peers -local-trusted-peers names (by default the gateway and own addresses resolved at boot) beside a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
 		allowLocalModeWithOIDC: flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
 		memberMode:             flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
 		memberRoots:            flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all; point it at a dedicated projects directory, never $HOME"),
@@ -428,6 +442,7 @@ func parseBootFlags() *bootFlags {
 		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
 		trustedProxies:         flagEnv("trusted-proxies", "WARDYN_TRUSTED_PROXIES", "", "comma-separated CIDRs of the reverse proxies in front of wardynd; a request from one of them takes its client address from X-Forwarded-For, read right to left to the first address outside the list. Empty (default) reads no forwarding header"),
+		runnerPerAddr:          flagIntEnv("runner-stream-handshakes-per-address", "WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS", api.DefaultRunnerStreamHandshakesPerAddress, "most runner-stream connections one client address may hold between arrival and proving its runner key, per replica (integer, at least 1)"),
 		runnerOrgURL:           flagEnv("runner-org-url", "WARDYN_RUNNER_ORG_URL", "", "public organisation URL bound into registered runner identities; HTTPS required except loopback HTTP for development, without userinfo, query or fragment. Unset disables runner registration and streams"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		scimToken:              flagEnv("scim-token", "WARDYN_SCIM_TOKEN", "", "secret bearer the SCIM 2.0 Users routes (/scim/v2/Users) accept, at least 32 bytes; unset (default) mounts no SCIM route. Requires OIDC on a single-tenant Entra issuer and TLS"),
@@ -631,7 +646,11 @@ func parseBootFlags() *bootFlags {
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
+		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
 		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
+		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
+		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
+		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
@@ -641,6 +660,7 @@ func parseBootFlags() *bootFlags {
 	// internal/api reads its env toggles per request; a garbage value in one
 	// exits 2 here, in every auth mode, rather than on the first request.
 	api.ValidateEnvToggles()
+	cliutil.EnvBool(types.EnvReserveEditors, false)
 
 	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
 	// Done HERE, once, so every listen classifier and the http.Server itself
@@ -684,6 +704,9 @@ type localModeState struct {
 	enabled  bool
 	operator string
 	loopback bool
+	// trustedPeers is api.Config.LocalTrustedPeers, resolved only in local mode
+	// with -local-trust-forwarder.
+	trustedPeers []netip.Prefix
 }
 
 // resolveAWSSSOEndpointOverride resolves the gated AWS SSO endpoint hatch:
@@ -783,6 +806,16 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 				slog.String("listen", *f.listen),
 			)
 		}
+		var raw string
+		if f.localTrustedPeers != nil { // a test's partial bootFlags
+			raw = *f.localTrustedPeers
+		}
+		peers, err := localTrustedPeers(raw)
+		if err != nil {
+			return lm, err
+		}
+		lm.trustedPeers = peers
+		slog.Info("wardynd: local mode trusts these forwarder peers", slog.Any("peers", peers))
 	}
 	// The four-eyes egress switch cannot be enforced in local mode, and an
 	// operator who set both learns that when their FIRST approval hangs — a 503

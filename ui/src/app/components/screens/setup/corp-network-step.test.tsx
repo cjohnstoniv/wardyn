@@ -131,6 +131,8 @@ describe("pure helpers", () => {
 
   it("hasUserinfo detects a username:password in a URL, and only that", () => {
     expect(hasUserinfo("http://ops-egress:secret@proxy.corp.acme.com:8080")).toBe(true);
+    // The server refuses any userinfo, a password alone included (#2576).
+    expect(hasUserinfo("http://:s3cret@proxy.corp.acme.com:8080")).toBe(true);
     expect(hasUserinfo("http://proxy.corp.acme.com:8080")).toBe(false);
     expect(hasUserinfo("not a url")).toBe(false);
   });
@@ -421,7 +423,7 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   });
 
   // The client collision check must fold like the server's own
-  // normalizeRedirectEndpoint (TrimSpace + lowercase scheme+authority) — a
+  // duplicate-From key (TrimSpace + lowercase) — a
   // different-CASE typed `from` is the SAME redirect once the server
   // normalizes it, and a client check that misses that hole lets the
   // operator create the exact silently-shadowed duplicate the collision
@@ -443,10 +445,9 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
   });
 
-  // Negative control: only the AUTHORITY folds — a path-case difference is a
-  // genuinely different redirect target (paths are case-sensitive on most
-  // servers), so it must NOT collide.
-  it("negative control: a different-case PATH (same authority, different path case) does not collide", async () => {
+  // The server's duplicate-From rule lowercases the WHOLE string (site_config.go), so a path-case difference
+  // is refused there as a duplicate and must be flagged here (#2562).
+  it("a different-case PATH is a collision too, as the server decides it", async () => {
     // ticket: M1
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
@@ -456,8 +457,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     await user.click(await screen.findByText("use as typed"));
     setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi2");
 
-    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
-    expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeDisabled();
+    expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
   });
 
   // The "From" <Field label> must resolve to an id the combobox trigger

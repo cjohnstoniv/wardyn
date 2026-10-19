@@ -251,6 +251,8 @@ still execute inside the build container's namespaces. Two gaps remain:
   - (e.g. a host-loopback path to a registry the build container reaches by service name — the compose stack's own use).
   - The per-build tag is still appended on top of that override, so it never reintroduces one shared ref across builds.
   - See Builder.pushedBaseRef.
+  - After each build wardynd deletes that per-build tag from the registry, at CacheRepo's address or the override's (best effort: a registry that needs credentials keeps it).
+  - Deleting a tag frees no disk. Reclaim it with the registry's own collector, while no build runs: `docker compose exec registry registry garbage-collect --delete-untagged /etc/distribution/config.yml`.
   - A real-registry TestBuild_SmokeDockerd validates the exact ref.
 - envbuilder's layer cache is not used. Each build pushes under its own tag (`<CacheRepo>:<build-uuid>`), which kaniko cannot use as a cache repository, so every build logs a non-fatal cache-upload error per layer and fetches every layer fresh.
   - A shared cache would let one build replace the layers every other build replays, and the build registry is unauthenticated, so Wardyn does not share one.

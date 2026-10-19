@@ -21,13 +21,12 @@ import { Chip } from "../../../wardyn/primitives";
 import { Button } from "../../../ui/button";
 import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../ui/select";
 import { ConfirmDialog } from "../confirm-dialog";
 import { Sec } from "../resource-table";
 
 type SubjectType = RunnerPoolSubject["subject_type"];
 const TYPES: SubjectType[] = ["user", "group", "user_type"];
-const SELECT =
-  "h-9 w-full rounded-md border border-input bg-input-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring dark:bg-input/30";
 
 /**
  * A pool with no policy answers with no subjects and the zero time for updated_at (the server always
@@ -185,13 +184,18 @@ export function PoolPolicy({
           <div className="grid grid-cols-2 items-end gap-3 max-sm:grid-cols-1">
             <div className="space-y-1.5">
               <Label htmlFor="pol-type">{POOL_DRAWER.ADD}</Label>
-              <select id="pol-type" className={SELECT} value={type} onChange={(e) => setType(e.target.value as SubjectType)}>
-                {TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {POOL_DRAWER.SUBJECT[t]}
-                  </option>
-                ))}
-              </select>
+              <Select value={type} onValueChange={(v) => setType(v as SubjectType)}>
+                <SelectTrigger id="pol-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {POOL_DRAWER.SUBJECT[t]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="pol-val">{POOL_DRAWER.NAME}</Label>

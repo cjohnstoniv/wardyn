@@ -18,6 +18,7 @@
 // connected; clicking Next past this step with nothing set marks it Skipped
 // (setup-screen.tsx's selectStep).
 import { Link } from "react-router-dom";
+import { useConsoleMode } from "../../wardyn/console-view";
 
 // The lede names "the Secrets page" and must actually link there (renaming
 // this step is out: its id must stay `integrations`, demo-videos.ts's
@@ -31,11 +32,14 @@ export const STEP_LEDE_SUFFIX = ", and handed to runs by name.";
 export const STEP_LEDE = `${STEP_LEDE_PREFIX}${STEP_LEDE_LINK}${STEP_LEDE_SUFFIX}`;
 
 export function IntegrationsStep() {
+  // The funnel mounts at /setup or /admin/setup; the link stays in the view it is read in, since the admin token
+  // on an SSO install has no User view and would land on a notice instead of the secrets (#2577).
+  const secrets = useConsoleMode() === "admin" ? "/admin/secrets" : "/secrets";
   return (
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
         {STEP_LEDE_PREFIX}
-        <Link to="/secrets" className="font-medium text-primary hover:underline">
+        <Link to={secrets} className="font-medium text-primary hover:underline">
           {STEP_LEDE_LINK}
         </Link>
         {STEP_LEDE_SUFFIX}
