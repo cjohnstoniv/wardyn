@@ -162,8 +162,11 @@ func TestConsumedOnceDoesNotReapproveViaStaleID(t *testing.T) {
 func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
 	apID := uuid.New()
 	release := make(chan struct{})
+	polling := make(chan struct{})
+	var polled sync.Once
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/internal/approvals/") {
+			polled.Do(func() { close(polling) })
 			<-release // hold this poll open so the "sibling" wins the race
 			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{
 				ID: apID, State: types.ApprovalApproved, DecisionScope: types.ScopeOnce,
@@ -185,7 +188,11 @@ func TestStalePollerCannotResurrectConsumedEntry(t *testing.T) {
 
 	// While that poll is parked, a sibling consumes the grant and a fresh raise
 	// takes the slot — the exact interleaving the discriminator exists for.
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-polling: // the poll is parked inside the fake GET handler
+	case <-time.After(5 * time.Second):
+		t.Fatal("the poller never reached the control plane")
+	}
 	seed(ap, "egress.test", hostApproval{state: apPending, approvalID: uuid.New(), lastPoll: time.Now()})
 	close(release)
 

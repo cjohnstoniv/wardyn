@@ -172,6 +172,21 @@ func TestAppRoleLookupIsFilterNotSearch(t *testing.T) {
 	if f.spCalls.Load() != 1 {
 		t.Fatalf("servicePrincipals calls = %d, want 1", f.spCalls.Load())
 	}
+	sp := f.lastSP.Load()
+	if sp == nil {
+		t.Fatal("servicePrincipals endpoint was never called")
+	}
+	if sp.query.Get("$filter") == "" {
+		t.Error("the App Role lookup sent no $filter")
+	}
+	for _, k := range []string{"$search", "$count"} {
+		if _, ok := sp.query[k]; ok {
+			t.Errorf("the App Role lookup sent %s; it is a plain $filter query", k)
+		}
+	}
+	if h := sp.headers.Get("ConsistencyLevel"); h != "" {
+		t.Errorf("the App Role lookup sent ConsistencyLevel = %q; only a $search needs it", h)
+	}
 }
 
 // With no sign-in app named, App Roles are read from the credential app's own
