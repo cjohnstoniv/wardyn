@@ -2176,3 +2176,36 @@ jobs:
             gh issue create --title "$title" --body "$body"
           fi
 
+  # ── one Go cache generation per job ───────────────────────────────────────
+  # Each green push to main saves its Go caches under its run id. The
+  # repository's caches are capped at 10 GB and evicted least recently used
+  # first, so superseded generations would push out live ones. For each cache
+  # family this run saved (the key less its go.mod/go.sum hash, run id and OS),
+  # this deletes the entries created before this run's. A family this run did
+  # not save, because its job failed, keeps its older entry.
+  go-cache-prune:
+    needs: [go, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the Go cache entries this run superseded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs/heads/main&key=go-&per_page=100" --jq '.actions_caches[]')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" '
+            def fam: .key | sub("-[0-9a-f]{64}-[0-9]+$"; "") | sub("-(Linux|Windows|macOS)$"; "");
+            (map(select(.key | endswith($r))) | map({key: fam, value: .created_at}) | from_entries) as $fresh
+            | .[] | select(fam as $f | $fresh[$f] != null and .created_at < $fresh[$f])
+            | "\(.id)\t\(.key)"')"
+          [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
+          while IFS=$'\t' read -r id key; do
+            echo "deleting $key"
+            gh cache delete "$id" || echo "::warning::could not delete cache $key"
+          done <<< "$stale"
