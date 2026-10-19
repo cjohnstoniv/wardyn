@@ -548,6 +548,9 @@ export async function mockMemberRole(page: Page): Promise<void> {
   await mockMemberSetupStatus(page);
 }
 
+/** demoSecretNames in internal/api/setup.go, which is demo-catalog-secrets.ts's needsSecret values. */
+const DEMO_SECRET_NAMES = ["wardyn-demo-key", "wardyn-demo-api-token", "wardyn-demo-pat", "wardyn-demo-ssh-key"];
+
 // The OTHER half of the member splice (W6 drift note). Splicing only /me left
 // every member-lensed spec reading an OPERATOR's GET /setup/status: the
 // redaction is server-side on !isOperator (internal/api/setup.go), and the
@@ -580,18 +583,23 @@ export async function mockMemberSetupStatus(page: Page): Promise<void> {
       body.checks = [];
       body.checks_redacted = true;
       body.providers = [];
-      body.secrets = { present: [] };
+      // The demo catalog's own seed-secret names survive, as internal/api/setup.go's demoSecretNames
+      // keeps them: they are public in the client bundle, and the demos' only signal that one is stored.
+      const present = ((body.secrets as { present?: string[] } | undefined)?.present ?? []).filter((n) => DEMO_SECRET_NAMES.includes(n));
+      body.secrets = { present };
       // Rebuilt from confinement_classes and the kubernetes bit ALONE, exactly
       // as the server rebuilds SetupRunner — so driver, confinement_substrates
       // and ephemeral_disk_enforcement are dropped by construction rather than
       // by a line somebody remembered to write. The classes survive redaction:
       // they are the barrier signal deriveReadiness reads for every role; the
       // bit is the one substrate fact a member's Vault remedy keys off.
-      const runner = (body.runner ?? {}) as { confinement_classes?: string[]; kubernetes?: boolean };
+      const runner = (body.runner ?? {}) as { confinement_classes?: string[]; kubernetes?: boolean; sandbox_start?: unknown };
       body.runner = {
         driver: "",
         confinement_classes: runner.confinement_classes ?? [],
         ...(runner.kubernetes ? { kubernetes: true } : {}),
+        // runner.sandbox_start survives redaction too (redactSetupStatusForUser keeps SandboxStart).
+        ...(runner.sandbox_start ? { sandbox_start: runner.sandbox_start } : {}),
       };
       body.bedrock = { ready: !!(body.bedrock as { ready?: boolean } | undefined)?.ready };
       body.scm = {};
