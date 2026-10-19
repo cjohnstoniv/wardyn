@@ -34,6 +34,8 @@ cd "$G" || { echo "FAIL cannot cd $G"; exit 1; }
 # the run: at least one test ran and the result was successful. It is a line carrying a nonce read
 # from stdin before any workspace code is imported, so output the workspace prints ("OK", a
 # unittest summary) followed by an exit with status 0 cannot pass, and neither can the status alone.
+# It stops printed text, not workspace code that reads the nonce: an in-process verdict cannot be
+# tamper-proof against the code it runs.
 nonce=$(python3 -I -c 'import secrets; print(secrets.token_hex(8))')
 out=$(printf '%s\n' "$nonce" | python3 -I -c 'import os, sys, unittest
 nonce = sys.stdin.readline().strip()
