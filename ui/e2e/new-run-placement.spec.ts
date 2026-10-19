@@ -173,7 +173,7 @@ test.describe("New Run, placement: the pool a person picks", () => {
     }
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES));
-    await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
+    await page.getByRole("checkbox", { name: NR_FILES.NO_EXTRA }).check();
     await fillMainDriveSize(page);
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS));
     await press(page, NR_TOOLS.REVIEW_RUN);
