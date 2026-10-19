@@ -668,6 +668,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
 	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
 	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	// A dispatch that returns with no sandbox created leaves no lease owner behind, which a
+	// member-drive delete would read as a create still in flight until the heartbeat aged out.
+	// Deferred first, so it runs after the create lease's ticker has stopped.
+	created := false
+	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
@@ -714,6 +719,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
 		return
 	}
+	created = true
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.

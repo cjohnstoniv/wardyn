@@ -186,7 +186,7 @@ func (s *Server) accessDecider(ctx context.Context) (string, error) {
 		return "", err
 	}
 	allows := slices.DeleteFunc(slices.Clone(b.byKind[capEgressHost]), func(g types.CapabilityGrant) bool {
-		return g.Effect != types.CapabilityAllow
+		return g.Effect != types.CapabilityAllow || (s.cfg.EgressHostPortGrantsInert && egressHostPortAllow(g))
 	})
 	switch {
 	case slices.ContainsFunc(allows, func(g types.CapabilityGrant) bool { return strings.TrimSpace(g.Value) == "*" }):

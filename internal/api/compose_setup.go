@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"maps"
 	"slices"
 	"strconv"
@@ -79,7 +80,7 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
 	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
 	// separate run.Repo-keyed lookup needed here.
-	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, owner, spec))
 }
 
 // deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
@@ -578,17 +579,25 @@ func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, sp
 		it.Fix = &SetupFix{Action: "none"}
 		return it, true
 	}
+	// The row is the caller's: a non-operator reads what redactSetupStatusForUser
+	// leaves them, so neither the probe's error nor the substrate name.
+	operator := s.isOperator(ctx)
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
 		it.Status = "unverified"
-		it.Detail = "could not probe the runner's capabilities: " + err.Error()
+		it.Detail = "could not probe the runner's capabilities"
+		if operator {
+			it.Detail += ": " + err.Error()
+		} else {
+			slog.WarnContext(ctx, "wardynd: probing the runner's capabilities for a setup row failed", slog.Any("err", err))
+		}
 		return it, true
 	}
 	// Mirror of the launch gate (runs.go): the runner must advertise EXACTLY
 	// final, not merely something that outranks it.
 	if slices.Contains(caps.ConfinementClasses, final) {
 		it.Status = "satisfied"
-		if sub := caps.Resolved[final]; sub != "" {
+		if sub := caps.Resolved[final]; sub != "" && operator {
 			it.Detail = "enforced here as " + sub + "."
 		}
 		return it, true

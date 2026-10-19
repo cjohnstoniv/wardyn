@@ -112,7 +112,7 @@ func TestPG_CeilingAndDriveRankOneWay(t *testing.T) {
 		// Remove the all rows this test seeded, then ask for nobody.
 		for _, a := range mustList(t, st.ListGovernanceAssignments) {
 			if a.SubjectType == types.CapabilitySubjectAll {
-				if err := st.DeleteGovernanceAssignment(ctx, a.ID); err != nil {
+				if _, err := st.DeleteGovernanceAssignment(ctx, a.ID); err != nil {
 					t.Fatal(err)
 				}
 			}

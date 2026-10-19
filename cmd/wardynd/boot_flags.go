@@ -228,6 +228,10 @@ type bootFlags struct {
 	// Role/group keys, which env WARDYN_OIDC_ROLE_MAP email keys were never
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
+	// Three default-off tightenings, each fed to the api.Config field of the same name.
+	capabilityGrantsVerifiedEmail    *bool
+	governanceProfilePutExistingOnly *bool
+	egressHostPortGrantsInert        *bool
 
 	// Directory autocomplete (§I / PF-29), strictly OPT-IN. dirProvider empty is
 	// the whole feature off: no connector, no Graph reach, every "who" field
@@ -512,6 +516,12 @@ func parseBootFlags() *bootFlags {
 		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
+		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
+			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
+		governanceProfilePutExistingOnly: flagBool("governance-profile-put-existing-only", "WARDYN_GOVERNANCE_PROFILE_PUT_EXISTING_ONLY", false,
+			"PUT /api/v1/governance/profiles/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
+		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
+			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
 		dirTenant:   flagEnv("directory-tenant", "WARDYN_DIRECTORY_TENANT", "", "Entra tenant id/domain for the directory connector. Empty (default) derives it from -oidc-issuer; set together with -directory-client-id/-secret to use a dedicated app registration"),

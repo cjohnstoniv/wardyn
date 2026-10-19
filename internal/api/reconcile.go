@@ -742,6 +742,26 @@ func (s *Server) stampRunWatcherLease(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// releaseUncreatedRunLease, deferred by a dispatch, clears runID's lease owner unless *created (the
+// dispatch created a sandbox) or a sandbox is recorded for it
+// (store.PG.ReleaseUncreatedRunWatcher). Best-effort, like a stamp: a failure leaves the owner
+// to age out with its heartbeat, as before.
+func (s *Server) releaseUncreatedRunLease(ctx context.Context, runID uuid.UUID, created *bool) {
+	if *created {
+		return
+	}
+	rel, ok := s.cfg.Store.(interface {
+		ReleaseUncreatedRunWatcher(context.Context, uuid.UUID) error
+	})
+	if !ok {
+		return
+	}
+	if err := rel.ReleaseUncreatedRunWatcher(ctx, runID); err != nil {
+		slog.WarnContext(ctx, "wardynd: releasing an uncreated run's watcher lease failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+}
+
 // watcherBaseCtx is the daemon-lifetime context every detached watcher and the
 // sweeper run on (never a request ctx, which dies when the handler returns).
 // api.New sets BaseCtx unconditionally, so this is never nil.

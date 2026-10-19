@@ -433,6 +433,13 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// lost since that read is refused.
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
 		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID, id.JTI, claims.JTI)
+		if errors.Is(serr, store.ErrRunTokenLineage) {
+			// A revive replaced this token's proxy: retryable, so a proxy the revive kept renews
+			// again once its lineage is handed back, and a replaced one is gone by then.
+			s.auditRenewDenied(r, claims, "token_lineage_retired")
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, "the run's token was retired by a revive; retry the renewal")
+			return
+		}
 		if serr != nil {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, loggedMsg(r.Context(), "stamp run token renewed", serr))
 			return

@@ -300,8 +300,9 @@ func TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess(t *te
 	if res.FailureHint == recordEmptyCaptureHint {
 		t.Fatalf("a run that never started got the networking-guess hint instead of the dispatch failure reason: %q", res.FailureHint)
 	}
-	if !strings.Contains(res.FailureHint, "build timed out") {
-		t.Errorf("failure_hint = %q, want it to name the audited dispatch failure (%q)", res.FailureHint, "build timed out")
+	// The card is member-visible: it says the sandbox never started and leaves the error text in the audit log.
+	if !strings.Contains(res.FailureHint, "never started") || strings.Contains(res.FailureHint, "build timed out") {
+		t.Errorf("failure_hint = %q, want the never-started sentence without the audited error text", res.FailureHint)
 	}
 }
 
