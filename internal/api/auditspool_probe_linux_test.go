@@ -41,13 +41,18 @@ func TestAuditSpoolVolumeProbe_RefusesAVolumeTooSmallForTheRewrite(t *testing.T)
 	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &lim); err != nil {
 		t.Fatal(err)
 	}
-	lim.Cur = 1024
-	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &lim); err != nil {
+	capped := lim
+	capped.Cur = 1024
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &capped); err != nil {
 		t.Fatal(err)
 	}
 	a.mu.Lock()
 	ok := a.volumeWritable()
 	a.mu.Unlock()
+	// Lift the cap before the child exits: a -cover build writes its coverage files then.
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &lim); err != nil {
+		t.Fatal(err)
+	}
 	if ok {
 		t.Error("volumeWritable = true on a volume that cannot take the spool's rewrite, want false")
 	}
