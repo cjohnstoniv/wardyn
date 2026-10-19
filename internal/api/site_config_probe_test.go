@@ -370,6 +370,7 @@ type probeFakeRunner struct {
 	// (bestClass) rather than the operator's confinement floor.
 	lastImage string
 	lastClass types.ConfinementClass
+	lastSpec  runner.SandboxSpec
 }
 
 func (r *probeFakeRunner) Name() string { return "probe-fake" }
@@ -388,7 +389,7 @@ func (r *probeFakeRunner) Capabilities(context.Context) (runner.Capabilities, er
 func (r *probeFakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.lastImage, r.lastClass = spec.Image, spec.ConfinementClass
+	r.lastImage, r.lastClass, r.lastSpec = spec.Image, spec.ConfinementClass, spec
 	if r.createErr != nil {
 		return runner.Sandbox{}, r.createErr
 	}
@@ -1144,6 +1145,58 @@ func TestHandleTestSiteConfigRedirect_Reached(t *testing.T) {
 	_ = json.Unmarshal(events[0].Data, &data)
 	if data["to_host"] != "artifactory.corp" || data["from_host"] != "registry.npmjs.org" {
 		t.Errorf("audit data = %+v, want to_host/from_host set from the STORED row", data)
+	}
+}
+
+// The redirect Test presents the row's token the way a run does: dispatch authors the
+// row's proxy-side injection, its port-qualified MITM entry and egress entry, and the
+// sandbox, the response and the audit trail never hold the token itself (#2450).
+func TestHandleTestSiteConfigRedirect_PresentsTheRowsToken(t *testing.T) {
+	const tokenValue = "s3cr3t-mirror-token"
+	fr := &probeFakeRunner{exitCode: 0}
+	srv, ps := newProbeHarness(t, types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.npmjs.org", To: "https://artifactory.corp/npm", Ecosystem: "npm", TokenSecretRef: "npm-mirror-token"},
+	}}, fr)
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"npm-mirror-token": []byte(tokenValue)}}
+
+	w := do(t, srv, http.MethodPost, "/api/v1/site-config/test-redirect", adminToken, `{"from":"registry.npmjs.org"}`)
+	if got := decodeProbeResponse(t, w.Body.String()); w.Code != http.StatusOK || got.State != "reached" {
+		t.Fatalf("test-redirect = %d %s, want 200 reached", w.Code, w.Body.String())
+	}
+	fr.mu.Lock()
+	spec := fr.lastSpec
+	fr.mu.Unlock()
+	pc := spec.ProxyConfig
+
+	var rules []string
+	for _, ig := range pc.Injection {
+		rules = append(rules, ig.Rule.Host+" "+ig.Rule.Header+" "+ig.Rule.SecretName)
+	}
+	if !slices.Equal(rules, []string{"artifactory.corp Authorization npm-mirror-token"}) {
+		t.Errorf("proxy injections = %q, want the row's token rule for artifactory.corp", rules)
+	}
+	if !slices.Equal(pc.MITMHosts, []string{"artifactory.corp:443"}) || pc.MITMCACertPEM == "" {
+		t.Errorf("MITM hosts = %v (CA minted: %t), want artifactory.corp:443 with a per-run CA", pc.MITMHosts, pc.MITMCACertPEM != "")
+	}
+	if !slices.Contains(pc.Policy.AllowedDomains, "artifactory.corp:443") {
+		t.Errorf("probe egress = %v, want the port-qualified mirror entry a run gets", pc.Policy.AllowedDomains)
+	}
+	for _, env := range []map[string]string{spec.Env, spec.SecretEnv} {
+		for k, v := range env {
+			if strings.Contains(v, tokenValue) {
+				t.Errorf("sandbox env %s holds the mirror token", k)
+			}
+		}
+	}
+	if strings.Contains(w.Body.String(), tokenValue) {
+		t.Error("the response body holds the mirror token")
+	}
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	for _, ev := range ps.events {
+		if strings.Contains(string(ev.Data), tokenValue) {
+			t.Errorf("audit event %q holds the mirror token", ev.Action)
+		}
 	}
 }
 

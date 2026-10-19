@@ -3403,6 +3403,7 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 
 - It runs two fetches in one sandbox.
 - The mirror (`to`) goes through the normal path, then the public endpoint (`from`) again with the proxy deliberately bypassed — to catch a redirect that's configured but not enforced.
+- A row with a token (`token_secret_ref` or `token_integration_ref`) is fetched with that token, injected by the proxy exactly as a run's is: it never enters the probe sandbox, the response or the audit row.
 - Both return `200` with `{"state", "detail", "elapsed_ms"}`.
 - `test-proxy` adds three qualifiers so a client never has to string-match `detail`:
   - `via` (`proxy`/`direct`);
