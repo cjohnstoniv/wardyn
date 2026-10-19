@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -135,6 +136,9 @@ type syncRunner struct {
 }
 
 func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
+	if len(spec.Argv) == 3 && spec.Argv[0] == "/bin/sh" {
+		return r.hostShell(ctx, spec.Argv[2])
+	}
 	start := "/"
 	if i := slices.Index(spec.Argv, "-d"); i >= 0 && i+1 < len(spec.Argv) {
 		// sftp-server's own chdir failure does not stop it: it serves from
@@ -175,6 +179,34 @@ func (r *syncRunner) ExecStream(ctx context.Context, _ string, spec runner.ExecS
 			}
 		},
 	}, nil
+}
+
+// hostShell runs an SSH exec's command on the host, with every sandbox path
+// moved under the sandbox directory, as the sandbox's own shell would.
+func (r *syncRunner) hostShell(ctx context.Context, script string) (*runner.ExecSession, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", strings.ReplaceAll(script, "/home/agent", filepath.Join(r.sandbox, "home/agent")))
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &runner.ExecSession{Stdin: stdin, Stdout: stdout, Stderr: stderr, Wait: func() (int, error) {
+		err := cmd.Wait()
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode(), nil
+		}
+		return 0, err
+	}}, nil
 }
 
 func (r *syncRunner) host(p string) string {
@@ -795,7 +827,7 @@ func TestSyncGateway_WatchPicksUpLaterChanges(t *testing.T) {
 	cmd := syncCmd(nil)
 	var out strings.Builder
 	cmd.SetOut(&out)
-	go func() { done <- runSyncLoop(ctx, cmd, sy, syncFlags{watch: true, asJSON: true}) }()
+	go func() { done <- runSyncLoop(ctx, cmd, sy, sess, syncFlags{watch: true, asJSON: true}, nil) }()
 	putSyncFile(t, filepath.Join(root, "late.txt"), "arrived later", 0o644)
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		if b, err := os.ReadFile(filepath.Join(box, "late.txt")); err == nil && string(b) == "arrived later" {

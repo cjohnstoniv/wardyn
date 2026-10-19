@@ -300,7 +300,7 @@ func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
 
 // subsystemBridge validates a subsystem request and returns the bridge to run,
 // or nil after replying false. wardyn-sync moves the channel onto a sync slot.
-func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string) func() {
+func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string, pass *sshSyncPass) func() {
 	s, ctx, runID, principal := g.s, g.ctx, g.runID, g.principal
 	var m sshSubsystemMsg
 	if err := ssh.Unmarshal(req.Payload, &m); err != nil {
@@ -327,7 +327,7 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
-		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv) }
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv, pass) }
 	default:
 		_ = req.Reply(false, nil)
 	}
@@ -369,6 +369,9 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// syncEnv holds the wardyn-sync-only env names. Kept apart from env so they
 	// can never reach an exec or shell: only a wardyn-sync dispatch reads them.
 	syncEnv := map[string]string{}
+	// pass takes the wardyn-sync-pass reports, which only a sync bridge that
+	// has started accepts.
+	pass := &sshSyncPass{}
 	var bridgeDone chan struct{}
 	gate := &sshSessionGate{s: s, ctx: chCtx, runID: runID, principal: principal, slot: slot, channel: channel}
 
@@ -453,7 +456,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "subsystem":
-			bridge := gate.subsystemBridge(req, channel, syncEnv)
+			bridge := gate.subsystemBridge(req, channel, syncEnv, pass)
 			if bridge == nil {
 				continue
 			}
@@ -464,6 +467,12 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 				defer close(bridgeDone)
 				bridge()
 			})
+
+		case sshSyncPassRequest:
+			ok := s.sshSyncPassReported(chCtx, runID, principal, pass, req.Payload)
+			if req.WantReply {
+				_ = req.Reply(ok, nil)
+			}
 
 		default:
 			// Everything else — agent forwarding (auth-agent-req@openssh.com),

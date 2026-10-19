@@ -523,6 +523,8 @@ func run() error {
 		SSHHostKey:           feats.sshHostKey,
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
+		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
 		// How long a governance change held for a second human waits (the switch itself is read

@@ -636,6 +636,14 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
+	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
+	// ignore file in the synced tree. Empty adds none.
+	SyncDeny []string
+	// LocalFolderSeedWait is WARDYN_LOCAL_FOLDER_SEED_WAIT: how long dispatch
+	// holds a run's agent for the first sync of its local folder, never past
+	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
+	LocalFolderSeedWait time.Duration
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.

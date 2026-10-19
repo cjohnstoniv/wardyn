@@ -811,6 +811,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
+		// A local folder holds the agent until its first sync lands (run_local_folder.go).
+		if !s.holdForLocalFolder(ctx, run, ref) {
+			return
+		}
 		// BYOI: gate the task exec on a passing selftest (fail closed) — but
 		// refuse UP FRONT, before even attempting the selftest, on an
 		// exec-less (krun) substrate: see byoiExecLessRefused.

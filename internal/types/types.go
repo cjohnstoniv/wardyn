@@ -176,9 +176,12 @@ type AgentRun struct {
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
-	Reserved   RunnerAmounts `json:"-"`
-	SandboxRef string        `json:"sandbox_ref,omitempty"`
-	Image      string        `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	Reserved RunnerAmounts `json:"-"`
+	// LocalFolder is the folder on the creator's computer that `wardyn sync` seeds before the agent
+	// starts (0192, run_local_folder.go): written with the row, read back only by dispatch's hold.
+	LocalFolder *RunLocalFolder `json:"-"`
+	SandboxRef  string          `json:"sandbox_ref,omitempty"`
+	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
@@ -606,3 +609,12 @@ type PersonList struct {
 // of at most 64 MiB (128 GiB) and a replay or list render at 2048 reads. The
 // control plane refuses a higher part (413), and the proxy never forwards one.
 const RecordingMaxParts = 2048
+
+// RunLocalFolder is a run's folder on the person's computer, which reaches a remote sandbox only by
+// `wardyn sync`. Name is how the person's computer names it (its base name), for the messages that
+// refer to it; RemoteDir is where in the sandbox it lands. A run that has one does not start its
+// agent until the first sync of that folder into RemoteDir has completed.
+type RunLocalFolder struct {
+	Name      string `json:"name"`
+	RemoteDir string `json:"remote_dir,omitempty"`
+}

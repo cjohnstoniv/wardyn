@@ -31,7 +31,8 @@ docs/USERS.md=4748 share=35
 # docs/SSH.md 5813 = 5808 + 5, measured: keepalive bound stated as 30 to 60 seconds
 # docs/SSH.md 5849 = 5813 + 36, measured: the never-reap bullet names the shipped ceiling.
 # docs/SSH.md 5865 adds 52 over 5813, measured: 0.9.4 L4b, the connection bounds.
-docs/SSH.md=5901 share=35
+# docs/SSH.md=5901 adds 297 (0.10 HYB-A): sync ignore files, deletes and renames, --git, and the local-folder hold
+docs/SSH.md=6198 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.

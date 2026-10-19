@@ -436,6 +436,9 @@ export interface RunSyncOpen {
 }
 export interface RunSync {
   open: RunSyncOpen[];
+  // deny is the organisation's WARDYN_SYNC_DENY patterns, which `wardyn sync`
+  // applies above every ignore file; the console does not show it yet.
+  deny?: string[];
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
