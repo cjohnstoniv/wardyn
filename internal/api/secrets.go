@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -963,6 +964,7 @@ func (s *Server) ownsSecret(ctx context.Context, owner, name string) bool {
 	}
 	names, err := s.cfg.Secrets.For(owner).List(ctx)
 	if err != nil {
+		slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
 		return false
 	}
 	return slices.Contains(names, name)

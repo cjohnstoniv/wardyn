@@ -5,7 +5,15 @@ package federation
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestOrgURLSHA256 pins what counts as the same organisation URL (the client
@@ -36,5 +44,29 @@ func TestOrgURLSHA256(t *testing.T) {
 	var old Credential
 	if err := json.Unmarshal([]byte(`{"device_id":"6f1c2c1e-0d0c-4b52-9a4e-5b1f0c8f2a11","token":"wdd_x","enrolment_token_sha256":"ab"}`), &old); err != nil || old.OrgURLSHA256 != "" {
 		t.Errorf("legacy credential: err=%v hash=%q, want empty", err, old.OrgURLSHA256)
+	}
+}
+
+// The device bearer is for the organisation URL only (#2688): a 3xx from it is an answer, never
+// followed, so the target sees neither the request nor the bearer.
+func TestClient_RefusesToFollowARedirect(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	org := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer org.Close()
+
+	_, err := NewClient(org.URL).Push(t.Context(), Credential{DeviceID: uuid.New(), Token: "wdd_secret"}, []types.FederatedAuditEvent{})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("Push = %v, want the 307 as a StatusError", err)
+	}
+	if n := targetHits.Load(); n != 0 {
+		t.Fatalf("the redirect target was reached %d times", n)
 	}
 }

@@ -113,10 +113,24 @@ func ReadSecretFile(name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: unusable path", name)
 	}
-	if rel, err := filepath.Rel(repoRoot(), abs); err == nil && !strings.HasPrefix(rel, "..") {
+	// Judge where the file REALLY is: a symlink outside the checkout that points into it, or a
+	// checkout reached through a symlink, must not slip past a lexical comparison (#2699).
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: file not readable", name)
+	}
+	root := repoRoot()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil {
+		return nil, fmt.Errorf("%s cannot be checked against the repository; keep secret files outside it", name)
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("%s points inside the repository; keep secret files outside it", name)
 	}
-	b, err := os.ReadFile(abs)
+	b, err := os.ReadFile(real)
 	if err != nil {
 		return nil, fmt.Errorf("%s: file not readable", name)
 	}

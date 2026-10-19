@@ -617,6 +617,13 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 // finalisation when that is possible, else to a capture-gap row.
 func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStore, runID uuid.UUID) {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		// A transient read fault must not become a permanent capture-gap row: the
+		// pending row stays stale and the next sweep tries again (#2797).
+		slog.WarnContext(ctx, "wardynd: reading a run to resolve its stale pending output failed; retrying next sweep",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
 	if err != nil || run.Interactive || runIsUnrecordable(run) {
 		s.writeGapRow(ctx, st, runID, "stale_pending")
 		return

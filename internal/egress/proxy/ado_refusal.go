@@ -133,6 +133,10 @@ func (c adoUpstreamClass) message(target string, status int) string {
 	case adoUpstreamRefused:
 		return "Azure DevOps refused this run's Azure DevOps sign-in (HTTP 401). Azure DevOps does not say why: the sign-in may have expired, it may have been revoked, or it may be missing a permission this request needs."
 	default:
+		if status == http.StatusNotFound {
+			// A 404 with a user-data header is as likely a path that does not exist as a hidden one.
+			return fmt.Sprintf("Azure DevOps could not find %s, or your Azure DevOps account lacks access to it (HTTP %d).", target, status)
+		}
 		return fmt.Sprintf("your Azure DevOps account lacks access to %s (HTTP %d).", target, status)
 	}
 }

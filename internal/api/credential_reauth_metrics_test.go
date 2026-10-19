@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -397,4 +398,40 @@ func TestCredentialReauthMetrics_RequestedAndResolvedAtTheirOwnTransitions(t *te
 		t.Error("the wait summary did not record the resolution")
 	}
 	_ = json.RawMessage(nil)
+}
+
+// adoServerSiteStore answers the site config with one Azure DevOps Server row.
+type adoServerSiteStore struct {
+	store.Store
+	sc types.SiteConfig
+}
+
+func (s adoServerSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.sc, nil
+}
+
+// An Azure DevOps Server own-token hold that ran out stamps the Server host,
+// which is no *.dev.azure.com name; it must stay off the AWS SSO timeout series
+// like the Services hosts do (#2801).
+func TestCountReauthTimeout_AzureDevOpsServerHostIsNotAnAWSTimeout(t *testing.T) {
+	h := newHarness(t)
+	srv := h.srv
+	srv.cfg.Store = adoServerSiteStore{Store: srv.cfg.Store, sc: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
+		Git: []types.GitProvider{{ID: "tfs", Kind: types.GitProviderAzureDevOps, BaseURLs: []string{"https://tfs.corp.example/tfs/DefaultCollection"}}},
+	}}}
+	timeout := func(host string) egress.DecisionLog {
+		return egress.DecisionLog{
+			Request: egress.Request{Host: host, Port: 443, Method: http.MethodGet}, Decision: egress.Deny,
+			RuleSource: ruleSourceCredentialReauthTimeout,
+		}
+	}
+	before := reauthCount(t, srv, "timeout")
+	srv.countReauthTimeout(context.Background(), timeout("TFS.corp.example"))
+	if after := reauthCount(t, srv, "timeout"); after != before {
+		t.Errorf("an Azure DevOps Server hold timeout moved the AWS timeout label (%s -> %s)", before, after)
+	}
+	srv.countReauthTimeout(context.Background(), timeout("portal.sso.eu-west-2.amazonaws.com"))
+	if after := reauthCount(t, srv, "timeout"); after == before {
+		t.Errorf("an AWS SSO timeout did not move the timeout label (%s)", after)
+	}
 }

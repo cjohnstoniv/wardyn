@@ -45,15 +45,19 @@
 //  1. The create-then-dispatch window belongs to ONE launch. handleCreateRun
 //     answers 201 once the run row exists and hands this mount to the detached
 //     finishCreateRunLaunch (runs_create_launch.go), which builds the image and
-//     dispatches; nothing in the tree re-dispatches a run later (reconcile
-//     FAILS in-flight pre-dispatch runs, it never resumes one). So the grant
-//     that resolved here is the grant that launch binds — a revocation landing
-//     during the build does not reach it, as below.
+//     dispatches; no dispatch is ever repeated (reconcile FAILS in-flight
+//     pre-dispatch runs, it never resumes one). The one later start is a run
+//     promoted from a pool queue: it replays the create fold on its stored
+//     request (run_queue_start.go), which resolves the drive AGAIN at that
+//     start, so a grant revoked while the run waited is gone by then. Either
+//     way the grant that resolved is the grant that launch binds — a
+//     revocation landing during the build does not reach it, as below.
 //  2. Re-resolving at dispatch is IMPOSSIBLE anyway, which is why the ceiling
 //     does not do it either. Resolution keys on capabilitySubjects — the
 //     caller's OIDC sub, email and group snapshot — and the run row carries
 //     only CreatedBy, one principal string. There is no stored identity to
-//     re-resolve FROM.
+//     re-resolve FROM at dispatch (the queue start re-resolves earlier, in its
+//     fold, from the authority stored with the queued run).
 //  3. Persisting the request flag on the run row instead would therefore buy
 //     nothing readable: a column whose only consumer would have to re-resolve
 //     from an identity the row does not carry.

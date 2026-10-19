@@ -233,8 +233,9 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// in `scanning`.
 	runCreated := false
 	release := func(cause error) error {
-		_ = s.cfg.Store.ClearSourceActiveRun(ctx, src.ID, runID)
-		_, _ = s.cfg.Store.SetSourceScanResultUnfenced(ctx, src.ID, src.Profile, src.Status, nil)
+		// One write, fenced on this run's claim: it restores the status and clears the fence only
+		// while the claim is still ours, so a newer claim's scan is never overwritten.
+		_, _ = s.cfg.Store.SetSourceScanResult(ctx, src.ID, src.Profile, src.Status, runID, nil)
 		if runCreated {
 			// The PENDING row would otherwise hold its slot, run token and any
 			// clone grant until the undispatched sweep (claimImportStep's compensator).

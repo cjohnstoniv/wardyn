@@ -165,9 +165,9 @@ func (s *Server) SeedSiteConfig(ctx context.Context, seed *SiteConfigSeed) error
 	if len(applied) == 0 {
 		return nil
 	}
-	if err := validateSiteConfig(cfg); err != nil {
-		return fmt.Errorf("site-config seed: the seeded site config is invalid: %w", err)
-	}
+	// No validateSiteConfig here: the seed was validated at load, and a re-check
+	// of the merged document could only fail on a field already stored, which
+	// would refuse boot over settings the seed does not touch.
 	saved, err := s.cfg.Store.PutSiteConfig(lctx, cfg)
 	if err != nil {
 		return fmt.Errorf("site-config seed: write the site config: %w", err)

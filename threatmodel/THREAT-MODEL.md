@@ -813,7 +813,7 @@ is not the deployment described above.**
   - All suffix parts share the run lock.
   - New opens and stat calls check the fence even if a raw file or row was recreated; a reader already opened before the erase may retain bytes.
   - Filesystem markers are synced before success and never retention-swept, nor are the persistent per-run `.lock` files.
-  - Local Unix advisory-lock and directory-sync support are required; a failure refuses the operation.
+  - Local Unix advisory-lock support is required, and a failed directory sync refuses the operation, except where the filesystem cannot sync one (FUSE, 9p).
   - This covers cooperative Store/recorder writers on metadata whose integrity is protected.
   - Postgres tombstones likewise survive retention.
   - A shared-volume actor able to remove metadata can defeat that filesystem fence: this fallback is not a boundary against a writer controlling the recording root.
@@ -2189,8 +2189,9 @@ hiding them would repeat the failure mode we are designed to avoid.
         - The row outlives the erase on purpose. It keeps the subject id, the counter and the time of its last change, because deleting it would reset the counter to 0 and let a write that began before the erase land.
         - A request to remove every trace of a subject id from the database has to treat this row as a table of its own.
         - Residual: a store with no generation falls back to in-process locks (`write_fence` `locks_only`), and a pre-upgrade daemon in a mixed fleet is unfenced.
-      - **Outside every erasure scope (0.9):** a person's saved preferences (`principal_prefs`: the chosen view and the default runner pool) and the `created_by` and `updated_by` columns of organization runner pools and remote-hosted runners keep their name.
+      - **Outside every erasure scope (0.9):** the `created_by` and `updated_by` columns of organization runner pools and remote-hosted runners keep their name.
         - So does an Azure DevOps token row of their runs that is still live at the erasure: the sweep needs it to revoke the token. An erasure run again after the token is revoked or expired removes it.
+        - The `runner_pools` scope deletes `principal_prefs` and `ui_run_layouts`.
       - **Who a name is (0.9):** every route that erases, deletes or assigns by name resolves the name once, through `PrincipalsNamed`.
         - The order is: an exact principal (sign-in, admin-created person, API-token owner, workspace owner); then `entra:<tenant>:<object>` from recorded ids; then the principal case-folded; then, only for a name with an `@`, every recorded email together.
         - Two principals in a tier, or an unreadable directory, refuses; nothing falls through to a guess.

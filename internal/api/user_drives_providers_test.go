@@ -378,3 +378,26 @@ func TestDriveRehomeRaceIsRefusedAtTheWrite(t *testing.T) {
 		t.Errorf("audit = %v, want no drive.write row for a write that did not happen", driveAuditActions(rec))
 	}
 }
+
+// Each refusal of a drive write keeps its own reason on the wire: the org switch, the ceiling and an unreadable
+// site config have three remedies, so the one request-invalid stamp must not replace them.
+func TestDriveWriteRefusalsKeepTheirOwnReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		site       types.SiteConfig
+		wantReason string
+	}{
+		{"drives disabled", providerSiteConfig(true, 0), driveRefusalDrivesDisabled},
+		{"above the ceiling", providerSiteConfig(false, 1024), reasonUserDriveSizeRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newDriveCRUDStore()
+			st.site = tc.site
+			srv, _ := driveAdminServer(st, nil)
+			w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", driveCreateBody, nil)
+			if w.Code != http.StatusUnprocessableEntity || errorReasonOf(w.Body.String()) != tc.wantReason {
+				t.Errorf("drive write = %d reason %q, want 422 %q: %s", w.Code, errorReasonOf(w.Body.String()), tc.wantReason, w.Body.String())
+			}
+		})
+	}
+}

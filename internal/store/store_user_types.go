@@ -67,9 +67,14 @@ func GetUserTypeQ(ctx context.Context, q Querier, id string, forUpdate bool) (ty
 	return scanUserType(q.QueryRow(ctx, `SELECT `+userTypeCols+` FROM user_types WHERE id = $1`+lockSuffix(forUpdate), id))
 }
 
+// ErrUserTypeIDReferenced is CreateUserType's refusal when a grant, assignment, drive grant or live service
+// identity still names the id (an orphan of a deleted type, or the live type's own references). It wraps
+// ErrConflict, so a caller that only tests for a conflict is unchanged.
+var ErrUserTypeIDReferenced = fmt.Errorf("%w: a grant, assignment or service identity still names this user type id", ErrConflict)
+
 // CreateUserType inserts a custom type (built_in is never set here).
-// ErrConflict when the id or name is taken, or the id is still named by an
-// orphaned subject row.
+// ErrConflict when the id or name is taken; ErrUserTypeIDReferenced (an ErrConflict) when the id is still
+// named by a subject row.
 func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
 	const q = `
 		INSERT INTO user_types (id, name, description, priority, created_by)
@@ -80,7 +85,7 @@ func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserTyp
 	err := s.Pool.QueryRow(ctx, q, t.ID, t.Name, t.Description, t.Priority, t.CreatedBy).Scan(
 		&out.ID, &out.Name, &out.Description, &out.Priority, &out.BuiltIn, &out.CreatedAt, &out.UpdatedAt, &out.CreatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return types.UserType{}, ErrConflict
+		return types.UserType{}, ErrUserTypeIDReferenced
 	}
 	return out, uniqueConflict(err)
 }

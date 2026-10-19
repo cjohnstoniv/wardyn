@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -538,6 +539,26 @@ func TestDelegation_ScopeIsTheRegisteredGroup(t *testing.T) {
 	rows := e.rows("delegation.exchange")
 	if len(rows) != 2 || rows[0].Outcome != "denied" || rows[0].Target != delegPerson || !strings.Contains(string(rows[0].Data), "outside_scope") {
 		t.Fatalf("delegation.exchange rows = %+v, want denied outside_scope rows naming the person", rows)
+	}
+}
+
+// A refusal for a person whose group snapshot was partial says so in its audit
+// row (#2764): the reason stays outside_scope, the row gains groups_truncated.
+func TestDelegation_OutsideScopeRowFlagsATruncatedGroupSnapshot(t *testing.T) {
+	e := newDelegationPG(t)
+	portal, cred := e.registerPortal(t, delegGroup)
+	// More group names than the session snapshot holds, all sorting before the portal's group.
+	many := make([]string, 0, 400)
+	for i := range 400 {
+		many = append(many, fmt.Sprintf("a-filler-group-%04d", i))
+	}
+	subject := e.subjectToken(t, delegPerson, delegPersonEmail, many, nil)
+	if w := e.exchange(t, portal, cred, subject); w.Code != http.StatusForbidden {
+		t.Fatalf("%d %s, want 403", w.Code, w.Body.String())
+	}
+	rows := e.rows("delegation.exchange")
+	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"outside_scope"`) || !strings.Contains(string(rows[0].Data), `"groups_truncated":true`) {
+		t.Fatalf("rows = %+v, want one outside_scope row with groups_truncated", rows)
 	}
 }
 

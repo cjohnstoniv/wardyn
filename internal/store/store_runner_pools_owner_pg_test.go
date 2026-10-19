@@ -147,6 +147,13 @@ func TestPG_DeleteRunnerPoolsByOwnerDeletesThePersonsPreferences(t *testing.T) {
 	if _, err := pg.DeleteRunnerPoolsByOwner(ctx, "sub-leaver"); err != nil {
 		t.Fatal(err)
 	}
+	var layoutsGone, layoutsKept int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE principal = 'sub-leaver'), count(*) FILTER (WHERE principal = 'sub-stays') FROM ui_run_layouts`).Scan(&layoutsGone, &layoutsKept); err != nil {
+		t.Fatal(err)
+	}
+	if layoutsGone != 0 || layoutsKept != 1 {
+		t.Errorf("after the erasure: %d of the person's cockpit layouts left, %d of another's; want 0 and 1", layoutsGone, layoutsKept)
+	}
 	var gone, kept int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE principal = 'sub-leaver'), count(*) FILTER (WHERE principal = 'sub-stays') FROM principal_prefs`).Scan(&gone, &kept); err != nil {
 		t.Fatal(err)

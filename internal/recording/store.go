@@ -18,6 +18,7 @@ package recording
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -130,6 +131,19 @@ func (s *FSStore) SaveRecordingFile(ctx context.Context, name string, r io.Reade
 	return s.saveFile(ctx, strings.TrimSuffix(name, ext), ext, r, true)
 }
 
+// tmpCastPrefix starts every staging file saveFile writes before its rename.
+const tmpCastPrefix = ".tmp-cast-"
+
+// stagingName is a fresh staging file name carrying key's run id, so erasing the run can find the file
+// a failed save left behind. A run id too long for a file name (the 255-byte limit) is left out.
+func stagingName(key string) string {
+	run, _, _ := strings.Cut(key, castSep)
+	if len(run) > 150 {
+		return tmpCastPrefix + uuid.NewString()
+	}
+	return tmpCastPrefix + run + castSep + uuid.NewString()
+}
+
 func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, inPlace bool) error {
 	if _, err := safeRunPath(s.root, key); err != nil {
 		return err
@@ -139,7 +153,7 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 		return err
 	}
 	defer root.Close()
-	tmpName := ".tmp-cast-" + uuid.NewString()
+	tmpName := stagingName(key)
 	tmp, err := root.OpenFile(tmpName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
@@ -186,15 +200,22 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 	defer dir.Close()
 	// The cast is stored once the rename returns. Some filesystems (FUSE, 9p, older CIFS) cannot fsync
 	// a directory and answer EINVAL or ENOTSUP; that must not turn a stored cast into an error.
-	if err := syncDir(dir); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
-		return err
-	}
-	return nil
+	return syncDirTolerant(dir)
 }
 
 // syncDir is the directory fsync saveFile makes after its rename; a variable so a test can answer
 // the way a filesystem that cannot sync a directory does.
 var syncDir = func(dir *os.File) error { return dir.Sync() }
+
+// syncDirTolerant is syncDir where a filesystem that cannot fsync a directory (FUSE, 9p, older CIFS)
+// answers EINVAL or ENOTSUP: the change is made, so that is not a failure. Saves, erasure markers
+// and deletes all take the same durability trade on such a filesystem.
+func syncDirTolerant(dir *os.File) error {
+	if err := syncDir(dir); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return err
+	}
+	return nil
+}
 
 func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.File) error {
 	// Replacing the inode would bypass write access and change owner/mode/ACL.
@@ -244,7 +265,7 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	var errs []error
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || strings.HasSuffix(name, ".lock") || (!strings.HasSuffix(name, ".cast") && !strings.HasSuffix(name, ".log") && !strings.HasPrefix(name, ".tmp-cast-")) {
+		if e.IsDir() || strings.HasSuffix(name, ".lock") || (!strings.HasSuffix(name, ".cast") && !strings.HasSuffix(name, ".log") && !strings.HasPrefix(name, tmpCastPrefix)) {
 			continue
 		}
 		// A stat error means the entry vanished under us.
@@ -289,6 +310,70 @@ func (s *FSStore) DeleteRun(ctx context.Context, key string) (int, error) {
 	if err := markFSErased(ctx, root, key); err != nil {
 		return 0, err
 	}
+	// A composite key erases its own subtree only, so it leaves other keys' staging files alone.
+	var stagedOf func(run string) bool
+	if !strings.Contains(key, castSep) {
+		stagedOf = func(run string) bool { return run == key }
+	}
+	return removeRunFiles(ctx, root, func(stem string) bool { return withinRun(stem, key) }, stagedOf)
+}
+
+// RunsDeleter is RunDeleter for many bare run ids at once: one directory scan instead of one per
+// run, which is what a person's erasure over thousands of runs needs.
+type RunsDeleter interface {
+	DeleteRuns(ctx context.Context, runIDs []string) (int, error)
+}
+
+var _ RunsDeleter = (*FSStore)(nil)
+
+// DeleteRuns fences every run, one at a time under its own lock, then removes all their casts and
+// staging files in a single scan. After a run's fence is durable no writer can commit another file
+// for it (saveFile checks the fence under that lock), so the scan needs no lock of its own.
+func (s *FSStore) DeleteRuns(ctx context.Context, runIDs []string) (int, error) {
+	if len(runIDs) == 0 {
+		return 0, nil
+	}
+	set := make(map[string]struct{}, len(runIDs))
+	for _, id := range runIDs {
+		if strings.Contains(id, castSep) {
+			return 0, fmt.Errorf("recording: DeleteRuns takes bare run ids, got %q", id)
+		}
+		if _, err := safeRunPath(s.root, id); err != nil {
+			return 0, err
+		}
+		set[id] = struct{}{}
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
+	for id := range set {
+		if err := fenceFSRun(ctx, root, id); err != nil {
+			return 0, err
+		}
+	}
+	inSet := func(run string) bool { _, ok := set[run]; return ok }
+	return removeRunFiles(ctx, root, func(stem string) bool {
+		run, _, _ := strings.Cut(stem, castSep)
+		return inSet(run)
+	}, inSet)
+}
+
+// fenceFSRun installs run's erasure fence under its lock and releases the lock.
+func fenceFSRun(ctx context.Context, root *os.Root, run string) error {
+	lock, err := lockFSRun(ctx, root, run)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return markFSErased(ctx, root, run)
+}
+
+// removeRunFiles removes the .cast and .log files whose stem inRun accepts, counting them, and the
+// staging files of the runs stagedOf accepts (nil accepts none), which are not counted. A save that
+// failed before its rename leaves its staging file holding the run's bytes, so erasure takes it too.
+func removeRunFiles(ctx context.Context, root *os.Root, inRun func(stem string) bool, stagedOf func(run string) bool) (int, error) {
 	dir, err := root.Open(".")
 	if err != nil {
 		return 0, err
@@ -301,22 +386,34 @@ func (s *FSStore) DeleteRun(ctx context.Context, key string) (int, error) {
 	removed := 0
 	var errs []error
 	for _, e := range ents {
-		ext := filepath.Ext(e.Name())
-		if e.IsDir() || (ext != ".cast" && ext != ".log") || !withinRun(strings.TrimSuffix(e.Name(), ext), key) {
+		name := e.Name()
+		counted := true
+		switch ext := filepath.Ext(name); {
+		case e.IsDir():
+			continue
+		case strings.HasPrefix(name, tmpCastPrefix):
+			run, _, ok := strings.Cut(strings.TrimPrefix(name, tmpCastPrefix), castSep)
+			if !ok || stagedOf == nil || !stagedOf(run) {
+				continue
+			}
+			counted = false
+		case (ext != ".cast" && ext != ".log") || !inRun(strings.TrimSuffix(name, ext)):
 			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return removed, err
 		}
-		if err := root.Remove(e.Name()); err != nil {
+		if err := root.Remove(name); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				errs = append(errs, err)
 			}
 			continue
 		}
-		removed++
+		if counted {
+			removed++
+		}
 	}
-	return removed, errors.Join(append(errs, dir.Sync())...)
+	return removed, errors.Join(append(errs, syncDirTolerant(dir))...)
 }
 
 // OpenCast opens <root>/<runID>.cast for reading. Returns ErrNotFound when the

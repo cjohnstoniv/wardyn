@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,7 +129,8 @@ func (e Enqueue) Args() []any {
 	chans := make([]string, len(e.planned))
 	afters := make([]int32, len(e.planned))
 	for i, p := range e.planned {
-		tiers[i], chans[i], afters[i] = p.Tier, p.Channel, int32(p.After.Seconds())
+		// The column is an int: a delay past int32 seconds clamps to "effectively never" instead of wrapping.
+		tiers[i], chans[i], afters[i] = p.Tier, p.Channel, int32(min(p.After.Seconds(), math.MaxInt32))
 	}
 	return []any{tiers, chans, afters}
 }

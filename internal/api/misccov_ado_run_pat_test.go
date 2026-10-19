@@ -123,9 +123,10 @@ func (s *miscCovPATStore) InsertRunPAT(ctx context.Context, p store.RunPAT) erro
 
 // miscCovPATClient is the token API answering with exactly what a test says.
 type miscCovPATClient struct {
-	mu      sync.Mutex
-	result  adoPAT
-	revoked []string
+	mu        sync.Mutex
+	result    adoPAT
+	revoked   []string
+	revokeErr error
 }
 
 func (c *miscCovPATClient) Create(context.Context, string, string, adoPATRequest) (adoPAT, error) {
@@ -136,7 +137,7 @@ func (c *miscCovPATClient) Revoke(_ context.Context, _, _, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.revoked = append(c.revoked, id)
-	return nil
+	return c.revokeErr
 }
 
 func (c *miscCovPATClient) revokedIDs() []string {
@@ -218,6 +219,23 @@ func TestMiscCovMintRefusesBeforeCreatingAnything(t *testing.T) {
 			t.Errorf("created %d tokens, denied rows %v; want none created and one denial", l.pats.createCount(), l.deniedRefusals(t))
 		}
 	})
+}
+
+// A revoke that fails for a token nobody recorded leaves a live token with no row: the failure is
+// audited with its authorization id so it can be traced and revoked by hand (#2802).
+func TestMiscCovMintAuditsAFailedRevokeOfAnUnrecordedToken(t *testing.T) {
+	l := newMiscCovMintLane(t)
+	l.wrapped.insertErr = errors.New("insert refused")
+	id := uuid.NewString()
+	client := &miscCovPATClient{result: adoPAT{AuthorizationID: id, Token: "fakepat" + strings.Repeat("z", 44)}, revokeErr: errors.New("organisation unreachable")}
+	l.srv.adoPATs = client
+	if _, err := l.mint(l.ado.caps); err == nil {
+		t.Fatal("mint succeeded though its token could not be recorded")
+	}
+	rows := l.audit.find(adoPATAuditRevokeFailed)
+	if len(rows) != 1 || rows[0].Target != id || !strings.Contains(string(rows[0].Data), id) {
+		t.Fatalf("revoke-failed rows = %+v, want one naming authorization %s", rows, id)
+	}
 }
 
 // A token that could not be recorded is revoked at once and never handed out, whichever record failed.

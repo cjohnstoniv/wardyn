@@ -29,6 +29,15 @@ func HostOf(rawURL string) string {
 	if i := strings.Index(s, "://"); i >= 0 {
 		s = s[i+3:]
 	}
+	// Userinfo ("user.name:pw@host") sits before the first '/', '?' or '#'; drop it first, or the cut
+	// below stops inside the user name.
+	authority := s
+	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+		authority = authority[:i]
+	}
+	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
+		s = s[i+1:]
+	}
 	if i := strings.IndexAny(s, "/:"); i >= 0 {
 		s = s[:i]
 	}
@@ -92,7 +101,7 @@ func EmitArtifactConfig(bases map[string]string, goSumDBOff bool) (files map[str
 			files[".config/pip/pip.conf"] = "[global]\nindex-url = " + base + "\n"
 		case "cargo":
 			files[".cargo/config.toml"] = "[source.crates-io]\nreplace-with = \"corp\"\n\n" +
-				"[registries.corp]\nindex = \"sparse+" + base + "\"\n"
+				"[registries.corp]\nindex = \"sparse+" + strings.TrimRight(base, "/") + "/\"\n"
 		case "maven":
 			files[".m2/settings.xml"] = mavenMirrorSettings(base)
 		case "go":

@@ -89,7 +89,7 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 // checks it itself rather than leaning on the store's validKey: a store
 // refusal is not a not-found, so it would reach the caller as a 500.
 func servableKey(key string) bool {
-	return len(key) <= maxCastKeyBytes
+	return validKey(key) == nil
 }
 
 // canonicalRunID reports whether prefix is a run id in its one canonical

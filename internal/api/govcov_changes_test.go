@@ -544,3 +544,32 @@ func TestGovCovDenyApproverAndRefusalError(t *testing.T) {
 		t.Errorf("security-tier denial = %d %q, want 403 security_admin_surface", w.Code, errorReason(w))
 	}
 }
+
+// A list read that went past the store's bound says it was cut, whatever the caller may see of it; a
+// list of exactly the bound, or a short one, says nothing.
+func TestGovCovListChangesSaysWhenTheStoreHitItsCap(t *testing.T) {
+	full := make([]types.GovernanceChange, store.MaxGovernanceChangeList+1)
+	for i := range full {
+		full[i] = types.GovernanceChange{ID: uuid.New(), TargetKind: govKindProfile}
+	}
+	st := &govCovStore{changes: full}
+	s, _ := govCovServer(t, st)
+	w := do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if w.Code != http.StatusOK || w.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Errorf("a read past the bound = %d, X-Wardyn-Truncated %q, want 200 and true", w.Code, w.Header().Get("X-Wardyn-Truncated"))
+	}
+	var got []types.GovernanceChange
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != store.MaxGovernanceChangeList {
+		t.Errorf("a read past the bound returned %d rows (err %v), want it trimmed to %d", len(got), err, store.MaxGovernanceChangeList)
+	}
+	st.changes = full[:store.MaxGovernanceChangeList]
+	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("a list of exactly the bound set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+	st.changes = full[:3]
+	w = do(t, s, http.MethodGet, govCovChangesPath, adminToken, "")
+	if w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Errorf("a short read set X-Wardyn-Truncated %q", w.Header().Get("X-Wardyn-Truncated"))
+	}
+}

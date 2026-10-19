@@ -189,3 +189,41 @@ func TestPG_GetDelegatedTokenByID(t *testing.T) {
 		t.Fatalf("grant of a revoked portal: err=%v, want ErrNotFound", err)
 	}
 }
+
+// Expired attach tickets and delegated tokens are deleted by the sweep itself, not only by the next
+// mint; a live row of either kind stays.
+func TestPG_SweepExpiredEphemeral(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	d, err := st.CreateDelegate(ctx, types.Delegate{ID: uuid.New(), Name: "portal-" + uuid.NewString()[:8], IdPClientID: "client-" + uuid.NewString()[:8], Group: "g"}, "wdp_"+uuid.NewString())
+	if err != nil {
+		t.Fatalf("create delegate: %v", err)
+	}
+	for _, ttl := range []time.Duration{-time.Minute, time.Hour} {
+		if _, err := st.MintDelegatedToken(ctx, types.DelegatedToken{ID: uuid.New(), DelegateID: d.ID, Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(ttl)}, "wdg_"+uuid.NewString(), now.Add(-2*time.Hour)); err != nil {
+			t.Fatalf("mint delegated token: %v", err)
+		}
+		if err := st.MintAttachTicket(ctx, uuid.NewString(), store.AttachTicket{RunID: uuid.New(), ActorType: types.ActorHuman, Principal: "alice"}, now.Add(-2*time.Hour), now.Add(ttl)); err != nil {
+			t.Fatalf("mint attach ticket: %v", err)
+		}
+	}
+	count := func(table string) (n int) {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if count("attach_tickets") != 2 || count("delegated_tokens") != 2 {
+		t.Fatalf("setup: tickets %d tokens %d, want 2 and 2", count("attach_tickets"), count("delegated_tokens"))
+	}
+	gone, err := st.SweepExpiredEphemeral(ctx, now)
+	if err != nil || gone != 2 {
+		t.Fatalf("sweep = %d, %v; want the 2 expired rows", gone, err)
+	}
+	if count("attach_tickets") != 1 || count("delegated_tokens") != 1 {
+		t.Errorf("after the sweep: tickets %d tokens %d, want the live row of each", count("attach_tickets"), count("delegated_tokens"))
+	}
+}

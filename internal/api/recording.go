@@ -134,6 +134,10 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	// Read only on the store's demand: an early storage failure must not leave
 	// an independent goroutine blocked reading the request body.
 	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, runID, s.maskGuard(runID))
+	if mr, ok := body.(*recordingMaskReader); ok {
+		// A recorder that says its body is a plain log is believed over the first-bytes guess below.
+		mr.plainLog = r.Header.Get(recording.FormatHeader) == recording.FormatLog
+	}
 	// One person's uploads queue behind each other before they queue with
 	// everyone else's; a run with no person owner queues as itself.
 	ctx := r.Context()
@@ -350,6 +354,14 @@ type recordingMaskReader struct {
 	sent  int    // masked bytes handed to the caller
 	head  []byte // the first bytes read, to tell a cast from a plain log
 	cut   bool
+	// plainLog is the recorder's own word that the body is a plain log, whatever its first bytes are.
+	plainLog bool
+}
+
+// isCast says whether the body is a cast, which is never cut: by the recorder's word when it gave one,
+// else by the cast header's first bytes.
+func (r *recordingMaskReader) isCast() bool {
+	return !r.plainLog && strings.HasPrefix(string(r.head), castHeadPrefix)
 }
 
 // maskCutMarker is the line a log cut at limit masked bytes ends with. It is not wardyn-rec's cut marker, which
@@ -363,7 +375,7 @@ const castHeadPrefix = `{"version"`
 
 // held back from the caller until the end or the cap is known: the room the cut marker needs.
 func (r *recordingMaskReader) holdBack() int {
-	if r.err != nil || r.cut || r.limit == 0 || strings.HasPrefix(string(r.head), castHeadPrefix) {
+	if r.err != nil || r.cut || r.limit == 0 || r.isCast() {
 		return 0
 	}
 	return len(maskCutMarker(r.limit))
@@ -372,7 +384,7 @@ func (r *recordingMaskReader) holdBack() int {
 // capOutput cuts a plain log's masked output at the limit: whatever was not yet handed on, up to the room the
 // marker needs, then the marker. The source is not read again.
 func (r *recordingMaskReader) capOutput() {
-	if r.limit == 0 || r.cut || r.sent+r.output.Len() <= r.limit || strings.HasPrefix(string(r.head), castHeadPrefix) {
+	if r.limit == 0 || r.cut || r.sent+r.output.Len() <= r.limit || r.isCast() {
 		return
 	}
 	marker := maskCutMarker(r.limit)

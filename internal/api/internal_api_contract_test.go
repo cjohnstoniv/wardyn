@@ -241,6 +241,39 @@ func TestInternalAPI_ServesTheN1Proxy(t *testing.T) {
 	}
 }
 
+// TestInternalAPI_ServesTheN1ProxyOf08 is the same window for the 0.8.9 proxy, the real N-1 of a 0.9
+// daemon: every route it dials is still routed behind the run-token gate, and the activity report it
+// added since 0.7 (testdata/internal_api_v0.8.json) is accepted with no body.
+func TestInternalAPI_ServesTheN1ProxyOf08(t *testing.T) {
+	raw, err := os.ReadFile("testdata/internal_api_v0.8.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c internalAPIContract
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: "owner@example.com", State: types.RunRunning, Agent: "claude-code"}
+	ast.mu.Unlock()
+	id, err := srv.cfg.Identity.MintRunIdentity(context.Background(), runID, "owner@example.com", "", internalAudience, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fill := strings.NewReplacer("{id}", uuid.NewString(), "{run}", runID.String())
+	for _, rt := range c.Routes {
+		if w := do(t, srv, rt.Method, fill.Replace(rt.Path), "", ""); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s with no run token: code %d, want 401 — the %s proxy's route is gone or ungated",
+				rt.Method, rt.Path, w.Code, c.Release)
+		}
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/internal/activity", id.Token, ""); w.Code != http.StatusNoContent {
+		t.Errorf("activity report from the %s proxy: code %d body %s, want 204", c.Release, w.Code, w.Body.String())
+	}
+}
+
 // TestReviewRev08N1ProxyDecisionSemantics is the independent 0.8 review's own
 // reproduction (F11 / issue #1063), adopted verbatim as a regression pin: a
 // v0.7.12 proxy's decision bodies, sent as-is to an 0.8 daemon, must keep the

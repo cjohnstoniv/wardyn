@@ -416,12 +416,12 @@ func uploadLog(srcPath, uploadURL, runToken string) error {
 	}
 	size := info.Size()
 	if size <= maxLogUploadBytes {
-		return putBody(io.NewSectionReader(f, 0, size), size, uploadURL, runToken)
+		return putBody(io.NewSectionReader(f, 0, size), size, uploadURL, runToken, true)
 	}
 	keep := cutAtLine(f, int64(maxLogUploadBytes-logMarkerReserve))
 	marker := recording.LogCutMarker(keep, size)
 	return putBody(io.MultiReader(io.NewSectionReader(f, 0, keep), strings.NewReader(marker)),
-		keep+int64(len(marker)), uploadURL, runToken)
+		keep+int64(len(marker)), uploadURL, runToken, true)
 }
 
 // logCutWindow is how far back cutAtLine looks for a line end.
@@ -445,12 +445,13 @@ func cutAtLine(f *os.File, keep int64) int64 {
 
 // putCast is uploadCast's request, shared with the tail uploader's parts.
 func putCast(data []byte, uploadURL, runToken string) error {
-	return putBody(bytes.NewReader(data), int64(len(data)), uploadURL, runToken)
+	return putBody(bytes.NewReader(data), int64(len(data)), uploadURL, runToken, false)
 }
 
 // putBody PUTs n bytes from body. The length is declared, so the request is
-// never chunked, and the client deadline scales with it (uploadTimeout).
-func putBody(body io.Reader, n int64, uploadURL, runToken string) error {
+// never chunked, and the client deadline scales with it (uploadTimeout). plainLog says the body is
+// a plain log rather than a cast, so the server does not have to guess from its first bytes.
+func putBody(body io.Reader, n int64, uploadURL, runToken string, plainLog bool) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: uploadDialTimeout}).DialContext
 	client := &http.Client{Timeout: uploadTimeout(int(n)), Transport: transport}
@@ -460,6 +461,9 @@ func putBody(body io.Reader, n int64, uploadURL, runToken string) error {
 	}
 	req.ContentLength = n
 	req.Header.Set("Content-Type", "application/x-asciicast")
+	if plainLog {
+		req.Header.Set(recording.FormatHeader, recording.FormatLog)
+	}
 	if runToken != "" {
 		req.Header.Set("Authorization", "Bearer "+runToken)
 	}

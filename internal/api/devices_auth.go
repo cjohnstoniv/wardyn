@@ -234,10 +234,10 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 // opening row or summary — pays the process-wide auth-failure bucket
 // (emitEnrolFailure).
 //
-// The streak key is the reason and the path, NOT the peer. auth.fail keys on
-// the peer because on a loopback deployment it separates principals; on this
-// anonymous route the peer is the caller's to rotate, and a key it can rotate
-// is a fold it can defeat. Each opening row still carries its peer, and the
+// The streak key is the reason and the path, NOT the peer. auth.fail's own key
+// (authFailedKey: actor, reason, path) leaves the peer out for the same reason:
+// the peer is the caller's to rotate, and a key it can rotate is a fold it can
+// defeat. Each opening row still carries its peer, and the
 // per-peer limiter has already bounded each address.
 func (s *Server) auditEnrolFailure(r *http.Request, reason string) {
 	ev := s.auditEvent(nil, types.ActorSystem, deviceEnrolActor, "device.enrol", r.URL.Path, "failure",

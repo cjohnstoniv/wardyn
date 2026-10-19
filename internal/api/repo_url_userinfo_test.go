@@ -274,10 +274,10 @@ func TestStoredRepoURLRedactedInLogsAndAudit(t *testing.T) {
 			{Repo: c.url, Target: "/etc/app"},           // refused target: logged and warned
 			{Repo: "acme/one", Target: "/home/agent/x"}, // takes the directory
 			{Repo: c.url, Target: "/home/agent/x"},      // collides: logged and warned
-			{Repo: c.url, Ref: "bad ref"},               // unsafe ref: logged
+			{Repo: c.url, Ref: "bad ref"},               // unsafe ref: logged and warned
 		})
 		out := logged.String()
-		if !strings.Contains(out, hostPath) || len(warnings) != 2 {
+		if !strings.Contains(out, hostPath) || len(warnings) != 3 {
 			t.Fatalf("fixture did not reach the log lines and warnings: log %q, warnings %q", out, warnings)
 		}
 		if strings.Contains(out, c.secret) {

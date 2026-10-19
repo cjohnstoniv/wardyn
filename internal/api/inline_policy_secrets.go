@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
@@ -23,6 +24,20 @@ const (
 	// the one the author has to look at first.
 	inlineSecretStoreMissingRefusal = "the %s grant requires a secret store, but none is configured"
 )
+
+// errSecretStoreUnavailable is validateRunSecretRefs' answer when the secret
+// store could not be listed: not a verdict on the policy, so callers refuse
+// 503 with this sentence alone rather than "invalid ...: <driver text>".
+var errSecretStoreUnavailable = errors.New("the secret store is unavailable; try again")
+
+// runSecretRefsRefusal turns validateRunSecretRefs' (code, err) into the run
+// refusal for a policy named by prefix ("invalid inline_policy: ").
+func runSecretRefsRefusal(prefix string, code int, err error) *runRefusal {
+	if errors.Is(err, errSecretStoreUnavailable) {
+		return runError(code, reasonSinkStoreUnavailable, err.Error())
+	}
+	return runError(code, reasonInlinePolicyInvalid, prefix+err.Error())
+}
 
 // validateInlineSecretRefs fails a policy spec closed when any of its api_key
 // OR git_pat eligible grants names a secret that does not actually exist, is a
@@ -355,7 +370,10 @@ func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject strin
 	// Names only — never Get a value here.
 	have, err := s.cfg.Secrets.List(ctx)
 	if err != nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf("list secrets: %w", err)
+		// A store fault is the server's, not the policy author's: a retryable 503
+		// whose body carries no driver text (the cause is logged).
+		slog.ErrorContext(ctx, "api: list secrets to validate a policy's secret references", slog.Any("err", err))
+		return http.StatusServiceUnavailable, errSecretStoreUnavailable
 	}
 	known := make(map[string]bool, len(have))
 	for _, n := range have {
