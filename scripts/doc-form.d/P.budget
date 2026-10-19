@@ -30,7 +30,8 @@
 # 0.9.4 L8: examples/policies/README.md 1418 adds 69 over 1349: the repos-template note and the model-credential wording.
 # 0.10 API-3: docs/POLICIES.md 18559 adds 139 over 18420, measured: a push that adds no commits passes when the forge holds every commit it sets.
 # 0.10 API-3 round 2: docs/POLICIES.md 18597 adds 38 over 18559, measured: a now-denied path in a vouched commit, and a lightweight tag under git_push_any_branch.
-docs/POLICIES.md=18597 share=12
+# 0.10 W1 train: docs/POLICIES.md tightened to 18590, measured at the train merge.
+docs/POLICIES.md=18590 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

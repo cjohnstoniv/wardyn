@@ -44,6 +44,7 @@
 # 0.9.4 W4 train +6: REST and API-B each used the same THREAT-MODEL slack, measured at the API-B merge.
 # DEP-1: threatmodel/THREAT-MODEL.md 64605 adds 64 over 64541: the NET_RAW-dropped residual line beside the local-mode forwarder residual.
 # 0.10: threatmodel/THREAT-MODEL.md 64741 adds 200, measured: 0.10 connection, scan-budget and local-peer bounds.
-threatmodel/THREAT-MODEL.md=64805 share=20
+# 0.10 W1 train: threatmodel/THREAT-MODEL.md tightened to 64762, measured at the train merge.
+threatmodel/THREAT-MODEL.md=64762 share=20
 # threatmodel/THREAT-MODEL.md 63171 adds 78 over 63093, measured: the console session under the role-stamp residual: renewal up to its cap, never moving the sign-in time, and the copied-cookie bound (0.9.3 console session lifetime).
 # threatmodel/THREAT-MODEL.md 63025 = 62948 + 77, measured: the laptop decision-sink crossing row and #77's sink and loss-row bullets.

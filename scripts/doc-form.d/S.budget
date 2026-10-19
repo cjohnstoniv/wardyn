@@ -170,7 +170,8 @@
 # docs/sdk.md 19321 adds 12 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/sdk.md 19573 = 19504 (0.10 API-2: the sign_in_required, host_capacity_refused, workspace_name_taken and workspace_approved_egress_denied reason rows) + 19378 - 19309 at the main merge.
 # docs/sdk.md 19383 = 19309 + 5 + 69, measured after merging main into the trusted-peers lane.
-docs/sdk.md=19590 share=21
+# 0.10 W1 train: docs/sdk.md tightened to 19521, measured at the train merge.
+docs/sdk.md=19521 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
