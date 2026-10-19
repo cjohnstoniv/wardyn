@@ -92,19 +92,19 @@ test.describe("member Getting Started (real per-person token)", () => {
     await expect(page.getByText("The sealed box")).toBeVisible();
   });
 
-  test("the episode rail leads with the member's own path, then core (Shape C)", async ({
+  test("the episode rail lists only recorded episodes, grouped, and drops a group with none (#3068)", async ({
     page,
   }) => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
-    // Group labels, in order: "Your path" (every member-audience episode —
-    // including 13, whose lesson is the member terminal) then "Start here".
+    // "Your path" (member-audience episodes, including 13, the member terminal) is empty while none of them
+    // has a video, so its heading is gone; "Start here" keeps the recorded core episodes.
     const labels = page.locator(".label-eyebrow", { hasText: /Your path|Start here/ });
-    await expect(labels).toHaveCount(2);
-    await expect(labels.nth(0)).toHaveText("Your path");
-    await expect(labels.nth(1)).toHaveText("Start here");
-    await expect(page.getByText("Your terminal, our cluster")).toBeVisible();
-    // The flipped core episode is in the member's Start-here set.
+    await expect(labels).toHaveCount(1);
+    await expect(labels.nth(0)).toHaveText("Start here");
+    await expect(page.getByText("Your terminal, our cluster")).toHaveCount(0);
+    await expect(page.getByText("Not recorded yet")).toHaveCount(0);
+    // The recorded core episode is in the member's Start-here set.
     await expect(page.getByText("Your first policy")).toBeVisible();
   });
 
