@@ -93,7 +93,7 @@ var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
 	// errorBody{error,reason}, does not reach this handler at all.
 	// writeError itself: its one forwarding call writeErrorReason(w, status, "", msg) is what a
 	// reason-less writeError is, and every caller of writeError is found at its own call site.
-	"http.go:writeError": {1, "writeError's own forward to writeErrorReason with an empty reason; its callers are counted individually"},
+	"http.go:writeError":      {1, "writeError's own forward to writeErrorReason with an empty reason; its callers are counted individually"},
 	"ui.go:Server.serveIndex": {1, "not the JSON API: serves index.html; a read failure here has no errorBody to carry a reason in"},
 }
 
