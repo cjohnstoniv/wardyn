@@ -1998,6 +1998,20 @@ jobs:
             fi
           fi
 
+  # ── ci-ran: this workflow ran on the pull request ──────────────────────────
+  # A pull request with a merge conflict gets no pull_request run at all, so its
+  # checks can hold only CodeQL and read as green. Required, this context shows
+  # as Expected on such a pull request instead. It does nothing else.
+  ci-ran:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The pull_request workflow ran
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "CI ran on $HEAD_SHA"
+
   # ── every flaky e2e test gets an issue ─────────────────────────────────────
   # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
   # flaky.tsv (`spec<TAB>title<TAB>new|quarantined`). One issue per test, found by
