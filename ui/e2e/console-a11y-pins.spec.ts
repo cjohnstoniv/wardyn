@@ -58,10 +58,14 @@ test.describe("Console accessibility pins", () => {
     await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(action).toBeFocused();
-    const shadow = await action.evaluate((el) => getComputedStyle(el).boxShadow);
-    expect(shadow).toContain("3px");
-    // Any alpha channel (rgba(...) or "/ 0.2") means a translucent ring.
-    expect(shadow).not.toMatch(/rgba\(|\/\s*[\d.]+%?\s*\)/);
+    // The ring eases in (transition-all), so read it once settled: the full 3px, and no alpha channel
+    // (rgba(...) or "/ 0.2") — a translucent ring is the faint halo.
+    await expect
+      .poll(async () => {
+        const shadow = await action.evaluate((el) => getComputedStyle(el).boxShadow);
+        return shadow.includes("3px") && !/rgba\(|\/\s*[\d.]+%?\s*\)/.test(shadow);
+      })
+      .toBe(true);
   });
 
   test("a chip with a reason is a named image, so a screen reader announces the reason", async ({ page }) => {

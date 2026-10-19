@@ -384,9 +384,9 @@ export default function App() {
   // never a deliberate sign-out.
   const [signedOut, setSignedOut] = React.useState(false);
   const signingOutRef = React.useRef(false);
-  // The logout call failed, so this browser's session cookie may still be live: a focus or visibility re-probe
-  // would walk straight back in. Another tab announcing a sign-in is still believed.
-  const signOutFailedRef = React.useRef(false);
+  // This tab signed out on purpose, so a focus or visibility re-probe must not walk back in (a failed logout leaves
+  // the cookie live). Another tab announcing a sign-in is still believed. Cleared by signing in here.
+  const signedOutHereRef = React.useRef(false);
   // Someone else signed in over the page: nothing of it may survive, so the
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
@@ -467,7 +467,7 @@ export default function App() {
     let alive = true;
     const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
-      if (!fromOtherTab && signOutFailedRef.current) return;
+      if (!fromOtherTab && signedOutHereRef.current) return;
       void probeAuth().then((probe) => {
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         setSignedOut(false);
@@ -642,7 +642,7 @@ export default function App() {
           reason={signedOut ? SESSION_ENDED_REASON : undefined}
           onSignIn={() => {
             signingOutRef.current = false;
-            signOutFailedRef.current = false;
+            signedOutHereRef.current = false;
             setSignedOut(false);
             setAuth("authed");
             void navigate("/runs", { replace: true });
@@ -700,9 +700,9 @@ export default function App() {
                 // passes it, core.ts WfetchInit.endsSession) and drops with
                 // resetReauth below, once the logout has settled.
                 signingOutRef.current = true;
+                signedOutHereRef.current = true;
                 setSignedOutHold(true);
                 if (!(await health.logout())) {
-                  signOutFailedRef.current = true;
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });

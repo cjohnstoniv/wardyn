@@ -878,12 +878,12 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       const row = page.getByTestId("live-approval-row").filter({ hasText: markerRe(marker) });
       const panel = page.getByTestId("live-approvals");
       await expect(row.getByRole("button", { name: "Approve" })).toBeEnabled();
-      await expect(panel.getByText("Requires the admin role.", { exact: true })).toHaveCount(0);
+      await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toHaveCount(0);
 
       await row.getByRole("button", { name: "Approve" }).click();
       await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
       await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
-      await expect(panel.getByText("Requires the admin role.", { exact: true })).toBeVisible();
+      await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toBeVisible();
     } finally {
       deleteApproval(id);
     }

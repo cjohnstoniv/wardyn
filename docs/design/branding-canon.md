@@ -29,6 +29,7 @@ Denied hosts card and `ApprovalStateBadge`. The initial loading screen keeps the
 | `BRAND_NAME.SUFFIX(company)` | same surfaces | Wardyn for {company} |
 | `BRANDING.TITLE` | Admin view Settings card heading | Branding |
 | `BRANDING.LEDE` | Branding card | How this Wardyn console looks and introduces itself to the people who sign in. |
+| `BRANDING.LOAD_FAILED_SUMMARY` | Branding card, collapsed summary when the settings read failed | Couldn't load |
 | `BRANDING.ORG_NAME_LABEL` | Branding card | Organisation name |
 | `BRANDING.NAME_FORMAT_LABEL` | Branding card | How the product name appears |
 | `BRANDING.PRIMARY_LABEL` | Branding card | Primary colour |
