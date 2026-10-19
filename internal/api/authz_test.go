@@ -971,6 +971,11 @@ func assertNotBlocked(t *testing.T, who string, w *httptest.ResponseRecorder) {
 	if w.Code == http.StatusForbidden && errorReason(w) == reasonPersonTokenMintRemoved {
 		return
 	}
+	// POST /components/{id}/sign-in answers an id that names no row exactly as a row the caller may not
+	// attach (#2419): that 403 is the handler's own answer, so whether the row exists is not observable.
+	if w.Code == http.StatusForbidden && errorReason(w) == "capability_component" {
+		return
+	}
 	if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
 		t.Errorf("%s: status = %d, want NOT 401/403; body=%s", who, w.Code, w.Body.String())
 	}
