@@ -82,7 +82,7 @@ describe("TierPicker — the requirement card (zero visible tiers, T-9)", () => 
 
   it("falls back to the generic no-runner sentence when the caller has no specific reason", () => {
     render(<TierPicker tiers={[]} selected={null} onSelect={vi.fn()} />);
-    expect(screen.getByText(/can't run sandboxes yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
   });
 });
 

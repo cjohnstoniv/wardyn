@@ -31,7 +31,6 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, sql, ADMIN_TOKEN } from "../fixtures";
-import { NO_BARRIER } from "../../src/app/components/wardyn/copy/run-clone";
 
 // Self-skip unless driven by scripts/screenshots.sh: a bare `pnpm e2e` runs ALL
 // projects, and without this guard it would overwrite the tracked docs/img PNGs
@@ -190,7 +189,7 @@ test.describe("Docs screenshots", () => {
     await expect(page.getByText("Fix flaky webhook retry test")).toBeVisible();
     await expect(page.getByText("Refactor session cache eviction")).toBeVisible();
     // The none-runner backend would otherwise photograph NoBarrierBanner above a healthy board.
-    await expect(page.getByText(NO_BARRIER.TITLE)).toHaveCount(0);
+    await expect(page.getByText(/No sandbox barrier on this host/)).toHaveCount(0);
     // The sidebar Getting-started chip polls setup status — don't capture its
     // transient "Checking..." state.
     await expect(page.getByText(/Checking/)).toHaveCount(0, { timeout: 10_000 });

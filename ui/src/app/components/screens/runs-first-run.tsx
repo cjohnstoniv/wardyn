@@ -25,7 +25,6 @@ import type { Readiness } from "../../lib/readiness";
 import { Button } from "../ui/button";
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
-import { NO_BARRIER } from "../wardyn/copy/run-clone";
 import { CC_META } from "../wardyn/cc-meta";
 
 // Lazy on purpose. /runs is EAGER (App.tsx keeps it unlazied), so anything this
@@ -59,7 +58,7 @@ export function NoBarrierBanner({ onRecheck }: { onRecheck: () => void }) {
     >
       <div className="flex items-start gap-2">
         <ShieldX className="mt-0.5 size-4 shrink-0" />
-        <p className="font-medium">{NO_BARRIER.TITLE}</p>
+        <p className="font-medium">No sandbox barrier on this host. Runs cannot start.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2 pl-6">
         <div className="flex items-center gap-1.5 rounded-md border border-danger/30 bg-card px-2 py-1">

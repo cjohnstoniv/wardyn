@@ -17,7 +17,6 @@
 // genuinely NEW: the picker's own instruction line, the decided-state line,
 // and the Allowed-barriers editor's label + three summary sentences
 // (tier-picker-1200-packet.html's Strings table).
-import { NO_BARRIER } from "../components/wardyn/copy/run-clone";
 import type { ConfinementClass } from "./types";
 
 export const TIER_PICKER = {
@@ -40,7 +39,7 @@ export const TIER_PICKER = {
   // naming the requirement. `tierLabel` is the profile's required tier;
   // `reason` is the same honest reason environment-step.tsx already computes
   // for that tier (a KVM absence, a missing runtime).
-  REQUIREMENT_TITLE: NO_BARRIER.TITLE,
+  REQUIREMENT_TITLE: "No sandbox runner — runs can't launch.",
   // Generic on purpose: the floor a caller passes in may come from an admin's
   // governance ceiling, this run's own authored policy, or whichever of the
   // two ranks higher — the sentence

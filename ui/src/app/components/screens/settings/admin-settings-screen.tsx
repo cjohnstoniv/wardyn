@@ -159,7 +159,7 @@ function HostCard({
   // lede below); noRunner is stated as its own fact rather than naming a
   // tier that cannot actually launch anything.
   const hostSummary = noRunner
-    ? "No barrier installed" // the card below states the full condition; the collapsed line stays a short fact
+    ? "No barrier installed — runs can't launch"
     : `Runs default to ${CC_META[selected].label}`;
 
   return (
