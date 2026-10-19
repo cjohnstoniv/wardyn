@@ -270,6 +270,13 @@ func resolveSSHAccess(ctx context.Context, c *sdk.Client, verb, runID string, ad
 		return sshAccess{}, err
 	}
 	if gw.proxy != "" && !advertisedProxy {
+		if verb == "editor" {
+			// editor writes the command into ~/.wardyn/ssh_config, so unlike exec
+			// and forward it outlives this invocation.
+			return sshAccess{}, fmt.Errorf("editor: this deployment advertises a ProxyCommand:\n  %s\n"+
+				"run again with --advertised-proxy to write it into %s, where VS Code and any `ssh wardyn-<short-id>` "+
+				"run it on this computer on every connection until you remove the block", gw.proxy, wardynSSHConfig)
+		}
 		return sshAccess{}, fmt.Errorf("%s: this deployment advertises a ProxyCommand, which would run on this computer:\n  %s\n"+
 			"run again with --advertised-proxy to connect through it", verb, gw.proxy)
 	}

@@ -2494,10 +2494,11 @@ func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // TestTopLevelAttachAndSSHAreGone pins the clean break the owner ruled for on
-// issue #206 ("no alias commands"): the old bare `wardyn attach`/`wardyn ssh`
-// spellings must fail as an unknown command, not
-// silently keep working, or a script written against the old tree would pass
-// this suite for the wrong reason.
+// issue #206 ("no alias commands"): the bare `wardyn attach`/`wardyn ssh`
+// spellings must fail as an unknown command, not silently keep working, or a
+// script written against the old tree would pass this suite for the wrong
+// reason. `exec`, `forward` and `editor` were never top-level; the test pins
+// that they are not (TestRunAttachAndSSHAreReachable pins them under `run`).
 func TestTopLevelAttachAndSSHAreGone(t *testing.T) {
 	for _, verb := range []string{"attach", "ssh", "exec", "forward", "editor"} {
 		t.Run(verb, func(t *testing.T) {

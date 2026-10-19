@@ -37,7 +37,10 @@ runs: code --remote ssh-remote+wardyn-<short-id> <dir>. VS Code reads your
 ~/.ssh/config, so that file needs one line, "Include ~/.wardyn/ssh_config", at
 the top; this command asks before adding it and, if you decline, prints the
 line and stops. The Host block has the same HostName, Port, User and
-ProxyCommand as 'wardyn run ssh --config', plus your key.
+ProxyCommand as 'wardyn run ssh --config', plus your key. A ProxyCommand the
+deployment advertises is written only with --advertised-proxy, and then stays in
+~/.wardyn/ssh_config: VS Code and any 'ssh wardyn-<short-id>' run it on this
+computer on every connection until you remove the block.
 
 VS Code needs "remote.SSH.localServerDownload": "always" in its settings (the
 sandbox has no internet); see docs/SSH.md.
@@ -85,7 +88,7 @@ key is made by 'wardyn ssh-key ensure', never by this command.
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "/home/agent/work", "folder in the sandbox to open")
-	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "write the ProxyCommand this deployment advertises into the Host block (VS Code runs it on this computer)")
+	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "write the ProxyCommand this deployment advertises into the Host block; it stays in ~/.wardyn/ssh_config and VS Code (or any ssh wardyn-<short-id>) runs it on this computer on every connection until you remove the block")
 	return cmd
 }
 
@@ -97,6 +100,9 @@ func upsertSSHHost(path, block string) error {
 	if raw, err := os.ReadFile(path); err == nil {
 		var cur []string
 		flush := func() {
+			for len(cur) > 0 && strings.TrimSpace(cur[len(cur)-1]) == "" {
+				cur = cur[:len(cur)-1] // the blank separator belongs to the join below
+			}
 			if len(cur) > 0 && cur[0] != host {
 				keep = append(keep, strings.Join(cur, "\n")+"\n")
 			}
@@ -115,7 +121,42 @@ func upsertSSHHost(path, block string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(strings.Join(append(keep, block), "\n")), 0o600)
+	return writeFileAtomic(path, []byte(strings.Join(append(keep, block), "\n")), 0o600)
+}
+
+// writeFileAtomic replaces path with data through a temp file in the same
+// directory (target's mode if it exists, else mode), fsynced and renamed, so a
+// crash never leaves a half-written ssh config. A symlinked path is written
+// through to its target and stays a symlink.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".wardyn-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(mode)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // ensureSSHInclude reports whether ~/.ssh/config includes the Wardyn file,
@@ -146,11 +187,7 @@ func ensureSSHInclude(cmd *cobra.Command, cfg string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(sshCfg), 0o700); err != nil {
 		return false, fmt.Errorf("editor: %w", err)
 	}
-	mode := os.FileMode(0o600)
-	if fi, serr := os.Stat(sshCfg); serr == nil {
-		mode = fi.Mode().Perm()
-	}
-	if err := os.WriteFile(sshCfg, append([]byte(line+"\n\n"), raw...), mode); err != nil {
+	if err := writeFileAtomic(sshCfg, append([]byte(line+"\n\n"), raw...), 0o600); err != nil {
 		return false, fmt.Errorf("editor: write %s: %w", sshCfg, err)
 	}
 	return true, nil

@@ -243,6 +243,34 @@ func TestGatewayCommands_AdvertisedProxyNeedsConsent(t *testing.T) {
 	}
 }
 
+// The editor writes the advertised ProxyCommand into ~/.wardyn/ssh_config, where it
+// outlives the command; its refusal must say so. exec and forward only run it once.
+func TestGatewayCommands_AdvertisedProxyRefusalIsVerbSpecific(t *testing.T) {
+	for _, tc := range gatewayCommands {
+		t.Run(tc.name, func(t *testing.T) {
+			homeWithKey(t, false)
+			f := newGatewayFixture(t, proxyHealthz, oneKey)
+			_, err := runGateway(t, tc.mk, f, "y\n", tc.args...)
+			if err == nil {
+				t.Fatal("want a refusal without --advertised-proxy")
+			}
+			if tc.name == "editor" {
+				for _, part := range []string{"~/.wardyn/ssh_config", "every connection", testProxyCommand, "--advertised-proxy"} {
+					if !strings.Contains(err.Error(), part) {
+						t.Errorf("editor refusal = %q, want it to name %q", err, part)
+					}
+				}
+				return
+			}
+			want := tc.name + ": this deployment advertises a ProxyCommand, which would run on this computer:\n  " + testProxyCommand +
+				"\nrun again with --advertised-proxy to connect through it"
+			if err.Error() != want {
+				t.Errorf("%s refusal = %q, want %q", tc.name, err, want)
+			}
+		})
+	}
+}
+
 func TestGatewayCommands_RefuseABadRunIDBeforeAnyRequest(t *testing.T) {
 	for _, tc := range gatewayCommands {
 		t.Run(tc.name, func(t *testing.T) {
@@ -415,6 +443,104 @@ func TestUpsertSSHHost_ReplacesOneHostAndKeepsTheRest(t *testing.T) {
 	got, _ := os.ReadFile(p)
 	if want := "Host wardyn-b\n  Port 2\n\nHost wardyn-a\n  Port 3\n"; string(got) != want {
 		t.Errorf("file = %q, want %q", got, want)
+	}
+}
+
+// A rewrite must not grow the file: exactly one blank line between blocks, and the
+// second pass over the same hosts is byte-identical to the first.
+func TestUpsertSSHHost_RewriteIsIdempotent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "ssh_config")
+	hosts := []string{"a", "b", "c", "d", "e"}
+	block := func(h string) string { return "Host wardyn-" + h + "\n  Port 1\n" }
+	var first, second []byte
+	for pass := 0; pass < 3; pass++ {
+		for _, h := range hosts {
+			if err := upsertSSHHost(p, block(h)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		switch pass {
+		case 0:
+			first, _ = os.ReadFile(p)
+		case 1:
+			second, _ = os.ReadFile(p)
+		}
+	}
+	third, _ := os.ReadFile(p)
+	if string(second) != string(third) {
+		t.Errorf("third pass differs from second:\n%q\n%q", third, second)
+	}
+	if string(first) != string(second) {
+		t.Errorf("second pass differs from first:\n%q\n%q", second, first)
+	}
+	want := strings.Join([]string{block("a"), block("b"), block("c"), block("d"), block("e")}, "\n")
+	if string(third) != want {
+		t.Errorf("file = %q, want %q", third, want)
+	}
+}
+
+func TestUpsertSSHHost_KeepsTheModeAndWritesThroughASymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "ssh_config")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, real, "Host wardyn-old\n  Port 9\n")
+	if err := os.Chmod(real, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSSHHost(link, "Host wardyn-new\n  Port 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the symlink was replaced: %v, %v", fi, err)
+	}
+	if fi, err := os.Stat(real); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("target mode = %v (%v), want 0640", fi.Mode().Perm(), err)
+	}
+	got, _ := os.ReadFile(real)
+	if want := "Host wardyn-old\n  Port 9\n\nHost wardyn-new\n  Port 1\n"; string(got) != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "real", ".wardyn-tmp-*")); len(left) != 0 {
+		t.Errorf("temp files left behind: %v", left)
+	}
+}
+
+func TestRunEditor_IncludeLineKeepsASymlinkedSSHConfigAndItsMode(t *testing.T) {
+	home := homeWithKey(t, true)
+	fakeCode(t)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(home, "dotfiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(home, "dotfiles", "ssh_config")
+	writeFile(t, real, "Host other\n  User me\n")
+	if err := os.Chmod(real, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(sshDir, "config")); err != nil {
+		t.Fatal(err)
+	}
+	f := newGatewayFixture(t, gatewayOnHealthz, oneKey)
+	if _, err := runGateway(t, runEditorCmd, f, "y\n", testRunID); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(sshDir, "config")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("~/.ssh/config stopped being a symlink: %v, %v", fi, err)
+	}
+	if fi, err := os.Stat(real); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v (%v), want 0640 kept", fi.Mode().Perm(), err)
+	}
+	if got, _ := os.ReadFile(real); string(got) != "Include ~/.wardyn/ssh_config\n\nHost other\n  User me\n" {
+		t.Errorf("target = %q, want the Include line first", got)
 	}
 }
 
