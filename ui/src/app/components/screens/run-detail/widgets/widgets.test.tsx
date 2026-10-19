@@ -231,9 +231,35 @@ describe("CredentialsWidget", () => {
     expect(row.querySelector("span.truncate")).not.toHaveTextContent(/[{}]/);
   });
 
-  it("the lede is the short eligibility line", async () => {
+  // A GitHub CLI grant carries capabilities, not permissions; a writing capability shows the amber chip.
+  it("flags a GitHub CLI grant that may write", async () => {
+    const grants: CredentialGrant[] = [
+      {
+        id: "g3",
+        scope: "github_token",
+        audience: "github_token",
+        state: "active",
+        scopeData: { repos: ["acme/api"], api: true, capabilities: ["code_read", "pr"] },
+      },
+      {
+        id: "g4",
+        scope: "github_token",
+        audience: "github_token",
+        state: "active",
+        scopeData: { repos: ["acme/web"], api: true, capabilities: ["code_read"] },
+      },
+    ];
+    render(<CredentialsWidget grants={grants} audit={[]} />);
+    const rows = await screen.findAllByTestId("credential-grant");
+    expect(within(rows[0]).getByText("grants write")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText("grants write")).not.toBeInTheDocument();
+  });
+
+  it("the lede says what the run may request and that the kind decides whether a credential enters the sandbox", async () => {
     render(<CredentialsWidget grants={[]} audit={[]} />);
-    expect(await screen.findByText("What this run may request.")).toBeInTheDocument();
+    expect(await screen.findByText(RUN_COCKPIT.credentialsEligibility)).toBeInTheDocument();
+    expect(RUN_COCKPIT.credentialsEligibility).toMatch(/readable inside the sandbox/);
+    expect(RUN_COCKPIT.credentialsEligibility).not.toMatch(/never/i);
   });
 
   it("claims no delivery for an ssh_key grant, whose key the sandbox can read", async () => {

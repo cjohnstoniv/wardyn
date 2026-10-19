@@ -7,8 +7,16 @@
 // people see "GitHub token · read contents · no repositories listed", never the API's JSON.
 export type GrantScope = Record<string, unknown>;
 
-/** Does the github_token scope's permissions object grant any write, admin, push or maintain? */
+// The GitHub CLI's grant (api: true) carries capabilities instead of permissions; these name a write.
+const WRITE_CAPABILITY = /write|admin|execute|^pr$/;
+
+function capabilities(scope: GrantScope): string[] {
+  return Array.isArray(scope.capabilities) ? scope.capabilities.filter((c): c is string => typeof c === "string") : [];
+}
+
+/** Does the github_token scope grant any write, admin, push or maintain, by permission or by capability? */
 export function grantsWrite(scope: GrantScope): boolean {
+  if (capabilities(scope).some((c) => WRITE_CAPABILITY.test(c))) return true;
   const perms = scope.permissions;
   if (perms && typeof perms === "object") {
     return Object.values(perms as Record<string, unknown>).some(
@@ -44,7 +52,7 @@ function permissionPhrases(scope: GrantScope): string[] {
 export function grantSentence(kind: string, scope: GrantScope): string {
   const parts = [KIND_LABEL[kind] ?? kind];
   if (kind === "github_token") {
-    const perms = permissionPhrases(scope);
+    const perms = [...permissionPhrases(scope), ...capabilities(scope).map((c) => (c === "pr" ? "pull requests" : c.replace(/_/g, " ")))];
     if (perms.length) parts.push(perms.join(", "));
     const repos = scopeRepos(scope);
     parts.push(repos.length ? repos.join(", ") : "no repositories listed");

@@ -63,4 +63,22 @@ test.describe("Design consistency", () => {
     expect(box.height).toBeLessThan(220);
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
+
+  // The same quiet block on the screens the compact size changed: People, Permissions and Governance.
+  for (const c of [
+    { name: "People", path: "/admin/people", api: /\/api\/v1\/people(\?|$)/, json: { people: [] }, title: "No people yet" },
+    { name: "Permissions", path: "/admin/permissions", api: /\/api\/v1\/permissions(\?|$)/, json: { grants: [], enforcement: {} }, title: "No grants yet" },
+    { name: "Governance", path: "/admin/governance", api: /\/api\/v1\/governance(\?|$)/, json: { profiles: [], assignments: [] }, title: "No profiles yet" },
+  ]) {
+    test(`${c.name}: the empty block is the compact one`, async ({ page }) => {
+      await page.route(c.api, (route) => (route.request().method() === "GET" ? route.fulfill({ json: c.json }) : route.fallback()));
+      await gotoConsole(page, "admin");
+      await navToRoute(page, c.path);
+      await expect(page.getByRole("heading", { name: c.title, level: 4 })).toBeVisible();
+      const block = page.locator('[data-size="compact"]').first();
+      const box = (await block.boundingBox())!;
+      expect(box.height).toBeLessThan(220);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    });
+  }
 });

@@ -13,7 +13,7 @@
 import { KeyRound } from "lucide-react";
 import type { AuditEvent, CredentialGrant } from "../../../../lib/types";
 import { relativeTime } from "../../../../lib/format";
-import { grantSentence } from "../../../../lib/grant-sentence";
+import { grantSentence, grantsWrite } from "../../../../lib/grant-sentence";
 import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
 import { Chip, WidgetCard } from "../../../wardyn/primitives";
@@ -64,6 +64,7 @@ export function CredentialsWidget({
                 <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={g.scope}>
                   {grantSentence(g.audience, g.scopeData ?? (g.host ? { host: g.host } : {}))}
                 </span>
+                {g.audience === "github_token" && g.scopeData && grantsWrite(g.scopeData) && <Chip tone="warning">grants write</Chip>}
               </div>
               {/* The API's own JSON stays one click away, never the first thing a person reads. */}
               <details className="mt-1 pl-1">

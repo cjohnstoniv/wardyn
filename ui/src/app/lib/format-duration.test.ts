@@ -37,6 +37,7 @@ describe("formatDuration", () => {
     const now = Date.now();
     expect(timeLeft(new Date(now + 40 * 60_000).toISOString(), now)).toBe("40 minutes");
     expect(timeLeft(new Date(now + 23 * 3600_000).toISOString(), now)).toBe("23 hours");
+    expect(timeLeft(new Date(now + 24 * 3600_000).toISOString(), now)).toBe("24 hours");
   });
 });
 

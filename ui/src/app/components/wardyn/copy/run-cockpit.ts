@@ -82,7 +82,8 @@ export const RUN_COCKPIT = {
   // a 400px rail. Grants are what the run MAY request — never live credentials.
   // It names no single delivery: an ssh_key or resident git_pat is readable in
   // the sandbox, so a "minted, never seen" line would be false for those grants.
-  credentialsEligibility: "What this run may request.",
+  credentialsEligibility:
+    "What this run may request. Most credentials are added at the proxy; the kind says whether one is readable inside the sandbox.",
   credentialDetails: "Details",
   // A metric the sandbox did not report. gVisor (Vault) presents a synthetic
   // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
