@@ -27,6 +27,9 @@ export interface GrantSpec {
   // Resolve the named stored secret from the run owner's own row only, never
   // the operator's (api_key / git_pat / ssh_key / env_secret).
   owner_only?: boolean;
+  // owner_only for the named stored secrets alone (an ssh_key grant whose key
+  // and known_hosts resolve from different rows).
+  owner_only_refs?: string[];
 }
 
 // A single operator/policy-controlled host bind mount. Mirrors the wire shape

@@ -85,7 +85,8 @@
       "scope",
       "ttl_seconds",
       "requires_approval",
-      "owner_only"
+      "owner_only",
+      "owner_only_refs"
     ],
     "IncludedTool": [
       "id",

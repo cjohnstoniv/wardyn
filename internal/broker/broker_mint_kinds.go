@@ -43,8 +43,8 @@ func ownerOf(caller *identity.Claims) string {
 // grantOwner is the namespace a grant's stored secret is read from: ownerOf,
 // except that an owner_only grant on a run the operator itself owns (the
 // signed Claims.OperatorOwned, never Sub) reads the operator's "", its own.
-func grantOwner(caller *identity.Claims, spec types.GrantSpec) string {
-	if spec.OwnerOnly && caller != nil && caller.OperatorOwned {
+func grantOwner(caller *identity.Claims, ownerOnly bool) string {
+	if ownerOnly && caller != nil && caller.OperatorOwned {
 		return ""
 	}
 	return ownerOf(caller)
@@ -115,7 +115,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 	}
 	// Own owner's row wins, falling back to the operator's unless owner_only.
 	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
-	value, err := b.secrets.For(grantOwner(caller, spec)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
+	value, err := b.secrets.For(grantOwner(caller, spec.OwnerOnly)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
 		return Minted{}, grantReadError("git_pat", sc.SecretName, spec.OwnerOnly, err)
 	}
@@ -159,22 +159,28 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 		return Minted{}, errors.New("broker: ssh_key grant but no secret store configured (fail closed)")
 	}
 	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
-	// and its optional known_hosts material below.
-	owned := b.secrets.For(grantOwner(caller, spec))
-	gctx, row := secretstore.GrantRead(ctx, spec.OwnerOnly)
-	rctx := secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint)
-	key, err := owned.Get(rctx, sc.KeySecretRef)
-	if err != nil {
-		return Minted{}, grantReadError("ssh_key", sc.KeySecretRef, spec.OwnerOnly, err)
+	// and its optional known_hosts material below, decided per ref: each reads
+	// owner_only when the grant or its OwnerOnlyRefs says so.
+	read := func(kind, ref string) ([]byte, string, error) {
+		ownerOnly := spec.OwnerOnlyFor(ref)
+		gctx, row := secretstore.GrantRead(ctx, ownerOnly)
+		v, err := b.secrets.For(grantOwner(caller, ownerOnly)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeBrokerMint), ref)
+		if err != nil {
+			return nil, "", grantReadError(kind, ref, ownerOnly, err)
+		}
+		return v, row.Scope(), nil
 	}
-	keyScope := row.Scope()
+	key, keyScope, err := read("ssh_key", sc.KeySecretRef)
+	if err != nil {
+		return Minted{}, err
+	}
 	// Optional operator-supplied known_hosts for a custom host the image-baked
 	// /etc/ssh/ssh_known_hosts does not cover; normally unset for github.com/ADO.
 	var knownHosts string
 	if sc.KnownHostsSecretRef != "" {
-		kh, kerr := owned.Get(rctx, sc.KnownHostsSecretRef)
+		kh, _, kerr := read("ssh_key known_hosts", sc.KnownHostsSecretRef)
 		if kerr != nil {
-			return Minted{}, grantReadError("ssh_key known_hosts", sc.KnownHostsSecretRef, spec.OwnerOnly, kerr)
+			return Minted{}, kerr
 		}
 		knownHosts = string(kh)
 	}

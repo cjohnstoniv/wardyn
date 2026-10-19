@@ -319,9 +319,9 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if nameSinkReservedSecret(keyRef) || nameSinkReservedSecret(khRef) {
 				return nil, errors.New("ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnly, ""})
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey, g.OwnerOnlyFor(keyRef), ""})
 			if khRef != "" {
-				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly, ""})
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnlyFor(khRef), ""})
 			}
 		case types.GrantFileSecret:
 			// A resident value, so the wider guard, as for git_pat. Collected,
