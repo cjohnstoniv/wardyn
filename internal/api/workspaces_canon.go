@@ -91,6 +91,9 @@ func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
 // entry is in it, and handleObservedEgress PRODUCES the candidates an operator
 // promotes. They must agree, or one dead suggestion breaks the promote for
 // every real host beside it.
+//
+// gitBrokerManagedHosts holds "*." wildcards, so a host is tested with deadApprovedEgressHost, never by
+// map lookup alone: raw.githubusercontent.com is dead although only *.githubusercontent.com is listed.
 func (s *Server) deadApprovedEgressHosts() map[string]struct{} {
 	dead := map[string]struct{}{}
 	add := func(hosts []string) {
@@ -104,6 +107,17 @@ func (s *Server) deadApprovedEgressHosts() map[string]struct{} {
 		dead[selfHost] = struct{}{}
 	}
 	return dead
+}
+
+// deadApprovedEgressHost reports whether host is in dead or under one of its "*." wildcards, the
+// rule dispatch strips those hosts by (gitBrokerManaged).
+func deadApprovedEgressHost(dead map[string]struct{}, host string) bool {
+	for entry := range dead {
+		if entryCoversAny(entry, map[string]bool{host: true}) {
+			return true
+		}
+	}
+	return false
 }
 
 // refuseTakenWorkspaceName answers 409 workspace_name_taken when owner already has a workspace other than
