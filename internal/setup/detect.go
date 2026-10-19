@@ -150,7 +150,7 @@ func DetectSCMPosture() SCMPosture {
 	p.GhCLI = exists(".config", "gh", "hosts.yml")
 	p.GitCredentialsFile = exists(".git-credentials")
 	p.Netrc = exists(".netrc") || exists(".netrc.gpg")
-	if out, err := exec.Command("git", "config", "--global", "credential.helper").Output(); err == nil {
+	if out, err := execCommandOutput("git", "config", "--global", "credential.helper"); err == nil {
 		p.CredentialHelper = strings.TrimSpace(string(out))
 	}
 	return p
