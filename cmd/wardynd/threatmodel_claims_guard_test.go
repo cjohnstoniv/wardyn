@@ -336,6 +336,9 @@ func TestArchitectureDocListsShippedSandboxBinaries(t *testing.T) {
 
 // residual #14's route table vs. the router
 
+// runAuthorizedCall matches both the plain owner-or-admin door and the variant that takes a predicate.
+var runAuthorizedCall = regexp.MustCompile(`s\.getRunAuthorized(?:By)?\(`)
+
 func TestThreatModelDocRouteTableMatchesRouter(t *testing.T) {
 	routes := readRepoFile(t, "internal/api/routes.go")
 	doc := readRepoFile(t, "threatmodel/THREAT-MODEL.md")
@@ -353,10 +356,13 @@ func TestThreatModelDocRouteTableMatchesRouter(t *testing.T) {
 	}
 	// Kill is owner-or-admin, not open to any signed-in human.
 	lifecycle := readRepoFile(t, "internal/api/runs_lifecycle.go")
-	if strings.Contains(funcBody(t, lifecycle, "(s *Server) handleKillRun"), "s.getRunAuthorized(") &&
-		strings.Contains(doc, "`POST /runs`, `POST /runs/{id}/kill`, every read") {
+	killBody := funcBody(t, lifecycle, "(s *Server) handleKillRun")
+	if !runAuthorizedCall.MatchString(killBody) {
+		t.Fatal("handleKillRun no longer calls getRunAuthorized or getRunAuthorizedBy — the guard's anchor is gone")
+	}
+	if strings.Contains(doc, "`POST /runs`, `POST /runs/{id}/kill`, every read") {
 		t.Error("residual #14 lists POST /runs/{id}/kill as open to any signed-in human; handleKillRun goes " +
-			"through getRunAuthorized (owner-or-admin, byte-identical 404 on a foreign run)")
+			"through getRunAuthorizedBy (owner, sponsor or admin, byte-identical 404 on a foreign run)")
 	}
 }
 
