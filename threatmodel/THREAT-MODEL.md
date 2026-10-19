@@ -811,7 +811,7 @@ is not the deployment described above.**
   - All suffix parts share the run lock.
   - New opens and stat calls check the fence even if a raw file or row was recreated; a reader already opened before the erase may retain bytes.
   - Filesystem markers are synced before success and never retention-swept, nor are the persistent per-run `.lock` files.
-  - Local Unix advisory-lock and directory-sync support are required; a failure refuses the operation.
+  - Local Unix advisory-lock support is required, and a failed directory sync refuses the operation. The one exception is a filesystem that cannot sync a directory at all (EINVAL or ENOTSUP: FUSE, 9p, older CIFS): there the erasure marker is written but not made durable against a host crash, the same trade a save takes.
   - This covers cooperative Store/recorder writers on metadata whose integrity is protected.
   - Postgres tombstones likewise survive retention.
   - A shared-volume actor able to remove metadata can defeat that filesystem fence: this fallback is not a boundary against a writer controlling the recording root.

@@ -186,15 +186,22 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 	defer dir.Close()
 	// The cast is stored once the rename returns. Some filesystems (FUSE, 9p, older CIFS) cannot fsync
 	// a directory and answer EINVAL or ENOTSUP; that must not turn a stored cast into an error.
-	if err := syncDir(dir); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
-		return err
-	}
-	return nil
+	return syncDirTolerant(dir)
 }
 
 // syncDir is the directory fsync saveFile makes after its rename; a variable so a test can answer
 // the way a filesystem that cannot sync a directory does.
 var syncDir = func(dir *os.File) error { return dir.Sync() }
+
+// syncDirTolerant is syncDir where a filesystem that cannot fsync a directory (FUSE, 9p, older CIFS)
+// answers EINVAL or ENOTSUP: the change is made, so that is not a failure. Saves, erasure markers
+// and deletes all take the same durability trade on such a filesystem.
+func syncDirTolerant(dir *os.File) error {
+	if err := syncDir(dir); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return err
+	}
+	return nil
+}
 
 func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.File) error {
 	// Replacing the inode would bypass write access and change owner/mode/ACL.
@@ -316,7 +323,7 @@ func (s *FSStore) DeleteRun(ctx context.Context, key string) (int, error) {
 		}
 		removed++
 	}
-	return removed, errors.Join(append(errs, dir.Sync())...)
+	return removed, errors.Join(append(errs, syncDirTolerant(dir))...)
 }
 
 // OpenCast opens <root>/<runID>.cast for reading. Returns ErrNotFound when the
