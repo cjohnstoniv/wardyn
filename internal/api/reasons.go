@@ -513,6 +513,7 @@ const (
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
+	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of

@@ -402,7 +402,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	injections = ado.injections
 	// A narrowed git_pat grant this run could not enforce refuses the run here
 	// (runs_dispatch_pat_scope.go).
-	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject, ceiling.adoStanding.operator) {
 		return
 	}
 	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)

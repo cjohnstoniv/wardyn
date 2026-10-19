@@ -7,6 +7,8 @@
 **Assessed against:** `v0.7.7` (the regression is almost certainly the 0.7.6 change; 0.7.7 is
 simply the release it was seen on)
 **Reported by:** an operator running Wardyn on a private-endpoint Kubernetes estate
+**Update (0.10.0):** `WARDYN_AWS_SSO_PROXY_INJECT=off`, the stopgap this report names, was removed
+and now refuses boot. `WARDYN_TRUSTED_CA_FILE` is the remedy for a TLS-intercepting corporate proxy.
 
 Environment-agnostic throughout: substitute your own for `CORP_PROXY_HOST:PORT` and the account and
 role names.

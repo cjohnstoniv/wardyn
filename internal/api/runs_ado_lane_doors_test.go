@@ -102,10 +102,10 @@ func TestADOLaneCallSitesSeeTheRunsRepo(t *testing.T) {
 	t.Run("c PAT door", func(t *testing.T) {
 		srv := &Server{cfg: Config{}}
 		spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{vssps}}
-		if reason, _ := srv.patNarrowingAtDoor(member(), createRunRequest{}, spec, site); reason != "" {
+		if reason, _ := srv.patNarrowingAtDoor(member(), createRunRequest{}, spec, site, false, false); reason != "" {
 			t.Fatalf("no repository: refused %q, want accepted (vssps is not a git host)", reason)
 		}
-		if reason, _ := srv.patNarrowingAtDoor(member(), createRunRequest{Repo: adoTestRepo}, spec, site); reason != reasonGitPATNarrowingUnsupportedHost {
+		if reason, _ := srv.patNarrowingAtDoor(member(), createRunRequest{Repo: adoTestRepo}, spec, site, false, false); reason != reasonGitPATNarrowingUnsupportedHost {
 			t.Fatalf("repo-only: reason %q, want %s", reason, reasonGitPATNarrowingUnsupportedHost)
 		}
 	})

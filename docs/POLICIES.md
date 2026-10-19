@@ -253,6 +253,7 @@
 | `git_pat_narrowing_ssh_conflict` | the same policy holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge): SSH is a second push path the broker cannot see. Also refused when the policy is written |
 | `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. That is an Azure DevOps host, one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
+| `git_pat_broker_off_resident` | 0.10.0: `WARDYN_GIT_PAT_BROKER` is `off`, so the PAT would be minted into the sandbox, and the run is not an operator's (or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set). Narrowed or not; a `runner_resident` grant and a host another lane serves are not refused |
 
 
 - Dispatch is authoritative, because the broker posture is deployment-wide and can change after a policy was written, and `POST /runs/preflight` answers the same reasons.
