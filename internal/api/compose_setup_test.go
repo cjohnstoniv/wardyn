@@ -560,19 +560,18 @@ func TestDeriveSetupItems_Residency(t *testing.T) {
 		t.Errorf("api-key llm_access must NOT carry the Node-proxy-env gap note, detail = %q", it.Detail)
 	}
 
-	// llm_access, subscription mode (the FINAL spec carries the Claude cred
-	// mount): resident_mount, plus the one-sentence Node<24 fetch()/HTTP_PROXY
-	// gap note (F4) since this is the ONE path where the CLI tunnels a direct
-	// api.anthropic.com request through the sandbox's proxy env.
+	// llm_access with a legacy policy still naming the retired Claude cred mount:
+	// dispatch strips it, so the row stays proxy_injected and carries no Node
+	// proxy-env note about a tunnel that no run takes.
 	subSpec := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Target: claudeCredTarget}}}
 	items = srv.deriveSetupItems(context.Background(), "", run, subSpec, secretsWith(),
 		&composeLLMAccess{Provisioned: true, Note: "ok"})
 	it, ok = findItem(items, "llm_access:claude-code")
-	if !ok || it.Residency != "resident_mount" {
-		t.Errorf("subscription llm_access residency = %+v (ok=%v), want resident_mount", it, ok)
+	if !ok || it.Residency != "proxy_injected" {
+		t.Errorf("legacy-mount llm_access residency = %+v (ok=%v), want proxy_injected", it, ok)
 	}
-	if !strings.Contains(it.Detail, "NODE_USE_ENV_PROXY") {
-		t.Errorf("subscription llm_access must carry the Node-proxy-env gap note, detail = %q", it.Detail)
+	if strings.Contains(it.Detail, "NODE_USE_ENV_PROXY") {
+		t.Errorf("legacy-mount llm_access must not carry the Node-proxy-env note, detail = %q", it.Detail)
 	}
 
 	// secret: api_key-sourced row is proxy_injected; git_pat-sourced row carries
