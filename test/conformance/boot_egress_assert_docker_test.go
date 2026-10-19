@@ -42,7 +42,7 @@ func assertQuiet(logs, control string) (failed bool) {
 const (
 	bootEgressControlLine = `{"decision":"allow","request":{"host":"bedrock-runtime.us-east-1.amazonaws.com"}}`
 	bootEgressOtherLine   = `{"decision":"allow","request":{"host":"api.anthropic.com"}}`
-	bootEgressPendingLine = `{"decision":"pending","request":{"host":"statsig.anthropic.com"}}`
+	bootEgressPendingLine = `{"decision":"hold","request":{"host":"statsig.anthropic.com"}}`
 )
 
 // A boot whose control dial left no decision in the log is a failure, not a quiet boot, even
