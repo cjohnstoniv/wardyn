@@ -37,7 +37,7 @@ const fallbackVMUID = 65532
 // filesystem. Every refusal is one sentence naming its fix.
 func (d *Driver) ProbeVM(ctx context.Context, c VMConfig) (VMConfig, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return c, fmt.Errorf("Linux VM sandboxes need an x86-64 Linux runner host (this one is %s/%s)", runtime.GOOS, runtime.GOARCH)
+		return c, fmt.Errorf("this runner host is %s/%s: Linux VM sandboxes need x86-64 Linux", runtime.GOOS, runtime.GOARCH)
 	}
 	fi, err := os.Stat("/dev/kvm")
 	st, ok := statT(fi)

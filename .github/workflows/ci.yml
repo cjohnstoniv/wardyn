@@ -1447,11 +1447,14 @@ jobs:
         run: |
           docker build -q -f deploy/runner/vm-qemu/Dockerfile -t wardyn/vm-qemu:ci .
           docker build -q -f deploy/images/vm-linux/Dockerfile -t wardyn/vm-linux:ci .
+      # A hosted runner's CPU does not offer every feature of the default model (Haswell-v4 needs
+      # spec-ctrl), so the job names the oldest model every x86-64 KVM host can run.
       - name: Linux VM conformance
         env:
           WARDYN_TEST_VM_QEMU_IMAGE: wardyn/vm-qemu:ci
           WARDYN_TEST_VM_GUEST_IMAGE: wardyn/vm-linux:ci
-        run: go test -tags 'docker vm' -count=1 -v -timeout 20m ./test/conformance/vm/
+          WARDYN_TEST_VM_CPU_MODEL: Nehalem-v1
+        run: grep -m1 'model name' /proc/cpuinfo && go test -tags 'docker vm' -count=1 -v -timeout 20m ./test/conformance/vm/
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
