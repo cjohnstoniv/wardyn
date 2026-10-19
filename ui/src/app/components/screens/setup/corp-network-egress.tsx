@@ -342,20 +342,10 @@ function ecosystemFor(from: string): string | undefined {
   return EGRESS_SUGGEST.find(([url]) => url === from)?.[1];
 }
 
-// Mirrors internal/api/site_config.go's normalizeRedirectEndpoint EXACTLY
-// (TrimSpace + lowercase scheme+authority up to the first `/` after `://`,
-// path case preserved) — a comparison KEY only, never applied to what gets
-// stored: the server does its own normalization on save regardless, and this
-// collision check would otherwise miss `https://PyPI.org/simple` colliding
-// with an existing `https://pypi.org/simple`.
-function foldRedirectEndpoint(raw: string): string {
-  const s = raw.trim();
-  const schemeEnd = s.indexOf("://");
-  const start = schemeEnd < 0 ? 0 : schemeEnd + 3;
-  const slash = s.indexOf("/", start);
-  const authorityEnd = slash < 0 ? s.length : slash;
-  return s.slice(0, authorityEnd).toLowerCase() + s.slice(authorityEnd);
-}
+// The server's duplicate-From key (internal/api/site_config.go: lowercased, trimmed, the whole string, path
+// included, matching findEgressRedirect's EqualFold compare). A comparison KEY only, never applied to what gets
+// stored: the server normalises on save.
+const duplicateKey = (raw: string): string => raw.trim().toLowerCase();
 
 // F3-F5: a duplicate `from` is producible today (no
 // client/server guard existed), and the rail keys redirects BY `from` — a
@@ -385,7 +375,7 @@ function AddRedirectForm({
   const trimmedFrom = from.trim();
   const collision =
     trimmedFrom !== "" &&
-    existingFroms.some((f) => foldRedirectEndpoint(f) === foldRedirectEndpoint(trimmedFrom));
+    existingFroms.some((f) => duplicateKey(f) === duplicateKey(trimmedFrom));
 
   const add = async () => {
     const f = trimmedFrom;

@@ -264,3 +264,40 @@ test("a run drill-in over the page cap shows the newest events and says the earl
   expect(asked.length).toBeGreaterThan(0);
   expect(asked.every((o) => o === "desc")).toBe(true);
 });
+
+// A read still in flight for the run filter the operator just left must not repaint that run's trail over the
+// all-events list (the next poll tick used to be the only thing that corrected it).
+test("a slow read for a cleared run filter does not repaint that run's trail", async ({ page }) => {
+  const event = (id: string, target: string, run_id: string) => ({
+    id,
+    time: new Date().toISOString(),
+    actor_type: "system",
+    actor: "wardynd",
+    action: "run.build",
+    target,
+    outcome: "success",
+    run_id,
+    data: { cache_hit: false },
+  });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/api\/v1\/audit(\?|$)/, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("run_id") === "run_e2eslow") {
+      await held;
+      return route.fulfill({ json: [event("slow-1", "ws-slow", "run_e2eslow")] });
+    }
+    return route.fulfill({ json: [event("all-1", "ws-all", "run_e2eother")] });
+  });
+  await navToRoute(page, "/admin/audit?run_id=run_e2eslow");
+  await page.getByRole("button", { name: "Show all events" }).click();
+  await expect(verb(page, "Built the sandbox image — ws-all")).toBeVisible();
+
+  const answered = page.waitForResponse((r) => r.url().includes("run_id=run_e2eslow"));
+  release();
+  await answered;
+  // Two frames: the stale answer, if it were applied, has repainted by then.
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await expect(verb(page, "Built the sandbox image — ws-slow")).toHaveCount(0);
+  await expect(verb(page, "Built the sandbox image — ws-all")).toBeVisible();
+});

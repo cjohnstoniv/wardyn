@@ -24,6 +24,8 @@ import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field } from "../../wardyn/form-primitives";
+import { PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
+import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 
@@ -195,18 +197,8 @@ export function SecretLane({
     }
   };
 
-  const disconnect = async () => {
-    setBusy(true);
-    try {
-      await secretsApi.deleteSecret(secretName);
-      toast.success(`Removed ${secretName}`);
-      onChanged();
-    } catch (e) {
-      toast.error(getErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Disconnect deletes a write-only value that cannot be shown or recovered, so it asks first.
+  const [confirming, setConfirming] = React.useState(false);
 
   // A STORED secret shows a summary, not an empty box. The box was read as
   // "your key didn't save" — the value is write-only, so there is nothing to
@@ -220,14 +212,25 @@ export function SecretLane({
           <Button size="sm" variant="secondary" disabled={disabled} onClick={() => setEditing(true)}>
             Replace
           </Button>
-          <Button size="sm" variant="ghost" disabled={disabled || busy} onClick={disconnect}>
-            {busy && <Loader2 className="size-3.5 animate-spin" />}
+          <Button size="sm" variant="ghost" disabled={disabled} onClick={() => setConfirming(true)}>
             Disconnect
           </Button>
           <span className="text-meta text-muted-foreground">
             Stored as <Mono>{secretName}</Mono>
           </span>
         </div>
+        <DeleteConfirmDialog
+          name={confirming ? secretName : null}
+          entity="credential"
+          allowed
+          description={PROVIDERS_EXTRA.DISCONNECT_CREDENTIAL_BODY}
+          onOpenChange={(o) => !o && setConfirming(false)}
+          onDelete={() => secretsApi.deleteSecret(secretName)}
+          onDeleted={() => {
+            setConfirming(false);
+            onChanged();
+          }}
+        />
       </div>
     );
   }

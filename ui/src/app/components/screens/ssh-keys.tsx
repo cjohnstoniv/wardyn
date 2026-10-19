@@ -74,7 +74,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   }, []);
   React.useEffect(load, [load]);
 
-  // #1200 compact cards — one line, absent while unloaded. "0 keys", not the
+  // #1200 compact cards — one line, absent while unloaded. "No keys", not the
   // EmptyState's own "No keys yet." — both render at once once expanded, and
   // a query for that canon string must still resolve to a single node. The
   // error case is absent too (review R2-L1): the packet has no error summary
@@ -82,7 +82,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   // ERROR_TITLE) already renders once the card is expanded — showing it here
   // too would repeat the same string twice on screen at once.
   const summary =
-    status === "loading" || status === "error" ? undefined : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
+    status === "loading" || status === "error" ? undefined : keys.length === 0 ? "No keys" : `${keys.length} ${keys.length === 1 ? "key" : "keys"}`;
 
   // review L2 — nested inside CollapsibleCard on Your account (h3), this
   // table wrapper must not repeat the card's own border+bg-card (CONSOLE-

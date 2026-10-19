@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The admin "Stored credentials" page (packet F §4, design F-1/F-2) and its
+// The admin "Credentials" page (packet F §4, design F-1/F-2) and its
 // erase flow (packet F §5, design F-5/F-6), byte-for-byte from
 // cs8-credentials-packet.html's strings table. GET /model-providers/credentials
 // (CS-6, PR #1164) and DELETE /people/{principal}/credentials (CS-5) already
@@ -11,12 +11,12 @@
 //
 // The nav label itself (canon NAV.CREDENTIALS, "Credentials") lives in
 // lib/nav-copy.ts's CREDENTIALS_NAV_TITLE instead — the eager sidebar's own
-// entry-chunk-size reason (see that file) — and is a DIFFERENT string from
-// this page's own heading (INVENTORY.TITLE, below).
+// entry-chunk-size reason (see that file). It equals this page's heading
+// (INVENTORY.TITLE, below): a nav entry and its page carry one name.
 
 export const INVENTORY = {
-  TITLE: "Stored credentials",
-  LEDE: "Who holds a credential for each model provider, when it was added and when a run last used it. Values are never shown.",
+  TITLE: "Credentials",
+  LEDE: "The credentials stored in Wardyn: who holds one for each model provider, when it was added and when a run last used it. Values are never shown.",
   SUMMARY: (people: number, n: number) =>
     `${people} ${people === 1 ? "person holds" : "people hold"} ${n} credential${n === 1 ? "" : "s"}`,
   FILTER_ALL: "All providers",

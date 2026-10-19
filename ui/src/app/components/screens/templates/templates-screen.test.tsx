@@ -116,6 +116,17 @@ describe("Templates screen: rows", () => {
     expect(row.queryByText(T.POLICY_BADGE)).toBeNull();
   });
 
+  // A screen reader could not tell which value belonged to which column.
+  it("is a table: a named column header per column, and a cell under each in every row", async () => {
+    mount({ templates: [MINE, ORG], publish: MEMBER });
+    const table = await screen.findByRole("table", { name: T.LIST_ARIA });
+    const headers = within(table).getAllByRole("columnheader", { hidden: true });
+    expect(headers.map((h) => h.textContent)).toEqual([T.COL_NAME, T.COL_AVAILABLE, T.COL_INCLUDES, T.COL_UPDATED, T.COL_ACTIONS]);
+    const dataRows = within(table).getAllByRole("row", { hidden: true }).filter((r) => within(r).queryAllByRole("cell", { hidden: true }).length > 0);
+    expect(dataRows).toHaveLength(2);
+    for (const r of dataRows) expect(within(r).getAllByRole("cell", { hidden: true })).toHaveLength(headers.length);
+  });
+
   it("a policy carries the Policy badge and a missing dependency says Needs setup with the field named", async () => {
     mount({ templates: [ORG], publish: MEMBER });
     const row = within(await screen.findByText("Organisation baseline").then((n) => n.closest("li") as HTMLElement));

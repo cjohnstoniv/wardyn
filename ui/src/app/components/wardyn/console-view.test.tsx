@@ -65,6 +65,14 @@ describe("viewVerdict — the §2.3 table", () => {
       expect(viewVerdict(p, "session-admin")).toEqual({ kind: "to-user" });
     }
   });
+  // #2600: the personal pool form is a User-view page like /account itself.
+  it("every /account/* page takes the same rule as /account", () => {
+    for (const p of ["/account/pools/new", "/account/pools/p1/edit"]) {
+      expect(viewVerdict(p, "session-admin")).toEqual({ kind: "to-user" });
+      expect(viewVerdict(p, "admin-only")).toEqual({ kind: "admin-token" });
+      expect(viewVerdict(p, "session-user")).toEqual({ kind: "pass" });
+    }
+  });
   it("the admin token gets its own page on every User-view page", () => {
     for (const p of ["/runs", "/runs/new", "/runs/x", "/account", "/setup"]) {
       expect(viewVerdict(p, "admin-only")).toEqual({ kind: "admin-token" });

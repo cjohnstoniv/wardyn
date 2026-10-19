@@ -18,7 +18,7 @@ import {
   type DecisionOptions,
   type RunDetail,
 } from "../../lib/types";
-import { relativeTime } from "../../lib/format";
+import { absoluteTime, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
@@ -153,7 +153,7 @@ export function ApprovalsTab({
             <div className="flex flex-wrap items-center gap-2">
               <ApprovalKindChip kind={a.kind} />
               <ApprovalStateBadge state={a.state} />
-              <span className="ml-auto text-xs text-muted-foreground" title={a.requested_at}>
+              <span className="ml-auto text-xs text-muted-foreground" title={absoluteTime(a.requested_at)}>
                 requested {relativeTime(a.requested_at)}
               </span>
             </div>

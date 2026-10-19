@@ -105,6 +105,9 @@ export const DENY_SCOPE_HINT: Record<ApprovalScope, string> = {
 
 // Preset durations behind "Until…" (Phase 0's control shape). ms, not sec —
 // callers do `new Date(Date.now() + ms)`.
+// Shown beside a picked time that has already passed; the server refuses it with decision_expires_at in the past.
+export const UNTIL_PAST = "That time has already passed. Pick a later one.";
+
 export const UNTIL_PRESETS: { label: string; ms: number }[] = [
   { label: "15 minutes", ms: 15 * 60_000 },
   { label: "1 hour", ms: 60 * 60_000 },

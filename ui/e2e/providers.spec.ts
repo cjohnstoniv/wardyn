@@ -209,6 +209,17 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // A real secret write — GET /setup/status reflects it after a reload.
     await page.reload();
     await expect(page.getByTestId("provider-row-github").getByText(/Stored as/)).toBeVisible();
+
+    // Disconnect deletes a write-only value, so it asks first: Cancel keeps it, the confirm removes it.
+    const stored = page.getByTestId("provider-row-github");
+    await stored.getByRole("button", { name: "Disconnect" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm.getByText(/git-pat-github-com/)).toBeVisible();
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    await expect(stored.getByText(/Stored as/)).toBeVisible();
+    await stored.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete credential" }).click();
+    await expect(page.getByTestId("provider-row-github").getByLabel("Access token")).toBeVisible();
   });
 
   test("a malformed base URL is flagged before any request, and a server-only refusal renders the SERVER's own PROVIDERS_400 body — writing nothing", async ({

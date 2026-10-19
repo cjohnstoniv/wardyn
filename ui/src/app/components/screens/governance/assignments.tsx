@@ -224,6 +224,7 @@ export function AssignmentsBlock({
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
               className={buttonVariants({ variant: "outline" })}
+              disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toRemove) void remove(toRemove);
@@ -385,15 +386,20 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
   const [result, setResult] = React.useState<{ answer: GovernancePreview } | { error: true } | null>(null);
   const { userTypes, show: showUserType } = usePreviewUserTypes();
   const [userType, setUserType] = React.useState(USER_TYPE_STANDARD);
+  // Bumped on every input edit: an answer whose request started under an older value is dropped, so it can
+  // never sit under claims or a user type it was not asked about.
+  const inputGen = React.useRef(0);
 
   const run = async () => {
+    const asked = inputGen.current;
     setBusy(true);
     try {
       // The kind-less textarea onto the two wire lists — one implementation,
       // shared with the drives preview (lib/api/governance.ts's previewClaims).
-      setResult({ answer: await api.previewGovernance(previewClaims(claims, userType)) });
+      const answer = await api.previewGovernance(previewClaims(claims, userType));
+      if (asked === inputGen.current) setResult({ answer });
     } catch {
-      setResult({ error: true });
+      if (asked === inputGen.current) setResult({ error: true });
     } finally {
       setBusy(false);
     }
@@ -415,6 +421,7 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
               // PREVIOUS group's resolved profile sat under new, unrun input as
               // if it answered it.
               onChange={(e) => {
+                inputGen.current += 1;
                 setClaims(e.target.value);
                 setResult(null);
               }}
@@ -428,6 +435,7 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
               value={userType}
               userTypes={userTypes}
               onChange={(id) => {
+                inputGen.current += 1;
                 setUserType(id);
                 setResult(null);
               }}

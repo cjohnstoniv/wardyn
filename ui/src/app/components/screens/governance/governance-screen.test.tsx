@@ -408,6 +408,7 @@ describe("GovernanceScreen — delete: the pre-fill and the race are different r
     expect(within(dialog).queryByText(GOV.DELETE_RESTRICT_BODY(GREENFIELD.name, 0))).not.toBeInTheDocument();
     expect(confirm).not.toBeDisabled();
   });
+
 });
 
 describe("GovernanceScreen — assignments and the resolved preview", () => {
