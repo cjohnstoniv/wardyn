@@ -29,7 +29,10 @@ func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g 
 	}
 	origin, ref := s.localGrantOrigin(ctx, runIdentitySubject(ctx, run.CreatedBy), g.Spec)
 	if ref == nil && residentADOOrigin(origin) {
-		if r := s.residentADOAdmits(ctx, run, origin); r != nil {
+		if r, err := s.residentADOAdmits(ctx, run, origin); err != nil || r != nil {
+			if r == nil {
+				r = &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "dispatch grant", Detail: "the delivery policy or the runner's posture could not be read"}
+			}
 			return types.CredentialGrant{}, r
 		}
 		g.Delivery = types.GrantDeliveryResident
@@ -51,13 +54,15 @@ func residentADOOrigin(origin placement.CredentialOrigin) bool {
 }
 
 // residentADOAdmits judges an Azure DevOps minted token's runner_resident
-// delivery to run's runner: the delivery policy, the bound runner's trust class
-// and posture as stored now, and the connection's opt-in carried by origin. The
-// run's blast-radius floor is judged by the dispatch classifier
-// (classifyLocalDispatch), which re-judges the grant's injection rule with it.
-// The runner's proxy then fetches the token over the relay on each request and
-// holds it in memory only; no value is handed to the runner.
-func (s *Server) residentADOAdmits(ctx context.Context, run types.AgentRun, origin placement.CredentialOrigin) *placement.Refusal {
+// delivery to run's runner: the delivery policy, the bound runner's trust
+// class, owner kind and posture as stored now, and the connection's opt-in
+// carried by origin. The run's blast-radius floor is judged by the dispatch
+// classifier (classifyLocalDispatch), which re-judges the grant's injection
+// rule with it. The runner's proxy then fetches the token over the relay, per
+// resolve and at most every residentRejudgeEvery, and holds it in memory only;
+// no value is handed to the runner. err is a read that failed: nothing was
+// judged.
+func (s *Server) residentADOAdmits(ctx context.Context, run types.AgentRun, origin placement.CredentialOrigin) (*placement.Refusal, error) {
 	var p placement.LocalPlan
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err == nil && run.RunnerID == nil {
@@ -67,9 +72,9 @@ func (s *Server) residentADOAdmits(ctx context.Context, run types.AgentRun, orig
 		err = s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 	}
 	if err != nil {
-		return &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "dispatch grant", Detail: "the delivery policy or the runner's posture could not be read"}
+		return nil, err
 	}
-	return placement.ResidentAdmits(origin, p, "ProxyConfig.Injection")
+	return placement.ResidentAdmits(origin, p, "ProxyConfig.Injection"), nil
 }
 
 // localCapturedGrantOrigin inspects the raw snapshot rather than permitting

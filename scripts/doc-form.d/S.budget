@@ -177,7 +177,8 @@
 # docs/sdk.md 19653 adds 18 (0.9.6 P096B), measured: the runner_posture_unmet detail names every unmet field.
 # docs/sdk.md 19679 adds 26 (0.9.6 P096B), measured: buildable_modes on GET /governance/credential-delivery.
 # docs/sdk.md 19697 adds 18 over 19679 (0.10 MINT-L), measured: delivery_runner_resident names the Azure DevOps minted token it serves.
-docs/sdk.md=19697 share=21
+# docs/sdk.md 19702 adds 5 over 19697 (0.10 MINT-L round 2), measured: the owner gate and the revoke on a refused relayed fetch.
+docs/sdk.md=19702 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

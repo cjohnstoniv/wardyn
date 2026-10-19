@@ -82,7 +82,7 @@ func newADOLocalLane(t *testing.T, policy string, optIn bool) *adoLocalFixture {
 	id := uuid.New()
 	reported := adoTestNow
 	ls := &adoLocalStore{adoPATStore: fx.st, policy: policy,
-		runner: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, PostureReportedAt: &reported, Posture: types.RunnerPosture{OS: "linux"}}}
+		runner: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson, PostureReportedAt: &reported, Posture: types.RunnerPosture{OS: "linux"}}}
 	fx.srv.cfg.Store = ls
 	fx.st.edit(fx.run.ID, func(r *types.AgentRun) { r.Placement, r.RunnerID = types.PlacementLocal, &id })
 	fx.run, _ = fx.st.GetRun(context.Background(), fx.run.ID)
@@ -181,31 +181,43 @@ func TestMintedPATLocal_ResidentIsServedThroughTheRelay(t *testing.T) {
 }
 
 // Every relayed resolve is judged again: a policy flipped to refuse, a posture requirement the runner does
-// not meet, a trust class the policy does not deliver it to, an opt-in withdrawn, or another runner each
-// refuses the next resolve; restored, it is served again.
+// not meet, a trust class the policy does not deliver it to, an organization's runner, an opt-in withdrawn,
+// or another runner each refuses the next resolve. A refusal the judgement gave (not a failed read)
+// revokes the run's tokens at Azure DevOps with reason drift; restored, a fresh token is served.
 func TestMintedPATLocal_RelayRejudgesEveryResolve(t *testing.T) {
 	lf := newADOLocalFixture(t)
 	lf.relayedOK(t, "dev.azure.com", nil)
 	managedOnly := `{"classes":{"ado_minted_pat":{"mode":"refuse"}},"by_trust":{"managed_device":{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}}}`
-	for name, flip := range map[string]func(*adoLocalStore){
-		"policy refuse": func(s *adoLocalStore) { s.policy = `{"classes":{"ado_minted_pat":{"mode":"refuse"}}}` },
-		"posture unmet": func(s *adoLocalStore) {
+	for name, tc := range map[string]struct {
+		flip    func(*adoLocalStore)
+		revokes bool
+	}{
+		"policy refuse": {func(s *adoLocalStore) { s.policy = `{"classes":{"ado_minted_pat":{"mode":"refuse"}}}` }, true},
+		"posture unmet": {func(s *adoLocalStore) {
 			s.policy = `{"classes":{"ado_minted_pat":{"mode":"runner_resident","require_posture":{"disk_encrypted":true}}}}`
-		},
-		"personal, managed-only":  func(s *adoLocalStore) { s.policy = managedOnly },
-		"unknown trust class":     func(s *adoLocalStore) { s.runner.TrustClass = "" },
-		"opt-in withdrawn":        func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Entra.RunnerResident = false },
-		"row no longer minted":    func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer },
-		"connection row disabled": func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Disabled = true },
+		}, true},
+		"personal, managed-only":  {func(s *adoLocalStore) { s.policy = managedOnly }, true},
+		"organization's runner":   {func(s *adoLocalStore) { s.runner.OwnerKind = types.RunnerOwnerOrg }, true},
+		"unknown trust class":     {func(s *adoLocalStore) { s.runner.TrustClass = "" }, false}, // the plan's facts cannot be read
+		"opt-in withdrawn":        {func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Entra.RunnerResident = false }, true},
+		"row no longer minted":    {func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer }, true},
+		"connection row disabled": {func(*adoLocalStore) { lf.st.site.WorkspaceProviders.Git[0].Disabled = true }, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var policy string
 			var rn types.Runner
 			lf.ls.set(func(s *adoLocalStore) { policy, rn = s.policy, s.runner })
 			site, disabled := *lf.st.site.WorkspaceProviders.Git[0].Entra, lf.st.site.WorkspaceProviders.Git[0].Disabled
-			lf.ls.set(flip)
+			lf.ls.set(tc.flip)
+			lf.audit.rows = nil
 			w, _ := lf.relayed(t, lf.runner, "dev.azure.com", nil, true)
 			assertRelayRefused(t, w, name)
+			if live := lf.st.unrevoked(t); tc.revokes != (len(live) == 0) {
+				t.Fatalf("live tokens after the refusal = %d, want revoked %v", len(live), tc.revokes)
+			}
+			if got := lf.auditReasons(adoPATAuditRevoke); tc.revokes && (len(got) == 0 || slices.ContainsFunc(got, func(r string) bool { return r != adoPATRevokeDrift })) {
+				t.Fatalf("revoke reasons = %v, want drift", got)
+			}
 			lf.ls.set(func(s *adoLocalStore) { s.policy, s.runner = policy, rn })
 			*lf.st.site.WorkspaceProviders.Git[0].Entra = site
 			lf.st.site.WorkspaceProviders.Git[0].Disabled = disabled
@@ -216,23 +228,49 @@ func TestMintedPATLocal_RelayRejudgesEveryResolve(t *testing.T) {
 	assertRelayRefused(t, w, "another runner")
 }
 
+// A connection's opt-in withdrawn mid-run: the next relayed resolve refuses, and every token the run held
+// is revoked at Azure DevOps with reason drift, so the one the proxy still holds is dead at the provider.
+func TestMintedPATLocal_WithdrawnOptInRevokesWithDrift(t *testing.T) {
+	lf := newADOLocalFixture(t)
+	held := lf.relayedOK(t, "dev.azure.com", nil)
+	lf.st.site.WorkspaceProviders.Git[0].Entra.RunnerResident = false
+	lf.audit.rows = nil
+	w, _ := lf.relayed(t, lf.runner, "dev.azure.com", nil, true)
+	assertRelayRefused(t, w, "opt-in withdrawn")
+	if live := lf.st.unrevoked(t); len(live) != 0 {
+		t.Fatalf("live tokens = %+v, want none", live)
+	}
+	if !slices.Contains(lf.pats.revokedIDs(), held.JTI) {
+		t.Fatalf("revoked at Azure DevOps %v, want the held token %s", lf.pats.revokedIDs(), held.JTI)
+	}
+	if got := lf.auditReasons(adoPATAuditRevoke); !slices.Equal(got, []string{adoPATRevokeDrift}) {
+		t.Fatalf("revoke reasons = %v, want [drift]", got)
+	}
+}
+
 // Off by default: with no policy row, with no opt-in, on a trust class the policy does not deliver it
-// to, or for a bearer row, the grant write refuses and the run fails with no grant recorded.
+// to, on an organization's runner of the same trust class, or for a bearer row, the grant write refuses
+// and the run fails with no grant recorded.
 func TestMintedPATLocal_OffByDefault(t *testing.T) {
 	for name, tc := range map[string]struct {
 		policy string
 		optIn  bool
 		bearer bool
+		org    bool
 	}{
-		"no policy row":         {"", true, false},
-		"no opt-in":             {adoResidentPolicy, false, false},
-		"managed_device only":   {`{"classes":{"ado_minted_pat":{"mode":"refuse"}},"by_trust":{"managed_device":{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}}}`, true, false},
-		"bearer, opted in":      {adoResidentPolicy, true, true},
-		"bearer, no policy row": {"", true, true},
+		"no policy row":         {"", true, false, false},
+		"no opt-in":             {adoResidentPolicy, false, false, false},
+		"managed_device only":   {`{"classes":{"ado_minted_pat":{"mode":"refuse"}},"by_trust":{"managed_device":{"classes":{"ado_minted_pat":{"mode":"runner_resident"}}}}}`, true, false, false},
+		"bearer, opted in":      {adoResidentPolicy, true, true, false},
+		"bearer, no policy row": {"", true, true, false},
+		"organization's runner": {adoResidentPolicy, true, false, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			lf := newADOLocalLane(t, tc.policy, tc.optIn)
 			lf.st.edit(lf.run.ID, func(r *types.AgentRun) { r.State = types.RunStarting })
+			if tc.org {
+				lf.ls.set(func(s *adoLocalStore) { s.runner.OwnerKind = types.RunnerOwnerOrg })
+			}
 			if tc.bearer {
 				lf.st.site.WorkspaceProviders.Git[0].Entra.TokenMode = types.ADOTokenModeBearer
 				lf.ado.tokenMode = types.ADOTokenModeBearer
@@ -269,13 +307,27 @@ func TestMintedPATLocal_OtherResidentGrantsStayRefused(t *testing.T) {
 	}
 }
 
-// Through the relay the lane keeps the cluster's lifecycle: renewal in the window, pause revokes and refuses,
+// Through the relay the lane keeps the cluster's lifecycle, its answers expiring within residentRejudgeEvery:
+// a re-resolve in between gets the same token, renewal in the window, pause revokes and refuses,
 // resume mints afresh, and the run's end revokes every token with reason run_end and refuses the next resolve.
 func TestMintedPATLocal_RenewalPauseResumeAndRunEnd(t *testing.T) {
 	ctx := context.Background()
 	lf := newADOLocalFixture(t)
 	first := lf.relayedOK(t, "dev.azure.com", nil)
-	lf.setClock(time.UnixMilli(first.ExpiresAt).Add(-adoRunPATRenewWindow + time.Minute))
+	live := lf.st.unrevoked(t)
+	if len(live) != 1 {
+		t.Fatalf("live tokens = %d, want 1", len(live))
+	}
+	// The relayed answer expires within residentRejudgeEvery, long before the token does, so the proxy
+	// re-resolves and is judged again; inside the window it is handed the same token.
+	if limit := lf.clock().Add(residentRejudgeEvery); time.UnixMilli(first.ExpiresAt).After(limit) || !live[0].ValidTo.After(limit) {
+		t.Fatalf("relayed expiry %v, token validTo %v: want the expiry at most %v and the token outliving it", time.UnixMilli(first.ExpiresAt), live[0].ValidTo, limit)
+	}
+	lf.setClock(lf.clock().Add(residentRejudgeEvery))
+	if again := lf.relayedOK(t, "dev.azure.com", nil); again.JTI != first.JTI || lf.pats.createCount() != 1 {
+		t.Fatalf("re-resolve after the interval: JTI %s creates %d, want the same token and no create", again.JTI, lf.pats.createCount())
+	}
+	lf.setClock(live[0].ValidTo.Add(-adoRunPATRenewWindow + time.Minute))
 	renewed := lf.relayedOK(t, "dev.azure.com", nil)
 	if renewed.JTI == first.JTI || lf.pats.createCount() != 2 {
 		t.Fatalf("in the renew window: JTI %s creates %d, want a new token", renewed.JTI, lf.pats.createCount())
@@ -321,5 +373,31 @@ func TestLocalADOOrigin_OnlyMintedPATCarriesTheOptIn(t *testing.T) {
 		if o.Class != placement.ClassBrokered || o.Delivery != placement.ClassADOMintedPAT || o.ResidentOptIn != want {
 			t.Errorf("%s: origin %+v, want brokered ado_minted_pat with opt-in %v", mode, o, want)
 		}
+	}
+}
+
+// At create a plan holding an Azure DevOps minted token runner_resident is judged on the owner kind of the
+// class's runners: a class whose runners are all an organization's refuses it, a class with a person's own
+// admits it and marks the bind to keep only a person's own runners.
+func TestLocalADOResident_AdmittedOnlyOnAPersonsOwnRunner(t *testing.T) {
+	origin := placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: true}
+	p := placement.LocalPlan{
+		CredentialIntents: []placement.CredentialIntent{{Field: "ProxyConfig.ADOGrant[ado-row-1]", Origin: origin}},
+		Delivery:          placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassADOMintedPAT: {Mode: placement.ModeRunnerResident}}},
+		Posture:           &types.RunnerPosture{OS: "linux"},
+	}
+	org, person := trustTarget(types.RunnerTrustPersonal), trustTarget(types.RunnerTrustPersonal)
+	org.ownerKind, person.ownerKind = types.RunnerOwnerOrg, types.RunnerOwnerPerson
+	personal := []types.RunnerTrustClass{types.RunnerTrustPersonal}
+	if c, ref := judgeAtTrust(p, personal, trustOwners([]poolTarget{org})); c != "" || ref == nil || !strings.Contains(ref.Detail, "a person's own runner") {
+		t.Fatalf("only an organization's runner: %q %+v, want refused", c, ref)
+	}
+	if c, ref := judgeAtTrust(p, personal, trustOwners([]poolTarget{org, person})); c != types.RunnerTrustPersonal || ref != nil {
+		t.Fatalf("a person's own runner among them: %q %+v, want admitted", c, ref)
+	}
+	rp := runPlacement{eligible: []poolTarget{org, person}}
+	rp.narrowToPersonOwned()
+	if len(rp.eligible) != 1 || *rp.eligible[0].runnerID != *person.runnerID {
+		t.Fatalf("narrowed to %+v, want only the person's own runner", rp.eligible)
 	}
 }

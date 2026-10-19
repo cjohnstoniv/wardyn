@@ -81,9 +81,10 @@ func TestResidentLift_PerClass(t *testing.T) {
 		})
 	}
 	// ado_minted_pat (option L): no value is dispatched, so on an opted-in
-	// connection its intent and its injection rule are admitted as they are. No
-	// opt-in, a refuse policy, a floor, a trust class the policy does not
-	// deliver it to, or an unknown trust class each refuses.
+	// connection its intent and its injection rule are admitted as they are on
+	// a person's own runner. No opt-in, a refuse policy, a floor, a trust class
+	// the policy does not deliver it to, an unknown trust class, or an
+	// organization's runner of the same trust class each refuses.
 	t.Run(ClassADOMintedPAT, func(t *testing.T) {
 		const path = "ProxyConfig.Injection[0]"
 		resident := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}}
@@ -92,8 +93,12 @@ func TestResidentLift_PerClass(t *testing.T) {
 			Rule: egress.InjectionRule{Host: "dev.azure.com", Header: "Authorization", SecretName: types.ADOEntraAccessTokenSecret, RequireTLS: true}}}}}
 		plan := func(o CredentialOrigin, pol DeliveryPolicy, trust types.RunnerTrustClass, floor types.ConfinementClass) LocalPlan {
 			return LocalPlan{Spec: spec, Origins: map[string]CredentialOrigin{path: o}, Delivery: pol, Trust: trust, ConfinementFloor: floor,
-				CredentialIntents: []CredentialIntent{{Field: "ProxyConfig.ADOGrant[row-1]", Origin: o}}}
+				OwnerKind: types.RunnerOwnerPerson, CredentialIntents: []CredentialIntent{{Field: "ProxyConfig.ADOGrant[row-1]", Origin: o}}}
 		}
+		orgOwned := plan(optedIn, resident, types.RunnerTrustPersonal, "")
+		orgOwned.OwnerKind = types.RunnerOwnerOrg
+		unknownOwner := plan(optedIn, resident, types.RunnerTrustPersonal, "")
+		unknownOwner.OwnerKind = ""
 		if _, r := LocalEligibility(plan(optedIn, resident, types.RunnerTrustPersonal, "")); r != nil {
 			t.Fatalf("opted-in connection: %+v, want admitted", r)
 		}
@@ -107,6 +112,8 @@ func TestResidentLift_PerClass(t *testing.T) {
 			"CC3 floor":              plan(optedIn, resident, types.RunnerTrustPersonal, types.CC3),
 			"personal, managed-only": plan(optedIn, managedOnly, types.RunnerTrustPersonal, ""),
 			"unknown trust class":    plan(optedIn, resident, "", ""),
+			"an organization's runner, same trust class": orgOwned,
+			"unknown owner kind":                         unknownOwner,
 		} {
 			if _, r := LocalEligibility(p); r == nil {
 				t.Errorf("%s: admitted, want refused", name)

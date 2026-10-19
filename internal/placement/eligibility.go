@@ -61,6 +61,10 @@ type LocalPlan struct {
 	// ConfinementFloor is the run's blast-radius floor
 	// (composer.RequiredConfinementFloor); "" when there is none.
 	ConfinementFloor types.ConfinementClass
+	// OwnerKind is the candidate runner's owner kind: an Azure DevOps minted
+	// token is runner_resident only on a person's own runner. "" (unknown)
+	// refuses it.
+	OwnerKind types.RunnerOwnerKind
 }
 
 // Refusal names the actual field that makes local execution ineligible.
@@ -234,7 +238,7 @@ func notDeliveredDetail(class string, trust types.RunnerTrustClass, mode Mode) s
 // ResidentAdmits is the runner_resident gate (OD-12, design §7.4, Q7) for a
 // credential of origin, whose delivery class is origin.Delivery: the class is
 // delivered runner_resident under p's policy and may be, an Azure DevOps
-// connection opted in, the run has no blast-radius floor (a runner-asserted
+// connection opted in on a person's own runner, the run has no blast-radius floor (a runner-asserted
 // class never satisfies one for a value the runner holds), and the runner's
 // posture meets the class's requirement. LocalEligibility applies it at create,
 // dispatch and revive; the org's delivery applies it again to each value,
@@ -249,6 +253,8 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 		return refuse(ReasonPlacementCredential, path, class+" credential is not delivered runner_resident under the current delivery policy")
 	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
 		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident, or its token mode is not minted_pat")
+	case class == ClassADOMintedPAT && p.OwnerKind != types.RunnerOwnerPerson:
+		return refuse(ReasonPlacementCredential, path, "an Azure DevOps minted token is runner_resident only on a person's own runner")
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
@@ -276,7 +282,7 @@ func residentValueRefusal(path, class string, record bool, leaf reflect.Value) *
 	switch {
 	case !residentBuilt[class]:
 		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
-	case class == ClassADOMintedPAT: // no value is dispatched: the runner's proxy fetches it per request
+	case class == ClassADOMintedPAT: // no value is dispatched: the runner's proxy fetches it per resolve, at most every 15 minutes
 		return nil
 	case record:
 		return nil

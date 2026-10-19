@@ -2670,7 +2670,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Root on the host can copy a value while it is held. A value already in the sandbox or proxy stays until the run ends, and a key or token already used stays valid at the forge until rotated.
     - Posture is the runner's own report (`posture_source: runner_asserted`, audited `runner.posture.record`). It tells a lost or unmanaged laptop from a healthy one; it does not constrain the developer.
     - **Azure DevOps minted token [0.10].** Only on an opted-in connection, never in the keystore: the runner's proxy fetches it over the relay and holds it in memory, at most `pat_max_hours` (`relayedResidentADO`, [`internal/api/internal_relay.go`](../internal/api/internal_relay.go)).
-      - Each fetch is re-judged; a held token works until near expiry, and run end, kill and pause revoke it. Root on the host can read the proxy's memory. It is minted in the owner's name, within the run's capabilities.
+      - Only on a person's own runner. Each fetch, at most 15 minutes apart, is re-judged, and a refusal, run end, kill and pause revoke it. Root on the host can read the proxy's memory. It is minted in the owner's name, within the run's capabilities.
 
 77. **Offline, a laptop run keeps egress on its cached policy until the lapse, spooling self-reported decisions behind a fail-closed bound [0.9, client mode].**
     - No governed run is created while a runner's link is down (`runner_offline`), and a run in flight is never torn down by a drop.

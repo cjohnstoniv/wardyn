@@ -105,6 +105,7 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 		Delivery:          DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}},
 		Posture:           &types.RunnerPosture{OS: "linux"},
 		Trust:             types.RunnerTrustPersonal,
+		OwnerKind:         types.RunnerOwnerPerson,
 	}
 }
 
@@ -256,6 +257,7 @@ func TestResidentAdmits_Matrix(t *testing.T) {
 			p := residentPlan(ClassPolicy{}, tc.posture)
 			p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{tc.origin.Delivery: tc.cp}}
 			p.ConfinementFloor = tc.floor
+			p.OwnerKind = types.RunnerOwnerPerson
 			r := ResidentAdmits(tc.origin, p, "runner_resident."+tc.origin.Delivery)
 			switch {
 			case tc.reason == "" && r != nil:

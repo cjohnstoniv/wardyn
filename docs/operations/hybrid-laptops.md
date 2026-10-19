@@ -66,7 +66,7 @@
 - A grant that requires approval is never `runner_resident`.
 - `git_pat_helper` applies only with `WARDYN_GIT_PAT_BROKER=off`. Turning the broker on refuses new runs, dispatches and revives that would need one.
 - A git token for an Azure DevOps host is never `runner_resident` (`placement_credential`).
-- `ado_minted_pat` also needs the connection's opt-in. The runner's proxy fetches the per-run token from the organisation ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
+- `ado_minted_pat` also needs the connection's opt-in and a person's own runner. The runner's proxy fetches the per-run token from the organisation at most 15 minutes apart; a refused fetch revokes it ([Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement)).
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.

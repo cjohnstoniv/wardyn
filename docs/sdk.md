@@ -628,7 +628,7 @@ start.
 | `relay_runner_mismatch` | A relayed request names a run that is not placed on the relaying runner. |
 | `relay_required` | A local run's token was used off its runner's relay; local runs reach the org only through it. |
 | `runner_action_pending` | The relaying runner has an action pending for this run; retry once the runner has acted. |
-| `delivery_via_org` / `delivery_runner_resident` | Through a relay, a grant delivered `via_org` is used at the org and a `runner_resident` one already lives on the runner, so neither is handed out. Except an Azure DevOps minted token, served to the runner's proxy while policy, trust, posture and opt-in admit it. |
+| `delivery_via_org` / `delivery_runner_resident` | Through a relay, a grant delivered `via_org` is used at the org and a `runner_resident` one already lives on the runner, so neither is handed out. Except an Azure DevOps minted token, served to the runner's proxy while policy, owner, trust, posture and opt-in admit it; a refusal revokes it. |
 | `delivery_not_via_org` / `via_org_destination_refused` / `via_org_cap_exceeded` | `/internal/via-org/{grantID}/…` serves only this run's grant delivered `via_org`, to the grant's own destination, within 16 open streams and 8 GiB a run per server replica, reset on restart. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
