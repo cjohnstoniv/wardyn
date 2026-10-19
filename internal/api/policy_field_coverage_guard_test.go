@@ -51,8 +51,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "per-entry shape (proxy.ValidDomainEntry) plus a count cap; intersected down to the operator ceiling"},
 	"DeniedDomains": {validated: true, clamped: true,
 		why: "per-entry shape; the ceiling's denies are unioned in (a deny only ever widens)"},
-	"AllowAllEgress": {validated: true, clamped: true,
-		why: "documented inert under allow-all; forced false when the ceiling is not allow-all"},
+	"AllowAllEgress": {validated: false, clamped: true,
+		why: "a bool: nothing bounds it at write (validateLLMInspection only READS it to decide whether a sidecar URL's host is allowed). Documented inert under allow-all; forced false when the ceiling is not allow-all"},
 	"FirstUseApproval": {validated: true, clamped: true,
 		why: "closed enum; raised to the ceiling's stricter mode by firstUseApprovalRank"},
 	"FirstUseHoldSeconds": {validated: true, clamped: true,
@@ -90,10 +90,10 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 }
 
 func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
-	// Strip comments first — a bare substring match is satisfied by a
-	// field mentioned only in a comment, which would let a row read "bounded"
-	// for a field the source only talks about. See stripGoComments below.
-	policySrc := stripGoComments(t, readRepoFile(t, "internal", "api", "policy.go"))
+	// The fields the write-time validators bound, read off the syntax tree: a
+	// substring match over the whole file is satisfied by a field mentioned only
+	// in a comment, or only READ by a validator for another field's sake.
+	validated := writeBoundedFields(t, readRepoFile(t, "internal", "api", "policy.go"))
 	// cloneProposal is the clamp's OWNERSHIP copy (it reallocates the caller's
 	// slices and pointees so the clamped spec aliases nothing). It names EVERY
 	// reference-semantics field by construction and bounds none of them, so
@@ -115,7 +115,7 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 		if row.why == "" {
 			t.Errorf("RunPolicySpec.%s: the row needs a reason, not just two booleans", f.Name)
 		}
-		if got := strings.Contains(policySrc, "spec."+f.Name); got != row.validated {
+		if got := validated[f.Name]; got != row.validated {
 			t.Errorf("RunPolicySpec.%s: validated=%v in the table, but internal/api/policy.go %s reference it",
 				f.Name, row.validated, saysOrNot(got))
 		}
@@ -129,6 +129,45 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 			t.Errorf("coverage row %q names no RunPolicySpec field — the field was renamed or removed", name)
 		}
 	}
+}
+
+// validatorReads are the spec.<Field> selectors a validator reads as inputs to
+// another field's check without bounding them: validateLLMInspection tests
+// AllowAllEgress and AllowedDomains to decide whether the sidecar URL's host is
+// allowed, and bounds neither.
+var validatorReads = map[string]map[string]bool{
+	"validateLLMInspection": {"AllowAllEgress": true, "AllowedDomains": true},
+}
+
+// writeBoundedFields returns the RunPolicySpec fields named by a spec.<Field>
+// selector inside one of policy.go's validate* functions, minus validatorReads.
+func writeBoundedFields(t *testing.T, src string) map[string]bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "policy.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse policy.go: %v", err)
+	}
+	out := map[string]bool{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || !strings.HasPrefix(fn.Name.Name, "validate") {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "spec" && !validatorReads[fn.Name.Name][sel.Sel.Name] {
+				out[sel.Sel.Name] = true
+			}
+			return true
+		})
+	}
+	if len(out) == 0 {
+		t.Fatal("found no spec.<Field> selector in policy.go's validate* functions — re-anchor this guard")
+	}
+	return out
 }
 
 // withoutFunc returns src with one top-level func's declaration cut out, so a
