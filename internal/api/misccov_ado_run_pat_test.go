@@ -224,17 +224,35 @@ func TestMiscCovMintRefusesBeforeCreatingAnything(t *testing.T) {
 // A revoke that fails for a token nobody recorded leaves a live token with no row: the failure is
 // audited with its authorization id so it can be traced and revoked by hand (#2802).
 func TestMiscCovMintAuditsAFailedRevokeOfAnUnrecordedToken(t *testing.T) {
-	l := newMiscCovMintLane(t)
-	l.wrapped.insertErr = errors.New("insert refused")
-	id := uuid.NewString()
-	client := &miscCovPATClient{result: adoPAT{AuthorizationID: id, Token: "fakepat" + strings.Repeat("z", 44)}, revokeErr: errors.New("organisation unreachable")}
-	l.srv.adoPATs = client
-	if _, err := l.mint(l.ado.caps); err == nil {
-		t.Fatal("mint succeeded though its token could not be recorded")
-	}
-	rows := l.audit.find(adoPATAuditRevokeFailed)
-	if len(rows) != 1 || rows[0].Target != id || !strings.Contains(string(rows[0].Data), id) {
-		t.Fatalf("revoke-failed rows = %+v, want one naming authorization %s", rows, id)
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, l *miscCovMintLane)
+	}{
+		{"the token row", func(_ *testing.T, l *miscCovMintLane) { l.wrapped.insertErr = errors.New("insert refused") }},
+		{"the masking renderings", func(t *testing.T, l *miscCovMintLane) {
+			pool, _ := miscCovClosedPool(t)
+			reg := secretmask.NewRegistry()
+			l.srv.cfg.MaskRegistry = reg
+			l.srv.cfg.MaskManifests = maskmanifest.New(pool, nil, reg)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newMiscCovMintLane(t)
+			tc.setup(t, l)
+			id := uuid.NewString()
+			client := &miscCovPATClient{result: adoPAT{AuthorizationID: id, Token: "fakepat" + strings.Repeat("z", 44)}, revokeErr: errors.New("organisation unreachable")}
+			l.srv.adoPATs = client
+			if _, err := l.mint(l.ado.caps); err == nil {
+				t.Fatal("mint succeeded though its token could not be recorded")
+			}
+			rows := l.audit.find(adoPATAuditRevokeFailed)
+			if len(rows) != 1 || rows[0].Target != id || !strings.Contains(string(rows[0].Data), id) {
+				t.Fatalf("revoke-failed rows = %+v, want one naming authorization %s", rows, id)
+			}
+			if !strings.Contains(string(rows[0].Data), `"reason":"`+adoPATRevokeUnrecorded+`"`) {
+				t.Errorf("revoke-failed row data = %s, want the documented reason %q", rows[0].Data, adoPATRevokeUnrecorded)
+			}
+		})
 	}
 }
 
