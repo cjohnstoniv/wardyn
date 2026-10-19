@@ -364,11 +364,13 @@ func f() { c.Get(ctx, a, b, d); k.Unwrap(ctx, w, b); g.Open(nil, n, ct, aad) }`
 }
 
 // credentialEntryPoints are the functions that start a process holding
-// credentials: wardynd (every mode, maintenance ones included, reads them) and
-// the proxy sidecar (it resolves and injects them).
+// credentials: wardynd (every mode, maintenance ones included, reads them),
+// the proxy sidecar (it resolves and injects them) and wardyn-runnerd (it
+// carries each run's proxy config).
 var credentialEntryPoints = map[string]string{
-	"cmd/wardynd/main.go":      "main",
-	"cmd/wardyn-proxy/main.go": "main",
+	"cmd/wardynd/main.go":        "main",
+	"cmd/wardyn-proxy/main.go":   "main",
+	"cmd/wardyn-runnerd/main.go": "main",
 }
 
 func TestCredentialBinariesDisableCoreDumpsFirst(t *testing.T) {
