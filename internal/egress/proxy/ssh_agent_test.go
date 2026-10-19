@@ -162,7 +162,12 @@ func TestSSHAgent_SignsUserauthOnly(t *testing.T) {
 		if _, err := client.Sign(pub, hostbound); err != nil {
 			t.Fatalf("sign the host-bound sign-in: %v", err)
 		}
+		other, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(make([]byte, 32)).Public())
+		if err != nil {
+			t.Fatal(err)
+		}
 		for name, d := range map[string][]byte{
+			"another key":     userauthData("git", other, "publickey"),
 			"arbitrary data":  []byte("a commit to sign"),
 			"another user":    userauthData("root", pub, "publickey"),
 			"another method":  userauthData("git", pub, "hostbased"),
@@ -236,7 +241,7 @@ func TestBrokerMint_SSHKeyAnswerWithheld(t *testing.T) {
 	}
 }
 
-// A grant that is not an ssh_key gets no agent and leaks nothing; a grant a
+// A grant that is not an ssh_key gets no agent and no key; a grant a
 // broker mints is refused before any mint.
 func TestSSHAgent_RefusesOtherGrants(t *testing.T) {
 	sshGrant, other, brokered := uuid.New(), uuid.New(), uuid.New()

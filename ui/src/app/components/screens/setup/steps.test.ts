@@ -193,7 +193,7 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["authorized-not-issued", "Authorized, not issued"],
       ["rest-api-token", "A bearer token for a real API"],
       ["pat-stdout-only", "A PAT that only ever exists in a pipe"],
-      ["ssh-briefly-resident", "The one that touches disk — briefly"],
+      ["ssh-at-the-proxy", "The SSH key that stays at the proxy"],
       ["github-app-broker", "A token the sandbox never even sees"],
       ["sts-fail-closed", "No identity, no credential"],
       // "Code and workspaces" (was "Your work", renamed M-6/QM-8) is
@@ -345,7 +345,7 @@ describe("ceilingNarrows — the demos a user's ceiling would rewrite (#850)", (
     "authorized-not-issued",
     "rest-api-token",
     "pat-stdout-only",
-    "ssh-briefly-resident",
+    "ssh-at-the-proxy",
     "sts-fail-closed",
   ];
   const untouched = [

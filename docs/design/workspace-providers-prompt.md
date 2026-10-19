@@ -494,10 +494,10 @@ the thing refused — and the console renders them verbatim under its own headin
 
 | Key | Lives in | String |
 |---|---|---|
-| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | The GitHub App lane, and a PAT while the PAT broker is on, keep the token at the proxy. An SSH key file is written in the sandbox for the clone and wiped after; an approval-gated grant is delivered once. Public repos clone with no credential at all. |
+| `S.GIT_FOOTER` | `settings/connection-cards.tsx` | The GitHub App lane, a PAT while the PAT broker is on, and an SSH key all stay at the proxy; for SSH the proxy signs the clone's sign-in and closes its agent after the start-up clone. Public repos clone with no credential at all. |
 | `S.MODEL_FOOTER` | `settings/connection-cards.tsx` | The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it. |
 | `S.STORE_NOTE` | `settings/connection-cards.tsx` | Wardyn stores this — it doesn't dial the provider to check it. |
-| `Lane` titles / hints (git) | `settings/connection-cards.tsx` | Personal access token / The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time. · SSH key / A per-run key file is written inside the sandbox for the clone and shredded after; an approval-gated grant is delivered once. · GitHub App / Repo-scoped tokens brokered at the proxy — the token never enters the sandbox. |
+| `Lane` titles / hints (git) | `settings/connection-cards.tsx` | Personal access token / The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time. · SSH key / The proxy holds the key and signs the clone's SSH sign-in; no key file enters the sandbox. An approval-gated grant is issued once. · GitHub App / Repo-scoped tokens brokered at the proxy — the token never enters the sandbox. |
 | `Lane` titles / hints (model) | `settings/connection-cards.tsx` | Claude subscription / Sign in through a throwaway sandbox — the token never touches disk. · API key / ANTHROPIC_API_KEY or OPENAI_API_KEY. · AWS Bedrock / A bearer key, or an SSO device-code sign-in. |
 | `SecretLane` labels | `settings/connection-cards.tsx` | Access token · Private key · App ID · Private key (PEM) · Connected · Disconnect |
 | `LANE_META.*.label` | `lib/scm-provider.ts` | App · brokered / PAT · in-sandbox / SSH · resident |

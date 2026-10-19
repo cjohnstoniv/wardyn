@@ -66,7 +66,7 @@ describe("demo catalog", () => {
       // -> piped -> resident -> re-originated -> refused.
       "rest-api-token",
       "pat-stdout-only",
-      "ssh-briefly-resident",
+      "ssh-at-the-proxy",
       "github-app-broker",
       "sts-fail-closed",
     ];
@@ -157,7 +157,7 @@ describe("demo catalog", () => {
 
     // ssh_key: the host MUST be a supported SSH-over-443 provider or the policy
     // write 400s AND the startup mint never runs (no audit row to point at).
-    const ssh = byId("ssh-briefly-resident");
+    const ssh = byId("ssh-at-the-proxy");
     const sshGrant = ssh.policy.eligible_grants![0];
     expect(sshGrant.kind).toBe("ssh_key");
     const sshScope = sshGrant.scope as { host?: string; key_secret_ref?: string };
