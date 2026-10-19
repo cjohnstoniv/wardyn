@@ -273,6 +273,12 @@ const (
 	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
 	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
+	// GET/PUT /governance/walls, POST /governance/walls/dry-run, and the walls' own refusals.
+	reasonOrgWallsInvalid          = "org_walls_invalid"           // the walls document names a knob it cannot hold, or a value that knob refuses
+	reasonOrgWallsStale            = "org_walls_stale"             // If-Match does not match the current walls ETag
+	reasonOrgWallsHost             = "org_walls_host"              // an egress approval would admit a host the org walls do not allow
+	reasonBreakGlassReasonRequired = "break_glass_reason_required" // an admin-token run while the walls are on, without a usable break-glass reason
+
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds, or require_posture without runner_resident
 	reasonCredentialDeliveryUnavailable = "credential_delivery_unavailable" // the store keeps no delivery policy (not the Postgres store)

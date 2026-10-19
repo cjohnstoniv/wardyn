@@ -1,0 +1,202 @@
+[
+  {
+    "case": "profile_chain_default",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "outside.example",
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "outside.example",
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "member_pipeline_inline",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "outside.example",
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "outside.example"
+      ],
+      "first_use_approval": "always_deny",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "warnings": [
+      "confinement raised from \"CC1\" to operator minimum \"CC2\""
+    ],
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "stored_policy_unassigned",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": null,
+      "allow_all_egress": true,
+      "first_use_approval": "",
+      "min_confinement_class": "CC1"
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "deployment_default_unassigned",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "admin_run_inline",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": null,
+      "allow_all_egress": true,
+      "first_use_approval": "",
+      "min_confinement_class": "CC1"
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "admin_run_stored",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": null,
+      "allow_all_egress": true,
+      "first_use_approval": "",
+      "min_confinement_class": "CC1"
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  },
+  {
+    "case": "admin_token_inline",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2"
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "spec": {
+      "allowed_domains": null,
+      "allow_all_egress": true,
+      "first_use_approval": "",
+      "min_confinement_class": "CC1"
+    },
+    "warnings": null,
+    "policy_id": false,
+    "ok": true
+  }
+]

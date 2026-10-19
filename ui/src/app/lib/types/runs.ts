@@ -334,6 +334,8 @@ export interface AgentRun {
   // (admin token, local mode), not a person. A super admin may still open it
   // interactively; on a person's run only the owner may. Absent when false.
   operator_owned?: boolean;
+  // A run the admin token launched past the org walls while they were on (break-glass).
+  break_glass?: boolean;
   // internal/types/attention.go's RunAttention (#1197) — what this LIVE
   // run is waiting on and who (in the caller's own console view) can clear
   // it, projected only when the caller's GET /runs (or GET /me/attention)

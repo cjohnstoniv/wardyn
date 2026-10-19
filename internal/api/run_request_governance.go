@@ -44,7 +44,11 @@ func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) 
 
 func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (governanceCeiling, *runRefusal) {
 	if s.runUngoverned(r.Context()) {
-		return governanceCeiling{Operator: true}, nil
+		c, err := s.wallOperatorCeiling(r.Context())
+		if err != nil {
+			return governanceCeiling{}, runServerError("read org walls", err)
+		}
+		return c, nil
 	}
 	// One capability snapshot for every field below (capBatch's ctx memo).
 	r = r.WithContext(withCapBatch(r.Context()))

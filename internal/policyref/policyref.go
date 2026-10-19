@@ -34,11 +34,13 @@ const (
 
 	// The layer kinds: which layer set a limit (Ref.Layer) or a value of a run's
 	// effective policy (Provenance.Layer). A ceiling is a deployment or a profile
-	// layer; member is the run's own policy and operator a run no ceiling binds.
+	// layer; member is the run's own policy and operator a run no ceiling binds;
+	// walls is the organisation walls, the outermost limit (types.OrgWalls).
 	LayerDeployment = SourceDeployment
 	LayerProfile    = SourceProfile
 	LayerMember     = "member"
 	LayerOperator   = "operator"
+	LayerWalls      = "walls"
 
 	mailtoScheme = "mailto:"
 )
@@ -90,10 +92,11 @@ type Ref struct {
 
 // Provenance is which layer set one value of a run's effective policy. Name is
 // the leaf profile's name, or "deployment", and never a profile it is built
-// from. Contact is the leaf's (or the deployment's policy_help), filled on read
-// and never written to the audit. Locked says a layer forbids the layers below
-// it to change the value (lower_may_change false); it is false until org walls
-// or per-knob delegation can lock a knob.
+// from; a member, operator or walls record has none. Contact is the leaf's (or
+// the deployment's policy_help), filled on read and never written to the audit.
+// Locked says a layer forbids the layers below it to change the value
+// (lower_may_change false). The org walls lock nothing, since a lower layer may
+// still narrow what they allow, so it stays false until per-knob delegation.
 type Provenance struct {
 	Layer   string   `json:"layer"`
 	Name    string   `json:"name,omitempty"`

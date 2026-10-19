@@ -152,6 +152,12 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		})
 		// The Background experience the person chose drops the idle stop.
 		source.knobs.step(ceiling.ownProvenance(), &spec, func() { clampWarnings = append(clampWarnings, boundBackgroundIdleStop(*req, &spec)...) })
+		// The org walls, last, over whatever the steps above left (org_walls_meet.go).
+		wallWarns, refusal := s.wallsRunStep(ceiling, &spec, &source)
+		if refusal != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+		}
+		clampWarnings = append(clampWarnings, wallWarns...)
 		if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 		}
@@ -286,6 +292,13 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	})
 	source.knobs.step(ceiling.ownProvenance(), &spec, func() { storedWarns = append(storedWarns, boundBackgroundIdleStop(*req, &spec)...) })
+	// The org walls, last: the one bound a stored row an unassigned member or an operator selects
+	// meets, and the outer limit on every other spec (org_walls_meet.go).
+	wallWarns, refusal := s.wallsRunStep(ceiling, &spec, &source)
+	if refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
+	storedWarns = append(storedWarns, wallWarns...)
 	if refusal := noRepositoriesResolvedRefusal(*req, spec); refusal != nil {
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
 	}

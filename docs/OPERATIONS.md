@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [Org walls](operations/org-walls.md#org-walls-the-outermost-limit-on-every-run)
 
 </details>
 
@@ -3918,6 +3918,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
 - `0189` (`0189_run_containment_pending`) replaces the `binding` check on `runner_pending_actions` (`0139`'s table) so a `stop_proxy` may carry a node record in place of an outage loss, beside its new `run_containment_pending` and `run_node_records` tables.
 - `0191` (`0191_secrets_value_rev`) adds `secrets.value_rev` (`0001`'s table), an identity column every write of a value moves; adding it rewrites `secrets` once under an exclusive lock.
+- `0192` (`0192_org_walls`) creates `org_walls` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

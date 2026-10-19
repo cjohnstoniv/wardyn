@@ -175,10 +175,14 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
 	r = withAskedRequest(r, &asked)
-	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
+	r, ok := s.admitBreakGlass(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
 	req, ceiling, reqCC, taskWarning, ok := s.decodeAndValidateCreateRun(w, r)
 	if !ok {
 		return
@@ -350,6 +354,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markGovernanceExempt(ctx, createData)
+	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)
@@ -468,6 +473,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Preset:          req.Preset,
 		PresetVersion:   req.PresetVersion,
 		OperatorOwned:   operatorOwned,
+		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,

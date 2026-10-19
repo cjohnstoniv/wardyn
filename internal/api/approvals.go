@@ -385,6 +385,13 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		writeErrorReason(w, http.StatusConflict, reasonCredentialReauthNotDecidable, credentialReauthNotDecidableBody)
 		return
 	}
+	// The org walls bound every decider's approve (org_walls_meet.go), after the member gate so the
+	// refusal is never an existence oracle.
+	if approve && ap.Kind == types.ApprovalEgressDomain {
+		if run, haveRun, ok = s.wallsAdmitApproval(w, r, ap, run, haveRun); !ok {
+			return
+		}
+	}
 
 	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
 	// two kinds differ in what "something" is.
