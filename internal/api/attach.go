@@ -398,6 +398,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// says so in the session.recording.write audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
+	holder.keepCast(castTee)
 
 	// Touch immediately so an attach that arrives just before a reap tick still
 	// resets the idle clock. The keepalive ping then bumps updated_at while

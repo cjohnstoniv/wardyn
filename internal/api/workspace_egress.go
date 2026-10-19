@@ -507,9 +507,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	for _, d := range ws.DeniedEgress {
 		skip[strings.ToLower(strings.TrimSpace(d))] = true
 	}
-	for d := range s.deadApprovedEgressHosts() {
-		skip[d] = true
-	}
+	dead := s.deadApprovedEgressHosts()
 	if p, ok := workspaceProfile(ws); ok {
 		for _, d := range p.EgressDomains {
 			skip[d] = true
@@ -553,7 +551,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || skip[host] || !hostrules.ValidApprovedHost(host) {
+			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) {
 				continue
 			}
 			// Policy allowed these hosts and the network lost the connection:

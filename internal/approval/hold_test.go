@@ -23,6 +23,8 @@ func mustScope(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
+func ptrTime(t time.Time) *time.Time { return &t }
+
 // adoScope builds the requested_scope of a control-plane-raised Azure DevOps
 // capability escalation — the ONE shape TallyToolCallADO (and therefore
 // Hold's ADO arm) recognises: lane=azure_devops AND requested_scope.grant_id
@@ -174,6 +176,30 @@ func TestHold(t *testing.T) {
 			name:     "a push_content well inside the 600s ceiling is still held",
 			ap:       types.ApprovalRequest{Kind: types.ApprovalPushContent, State: types.ApprovalPending, RequestedAt: now.Add(-300 * time.Second)},
 			wantHeld: true, wantUntil: now.Add(types.HoldWindowPush - 300*time.Second), checkUntil: true,
+		},
+		{
+			name: "a push_content retried after its first 600s is held again from the rejoin",
+			ap: types.ApprovalRequest{Kind: types.ApprovalPushContent, State: types.ApprovalPending,
+				RequestedAt: now.Add(-700 * time.Second), LastRejoinedAt: ptrTime(now.Add(-10 * time.Second))},
+			wantHeld: true, wantUntil: now.Add(types.HoldWindowPush - 10*time.Second), checkUntil: true,
+		},
+		{
+			name: "an egress wait_for_review retried 60s on is held again from the rejoin",
+			ap: types.ApprovalRequest{
+				Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+				RequestedAt: now.Add(-60 * time.Second), LastRejoinedAt: ptrTime(now.Add(-5 * time.Second)),
+				RequestedScope: mustScope(t, map[string]any{"host": "h", "mode": "wait_for_review"}),
+			},
+			wantHeld: true, wantUntil: now.Add(types.HoldWindowEgress - 5*time.Second), checkUntil: true,
+		},
+		{
+			name: "a rejoin whose own window has passed is not held",
+			ap: types.ApprovalRequest{
+				Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+				RequestedAt: now.Add(-120 * time.Second), LastRejoinedAt: ptrTime(now.Add(-60 * time.Second)),
+				RequestedScope: mustScope(t, map[string]any{"host": "h", "mode": "wait_for_review"}),
+			},
+			wantHeld: false,
 		},
 		{
 			name:     "an EXPIRED push_content is never held",

@@ -619,6 +619,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 			}()
 		},
 	}
+	holder.keepCast(castTee)
 	readOnly, releaseHolder := s.registerAttachHolder(runID, holder)
 	// Deferred for the same reason as the web lane's: a panicking pump must
 	// never strand a phantom holder (see registerAttachHolder). releaseAttach
@@ -839,6 +840,7 @@ func (p *sshPumpState) applyResize(cols, rows uint16) bool {
 		return true
 	}
 	p.s.fanoutWriterResize(p.ctx, p.runID, p.holder, cols, rows)
+	p.holder.recordResize(cols, rows)
 	return true
 }
 

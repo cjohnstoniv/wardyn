@@ -267,3 +267,25 @@ func TestUpdateWorkspace_OwnerChangedMidEditIs409WithoutRetry(t *testing.T) {
 		t.Errorf("a refused edit reclaimed an image: %v", rr.removed)
 	}
 }
+
+// A name the owner already uses is refused before any source is written: the store's unique index
+// would refuse it too, but only after upsertAndAttach had left library rows and source.write audit rows.
+func TestCreateWorkspace_TakenNameRefusedBeforeSourcesAreWritten(t *testing.T) {
+	h := newHarness(t)
+	fake := &workspaceStoreFake{ws: types.Workspace{ID: uuid.New(), Name: "frontend", Status: types.WorkspaceScanned}}
+	srv := New(baseTestConfig(h, ownerListingFake{fake}))
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces", adminToken, `{"name":"frontend","kind":"local_dir","source":"/home/u/repo"}`)
+	if w.Code != http.StatusConflict || decodeErrorBody(t, w).Reason != reasonWorkspaceNameTaken {
+		t.Fatalf("create with the owner's own taken name = %d %s, want 409 %s", w.Code, w.Body, reasonWorkspaceNameTaken)
+	}
+	if len(fake.lib.sources) != 0 {
+		t.Errorf("a refused create wrote %d library sources", len(fake.lib.sources))
+	}
+}
+
+// ownerListingFake adds the owner-scoped listing the PG store has, which the early name check reads.
+type ownerListingFake struct{ *workspaceStoreFake }
+
+func (f ownerListingFake) ListWorkspacesPageForOwner(ctx context.Context, _ string, _ store.Page) ([]types.Workspace, error) {
+	return f.ListWorkspaces(ctx)
+}

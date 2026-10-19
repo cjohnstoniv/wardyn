@@ -78,7 +78,8 @@ func TestHostCapacityCreateRun(t *testing.T) {
 	var got map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if w.Code != http.StatusServiceUnavailable || got["error"] != "host_capacity_refused" ||
-		got["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || w.Header().Get("Retry-After") != "30" {
+		got["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || w.Header().Get("Retry-After") != "30" ||
+		got["message"] != "this host is too busy to start a run right now (mem_available_mib=4096 < 8192, load1=150.00 > 100) — retry in 30 seconds" {
 		t.Fatalf("over limits: code = %d body = %s Retry-After = %q", w.Code, w.Body, w.Header().Get("Retry-After"))
 	}
 	if st.created.ID != uuid.Nil {
@@ -117,7 +118,8 @@ func TestHostCapacityPreflight(t *testing.T) {
 	var got map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
 	if w.Code != http.StatusServiceUnavailable || got["error"] != "host_capacity_refused" ||
-		got["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || w.Header().Get("Retry-After") != "30" {
+		got["reason"] != "mem_available_mib=4096 < 8192, load1=150.00 > 100" || w.Header().Get("Retry-After") != "30" ||
+		got["message"] != "this host is too busy to start a run right now (mem_available_mib=4096 < 8192, load1=150.00 > 100) — retry in 30 seconds" {
 		t.Fatalf("over limits: code = %d body = %s Retry-After = %q", w.Code, w.Body, w.Header().Get("Retry-After"))
 	}
 	if rows := h.audit.snapshot()[before:]; len(rows) != 0 {

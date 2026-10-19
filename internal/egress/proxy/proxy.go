@@ -659,7 +659,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
-			default: // apPending / apNone / apCapped
+			default: // apPending / apNone / apCapped / apRefused / apExpired
 				log := decisionLog(req, egress.Pending, approvalPendingReason(r.State))
 				if r.ApprovalID != uuid.Nil {
 					id := r.ApprovalID

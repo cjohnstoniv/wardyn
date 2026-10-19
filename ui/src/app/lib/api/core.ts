@@ -552,7 +552,13 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         policy?: unknown;
         tool?: unknown;
         cause?: unknown;
+        message?: unknown;
       };
+      // The host-capacity 503 keeps its older shape (error = the code, reason = the measured
+      // limits) and adds the sentence as message, so it is read here the way every other refusal is.
+      if (j.error === "host_capacity_refused" && typeof j.message === "string" && j.message) {
+        return { ...bare(j.message), reason: j.error };
+      }
       if (typeof j.error === "string" && j.error) {
         return {
           message: j.error,

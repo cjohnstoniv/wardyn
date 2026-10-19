@@ -391,9 +391,9 @@ export const BASELINE = {
   HOSTS_LABEL: "Exact hosts",
   HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses. Covers only the host named, not its subdomains.",
   SUFFIXES_LABEL: "Internal host suffixes",
-  SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host and every host under it.",
+  SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host only, not the hosts under it — list each of those under Exact hosts.",
   // Under the suffixes box, one line per entry as typed: the reach an entry has before it is saved (#2130).
-  COVERS: (entry: string) => `${entry} covers ${entry} and every host under it (*.${entry}).`,
+  COVERS: (entry: string) => `${entry} covers ${entry} only, not the hosts under it (*.${entry}).`,
   SAVE: "Save",
   SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
   REFUSED_TITLE: "This can't be saved as written",

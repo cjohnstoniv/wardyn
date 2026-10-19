@@ -437,6 +437,9 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
+	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
+	LastRejoinedAt *time.Time `json:"-"`
 	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
 	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
 	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.

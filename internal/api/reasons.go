@@ -555,3 +555,11 @@ const (
 // A request with no session and no bearer on a deployment with single sign-on and no admin token
 // (sessionRejectionResponse): the caller has to sign in.
 const reasonSignInRequired = "sign_in_required"
+
+// A run launch refused because the host is short of memory or over its load ceiling
+// (writeHostCapacityRefusal): a wait, not a fault, so it is a 503 with a Retry-After.
+const reasonHostCapacityRefused = "host_capacity_refused"
+
+// PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
+// deny beats allow, so the approval would change nothing.
+const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"

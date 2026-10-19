@@ -36,7 +36,7 @@ func TestMaskPipe_PG_AValueRegisteredOnAnotherReplicaIsMasked(t *testing.T) {
 	run := l.run()
 	a.dispatch(t, run, "dispatch-time-value-1")
 	tee, finish := b.srv.newSessionRecorder(run, "pipe", runner.AttachOptions{Cols: 80, Rows: 24})
-	p := tee.(*maskPipe)
+	p := tee.(*sessionTee).maskPipe
 	_, _ = tee.Write([]byte("output before the registration\n"))
 	p.flush() // no read in flight across the registration
 
@@ -85,7 +85,7 @@ func TestMaskPipe_PG_PostgresDownFailsTheBatchClosed(t *testing.T) {
 	a.dispatch(t, run, "value-before-the-outage-4")
 	tee, finish := b.srv.newSessionRecorder(run, "outage", runner.AttachOptions{Cols: 80, Rows: 24})
 	_, _ = tee.Write([]byte("healthy value-before-the-outage-4\n"))
-	tee.(*maskPipe).flush()
+	tee.(*sessionTee).flush()
 
 	down.Close()
 	for range 50 {

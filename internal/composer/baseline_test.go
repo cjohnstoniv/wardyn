@@ -30,8 +30,9 @@ func TestBaselineExtendsTheEgressGrade(t *testing.T) {
 		{"zero value grades as before", Baseline{}, true, RiskMedium},
 		{"declared host", Baseline{Hosts: []string{"llm.corp.example"}}, false, RiskLow},
 		{"a different declared host does not help", Baseline{Hosts: []string{"other.corp.example"}}, true, RiskMedium},
-		{"suffix covers a subdomain", Baseline{Suffixes: []string{"corp.example"}}, false, RiskLow},
-		{"suffix is label-anchored", Baseline{Suffixes: []string{"orp.example"}}, true, RiskMedium},
+		{"a marked internal host covers itself", Baseline{Suffixes: []string{"llm.corp.example"}}, false, RiskLow},
+		// #2824: a mark covers the exact host only, never a subdomain of it.
+		{"a marked internal host does not cover its subdomains", Baseline{Suffixes: []string{"corp.example"}}, true, RiskMedium},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := grade(tc.b); got != tc.risk {
@@ -58,7 +59,8 @@ func TestBaselineJudgesAPortOrTrailingDotEntryByItsHost(t *testing.T) {
 		{"registry.npmjs.org.:443", true},
 		{"llm.corp.example:8443", true},
 		{"llm.corp.example.", true},
-		{"api.svc.example:443", true},
+		{"svc.example:443", true},
+		{"api.svc.example:443", false},
 		{"db.corp.example:443", false},
 		{"*.svc.example:443", false},
 		{"github.com:99999", false},

@@ -6,9 +6,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // The two halves of "an admin acting on a MEMBER's workspace stays visible":
@@ -53,6 +56,11 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 	}
 	updated, err := s.cfg.Store.SetWorkspaceOwner(r.Context(), id, "")
 	if notFoundIf(w, err, "workspace", reasonWorkspaceNotFound) {
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeErrorReason(w, http.StatusConflict, reasonWorkspaceNameTaken,
+			"an operator-owned workspace already has this name — rename one of the two, then reassign")
 		return
 	}
 	if err != nil {

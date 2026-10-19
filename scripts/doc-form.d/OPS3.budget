@@ -63,7 +63,8 @@ docs/operations/admin-only-writes.md=3698 share=35
 # docs/operations/three-roles.md 4218 = 4194 + 24, measured: an overlay size over a base with none.
 # docs/operations/three-roles.md 4238 adds 20 over 4218, measured: where GET /governance keeps the resolved ceiling (0.9.3 ASK-6).
 # docs/operations/three-roles.md 4650 = 4630 + 20, measured after merging the ASK-6 rubric docs with the resolved-ceiling note.
-docs/operations/three-roles.md=4677 share=35
+# docs/operations/three-roles.md 4682 adds 5 (0.10 API-2): a baseline mark covers that host only.
+docs/operations/three-roles.md=4682 share=35
 docs/operations/provider-policy.md=1278 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
 docs/operations/ownership-and-offboarding.md=2414 share=35
