@@ -980,7 +980,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), which holds even when a root is set too wide.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
-- Point it at a dedicated projects directory — **never `$HOME` or `/`**, which boot WARNs about but permits
+- Point it at a dedicated projects directory — **never `$HOME` or `/`**. Boot WARNs about `/` and the daemon's own `$HOME` but permits both; a containerised daemon's home is not a person's, so a person's home gets no warning
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).
 - Operator mounts are never narrowed by it.
 - ([`internal/runner/member_mount.go`](../internal/runner/member_mount.go); flag `-member-workspace-roots`)
