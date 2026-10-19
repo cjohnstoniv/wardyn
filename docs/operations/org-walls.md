@@ -38,7 +38,7 @@ The dry run calls the same function the resolve calls once the walls are on, so 
 ## Break-glass
 
 - While the walls are on, a run started with the admin token is a break-glass run. It must carry a reason in the `X-Wardyn-Break-Glass-Reason` header, at most 512 characters.
-- Without a reason the run is refused with `400 break_glass_reason_required`.
+- Without a reason the run is refused with `400 break_glass_reason_required`, and so are its preflight and policy preview.
 - A break-glass run is not narrowed by the walls. Every other limit still applies, and its end is still capped at `limits.max_end_ahead_sec`.
 - The run record carries `break_glass: true`. The `run.break_glass.open` audit row and the run's `run.create` row record the reason.
 

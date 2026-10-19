@@ -168,8 +168,8 @@
 # docs/sdk.md 19321 adds 12 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/sdk.md 19409 adds 88 over 19321, measured (0.10 LAY-A): the four org walls and break-glass reasons.
 # docs/sdk.md=19378 adds 69, measured: the identity_deactivated sign-in answer on a deactivated session (#2762).
-# docs/sdk.md 19478 measured after merging main into 0.10 LAY-A.
-docs/sdk.md=19478 share=21
+# docs/sdk.md 19481 measured after merging main into 0.10 LAY-A, with the preflight and preview doors on break_glass_reason_required.
+docs/sdk.md=19481 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
