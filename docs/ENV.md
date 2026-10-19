@@ -723,6 +723,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Where the `k8s` substrate puts every pod it creates: the agent pod, the proxy pod and the boot-time egress canary (`-tags k8s`).
 - An object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels` (Kubernetes field shapes); an unknown field is refused.
 - Boot refuses a `podLabels` key that is `wardyn.managed`, `wardyn.run-id` or `wardyn.component` (the run NetworkPolicies select on them), and any annotation or label key under `kubernetes.io/` or `k8s.io/` other than `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key.
+- Boot also refuses a `podAnnotations` key starting `io.katacontainers.`, `io.kubernetes.cri-o.`, `io.kubernetes.cri.`, `io.containerd.`, `dev.gvisor.` or `run.oci.`: a container runtime reads those.
 - Chart: `k8s.sandbox.*`.
 
 ### `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`
@@ -979,6 +980,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A member source is allowed only if its **canonicalized real path** (`filepath.EvalSymlinks`) is inside one of these
 - So a symlink *inside* a root pointing *out* of every root is refused
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`, `.git/config`), even when a root is too wide.
+- The same list covers `.codex`, `.azure`, `.gemini`, `.npmrc`, `.pypirc` and `.config/gcloud`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
