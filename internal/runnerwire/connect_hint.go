@@ -31,9 +31,17 @@ func connectHint(err error) string {
 	if errors.As(err, &host) && host.Certificate != nil {
 		return certificateHint(host.Certificate, host)
 	}
+	var refused *proxyRefusedError
+	if errors.As(err, &refused) {
+		return refused.hint()
+	}
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "proxyconnect" {
 		// The proxy's address is the dial step's own: the operation wrapping it carries no address.
+		var dns *net.DNSError
+		if errors.As(op.Err, &dns) && dns.Name != "" {
+			return fmt.Sprintf("the proxy %s named by HTTPS_PROXY cannot be resolved", dns.Name)
+		}
 		var dial *net.OpError
 		if errors.As(op.Err, &dial) && dial.Addr != nil {
 			return fmt.Sprintf("the proxy %s named by HTTPS_PROXY did not accept the connection", dial.Addr)
@@ -73,6 +81,62 @@ func distinguished(n pkix.Name) string {
 	return strings.Join(parts, " ")
 }
 
+// proxyRefusedError is a proxy that answered the CONNECT request with 407 or 403. net/http reports any
+// non-200 CONNECT answer as a plain error holding only the status text, so the dial classifies it once
+// and carries the status and the proxy's host and port beside the original error.
+type proxyRefusedError struct {
+	err    error
+	status int
+	proxy  string
+}
+
+func (e *proxyRefusedError) Error() string { return e.err.Error() }
+func (e *proxyRefusedError) Unwrap() error { return e.err }
+
+func (e *proxyRefusedError) hint() string {
+	why := "it does not allow this destination"
+	if e.status == http.StatusProxyAuthRequired {
+		why = "it wants proxy authentication"
+	}
+	proxy := "the proxy"
+	if e.proxy != "" {
+		proxy += " at " + e.proxy
+	}
+	return fmt.Sprintf("%s refused the connection (%d: %s)", proxy, e.status, why)
+}
+
+// classifyProxyRefusal wraps err as a proxyRefusedError when a proxy is in use and err's innermost error
+// is exactly the standard status text of a 407 or 403. Only that comparison reads the text, which is the
+// proxy's own reason phrase and is never printed; the proxy's host and port come from the transport's
+// proxy function.
+func classifyProxyRefusal(err error, address string, rt http.RoundTripper) error {
+	leaf := err
+	for next := errors.Unwrap(leaf); next != nil; next = errors.Unwrap(leaf) {
+		leaf = next
+	}
+	status := 0
+	for _, code := range []int{http.StatusProxyAuthRequired, http.StatusForbidden} {
+		if leaf.Error() == http.StatusText(code) {
+			status = code
+		}
+	}
+	if status == 0 {
+		return err
+	}
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	tr, ok := rt.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		return err
+	}
+	proxy, _ := orgProxy(address, tr.Proxy)
+	if proxy == "" {
+		return err
+	}
+	return &proxyRefusedError{err: err, status: status, proxy: proxy}
+}
+
 // OrgRoute is how the runner's own session to the organisation will leave this computer, for the one
 // line serve logs at startup: "direct", or "via proxy host:port (HTTPS_PROXY)". It reads the same
 // environment the dial's transport does and prints the proxy's host and port only.
@@ -85,11 +149,21 @@ func orgRoute(orgURL, runnerID string, proxyFor func(*http.Request) (*url.URL, e
 	if err != nil {
 		return "direct"
 	}
-	u, err := url.Parse(address)
-	if err != nil {
+	host, variable := orgProxy(address, proxyFor)
+	if host == "" {
 		return "direct"
 	}
-	variable := "HTTPS_PROXY"
+	return fmt.Sprintf("via proxy %s (%s)", host, variable)
+}
+
+// orgProxy is the host and port of the proxy proxyFor names for the stream address, "" for none, and the
+// variable that names it. Never the proxy's userinfo.
+func orgProxy(address string, proxyFor func(*http.Request) (*url.URL, error)) (host, variable string) {
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", ""
+	}
+	variable = "HTTPS_PROXY"
 	if u.Scheme == "ws" {
 		u.Scheme, variable = "http", "HTTP_PROXY"
 	} else {
@@ -97,7 +171,7 @@ func orgRoute(orgURL, runnerID string, proxyFor func(*http.Request) (*url.URL, e
 	}
 	proxy, err := proxyFor(&http.Request{URL: u})
 	if err != nil || proxy == nil {
-		return "direct"
+		return "", ""
 	}
-	return fmt.Sprintf("via proxy %s (%s)", proxy.Host, variable)
+	return proxy.Host, variable
 }

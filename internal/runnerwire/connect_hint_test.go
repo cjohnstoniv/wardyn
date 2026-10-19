@@ -11,11 +11,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +84,49 @@ func TestConnectHintNamesRefusingProxy(t *testing.T) {
 	}
 	if strings.Contains(hint, "secret") || strings.Contains(hint, "u:") {
 		t.Errorf("hint %q leaks the proxy's userinfo", hint)
+	}
+}
+
+func TestConnectHintNamesUnresolvableProxy(t *testing.T) {
+	proxy, _ := url.Parse("http://u:secret@proxy.invalid:3128")
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+	_, err := DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), client)
+	if err == nil {
+		t.Fatal("a dial through an unresolvable proxy succeeded")
+	}
+	hint := connectHint(err)
+	if !strings.Contains(hint, "proxy.invalid") || !strings.Contains(hint, "cannot be resolved") || strings.Contains(hint, "secret") || strings.Contains(hint, "did not accept") {
+		t.Errorf("hint %q does not say the proxy host cannot be resolved (error: %v)", hint, err)
+	}
+}
+
+// A proxy that answers CONNECT with 407 or 403 is the usual corporate refusal; net/http reports it as a
+// bare status text, so the hint comes from the dial's own classification.
+func TestConnectHintNamesProxyThatRefusesConnect(t *testing.T) {
+	for status, want := range map[int]string{http.StatusProxyAuthRequired: "it wants proxy authentication", http.StatusForbidden: "it does not allow this destination"} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+			defer srv.Close()
+			proxy, _ := url.Parse("http://u:secret@" + srv.Listener.Addr().String())
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}}
+			_, err := DialWebSocket(t.Context(), "https://org.example", uuid.NewString(), client)
+			if err == nil {
+				t.Fatal("a dial through a refusing proxy succeeded")
+			}
+			hint := connectHint(err)
+			for _, need := range []string{"the proxy at " + srv.Listener.Addr().String() + " refused the connection", "(" + strconv.Itoa(status) + ": " + want + ")"} {
+				if !strings.Contains(hint, need) {
+					t.Errorf("hint %q lacks %q (error: %v)", hint, need, err)
+				}
+			}
+			if strings.Contains(hint, "secret") {
+				t.Errorf("hint %q leaks the proxy's userinfo", hint)
+			}
+		})
+	}
+	// No proxy in use: a bare "Forbidden" is not a proxy's answer.
+	if hint := connectHint(errors.New("Forbidden")); hint != "" {
+		t.Errorf("unrelated error got hint %q", hint)
 	}
 }
 
