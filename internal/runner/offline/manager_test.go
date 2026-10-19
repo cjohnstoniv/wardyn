@@ -4,8 +4,12 @@
 package offline
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -388,5 +392,69 @@ func TestHoldsSandboxOnlyForCreatedRuns(t *testing.T) {
 	}
 	if m.HoldsSandbox(uuid.NewString()) || m.HoldsSandbox("") {
 		t.Fatal("unknown sandbox held")
+	}
+}
+
+// bumpingStop is StopProxy as a concurrent exec sees it: the run's generation moves while the proxy stops.
+type bumpingStop struct {
+	m      *Manager
+	id     uuid.UUID
+	err    error
+	cancel context.CancelFunc
+}
+
+func (s bumpingStop) StopProxy(context.Context, string) error {
+	s.m.mu.Lock()
+	r := s.m.state.Runs[s.id]
+	r.Generation = uuid.New()
+	s.m.state.Runs[s.id] = r
+	s.m.mu.Unlock()
+	s.cancel()
+	return s.err
+}
+
+// A pass superseded by a concurrent exec is routine: it is logged at WARN with what changed and why the
+// run was selected, and a stopper that fails still logs ERROR.
+func TestContainmentSupersededWarnsNotErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stopErr   error
+		wantWarns int
+		wantErrs  int
+	}{{"superseded", nil, 1, 0}, {"stopper fails", errors.New("docker unreachable"), 0, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			m, _, _, org := managerFixture(t)
+			id := createLocal(t, m, org)
+			m.mu.Lock()
+			m.state.Revoked = true
+			m.mu.Unlock()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			m.stopper = bumpingStop{m: m, id: id, err: tc.stopErr, cancel: cancel}
+			_ = m.Run(ctx)
+			var warns, errs []map[string]any
+			for line := range strings.Lines(buf.String()) {
+				var r map[string]any
+				if json.Unmarshal([]byte(line), &r) != nil {
+					continue
+				}
+				switch {
+				case r["level"] == "WARN" && r["msg"] == "runner containment superseded, re-checking":
+					warns = append(warns, r)
+				case r["level"] == "ERROR" && r["msg"] == "runner containment will retry":
+					errs = append(errs, r)
+				}
+			}
+			if len(warns) != tc.wantWarns || len(errs) != tc.wantErrs {
+				t.Fatalf("got %d warnings and %d errors, want %d and %d:\n%s", len(warns), len(errs), tc.wantWarns, tc.wantErrs, buf.String())
+			}
+			if tc.wantWarns == 1 && (warns[0]["changed"] != "generation" || warns[0]["selected_by"] != "revoked" || warns[0]["run_id"] != id.String()) {
+				t.Fatalf("warning lacks what changed or why the run was selected: %v", warns[0])
+			}
+		})
 	}
 }

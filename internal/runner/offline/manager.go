@@ -407,6 +407,10 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		m.mu.Lock()
 		r := m.state.Runs[id]
 		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.expired(id)
+		selectedBy := ""
+		if expired {
+			selectedBy = m.selectedBy(id, r)
+		}
 		m.mu.Unlock()
 		if r.Retired || r.Ref == "" || !expired {
 			continue
@@ -431,7 +435,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		current := m.state.Runs[id]
 		if !sameContainmentTarget(r, current) {
 			m.mu.Unlock()
-			errs = append(errs, fmt.Errorf("contain run %s: mutation changed during containment", id))
+			errs = append(errs, errContainmentSuperseded{run: id, changed: changedContainmentField(r, current), selectedBy: selectedBy})
 			continue
 		}
 		r = current
@@ -458,6 +462,76 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// errContainmentSuperseded is a containment pass whose run changed under it (a concurrent exec or start):
+// nothing was confirmed, and the next tick decides again on the current state. It is logged at WARN, not
+// ERROR, and names what changed and why the run was selected.
+type errContainmentSuperseded struct {
+	run                 uuid.UUID
+	changed, selectedBy string
+}
+
+func (e errContainmentSuperseded) Error() string {
+	return fmt.Sprintf("contain run %s: mutation changed during containment (%s changed; selected by %s)", e.run, e.changed, e.selectedBy)
+}
+
+// changedContainmentField is the first thing sameContainmentTarget saw differ.
+func changedContainmentField(a, b localRun) string {
+	switch {
+	case a.Ref != b.Ref:
+		return "ref"
+	case a.Generation != b.Generation:
+		return "generation"
+	}
+	return "mutation_failure"
+}
+
+// selectedBy names the CheckLapses condition that matched, in that condition's order. The caller holds m.mu.
+func (m *Manager) selectedBy(id uuid.UUID, r localRun) string {
+	switch {
+	case m.state.Revoked:
+		return "revoked"
+	case r.FailedCreation:
+		return "failed_creation"
+	case r.Containment != nil && !r.Containment.Contained:
+		return "containment_open"
+	case r.Quarantine != nil && r.ProxyStoppedAt == nil:
+		return "quarantine"
+	case r.MutationFailure != nil && !r.MutationFailure.Contained:
+		return "mutation_failure_open"
+	case r.ProxyExited != nil && r.ProxyStoppedAt == nil:
+		return "proxy_exited"
+	}
+	if _, held := m.deadlines[id]; !held {
+		return "no_deadline_held"
+	}
+	return "lease_lapsed"
+}
+
+// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, and everything
+// else at ERROR as one line, as before.
+func logContainmentErrors(ctx context.Context, err error) {
+	var other []error
+	var walk func(error)
+	walk = func(e error) {
+		if multi, ok := e.(interface{ Unwrap() []error }); ok {
+			for _, inner := range multi.Unwrap() {
+				walk(inner)
+			}
+			return
+		}
+		var sup errContainmentSuperseded
+		if errors.As(e, &sup) {
+			slog.WarnContext(ctx, "runner containment superseded, re-checking", "run_id", sup.run, "changed", sup.changed, "selected_by", sup.selectedBy)
+			return
+		}
+		other = append(other, e)
+	}
+	walk(err)
+	if len(other) > 0 {
+		slog.ErrorContext(ctx, "runner containment will retry", "error", errors.Join(other...))
+	}
+}
+
 // Run owns containment independently of connection cancellation and replay IO.
 // The caller supplies daemon lifetime, retaining it across reconnect attempts.
 func (m *Manager) Run(ctx context.Context) error {
@@ -482,7 +556,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
 		done()
 		if err != nil {
-			slog.ErrorContext(ctx, "runner containment will retry", "error", err)
+			logContainmentErrors(ctx, err)
 		}
 		select {
 		case <-ctx.Done():
