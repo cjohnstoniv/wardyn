@@ -197,14 +197,18 @@ func TestAutonomyComponentCapWithoutAProfile(t *testing.T) {
 			t.Errorf("warnings = %q, want %q", got.warnings, want)
 		}
 	})
-	t.Run("an operator is capped too, with no policy to name", func(t *testing.T) {
+	t.Run("an operator is capped too, and the refusal names the deployment", func(t *testing.T) {
 		got := callComponentCap(t, governanceCeiling{Operator: true}, selfComponent(types.AutonomyL1),
 			`{"agent":"claude-code","task":"echo hi","confinement_class":"CC2","task_mode":"exec"}`)
 		if got.ok || got.code != http.StatusForbidden || got.body.Reason != "component_autonomy" {
 			t.Fatalf("got %d %q, want 403 component_autonomy", got.code, got.body.Reason)
 		}
-		if got.body.Policy != nil {
-			t.Errorf("policy = %+v, want none for an operator", got.body.Policy)
+		// The cap is the deployment's rule, the one ceiling rule an operator meets (#2951).
+		if p := got.body.Policy; p == nil || p.Source != policyref.SourceDeployment || p.Layer != policyref.LayerDeployment || p.Owner != componentCapHelp.Owner {
+			t.Errorf("policy = %+v, want the deployment, layer deployment, with its policy_help", got.body.Policy)
+		}
+		if got.layer != policyref.LayerDeployment {
+			t.Errorf("authz.denied layer = %v, want deployment", got.layer)
 		}
 	})
 }

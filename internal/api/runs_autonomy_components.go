@@ -67,8 +67,8 @@ type autonomySource struct {
 //
 // When the cap alone binds, the refusal points at the DEPLOYMENT's policy even
 // under a profile: the cap is a site-config setting, so the profile's contact
-// is the wrong person to ask. With no profile that is exactly ceilingPolicy's
-// answer; for an operator, as there, it is none.
+// is the wrong person to ask, and it binds an operator too, so an operator's
+// refusal names the deployment as well: the one ceiling rule an operator meets.
 //
 // The policy is read only when a level results, as the ladder's caller did
 // before: a run nothing caps costs no site-config read here.
@@ -82,7 +82,7 @@ func (s *Server) foldComponentCap(ctx context.Context, ceiling governanceCeiling
 		return capLevel, []string{componentAutonomyCause}, autonomySource{
 			phrase: componentAutonomySource,
 			reason: authz.ReasonComponentAutonomy,
-			policy: s.ceilingPolicy(ctx, governanceCeiling{Operator: ceiling.Operator}),
+			policy: s.ceilingPolicy(ctx, governanceCeiling{}),
 		}
 	}
 	if capLevel == folded {

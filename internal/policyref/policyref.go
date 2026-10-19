@@ -91,12 +91,14 @@ type Ref struct {
 // Provenance is which layer set one value of a run's effective policy. Name is
 // the leaf profile's name, or "deployment", and never a profile it is built
 // from. Contact is the leaf's (or the deployment's policy_help), filled on read
-// and never written to the audit. Locked says the person cannot widen the value.
+// and never written to the audit. Locked says a layer forbids the layers below
+// it to change the value (lower_may_change false); it is false until org walls
+// or per-knob delegation can lock a knob.
 type Provenance struct {
 	Layer   string   `json:"layer"`
 	Name    string   `json:"name,omitempty"`
 	Contact *Contact `json:"contact,omitempty"`
-	Locked  bool     `json:"locked"`
+	Locked  bool     `json:"locked,omitempty"`
 }
 
 // Layered is a copy of ref stamped with the layer kind its source names

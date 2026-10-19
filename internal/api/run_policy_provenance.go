@@ -5,6 +5,7 @@ package api
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
@@ -54,14 +55,14 @@ func (k knobProvenance) step(rec policyref.Provenance, spec *types.RunPolicySpec
 }
 
 // setBy records rec on every knob whose value differs from before to after.
-// Both sides are compared cloned, so an empty list and an absent one are one
-// value, as an unset first_use_approval and its normalized mode are.
+// Both sides are compared canonical (canonicalKnobs), so a step that only
+// reorders, re-cases or dedupes a list, or normalizes an unset
+// first_use_approval, changed nothing.
 func (k knobProvenance) setBy(rec policyref.Provenance, before, after types.RunPolicySpec) {
 	if k == nil {
 		return
 	}
-	before, after = before.Clone(), after.Clone()
-	before.FirstUseApproval, after.FirstUseApproval = before.FirstUseApproval.Normalize(), after.FirstUseApproval.Normalize()
+	before, after = canonicalKnobs(before), canonicalKnobs(after)
 	bv, av := reflect.ValueOf(before), reflect.ValueOf(after)
 	for i, name := range policyKnobFields {
 		if name != "" && !reflect.DeepEqual(bv.Field(i).Interface(), av.Field(i).Interface()) {
@@ -70,13 +71,37 @@ func (k knobProvenance) setBy(rec policyref.Provenance, before, after types.RunP
 	}
 }
 
-// The records a resolution writes. A ceiling's is locked: the person cannot
-// widen what it set (until per-knob delegation, that is every value a ceiling
-// set). The name is the leaf profile's, never a profile it is built from.
+// canonicalKnobs is a clone of s in the form composer's merges leave it: host
+// and method lists case-folded, trimmed, sorted and deduped (composer.union),
+// push_rules paths sorted and deduped by exact bytes (composer.unionPaths), an
+// empty list absent, and first_use_approval normalized.
+func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
+	s = s.Clone()
+	fold := func(xs []string) []string {
+		for i, x := range xs {
+			xs[i] = strings.ToLower(strings.TrimSpace(x))
+		}
+		slices.Sort(xs)
+		return slices.Compact(xs)
+	}
+	s.AllowedDomains, s.DeniedDomains, s.AllowedMethods = fold(s.AllowedDomains), fold(s.DeniedDomains), fold(s.AllowedMethods)
+	if s.PushRules != nil {
+		slices.Sort(s.PushRules.DenyPaths)
+		slices.Sort(s.PushRules.RequireReviewPaths)
+		s.PushRules.DenyPaths, s.PushRules.RequireReviewPaths = slices.Compact(s.PushRules.DenyPaths), slices.Compact(s.PushRules.RequireReviewPaths)
+	}
+	s.FirstUseApproval = s.FirstUseApproval.Normalize()
+	return s
+}
+
+// The records a resolution writes. None is locked: a lock is a layer forbidding
+// the layers below it to change a knob (lower_may_change false), and no layer
+// can lock one until org walls or per-knob delegation arrive. The name is the
+// leaf profile's, never a profile it is built from.
 var (
 	memberProvenance     = policyref.Provenance{Layer: policyref.LayerMember}
 	operatorProvenance   = policyref.Provenance{Layer: policyref.LayerOperator}
-	deploymentProvenance = policyref.Provenance{Layer: policyref.LayerDeployment, Name: policyref.SourceDeployment, Locked: true}
+	deploymentProvenance = policyref.Provenance{Layer: policyref.LayerDeployment, Name: policyref.SourceDeployment}
 )
 
 // ownProvenance is the record of a value the run's own policy set: the
@@ -95,7 +120,7 @@ func (c governanceCeiling) provenance() policyref.Provenance {
 	case c.Operator:
 		return operatorProvenance
 	case c.Profile != nil:
-		return policyref.Provenance{Layer: policyref.LayerProfile, Name: c.Profile.Name, Locked: true}
+		return policyref.Provenance{Layer: policyref.LayerProfile, Name: c.Profile.Name}
 	default:
 		return deploymentProvenance
 	}
