@@ -253,7 +253,7 @@ func (rf *adoResolveFixture) seedBearer(t *testing.T, granted []string) {
 	t.Helper()
 	req := rf.srv.adoRequestScopes(context.Background(), rf.cfg, rf.subject)
 	key := strings.Join([]string{rf.subject, rf.cfg.RowID, rf.cfg.TenantID, rf.cfg.ClientID, strings.Join(req, " ")}, "\x00")
-	rf.srv.adoEntraTokens.put(key, ADOEntraAccess{AccessToken: "fake-entra-access-seeded", Scopes: granted, ExpiresAt: adoTestNow.Add(time.Hour)})
+	rf.srv.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: ADOEntraAccess{AccessToken: "fake-entra-access-seeded", Scopes: granted, ExpiresAt: adoTestNow.Add(time.Hour)}})
 }
 
 func TestInjectionADO_S2RefusesABearerThatCanMintOrReportsNothing(t *testing.T) {
