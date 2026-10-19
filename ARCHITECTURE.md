@@ -22,7 +22,7 @@
 | `wardyn-scan` | In-sandbox workspace scanner: clone-and-scan a source and upload raw `ScanFacts` (profile derivation is server-side). |
 | `wardyn-toolgate` | In-sandbox stdio MCP relay, built into the agent images: **cooperative, not a boundary**, so an agent that never calls it is not gated; see [below](#wardyn-toolgate-role). |
 | `wardyn-aws-sso` | In-sandbox uploader for the containerized `aws sso login` capture lane; see [below](#wardyn-aws-sso-role). |
-| `wardyn` | CLI: `wardyn run`, `wardyn source`, `wardyn workspace`, `wardyn approval`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn session`, `wardyn site-config`, `wardyn support-bundle` and `wardyn setup`; see [below](#wardyn-role). |
+| `wardyn` | CLI: `wardyn run`, `wardyn source`, `wardyn workspace`, `wardyn approval`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn session`, `wardyn site-config`, `wardyn support-bundle` and `wardyn setup` among others (`wardyn --help` lists all); see [below](#wardyn-role). |
 
 How they fit together (same diagram as the README):
 
@@ -54,9 +54,9 @@ flowchart LR
 - Its `media-src` allowlists the two hosts a GitHub Release asset download touches — `github.com` and the redirect target it resolves to —
   - for one consumer: the Getting Started demo-episode player, which streams an episode only on an explicit click from the tag-pinned manifest ([`ui/src/app/lib/demo-videos.ts`](ui/src/app/lib/demo-videos.ts), `episodeUrl`/`episodesFor`):
     - no prefetch, no autoplay, no third-party video player.
-- An air-gapped mirror of the series is a named gap, not built.
+- An operator-set mirror (`WARDYN_DEMO_VIDEO_BASE_URL`, air-gapped) replaces both hosts with its own origin.
 - Three further relaxations in that same policy are deliberate, and are named rather than summarised away:
-  - `connect-src 'self' ws: wss:` (a bare scheme-source matches any host under CSP Level 3, so the WebSocket half is not origin-restricted),
+  - `connect-src 'self'` plus this deployment's own `ws://` and `wss://` host and, with the UI gateway on, its bind URL (`cspConnectSrc`),
   - `script-src 'self' 'wasm-unsafe-eval'` (the recording replay player's WASM VT core; WASM compilation only, never JS `eval`)
   - and `font-src 'self' data:`.
 - The threat model prices all of them against the admin token's at-rest posture — [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) § "Console auth token storage", which quotes the served header in full.
@@ -120,7 +120,8 @@ flowchart LR
   - `wardyn session` (revoke/list),
   - `wardyn site-config` (get/set),
   - `wardyn support-bundle`,
-  - `wardyn setup status|detect-proxy|proxy-relay|wall|vault`.
+  - `wardyn setup status|detect-proxy|proxy-relay|wall|vault`,
+  - and more groups: `wardyn --help` is the full list.
 
 ### Feature surfaces on top of the core loop (all shipped)
 
@@ -189,13 +190,17 @@ flowchart LR
     are issued from [`internal/api/runs_dispatch.go`](internal/api/runs_dispatch.go) for the launch edges and
     [`internal/api/runs_lifecycle.go`](internal/api/runs_lifecycle.go) for the terminal ones,
   - all funnelled through the
-    one compare-and-swap there — `casRunState` → `UpdateRunStateIf` —
+    one compare-and-swap there — `casRunState` → `UpdateRunStateIf`, which from `QUEUED` is `LeaveRunQueue` —
   - so a kill can
     never resurrect a finished run):
 
 ```mermaid
 stateDiagram-v2
   [*] --> PENDING: create run
+  [*] --> QUEUED: runner pool at its cap
+  QUEUED --> PENDING: slot freed
+  QUEUED --> FAILED: wait ended
+  QUEUED --> KILLED: kill switch
   PENDING --> STARTING: dispatch
   PENDING --> FAILED: build error (before dispatch)
   STARTING --> RUNNING: sandbox up
@@ -208,6 +213,7 @@ stateDiagram-v2
   RUNNING --> KILLED: kill switch
 ```
 
+- `QUEUED` waits for a slot in a capped runner pool and holds nothing.
 - `COMPLETED`, `FAILED`, `STOPPED`, and `KILLED` are terminal.
 - `WAITING_FOR_CONFIRMATION` and `ARCHIVED` exist in the state enum as reserved
   forward-compatibility values; no transition produces them today.
@@ -395,15 +401,16 @@ stateDiagram-v2
      the scope the approver saw.
    - No widening, ever.
 3. **L0 structural egress.**
-   - A sandbox has no default route; its only path
-     out is `wardyn-proxy`.
+   - On Docker a sandbox has no default route; its only path
+     out is `wardyn-proxy`. On Kubernetes a canary-proven NetworkPolicy default-deny does the same.
    - `HTTP_PROXY`/`HTTPS_PROXY` are set for client
      compatibility, but security does NOT rely on them:
      - because the network is
        gatewayless, an agent that ignores the proxy env vars (the documented env-var
        bypass class) has no route and reaches nothing.
-   - Private/link-local/metadata
-     IPs (169.254.169.254) are unconditionally blocked.
+   - Loopback, link-local/metadata
+     (169.254.169.254) and other reserved addresses are unconditionally blocked.
+   - Private RFC1918/ULA/CGNAT addresses are blocked unless an admin declared the hostname under `internal_hosts`.
 4. **Per-run identity with full attribution.**
    - The minted run identity token
      (`identity.Claims`) carries the full delegation chain: `sub` (human), `act`

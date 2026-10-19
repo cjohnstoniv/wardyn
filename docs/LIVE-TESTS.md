@@ -70,8 +70,8 @@ Every variable is listed in [ENV.md](ENV.md#live-local-harness-opt-in-never-in-c
   - it rides Wardyn's ordinary per-run Bedrock credential and asks for one short reply per run,
   - on a model the suite verifies AFTER the run completes is Claude Haiku 4.5 or Amazon Nova Micro (`testlive.ModelAllowed`, read off the run's own `run.bedrock.configure` audit row) —
   - there is no independent `max_tokens` fence on this path the way LL3's own direct SigV4 calls have one,
-  - and no way to refuse a misconfigured Integration BEFORE the one call it makes (`GET /integrations` is not wrapped by the SDK this harness uses).
-  - Configure the Integration this suite points at to a Haiku/Nova model to begin with; the post-hoc check catches a misconfiguration, it does not prevent the one call's worth of spend from it.
+  - and no way to refuse a misconfigured model provider BEFORE the one call it makes (`GET /model-providers` is not wrapped by the SDK this harness uses).
+  - Configure the model provider this suite points at to a Haiku/Nova model; the post-hoc check catches a misconfiguration, it does not prevent the one call's worth of spend from it.
 - LL5 spends nothing: `unattended_refused`'s whole proof is a 403 before a run exists,
   - and `interactive_agent_policy_delivered` sends NO task at all
   - (an interactive run with a task would seed the agent CLI at boot, before anyone attaches, spending at least one model call — see the test's own doc comment),

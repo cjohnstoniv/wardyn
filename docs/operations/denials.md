@@ -43,7 +43,7 @@ read.
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
-| `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
+| `admin_view` | an SSO admin in the Admin view started or previewed a run (`POST /runs`, `POST /runs/preflight` or `POST /runs/policy-preview`, `refuseAdminViewLaunch`, [`internal/api/membermode.go`](../../internal/api/membermode.go)), or launched one after the type the view looks through was deleted. Not audited on its own; in the deleted-type case the cause row is `user_view_type_deleted`, which the launch response answered | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. Its `403` body is byte-identical to `admin_surface`'s, so a refusal never maps a route's tier; only the reason tells them apart | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path ([`internal/api/attach_ticket.go`](../../internal/api/attach_ticket.go)) | ⛔ `404` (byte-identical to missing) |
@@ -112,7 +112,7 @@ read.
 - A 404 on a resource that genuinely doesn't exist stays silent by design.
 
 > [!NOTE]
-> One exception: the `always`-scope 403 (the `security_admin_surface` row in [the reasons table](#every-denial-that-isnt-a-404)) returns before `decide()` reaches any audit call, so it is a bare 403 with no audit trail at all.
+> One exception: the `always`-scope 403 (the `security_admin_surface` row in [the reasons table](#every-denial-that-isnt-a-404)) is audited like every other member denial on this path: an `authz.denied` row naming that reason ([`internal/api/approvals.go`](../../internal/api/approvals.go)).
 
 - **What's still not built.**
   - No custom roles: the tier set is the three fixed ones (admin, `security_admin`, member — see "[Three roles, and who sets the walls](three-roles.md#three-roles-and-who-sets-the-walls)").

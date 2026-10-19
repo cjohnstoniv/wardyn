@@ -207,7 +207,7 @@ A `kind: Run` document is the draft written as text. Choose **YAML / JSON** on t
 - Unsupported input is reported, never discarded. "N issues must be fixed" blocks **Continue to review**. **Open in Guided setup** validates, then opens step 1.
 - [Run documents](sdk.md#run-documents) lists the fields. A title or description is refused as `template_field_excluded`; you name the run at launch.
 
-From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
+From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
 
 The `wardyn template` commands are listed in [Run templates](sdk.md#run-templates).
 

@@ -144,6 +144,6 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
 
 **Deciding an approval is kind-restricted, not just owner-restricted** (`decide()`, [`internal/api/approvals.go`](../../internal/api/approvals.go)): a member may approve or deny an `egress_domain` approval on a run they own.
 
-- `credential` and `tool_call` approvals stay **admin-only regardless of ownership**
+- `credential` and `tool_call` approvals stay **admin-only regardless of ownership** except an Azure DevOps access request on a run the member owns ([USERS.md](../USERS.md#deciding-an-egress-approval-on-your-own-run))
   - the shipped default policy requires approval on `github_token`,
   - so a member self-approving their own run's credential request would self-mint a real token, and self-approving a `tool_call` re-opens exactly what the clamp (below) exists to bound.
