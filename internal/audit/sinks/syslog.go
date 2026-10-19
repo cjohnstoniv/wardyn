@@ -96,10 +96,12 @@ func newSyslogSinkWith(w syslogWriter, network, addr string) *SyslogSink {
 func (s *SyslogSink) Name() string { return "syslog" }
 
 // Emit serialises ev to JSON and hands it to the background writer as an INFO syslog entry. A cancelled
-// context skips the write without error. Emit NEVER blocks: a full buffer drops+counts instead.
+// context skips the write without error and counts a drop. Emit NEVER blocks: a full buffer drops+counts
+// instead.
 func (s *SyslogSink) Emit(ctx context.Context, ev types.AuditEvent) error {
 	select {
 	case <-ctx.Done():
+		s.drops.Add(1)
 		return nil
 	default:
 	}

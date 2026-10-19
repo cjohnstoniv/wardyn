@@ -338,7 +338,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	err := store.InsertAuditEvent(ctx, f.primary.Pool, &ev)
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
-		if ferr := f.fanout.Emit(ctx, ev); ferr != nil {
+		// Detached from the caller, as landedRecorder does: a client that left, or a
+		// shutdown that cancelled the root context, must not drop the row from the sinks.
+		if ferr := f.fanout.Emit(context.WithoutCancel(ctx), ev); ferr != nil {
 			slog.ErrorContext(ctx, "wardynd: audit fanout emit failed",
 				slog.String("action", ev.Action),
 				slog.Any("err", ferr),
