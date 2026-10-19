@@ -8,6 +8,7 @@ package k8s
 import (
 	"bytes"
 	"context"
+	goruntime "runtime"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +126,11 @@ func TestExec_NoExecOutputReadsNoLog(t *testing.T) {
 	}
 	select {
 	case <-firstRead:
+		// The goroutine just run was the newest; an older follower (had the quiet pod's Exec started
+		// one) is queued behind it, so yield until it has had its turn before counting.
+		for i := 0; i < 200; i++ {
+			goruntime.Gosched()
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the pod that keeps an output tail never had its log read: the absence below would prove nothing")
 	}
