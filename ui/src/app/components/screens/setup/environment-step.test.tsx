@@ -485,7 +485,8 @@ describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
     const panel = screen.getByLabelText("Kubernetes environment");
     expect(within(panel).getByText(/Not enforcing/)).toBeInTheDocument();
     expect(within(panel).getByText(/helm: env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL/)).toBeInTheDocument();
-    expect(within(panel).queryByText(/Enforcing · NetworkPolicy \(canary proved/)).not.toBeInTheDocument();
+    // The Enforcing row's own sentence, as the server words it (setup_checks.go): this case's row must not borrow it.
+    expect(within(panel).queryByText(/Enforcing · NetworkPolicy \(the boot-time canary proved/)).not.toBeInTheDocument();
   });
 
   it("Indeterminate (field/row absent despite a k8s driver) never borrows Enforcing's style", () => {

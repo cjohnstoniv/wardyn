@@ -98,6 +98,15 @@
         "state": "not_waiting"
       },
       "ts": "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH"
+    },
+    {
+      "name": "lookalike hosts are not the sign-in link",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com.evil.example/?user_code=ABCD-EFGH\nhttps://d-1234567890.awsapps.com.evil.example/start/#/device?user_code=ABCD-EFGH\nhttps://evil-awsapps.com/start/#/device?user_code=ABCD-EFGH\nhttps://device.sso.us-east-1.amazonaws.com@evil.example/?user_code=ABCD-EFGH\nhttp://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\nhttps://evil.example/device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": null
     }
   ]
 }

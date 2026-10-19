@@ -217,6 +217,15 @@ describe("/approvals — a provider run's hold (#543)", () => {
     expect(screen.queryByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeNull();
   });
 
+  // The admin-view mount above never offers a door to anyone, so it cannot show that the unresolved
+  // /me is what withholds one. The member view does offer the owner a door once /me resolves (the
+  // first case in this describe), so there the withheld door is the unresolved state's doing.
+  it("while /me is still resolving, in the member view: the owner's door is withheld", async () => {
+    await mountAt("/approvals", "bob@acme.example", HOLD, false);
+    expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+    expect(screen.queryByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeNull();
+  });
+
   it("the title names the need, not a pause (#146 defect 3)", () => {
     expect(REAUTH_TITLE).toBe("AWS sign-in needed for this run");
   });

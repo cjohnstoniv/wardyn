@@ -664,7 +664,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
 
   // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) reaches
   // the same org-wide feed an admin does — handleQueryAudit scopes it on
-  // isSecurityOperator (audit.go:73). Telling them the feed is "admin-only"
+  // isSecurityOperator (handleQueryAudit in internal/api/audit.go). Telling them the feed is "admin-only"
   // would contradict what the server just answered.
   it("does NOT tell a security admin the feed is admin-only — their feed is the org-wide one", async () => {
     listAuditMock.mockResolvedValue([]);

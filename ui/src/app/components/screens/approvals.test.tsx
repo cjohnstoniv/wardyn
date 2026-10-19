@@ -327,7 +327,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
 
   // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) decides
   // ANY kind on ANY run — authorizeUserDecision early-returns for
-  // isSecurityOperator (approvals.go:392) BEFORE both the kind check and the
+  // isSecurityOperator (authorizeUserDecision in internal/api/approvals.go) BEFORE both the kind check and the
   // egress_host capability leg. Gating this card on useOperator would refuse
   // them a decision the server would have honoured.
   it("security admin, tool_call kind: LIVE — the tier decides any kind, on any run", async () => {
