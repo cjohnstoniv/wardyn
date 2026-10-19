@@ -591,6 +591,15 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
 - Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
 
+### Self-hosted canary
+
+- [`selfhosted-canary.yml`](../.github/workflows/selfhosted-canary.yml) (dispatch only) runs `make staticcheck` on a runner labelled `wardyn-ci`, before any `ci.yml` job moves to one.
+- Its `runs-on` picks that runner only in this repository, with the owner as actor: a push to `main`, `prep/*` or `train/*`, an owner pull request from a branch here, or a dispatch.
+- Anything else, including every fork or Dependabot pull request, runs on `ubuntu-latest`.
+- Dispatch only: a job routed to a label no runner serves waits up to 24 hours, which would hold a pull request's checks.
+- On a self-hosted runner its first step fails unless the job is in gVisor, non-root, capped at `10 GiB`, with no Docker socket or bind mount.
+- `hosted: true` runs it on `ubuntu-latest` for comparison. It uses no secret and a `contents: read` token; required checks are unchanged.
+
 ## Driving an existing control plane instead
 
 - If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and `ci-run.sh` launches there (see "[CI's identity](#cis-identity)" above).
