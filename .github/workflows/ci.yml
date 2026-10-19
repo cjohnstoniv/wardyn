@@ -2061,9 +2061,13 @@ jobs:
   # gone red on a train whose pull request CI was green. On those heads
   # train-gate passes only when train-suites (the nightly's candidate scope)
   # passed. On any other head, and on push, train-suites skips and train-gate
-  # passes at once, so the one name can be required everywhere.
+  # passes at once, so the one name can be required everywhere. A fork's
+  # train/* branch never runs train-suites, so train-gate stays red there.
   train-suites:
-    if: github.event_name == 'pull_request' && (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
