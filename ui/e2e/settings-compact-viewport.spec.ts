@@ -9,23 +9,22 @@ import { test, expect, asRealMember, gotoConsole, navToRoute } from "./fixtures"
 // account at 981px against a 744px viewport with every card fully open
 // (settings-compact-1200-packet.html). Every card on both pages now collapses
 // to a one-line summary by default (collapsible-card.tsx) — this is the pin
-// that proves the fix at the real backend, not just in a unit test: at
-// 1280x744, neither page's <main> (the shell's own scroll container,
-// app-shell.tsx) scrolls once its cards have loaded, collapsed.
+// that proves the fix at the real backend, not just in a unit test: at its
+// viewport budget (Your account 1280x744, Admin Settings below), neither
+// page's <main> (the shell's own scroll container, app-shell.tsx) scrolls once
+// its cards have loaded, collapsed. Admin Settings no longer fits 744: the
+// group headings and the notice cost it more than that.
 //
-// Mutation proof (recorded here, not re-run by CI): defaulting HostCard's
-// CollapsibleCard to `defaultOpen` — the single largest card, carrying the
-// barrier picker, the Image builder/Recording store/Internet rows and the
-// Corporate proxy button — pushes Admin Settings' content past 744px on its
-// own, and this test fails (main.scrollHeight > main.clientHeight) exactly as
-// it must. Reverting the mutation restores the pass. This is the sharpest
-// case: Admin Settings' six other cards collapsed still fit comfortably
-// beneath 744px, so Host opening alone is what tips it over.
+// Mutation proof, kept as a test below: opening Host (the largest card, with the barrier picker, the Image
+// builder/Recording store/Internet rows and the Corporate proxy button) must push Admin Settings past its budget,
+// so a budget loosened until that stops being true fails there. Opening the card in the UI is the same change as
+// defaulting HostCard's CollapsibleCard to `defaultOpen`.
 const VIEWPORT = { width: 1280, height: 744 };
-// Admin Settings draws three group headings (This host, Connections, People and access, #3048), which
-// take roughly 70px that the original nine bare rows did not, and the e2e host's no-barrier notice is a
-// few px taller now it carries actions; the promise is unchanged, the budget is the measured height plus that.
-const ADMIN_VIEWPORT = { width: 1280, height: 900 };
+// Admin Settings (three group headings, eight collapsed cards, the no-barrier notice) needs 852px of viewport,
+// measured on the hosted runner at 1280 wide: 115px of chrome around <main> plus 737px of content. Collapsed
+// Host opened needs 1241px. The budget is the measured height plus a small margin; TOLERANCE_PX below is the
+// sub-pixel jitter allowance on top.
+const ADMIN_VIEWPORT = { width: 1280, height: 860 };
 
 // runs.spec.ts's own "the page itself does not scroll" check notes the same
 // class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,
@@ -97,22 +96,16 @@ test.describe("Settings and Your account fit their viewport budget collapsed (#1
     expect(await mainScrolls(page)).toBe(false);
   });
 
-  // MEASUREMENT (temporary): the viewport height Admin Settings needs, collapsed and with Host open, read at a
-  // viewport short enough that <main> scrolls: chrome around <main> + its content height.
-  test("Admin Settings: measure the height it needs", async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 500 });
+  // The mutation proof: Host open (the largest card) must break the budget above. If the budget is ever loosened
+  // until this fails, the collapsed-by-default promise has stopped meaning anything.
+  test("Admin Settings: the Host card open breaks the budget", async ({ page }) => {
+    await page.setViewportSize(ADMIN_VIEWPORT);
     await gotoConsole(page, "admin");
     await navToRoute(page, "/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
     await waitForSettledSummaries(page, [/^Admin SSH keys \d+ admin key/, /^SCIM provisioning\s*\S/, /^Model providers \S/]);
-    const needs = () =>
-      page.evaluate(() => {
-        const el = document.querySelector("main")!;
-        return { needs: window.innerHeight - el.clientHeight + el.scrollHeight, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-      });
-    console.log(`ADMIN_SETTINGS_MEASURED collapsed ${JSON.stringify(await needs())}`);
     await page.getByRole("button", { name: /^Host( |$)/ }).click();
-    console.log(`ADMIN_SETTINGS_MEASURED host-open ${JSON.stringify(await needs())}`);
+    expect(await mainScrolls(page)).toBe(true);
   });
 
   test("Your account: every card collapsed, no scroll on main", async ({ page }) => {
@@ -135,7 +128,7 @@ test.describe("Settings and Your account fit their viewport budget collapsed (#1
   });
 
   // Expanding every card at once is the honest worst case a real person can
-  // reach (nothing stops opening them all) — this is NOT the 744px promise
+  // reach (nothing stops opening them all) — this is NOT the viewport promise
   // (only collapsed is), but it must still resolve to a real, scrollable page
   // rather than a broken layout, and no card may vanish or throw once opened.
   test("Admin Settings: expanding every card in turn never loses a card or throws", async ({ page }) => {
