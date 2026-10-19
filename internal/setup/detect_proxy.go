@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -473,6 +474,9 @@ func detectShellProxyCandidates(home string) []proxyCandidate {
 		if err != nil {
 			continue
 		}
+		// A shell applies the LAST assignment, so within one file the last
+		// declaration of a category wins; across files the first file wins.
+		var fileOut []proxyCandidate
 		scanner := bufio.NewScanner(f)
 		for lines := 0; scanner.Scan() && lines < maxShellProfileLines; lines++ {
 			m := shellProxyLineRE.FindStringSubmatch(scanner.Text())
@@ -483,10 +487,18 @@ func detectShellProxyCandidates(home string) []proxyCandidate {
 			if category == "" || seen[category] {
 				continue
 			}
-			seen[category] = true
-			out = append(out, proxyCandidate{category, m[2], ProxySourceShell, m[1] + " declared in " + path})
+			c := proxyCandidate{category, m[2], ProxySourceShell, m[1] + " declared in " + path}
+			if i := slices.IndexFunc(fileOut, func(o proxyCandidate) bool { return o.category == category }); i >= 0 {
+				fileOut[i] = c
+			} else {
+				fileOut = append(fileOut, c)
+			}
 		}
 		f.Close()
+		for _, c := range fileOut {
+			seen[c.category] = true
+		}
+		out = append(out, fileOut...)
 	}
 	return out
 }
@@ -588,8 +600,9 @@ var (
 	npmProxyRE    = regexp.MustCompile(`(?i)^(?:https-proxy|proxy)\s*=\s*(\S+)`)
 	pipProxyRE    = regexp.MustCompile(`^proxy\s*=\s*(\S+)`)
 	cargoProxyRE  = regexp.MustCompile(`^proxy\s*=\s*"?([^"\s]+)"?`)
-	aptProxyRE    = regexp.MustCompile(`Acquire::(?:http|https)::Proxy\s+"([^"]+)"`)
+	aptProxyRE    = regexp.MustCompile(`^\s*Acquire::(?:http|https)::Proxy\s+"([^"]+)"`)
 	mavenProxyRE  = regexp.MustCompile(`(?s)<proxies>(.*?)</proxies>`)
+	xmlCommentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
 	mavenHostRE   = regexp.MustCompile(`<host>\s*([^<\s]+)\s*</host>`)
 	mavenPortRE   = regexp.MustCompile(`<port>\s*([^<\s]+)\s*</port>`)
 	mavenActiveRE = regexp.MustCompile(`<active>\s*false\s*</active>`)
@@ -603,6 +616,8 @@ func detectMavenProxy(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	// The shipped settings.xml carries a commented-out example <proxy>; it is not live.
+	data = xmlCommentRE.ReplaceAll(data, nil)
 	m := mavenProxyRE.FindSubmatch(data)
 	if m == nil {
 		return "", false

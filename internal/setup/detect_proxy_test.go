@@ -247,6 +247,52 @@ func TestDetectShellProxyCandidates_TempProfileAndCredentialMasking(t *testing.T
 	}
 }
 
+// A shell applies the last assignment, so a profile that exports http_proxy twice
+// is reported with the current (second) value.
+func TestDetectShellProxyCandidates_LastDeclarationInAFileWins(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".bashrc"), "export http_proxy=http://old.proxy:3128
+export https_proxy=http://s.proxy:3128
+export http_proxy=http://new.proxy:3128
+")
+	got := map[string]string{}
+	for _, c := range detectShellProxyCandidates(home) {
+		if strings.HasSuffix(c.detail, filepath.Join(home, ".bashrc")) {
+			got[c.category] = c.value
+		}
+	}
+	if got["http"] != "http://new.proxy:3128" || got["https"] != "http://s.proxy:3128" {
+		t.Errorf("candidates from .bashrc = %v, want http=new.proxy and https=s.proxy", got)
+	}
+}
+
+// A commented-out example (Maven's shipped settings.xml, an apt line behind //
+// or #) is not a live proxy.
+func TestDetectToolConfigs_CommentedExamplesAreNotLive(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".m2", "settings.xml"),
+		"<settings><proxies><!-- <proxy><host>proxy.host.net</host><port>80</port></proxy> --></proxies></settings>")
+	origApt := aptConfDir
+	defer func() { aptConfDir = origApt }()
+	aptConfDir = t.TempDir()
+	mustWrite(t, filepath.Join(aptConfDir, "01old"), "//Acquire::http::Proxy \"http://old:3128\";\n# Acquire::https::Proxy \"http://older:3128\";\n")
+	for _, tc := range detectToolConfigs(home) {
+		if tc.Tool == "maven" || tc.Tool == "apt" {
+			t.Errorf("detected %s proxy %q from a commented-out example", tc.Tool, tc.Setting.Value)
+		}
+	}
+	mustWrite(t, filepath.Join(aptConfDir, "02live"), "  Acquire::http::Proxy \"http://live:3128\";\n")
+	var apt string
+	for _, tc := range detectToolConfigs(home) {
+		if tc.Tool == "apt" {
+			apt = tc.Setting.Value
+		}
+	}
+	if apt != "http://live:3128" {
+		t.Errorf("apt proxy = %q, want the indented live line", apt)
+	}
+}
+
 func TestDetectShellProxyCandidates_MissingFilesTolerated(t *testing.T) {
 	// A home dir with no profile files at all must not error or panic.
 	home := t.TempDir()
