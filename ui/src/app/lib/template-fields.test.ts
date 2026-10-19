@@ -89,8 +89,11 @@ describe("template field registry", () => {
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual([
       "LLMInspectionSpec.workspace_secret_values",
+      "RunLocalFolder.direction",
       "RunLocalFolder.name",
+      "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
+      "RunLocalFolder.runner_id",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });

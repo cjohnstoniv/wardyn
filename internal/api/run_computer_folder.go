@@ -121,7 +121,7 @@ func (s *Server) handleListMyRunnerFolders(w http.ResponseWriter, r *http.Reques
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonComputerFolderRefused, werr.Message)
 		return
 	case err != nil:
-		writeErrorReason(w, http.StatusBadGateway, reasonComputerRunnerOffline, "the runner did not answer: "+err.Error())
+		writeErrorReason(w, http.StatusBadGateway, reasonComputerRunnerOffline, loggedMsg(r.Context(), "the runner did not answer", err))
 		return
 	}
 	row, _ := s.cfg.Store.(runnerGetter).GetRunner(r.Context(), id)
