@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -443,14 +442,9 @@ type probeRunResult struct {
 // audited against it) and what was actually observed.
 //
 // grants are the eligible credential grants the probe run should carry (nil for
-// the two site-config probes, which authenticate to nothing). They are
-// persisted and wired proxy-side exactly as persistRunGrants does for a real
-// run, so an integration probe traverses the SAME injection path a run granted
-// that integration takes -- the whole point of testing it at all.
-//
-// redirect is the stored egress redirect row the redirect Test probes (nil for
-// the other probes): dispatch authors its token injection and MITM entry the
-// way it does for a run (dispatchParams.RedirectProbe).
+// both site-config probes), persisted and wired proxy-side as persistRunGrants
+// does for a real run. redirect is the stored row the redirect Test probes (nil
+// otherwise): dispatch authors its token as for a run (dispatchParams.RedirectProbe).
 func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, allowedDomains []string, grants []types.GrantSpec, extraEnv map[string]string, redirect *types.EgressRedirect) (uuid.UUID, probeRunResult, error) {
 	start := s.cfg.Now()
 	// Detach the durable launch work from request cancellation -- a client
@@ -980,10 +974,8 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	fromHost := hostrules.HostOf(red.From)
 	toURL, connectTo := redirectProbeTo(red, toHost, fromHost)
 	actor := principalFromRequest(r)
-	// The mirror's entry is port-qualified, as substituteArtifactEgress authors
-	// it for a run, so the proxy reads the same transport intent for the token.
 	runID, res, perr := s.runSiteConfigProbe(ctx, actor, redirectProbeScript,
-		[]string{net.JoinHostPort(toHost, strconv.Itoa(redirectPort(red.To)))}, nil, map[string]string{
+		[]string{redirectToEntry(toHost, red.To)}, nil, map[string]string{
 			"WARDYN_PROBE_TO_URL":     toURL,
 			"WARDYN_PROBE_TO_CONNECT": connectTo,
 			"WARDYN_PROBE_FROM_URL":   probeTargetURL(red.From),
