@@ -90,10 +90,12 @@ export function proxyDetected(d?: HostProxyDetection): boolean {
 
 // A URL "has credentials" (from the FE's own perspective — HostProxySetting's
 // detected value is already server-masked, this is about what the operator is
-// typing right now) when it parses with a non-empty username.
+// typing right now) when it parses with a username or a password: the server refuses any embedded userinfo,
+// so `http://:token@proxy` (password only) must take the store-as-secret path too.
 export function hasUserinfo(url: string): boolean {
   try {
-    return !!new URL(url).username;
+    const u = new URL(url);
+    return !!(u.username || u.password);
   } catch {
     return false;
   }
@@ -103,7 +105,7 @@ export function hasUserinfo(url: string): boolean {
 // Small shared bits
 // ------------------------------------------------------------
 function BlockLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{children}</div>;
+  return <div className="label-eyebrow">{children}</div>;
 }
 
 function ConfigStatusLine({ tone, children }: { tone: "success" | "neutral" | "warning"; children: React.ReactNode }) {

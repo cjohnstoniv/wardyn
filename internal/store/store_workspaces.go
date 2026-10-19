@@ -213,9 +213,14 @@ func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.W
 // column after CreateWorkspace: UpdateWorkspace omits owned_by, so an
 // ordinary edit can never move ownership.
 func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error) {
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
+	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET owned_by=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
 		owner, id))
+	if isUniqueViolation(err) {
+		// The new owner already has a workspace of this name (UNIQUE(owned_by, name), 0192).
+		return types.Workspace{}, ErrConflict
+	}
+	return out, err
 }
 
 // SetWorkspaceApprovedEgress replaces ONLY the approved-egress column (plus

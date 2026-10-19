@@ -1,3 +1,16 @@
+## Intermediate tags 0.7.8 through 0.9.3, not individually re-scanned (still pullable)
+
+The images above were published at every tag from 0.7.8 through 0.9.3, and those
+tags are still pullable, but the tables above are the 0.9.4 scan. The previous
+tables (the 0.8.2 and 0.8.3 scans, the last full scans before 0.9.4) are
+recorded at commit `1cf4815a3` (`git show
+1cf4815a3:deploy/images/THIRD-PARTY-GPL.md`). The corresponding-source
+obligation for those tags is discharged the same way as for the tags above:
+`https://snapshot.debian.org` pinned to each package's own version, or
+`apt-get source <package>` on a trixie host, which that earlier record and the
+tables above are enough to reconstruct. The offer for them stands while the tags
+remain pullable, and for three years after the last copy is conveyed.
+
 ## Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (still pullable)
 
 `wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and `agent-aws-sso`

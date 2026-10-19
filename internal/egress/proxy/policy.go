@@ -494,6 +494,24 @@ var neverLiftableClass = map[blockKind]string{
 	blockV4Compat:      "an IPv4-compatible-embedded address",
 }
 
+// clampDetail is the denial sentence for an address onOwnSubnetOrControlPlane refused, or "" for any
+// other kind: the internal_hosts and allowed_domains remedies are wrong for it, since neither lifts it.
+func clampDetail(subject string, kind blockKind) string {
+	switch kind {
+	case blockOwnNetwork:
+		return subject + " is on this proxy's own network or is the control plane's address. A sandbox never " +
+			"reaches the proxy's neighbours, so no internal_hosts entry, allowed_domains entry or egress_redirect " +
+			"lifts it, however it is declared; the service has to be reachable at an address off those networks " +
+			"(OPERATIONS.md, internal_hosts)."
+	case blockExclusionUnknown:
+		return subject + " is a private address, and this proxy could not capture its own network or the " +
+			"control plane's address when it started, so for this run it lifts no internal_hosts entry and " +
+			"trusts no private literal, however they are declared (OPERATIONS.md, internal_hosts). The sidecar's " +
+			"log names the failed capture; a new run tries it again."
+	}
+	return ""
+}
+
 // neverLiftableDetail composes the never-liftable sentence for `subject` ("this
 // host's address", or "literal IP 10.0.0.1"). Returns "" when kind IS liftable,
 // so the single caller can fall through to the remedy text.
@@ -513,8 +531,8 @@ func neverLiftableDetail(subject string, kind blockKind) string {
 // re-derived (re-deriving for a hostname means resolving it a second time,
 // the work B6's memo exists to avoid). blockPrivate (the only liftable class)
 // gets the four-sentence remedy verbatim; every other class gets
-// neverLiftableDetail. A LITERAL host needs no carried kind — it re-derives
-// and ignores the parameter.
+// neverLiftableDetail, and the clamp's kinds get clampDetail. A LITERAL host
+// re-derives its range and reads only the clamp's kinds from the parameter.
 func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) string {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" {
@@ -532,6 +550,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 					"and no internal_hosts entry lifts that; write the address as " + dec.String() + "."
 			}
 			return "literal IP " + h + " decodes to " + dec.String() + ", " + egressNeverLiftableRemedy
+		}
+		if clamped := clampDetail("this host's address", kind); clamped != "" {
+			return clamped
 		}
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
@@ -552,6 +573,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		if _, denied := pol.deniedExactPort[hostPortKey(ip.String(), port)]; denied {
 			return "literal IP " + ip.String() + " is on denied_domains for this port, and a deny always beats an allow"
 		}
+	}
+	if clamped := clampDetail("literal IP "+ip.String(), kind); clamped != "" {
+		return clamped
 	}
 	// Only blockPrivate is reachable by an EXACT allowed_domains entry, so
 	// telling a 127.0.0.1 / 169.254.169.254 / NAT64 literal to list itself

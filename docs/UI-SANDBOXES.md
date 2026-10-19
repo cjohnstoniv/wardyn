@@ -99,6 +99,7 @@
 | `policy:default-deny` | the host is simply not on the allowlist | ask the operator to add it |
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
+| `approval:expired` | the host's approval expired, or was cancelled, before anyone decided it | retry: the next request asks again, and a person still has to approve it |
 | `policy:method` | the host is allowed, the HTTP method is not | |
 | `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
@@ -219,13 +220,13 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 - A background task's UI apps cannot be opened (`409 run_background_only`).
 - Three calls:
-  1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type),
+  1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
   2. **bind** it to the browser that will use it,
   3. then hand it to the enter endpoint on the UI origin —
      - as a `POST` form field (preferred: the ticket never lands in a URL, browser history, or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
 
 ```sh
-TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
+TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket?purpose=ui" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
 
 # Bind: what the console's own fetch sends. The binding cookie lands in the jar.

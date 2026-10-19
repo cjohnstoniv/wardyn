@@ -20,7 +20,8 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		"VM PortRule"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
@@ -39,7 +40,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerPosture]():        strings.Fields("MDMManaged DiskEncrypted OS OSVersion Evidence"),
 	reflect.TypeFor[egress.InjectionRule]():       strings.Fields("Host Header SecretName Format RequireTLS PinPath PinQuery PinRoutes"),
 	reflect.TypeFor[egress.PinRoute]():            strings.Fields("Method Path"),
-	reflect.TypeFor[policyref.Ref]():              strings.Fields("Source Name Owner Email RequestURL RequestText Overridden"),
+	reflect.TypeFor[policyref.Ref]():              strings.Fields("Source Name Owner Email RequestURL RequestText Overridden Layer"),
 	reflect.TypeFor[proxy.ADOGrantConfig]():       strings.Fields("Organization Capabilities Hosts"),
 	reflect.TypeFor[proxy.AzureGateConfig]():      strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():       strings.Fields("Capabilities Repos Grants"),
@@ -49,7 +50,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned Content"),
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
-	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap"),
+	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
 	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement"),
 	reflect.TypeFor[types.GrantSpec]():            strings.Fields("Kind Scope TTLSeconds RequiresApproval OwnerOnly"),
 	reflect.TypeFor[types.InternalHost]():         strings.Fields("HostSuffix CIDRs Baseline"),
@@ -150,6 +151,7 @@ var opaqueFields = map[string]string{
 	"SandboxSpec.OnWaiting":  "a callback, tagged json:\"-\"; waiting events replace it",
 	"SandboxSpec.ExecOutput": "a writer, tagged json:\"-\"; the output stream replaces it",
 	"ResidentMint.ExpiresAt": "a time.Time, an opaque scalar: the instant the proxy stops answering the grant",
+	"Config.AllowedPeers":    "netip.Prefix values, opaque scalars: the source networks the proxy serves",
 }
 
 func mergeOpaque(extra map[string]string) map[string]string {

@@ -15,7 +15,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
-import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
+import { absoluteTime, getErrorMessage, relativeTime, shortDate, shortTime } from "../../../lib/format";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
 import { MY_POOLS, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNER, RUNNERS } from "../../wardyn/copy/runners";
@@ -32,7 +32,7 @@ import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../ru
 import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
 import { ArchText, MachineText } from "../runners/runner-card";
 import { RunnerChip } from "../runners/runner-chip";
-import { CHIP_WORD, postureLines, runnerChipKind, shortDate, sortRunners, timeLeft } from "../runners/runner-display";
+import { CHIP_WORD, postureLines, runnerChipKind, sortRunners, timeLeft } from "../runners/runner-display";
 import { ClaimRunnerDialog } from "./claim-runner-dialog";
 import { MyPoolsSection, RunnerPoolsSection } from "./my-pools-section";
 import { useMyPools } from "./use-my-pools";
@@ -213,7 +213,7 @@ function TokenBlock({ token, expired, onDone }: { token: RunnerRegistrationToken
   React.useEffect(() => eyebrow.current?.focus(), []);
   if (expired) return <p className="text-body text-muted-foreground">{MY_RUNNER.TOKEN_EXPIRED}</p>;
   const command = registerCommand(token, "~/wardyn-runner-token");
-  const expires = new Date(token.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const expires = shortTime(token.expires_at);
   return (
     <section className="space-y-3 rounded-lg border border-border p-3">
       <div className="flex items-baseline justify-between gap-3">

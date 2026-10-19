@@ -20,7 +20,7 @@ import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
-import { absoluteTime, fmtBytes, relativeTime } from "../../lib/format";
+import { absoluteTime, fmtBytes, formatDuration, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -80,12 +80,6 @@ const PAGE_SIZE = 100;
 // (`<run-id>~<session-uuid>`) is still outside this projection; those
 // recordings surface on Run Detail instead, from that run's own audit trail.
 // A cast is fetched (api.getRecording) only once a viewer presses play.
-function formatDuration(totalSeconds: number): string {
-  const s = Math.max(0, Math.round(totalSeconds));
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
-}
-
 // Only show search/facets once there's enough of a library to make them
 // useful — a filter bar over two cards is just noise.
 // fixed threshold; make it configurable if it ever matters.
@@ -333,12 +327,8 @@ export function RecordingScreen() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     className="pl-9"
-                    disabled={recordingDisabled}
                   />
                 </div>
-                {recordingDisabled && (
-                  <p className="mt-1 text-xs text-muted-foreground">{RECORDINGS.SEARCH_DISABLED_HINT}</p>
-                )}
               </div>
               {agentOptions.length > 1 && (
                 <Select value={agentFacet} onValueChange={setAgentFacet}>
@@ -470,7 +460,7 @@ function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
           </span>
           {durationSec != null && (
             <span className="absolute bottom-2.5 right-3 rounded-md border border-border bg-background/85 px-1.5 py-0.5 font-mono text-meta text-muted-foreground">
-              {formatDuration(durationSec)}
+              {formatDuration(Math.round(durationSec) * 1000, "clock")}
             </span>
           )}
         </div>

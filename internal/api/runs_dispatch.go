@@ -17,7 +17,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
 // dispatchParams carries the per-run inputs the create / workspace handlers
@@ -117,6 +116,10 @@ type dispatchParams struct {
 	// proxy's refusal then names the policy as changed for this run
 	// (policyref.Ref.Overridden).
 	PolicyOverridden bool
+	// Provenance is which layer set each value of the run's policy as create
+	// resolved it, recorded on run.policy.resolve. Nil for every lane with no
+	// create resolution (scans, record, verify, logins, probes).
+	Provenance knobProvenance
 	// PushRuleSets are the push content rules per SCM entry the run brings
 	// (pushRuleSetsFor), the product after the ceiling. When set, the proxy
 	// carries them INSTEAD of the policy's run-wide push_rules.
@@ -133,6 +136,11 @@ type dispatchParams struct {
 	// pool-queue doors) from the request the fold graded; a server-authored lane
 	// leaves it empty and resolves from WorkspaceRepos alone.
 	ADOLaneRepo string
+	// RedirectProbe is the stored egress redirect row the redirect Test probes,
+	// nil for every other run. Set only by handleTestSiteConfigRedirect: dispatch
+	// plans that one row's token as for a run that reaches its public host, so
+	// the probe presents the token proxy-side exactly as a run does.
+	RedirectProbe *types.EgressRedirect
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -369,7 +377,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// cannot keep reaching the public host the operator redirected away
 		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
 		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains, resolvedLaneHosts(adoRun, adoInject))
+		planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, p.RedirectProbe)
+		artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -643,6 +652,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
+			Provenance: p.Provenance,
 		})))
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
@@ -813,6 +823,10 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 	// sandbox. The driver wraps the argv with wardyn-rec (recording) when
 	// configured. Exec failure: audit + stop the sandbox + mark FAILED.
 	if run.Task != "" {
+		// A local folder holds the agent until its first sync lands (run_local_folder.go).
+		if !s.holdForLocalFolder(ctx, run, ref) {
+			return
+		}
 		// BYOI: gate the task exec on a passing selftest (fail closed) — but
 		// refuse UP FRONT, before even attempting the selftest, on an
 		// exec-less (krun) substrate: see byoiExecLessRefused.
@@ -914,34 +928,6 @@ func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 	return out
 }
 
-// toolchainNeeds is dispatchParams.Toolchains' shape: which of the two
-// toolchain-fidelity env groups this run's workspace scans actually detected.
-type toolchainNeeds struct{ goTools, jvmTools bool }
-
-// runToolchainNeeds derives a run's toolchainNeeds from its resolved
-// workspaces: the union of every attached profile's detections
-// (workspacescan.ToolchainNeeds — the same signals the devcontainer emission
-// keys on). No workspaces at all, or ANY attached workspace lacking a
-// decodable profile (unattached/unscanned/malformed) → nil (UNKNOWN; dispatch
-// keeps the full set) — one unscanned workspace in an otherwise-scanned set
-// must dominate the same way an all-unscanned set does, or its undeclared
-// needs would silently ride on the scanned workspaces' narrower env. Only
-// once EVERY workspace decodes a profile does empty needs apply: a workspace
-// run's env then states what its requirements ground, nothing more.
-func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
-	profiles := make([]workspacescan.WorkspaceProfile, 0, len(wsRefs))
-	for _, ws := range wsRefs {
-		if p, ok := workspaceProfile(ws); ok {
-			profiles = append(profiles, p)
-		}
-	}
-	if len(wsRefs) == 0 || len(profiles) != len(wsRefs) {
-		return nil
-	}
-	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
-	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
 // dispatchAdmitted refuses, before anything is claimed or written, a run no
 // lane may dispatch (a non-remote placement create bound to no runner) and a
 // ceiling nobody resolved.
@@ -974,4 +960,17 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 // The local placement parity test reads the same list, so a key added here needs a placement origin.
 func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
 	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
+}
+
+// redirectPlanScope is what planArtifactRedirect plans over: the site config
+// and the run's pre-substitution egress, or, for the redirect Test, only the
+// probed row as for a run that names its public hosts. The probe's egress names
+// only the mirror, so the run-scoped gate (artifactRedirectApplies) would
+// otherwise withhold the row's token.
+func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.EgressRedirect) (types.SiteConfig, []string) {
+	if probe == nil {
+		return sc, preDomains
+	}
+	sc.EgressRedirects = []types.EgressRedirect{*probe}
+	return sc, redirectPublicHosts(*probe)
 }

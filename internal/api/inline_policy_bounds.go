@@ -55,8 +55,8 @@ func envSecretAdminOnlyWarning(kind types.GrantKind, secretRef string) string {
 //
 // Unconditional on every member path, which is the whole fix: the other kinds a
 // member may reuse are bounded after delivery (an api_key value never leaves the
-// broker, a git_pat reaches git through the helper, an ssh_key is wiped after
-// the clone), while an env_secret is a raw value in the process environment for
+// broker, a git_pat reaches git through the helper, an ssh_key stays at the proxy,
+// which signs the clone's sign-in), while an env_secret is a raw value in the process environment for
 // the run's whole life, with no mint, no TTL and nothing to revoke (see
 // GrantEnvSecret). "The operator listed this pairing" is a weaker statement here
 // than for every other kind, so it is not the statement this rule rests on. A

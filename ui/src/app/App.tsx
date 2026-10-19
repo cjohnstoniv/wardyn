@@ -128,7 +128,7 @@ const UserTypesScreen = React.lazy(() =>
     default: m.UserTypesScreen,
   })),
 );
-// Stored credentials (CS-8, design F-1) — who holds a credential for which
+// Credentials (CS-8, design F-1) — who holds a credential for which
 // model provider, and offboarding's erase. securityOps server-side, like
 // User types; no member route.
 const CredentialsScreen = React.lazy(() =>
@@ -384,6 +384,9 @@ export default function App() {
   // never a deliberate sign-out.
   const [signedOut, setSignedOut] = React.useState(false);
   const signingOutRef = React.useRef(false);
+  // This tab signed out on purpose, so a focus or visibility re-probe must not walk back in (a failed logout leaves
+  // the cookie live). Another tab announcing a sign-in is still believed. Cleared by signing in here.
+  const signedOutHereRef = React.useRef(false);
   // Someone else signed in over the page: nothing of it may survive, so the
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
@@ -400,6 +403,8 @@ export default function App() {
   const authRef = React.useRef<AuthStatus>(auth);
   React.useEffect(() => {
     authRef.current = auth;
+    // A deliberate sign-out has settled once the sign-in gate is up; from here the gate listens like any other.
+    if (auth === "unauthed") signingOutRef.current = false;
   }, [auth]);
   const location = useLocation();
 
@@ -460,22 +465,26 @@ export default function App() {
   React.useEffect(() => {
     if (auth !== "unauthed") return;
     let alive = true;
-    const reprobe = () => {
+    const reprobe = (fromOtherTab: boolean) => {
       if (signingOutRef.current) return;
+      if (!fromOtherTab && signedOutHereRef.current) return;
       void probeAuth().then((probe) => {
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
+        // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
+        signedOutHereRef.current = false;
         setSignedOut(false);
         setAuth("authed");
       });
     };
-    const onVisible = () => document.visibilityState === "visible" && reprobe();
-    const stop = onRemoteAuthChange(reprobe);
-    window.addEventListener("focus", reprobe);
+    const onFocus = () => reprobe(false);
+    const onVisible = () => document.visibilityState === "visible" && reprobe(false);
+    const stop = onRemoteAuthChange(() => reprobe(true));
+    window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       stop();
-      window.removeEventListener("focus", reprobe);
+      window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [auth]);
@@ -635,6 +644,7 @@ export default function App() {
           reason={signedOut ? SESSION_ENDED_REASON : undefined}
           onSignIn={() => {
             signingOutRef.current = false;
+            signedOutHereRef.current = false;
             setSignedOut(false);
             setAuth("authed");
             void navigate("/runs", { replace: true });
@@ -692,6 +702,7 @@ export default function App() {
                 // passes it, core.ts WfetchInit.endsSession) and drops with
                 // resetReauth below, once the logout has settled.
                 signingOutRef.current = true;
+                signedOutHereRef.current = true;
                 setSignedOutHold(true);
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {

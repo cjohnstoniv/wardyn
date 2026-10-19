@@ -46,19 +46,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
-// internalAudience is the audience run tokens are verified against on the
-// internal (sidecar) endpoints (RFC 8707 discipline).
-const internalAudience = "wardyn-internal"
-
-// groundtruthAudience is the SEPARATE audience the host-scoped eBPF
-// ground-truth sensor's token is verified against (RFC 8707 discipline). It is
-// distinct from internalAudience on purpose: a token minted for this audience
-// is accepted ONLY on POST /api/v1/internal/groundtruth (audit-write), and is
-// rejected by every mint/approval endpoint (which verify internalAudience).
-// This bounds the host sensor's authority to exactly "write ground-truth audit
-// events" and nothing else.
-const groundtruthAudience = "wardyn-groundtruth"
-
 // Config holds the API server's non-secret configuration and injected
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
@@ -143,6 +130,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerStreamHandshakesPerAddress caps one address's runner-stream handshakes
+	// in progress (WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS); 0 is the default.
+	RunnerStreamHandshakesPerAddress int
 	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
 	// token mint answers carry it; empty omits it.
 	ProxyImage string
@@ -526,11 +516,14 @@ type Config struct {
 	// publishes the port loopback-only (127.0.0.1:PORT), so a host UI/CLI request
 	// arrives at wardynd from the docker bridge gateway, not loopback. The LAN
 	// protection in that topology is the loopback PUBLISH (a LAN peer cannot reach a
-	// 127.0.0.1-bound host port at all), not the peer check — so the peer gate is a
-	// false positive there. The DNS-rebinding Host gate still applies. NEVER set this
-	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
-	// no-auth exposure the peer gate closes. Default false; set by compose only.
+	// 127.0.0.1-bound host port at all). Only peers inside LocalTrustedPeers pass,
+	// so another member of wardynd's network does not. The DNS-rebinding Host gate
+	// still applies. NEVER set this for a directly-bound host-mode wardynd on
+	// 0.0.0.0. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// LocalTrustedPeers are the non-loopback peers LocalTrustForwarder trusts, resolved
+	// at boot (WARDYN_LOCAL_TRUSTED_PEERS, else the gateway and own addresses).
+	LocalTrustedPeers []netip.Prefix
 	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
 	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
@@ -640,6 +633,18 @@ type Config struct {
 	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections and
+	// SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE) one address's handshakes; 0 is the default.
+	SSHMaxConnections         int
+	SSHMaxHandshakesPerSource int
+	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
+	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
+	// ignore file in the synced tree. Empty adds none.
+	SyncDeny []string
+	// LocalFolderSeedWait is WARDYN_LOCAL_FOLDER_SEED_WAIT: how long dispatch
+	// holds a run's agent for the first sync of its local folder, never past
+	// the run's own end (run_local_folder.go). Zero is DefaultLocalFolderSeedWait.
+	LocalFolderSeedWait time.Duration
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
@@ -866,6 +871,8 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
+	backchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -899,10 +906,8 @@ type Server struct {
 	ssoRefreshSpent map[string]bool
 	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
 	// refresh tokens AWS last refused to renew with a re-auth code, to the code
-	// and description it answered, also under ssoRefreshMu.
-	// ponytail: process-local, so per replica and per restart: a replica or a
-	// restarted process that has not seen the refusal grades the session live
-	// and passes Review until its own dispatch is refused and re-marks it.
+	// and description it answered, also under ssoRefreshMu. Used only by a store
+	// with no store.AWSSSORefusedTokenStore; with one, the marks are shared there.
 	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).
@@ -966,8 +971,9 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		deviceRouteState: newDeviceRouteState(),
+		branchLimiter:      principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		backchannelLimiter: principalLimiter{rate: backchannelLogoutRatePerSec, burst: backchannelLogoutBurst, max: 1},
+		deviceRouteState:   newDeviceRouteState(),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()

@@ -37,7 +37,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import type { GovernanceChange } from "../../../lib/types";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
-import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
+import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -62,7 +62,7 @@ import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
 import { Note, noteClass, question, withMono } from "./display";
-import { limitChips } from "./limit-chips";
+import { limitChips, limitsBoundNothing } from "./limit-chips";
 import { BaseChip, childrenOf } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 import { RunnerCredentials } from "./runner-credentials";
@@ -171,6 +171,9 @@ export function GovernanceScreen() {
             }
           : { message: getErrorMessage(e) },
       );
+      // The 409 says the list this row was read from is stale (Not assigned, the count): re-read it, as the
+      // drives delete does, or every later Delete re-opens the same doomed confirm.
+      if (e instanceof HttpError && e.status === 409) load();
     } finally {
       setBusy(false);
     }
@@ -295,6 +298,7 @@ export function GovernanceScreen() {
                 <TableSkeleton rows={3} cols={6} />
               ) : noProfiles ? (
                 <EmptyState
+                  size="compact"
                   icon={ShieldCheck}
                   title={GOV.EMPTY_TITLE}
                   // withMono, like every other governance surface that renders
@@ -339,17 +343,8 @@ export function GovernanceScreen() {
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
-                              {/* "None" is a claim that this profile bounds
-                                  nothing, so it is derived from every chip
-                                  limitChips can draw — not from the boolean
-                                  doors alone. max_concurrent_runs is enforced
-                                  (denyUserRunQuota's 422), and a quota-only
-                                  profile used to read "None". autonomy_rubric
-                                  joined the same rule the day its chip did, and
-                                  the run limits (RL-14, #579) read all seven
-                                  fields through setsRunLimits, since the chip
-                                  names only three of them. */}
-                              {chips.length > 0 ? chips : !setsRunLimits(p.limits) && GOV.LIMITS_NONE}
+                              {/* "None" is limitsBoundNothing's call: every limit, not one list. */}
+                              {chips.length > 0 ? chips : limitsBoundNothing(p.limits) && GOV.LIMITS_NONE}
                             </span>
                           </TableCell>
                           <TableCell>

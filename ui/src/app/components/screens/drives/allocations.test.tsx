@@ -20,7 +20,7 @@
 //   3. the preview has three ANSWERS — a drive, no drive, and a PAUSED winner
 //      that derives no directory and no storage object.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // vi.mock is hoisted above this import, so `toast` here IS the spy below.
 import { toast } from "sonner";
@@ -285,6 +285,21 @@ describe("DrivesScreen — allocations", () => {
     expect(upsertGrantMock).toHaveBeenCalledWith(
       expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", drive_id: SCRATCH.id }),
     );
+  });
+
+  // #2501: a second click on the confirm met a 404 and toasted an error over a removal that had gone through.
+  it("the Remove confirm is disabled while the delete runs, so it is sent once", async () => {
+    let finish!: () => void;
+    deleteGrantMock.mockReturnValue(new Promise<void>((r) => (finish = r)));
+    renderScreen();
+    await screen.findByText("wardyn.platform");
+    await userEvent.click(screen.getByRole("button", { name: `${PERM.REMOVE} wardyn.platform` }));
+    const confirm = within(await screen.findByRole("alertdialog")).getByRole("button", { name: PERM.REMOVE });
+    await userEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    await userEvent.click(confirm);
+    expect(deleteGrantMock).toHaveBeenCalledTimes(1);
+    finish();
   });
 
   it("Remove is outline and reversible: it confirms with the frozen sentence and deletes no data", async () => {
@@ -590,6 +605,17 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
     expect(await screen.findByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_GROUP))).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
+    expect(screen.queryByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_GROUP))).not.toBeInTheDocument();
+  });
+
+  // #2437: a request already in flight when the claims change must not paint its answer or error under the new text.
+  it("an answer or a refusal to claims that were edited while it was in flight is dropped", async () => {
+    let resolve!: (v: unknown) => void;
+    previewDriveMock.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    renderScreen();
+    await ask();
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
+    await act(async () => resolve({ drive_name: SCRATCH.name, matched_tier: "group", writable: true, enforcement: "request", size_mib: 16384 }));
     expect(screen.queryByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_GROUP))).not.toBeInTheDocument();
   });
 

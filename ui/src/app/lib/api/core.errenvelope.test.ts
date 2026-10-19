@@ -130,3 +130,15 @@ describe("asNoContent — a 2xx with no body", () => {
     expect(err.reason).toBe("runner_pools_unavailable");
   });
 });
+
+describe("errEnvelope — the host-capacity 503", () => {
+  it("shows the sentence and carries the code as the reason", async () => {
+    const res = new Response(
+      JSON.stringify({ error: "host_capacity_refused", reason: "load1=150.00 > 100", message: "this host is too busy (load1=150.00 > 100) — retry in 30 seconds" }),
+      { status: 503 },
+    );
+    const env = await errEnvelope(res);
+    expect(env.message).toBe("this host is too busy (load1=150.00 > 100) — retry in 30 seconds");
+    expect(env.reason).toBe("host_capacity_refused");
+  });
+});

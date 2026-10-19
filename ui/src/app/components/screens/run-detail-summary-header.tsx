@@ -14,6 +14,7 @@ import { Link } from "react-router-dom";
 import { Check, Clock, Laptop, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { RunDetail } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
+import { formatDuration } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
@@ -35,18 +36,6 @@ import {
 import { titleFromTask } from "../../lib/run-title";
 
 
-// Exported for the failure block (run-detail/failure-block.tsx), which states
-// how far into a run an operator killed it — the same duration, in the same
-// words, as the clock in this bar.
-export function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m ${s}s`;
-}
-
 // Live-ticking duration since `createdAt`, frozen at `updatedAt` once the run
 // is terminal — a terminal run's elapsed time must not keep growing every
 // time someone happens to reopen the page days later.
@@ -58,7 +47,7 @@ function useElapsed(createdAt: string, updatedAt: string, terminal: boolean): st
     return () => clearInterval(id);
   }, [terminal]);
   const end = terminal ? new Date(updatedAt).getTime() : now;
-  return formatElapsed(end - new Date(createdAt).getTime());
+  return formatDuration(end - new Date(createdAt).getTime());
 }
 
 // The model provider this run chose at create (#543, decision 5) — fixed on the

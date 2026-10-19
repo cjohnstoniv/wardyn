@@ -11,7 +11,8 @@
 import type * as React from "react";
 import type { RunnerPool, RunnerPoolAmount, RunnerPoolDuration, RunnerPoolLimits, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
 import { POOL_DRAWER, RES } from "../../../wardyn/copy/runner-pools";
-import { cpus, fmtAmount, fmtDur, gb, poolRunTypes, type ResKey } from "../resources";
+import { formatDuration } from "../../../../lib/format";
+import { cpus, fmtAmount, gb, poolRunTypes, type ResKey } from "../resources";
 import { runnersBiggest } from "./pool-form-model";
 
 type Res = Exclude<ResKey, "runs">;
@@ -22,13 +23,14 @@ const COLS: { key: Res; label: string }[] = [
   { key: "disk", label: RES.DISK },
 ];
 
+const dur = (sec: number) => formatDuration(sec * 1000, "words");
 const shown = (k: Res, wire: number) => fmtAmount(k, k === "cpu" ? cpus(wire) : gb(wire));
 
 /** A duration limit as the sheet words it; an absent one is set by the runners. */
 export function durLimit(d: RunnerPoolDuration | undefined, never: boolean): string {
   if (!d) return "—";
-  if (d.unlimited) return d.default_sec ? (never ? POOL_DRAWER.DUR_NEVER(fmtDur(d.default_sec)) : POOL_DRAWER.DUR_NO_MAX(fmtDur(d.default_sec))) : never ? POOL_DRAWER.NEVER : POOL_DRAWER.NO_MAXIMUM;
-  return POOL_DRAWER.DUR(fmtDur(d.default_sec), fmtDur(d.max_sec ?? 0));
+  if (d.unlimited) return d.default_sec ? (never ? POOL_DRAWER.DUR_NEVER(dur(d.default_sec)) : POOL_DRAWER.DUR_NO_MAX(dur(d.default_sec))) : never ? POOL_DRAWER.NEVER : POOL_DRAWER.NO_MAXIMUM;
+  return POOL_DRAWER.DUR(dur(d.default_sec), dur(d.max_sec ?? 0));
 }
 
 /**

@@ -1,0 +1,26 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Desktop-tier port publishes. Merged over deploy/compose/docker-compose.yaml by
+# the `include:` in docker-compose.yaml (never re-declare services there: older
+# Compose refuses that).
+#
+# The base stack publishes four loopback ports. This tier uses two: the console
+# (WARDYN_UP_PORT) and the SSH gateway (WARDYN_SSH_PORT). It drops the rest,
+# because a laptop commonly already runs its own Postgres (5432) or Metro (8081):
+#   - postgres 5432: the base publish exists for a host-mode wardynd; this tier
+#     runs wardynd in the stack and reaches Postgres by service name.
+#   - registry 5010: the envbuild registry is reached by service name inside the
+#     stack; this tier has no host-side consumer.
+#   - UI-sandbox relay 8081: off on this tier (wardyn.env.example).
+# Needs Docker Compose 2.24.4 or newer: `!override` replaces the list from 2.24.4;
+# 2.24.0 merges it and still publishes 5432, 5010 and 8081.
+services:
+  postgres:
+    ports: !reset []
+  registry:
+    ports: !reset []
+  wardynd:
+    ports: !override
+      - "127.0.0.1:${WARDYN_UP_PORT:-8080}:8080"
+      - "127.0.0.1:${WARDYN_SSH_PORT:-2222}:2222"

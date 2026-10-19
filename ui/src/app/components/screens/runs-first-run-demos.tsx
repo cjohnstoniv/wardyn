@@ -41,7 +41,7 @@ export default function FirstRunDemoGrid({
   return (
     <div className="w-full max-w-[900px] space-y-4">
       <div className="space-y-1 text-center">
-        <h3 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
+        <h3 className="label-eyebrow">
           See it work
         </h3>
         <p className="text-sm text-muted-foreground">{FIRST_RUN_DEMOS_SUBTITLE}</p>

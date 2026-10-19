@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,6 +295,52 @@ func TestBuild_RejectsEmptyOutputImageTag(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Fake-Docker unit tests: verify Build paths without a real daemon
 // ---------------------------------------------------------------------------
+
+// Each build pushes to its own <CacheRepo>:<uuid> tag, and without a delete the
+// registry kept every one for good (#2289). After Build returns, the tag is removed
+// with Distribution's DELETE /v2/<repo>/manifests/<tag>.
+func TestBuild_DeletesItsPerBuildRegistryTag(t *testing.T) {
+	var deleted []string
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deleted = append(deleted, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer reg.Close()
+	t.Setenv(envPushedRef, "")
+	t.Setenv(envRegistryInsecure, "true") // the test registry speaks plain HTTP, like compose's sidecar
+
+	f := newFakeEnvbuilderDocker()
+	b := newWithClient(f, "envbuilder:test", strings.TrimPrefix(reg.URL, "http://")+"/wardyn/devcontainers")
+	b.ToolsDir = fakeToolsDir(t)
+	b.RegistryHTTP = reg.Client()
+
+	if _, err := b.Build(t.Context(), BuildSpec{RepoURL: "https://github.com/example/repo", OutputImageTag: "wardyn-ws:abc"}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(deleted) != 1 || !strings.HasPrefix(deleted[0], "DELETE /v2/wardyn/devcontainers/manifests/") {
+		t.Fatalf("registry saw %v, want one DELETE of the per-build tag's manifest reference", deleted)
+	}
+	if tag := strings.TrimPrefix(deleted[0], "DELETE /v2/wardyn/devcontainers/manifests/"); len(tag) != 36 {
+		t.Errorf("deleted reference %q is not a per-build uuid tag", tag)
+	}
+}
+
+// A registry that refuses the delete (an external one that needs credentials) must not fail a build that succeeded.
+func TestBuild_RefusedTagDeleteDoesNotFailTheBuild(t *testing.T) {
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer reg.Close()
+	t.Setenv(envPushedRef, "")
+	t.Setenv(envRegistryInsecure, "true")
+
+	b := newWithClient(newFakeEnvbuilderDocker(), "envbuilder:test", strings.TrimPrefix(reg.URL, "http://")+"/wardyn/devcontainers")
+	b.ToolsDir = fakeToolsDir(t)
+	b.RegistryHTTP = reg.Client()
+	if _, err := b.Build(t.Context(), BuildSpec{RepoURL: "https://github.com/example/repo", OutputImageTag: "wardyn-ws:abc"}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+}
 
 func TestBuild_SuccessPath(t *testing.T) {
 	f := newFakeEnvbuilderDocker()

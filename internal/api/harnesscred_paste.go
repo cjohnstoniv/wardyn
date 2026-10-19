@@ -28,8 +28,8 @@ const (
 	// guards the paste door never had. An empty token stored a blob that reads
 	// as "connected" and resolves to nothing at inject time; an unbounded one
 	// went straight into the process-global mask corpus.
-	harnessPasteEmptyRefusal   = "the token is empty"
-	harnessPasteTooLongRefusal = "the token is too long (%d bytes, max %d)"
+	harnessPasteEmptyRefusal   = "The token is empty"
+	harnessPasteTooLongRefusal = "The token is too long (%d bytes, max %d)"
 )
 
 // harnessPasteRefusal validates an operator-pasted harness credential and
@@ -56,7 +56,7 @@ func harnessPasteRefusal(hl harnessLogin, token string) string {
 	// guard on"; it is no longer also the aws lane's way in, because that row is
 	// refused above.
 	if hl.tokenPrefix != "" && !strings.HasPrefix(token, hl.tokenPrefix) {
-		return "that does not look like a `claude setup-token` output (expected a token starting with " + hl.tokenPrefix + ")"
+		return "That does not look like a `claude setup-token` output (expected a token starting with " + hl.tokenPrefix + ")"
 	}
 	return ""
 }

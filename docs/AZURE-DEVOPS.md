@@ -270,6 +270,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - **Disconnecting revokes the tokens of the person's runs in progress**, and those runs lose Azure DevOps access.
 - The Settings card asks first: "Disconnecting revokes the tokens of any of your runs in progress. They lose Azure DevOps access."
 - `DELETE /api/v1/scm/azure-devops/connection` revokes every live token created in the person's name (each audited `ado_pat.revoke`, reason `disconnect`), then deletes their stored sign-in, writes `ado_pat.disconnect` and answers `204`, also when nothing was stored.
+- It deletes the person's sign-in under every Azure DevOps row, disabled or withdrawn ones too, so a re-enabled row needs a fresh sign-in.
 - A connection captured at console sign-in is captured again at the person's next sign-in.
 - **Offboarding revokes the person's live tokens first.**
 - `DELETE /people/{principal}/credentials` revokes every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`), then deletes the stored grant.

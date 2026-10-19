@@ -122,7 +122,7 @@ class ImageRecipes(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="wardyn-image-recipe-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for directory in ["bin", "claude-stage", "awscli-stage", "gpg", "lists"]:
+        for directory in ["bin", "claude-stage", "codex-stage", "awscli-stage", "gpg", "lists"]:
             (self.root / directory).mkdir(mode=0o700)
         for command in ["curl", "unzip", "gpg", "npm", "apt-get"]:
             script = self.root / "bin" / command
@@ -220,6 +220,34 @@ class ImageRecipes(unittest.TestCase):
         result = self.run_recipe("claude-code")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "claude").read_bytes(), b"staged native")
+
+    def run_codex(self, name, **overrides):
+        text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+        script = next(body for _, kind, body in instructions(text) if kind == "RUN" and "/codex-stage/codex-bin" in body)
+        for old, new in {"/codex-stage": "/codex-stage", "/usr/local/bin/codex": "/codex"}.items():
+            script = script.replace(old, str(self.root) + new)
+        env = {**self.env, "CODEX_INSTALL": "native", "CODEX_VERSION": "9.9.9", **overrides}
+        return subprocess.run(["/bin/sh", "-c", script], env=env, capture_output=True, text=True)
+
+    def test_codex_staged_arch_matches_target(self):
+        # Both images that install the staged codex-bin refuse only a recognised ELF for the other arch.
+        for name in ["codex-cli", "harnesses"]:
+            for target, machine in [("amd64", 0xb7), ("arm64", 0x3e)]:
+                with self.subTest(image=name, target=target):
+                    (self.root / "codex").unlink(missing_ok=True)
+                    (self.root / "codex-stage/codex-bin").write_bytes(self.elf(machine))
+                    result = self.run_codex(name, TARGETARCH=target)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"builds for {target}", result.stderr)
+                    self.assertIn(f"codex-cli --arch {target}", result.stderr)
+                    self.assertFalse((self.root / "codex").exists())
+            for staged in [self.elf(0xb7), b"#!/bin/sh\nexec launcher\n"]:
+                with self.subTest(image=name, staged=staged[:4]):
+                    (self.root / "codex").unlink(missing_ok=True)
+                    (self.root / "codex-stage/codex-bin").write_bytes(staged)
+                    result = self.run_codex(name, TARGETARCH="arm64")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((self.root / "codex").read_bytes(), staged)
 
     def test_claude_npm_channel(self):
         result = self.run_recipe("claude-code", CLAUDE_INSTALL="npm", CLAUDE_CODE_VERSION="stable", CLAUDE_MANIFEST_SHA256="")

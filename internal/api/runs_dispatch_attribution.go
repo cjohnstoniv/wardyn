@@ -25,7 +25,7 @@ func (s *Server) runAttribution(ctx context.Context, run types.AgentRun, site ty
 	ref := s.baseRunAttribution(ctx, run, site)
 	if overridden {
 		if ref == nil {
-			ref = &policyref.Ref{Source: policyref.SourceDeployment}
+			ref = policyref.Project(policyref.SourceDeployment, "", nil)
 		}
 		ref.Overridden = true
 	}

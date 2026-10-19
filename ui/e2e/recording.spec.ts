@@ -112,7 +112,7 @@ test.describe("Recordings — disabled-recording reasons are visible text (#459)
     ).toBeVisible();
   });
 
-  test("with a historical library, the search field is disabled and states why beneath it", async ({ page }) => {
+  test("with a historical library, the search field stays enabled and filters it", async ({ page }) => {
     await mockRecordingDisabled(page);
     await mockRecordingMeta(page, {
       "e2e fixture 0": { bytes: 1, durationSec: 1 },
@@ -124,11 +124,10 @@ test.describe("Recordings — disabled-recording reasons are visible text (#459)
     await openRecordings(page);
 
     const search = page.getByPlaceholder(/Search tasks, repos, run IDs/);
-    await expect(search).toBeVisible();
-    await expect(search).toBeDisabled();
-    await expect(
-      page.getByText("Session recording is disabled on this deployment — there is nothing to search."),
-    ).toBeVisible();
+    await expect(search).toBeEnabled();
+    await expect(page.getByText(/nothing to search/)).toHaveCount(0);
+    await search.fill("fixture 4");
+    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(1);
   });
 });
 

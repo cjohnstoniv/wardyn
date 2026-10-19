@@ -24,7 +24,7 @@ beforeEach(() => {
 
 describe("EgressBaselineTab coverage notice", () => {
   it("canon: the coverage line and the exact-hosts sentence, character for character", () => {
-    expect(BASELINE.COVERS("corp.example")).toBe("corp.example covers corp.example and every host under it (*.corp.example).");
+    expect(BASELINE.COVERS("corp.example")).toBe("corp.example covers corp.example only, not the hosts under it (*.corp.example).");
     expect(BASELINE.HOSTS_HINT).toBe("One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses. Covers only the host named, not its subdomains.");
   });
 

@@ -113,6 +113,10 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handlePATBroker(w, r)
 	case strings.HasPrefix(path, routeMCPBroker):
 		p.handleMCPBroker(w, r)
+	case r.Method == http.MethodPost && path == routeSSHAgentClose:
+		p.handleSSHAgentClose(w, r)
+	case strings.HasPrefix(path, routeSSHAgent):
+		p.handleSSHAgent(w, r)
 	default:
 		http.Error(w, "unknown brokered route", http.StatusNotFound)
 	}
@@ -133,6 +137,10 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 // PATGrants' per-host map, which a same-host shadow, a vetoed lane or a withheld
 // forge leaves without that grant. The broker's own mint goes to the control
 // plane directly and never passes through here.
+//
+// An ssh_key never passes here either: a resident one is refused, and a
+// relayed answer carrying one is withheld (relayControlPlane); the proxy's ssh
+// agent signs with it instead (ssh_agent.go).
 func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBrokeredBody))
 	if err != nil {
@@ -557,6 +565,13 @@ func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method
 		// The organisation's own refusal reason (recording_off, relay_route_refused, ...), so the
 		// row says why a cast was not kept rather than only that the upload failed.
 		cause = orgRefusalReason(respBody)
+	}
+	// An ssh_key's private key stays in this proxy: its ssh agent signs with
+	// it, and a raw mint answer carrying one is withheld from the sandbox.
+	if ruleSource == ruleSourceMint && resp.StatusCode == http.StatusOK && isSSHKeyMintAnswer(respBody) {
+		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
+		http.Error(w, sshKeyMintRefused, http.StatusForbidden)
+		return
 	}
 	p.emitLocalDecisionCause(r, decision, ruleSource, approvalID, cause)
 	passThrough(w, resp, respBody)

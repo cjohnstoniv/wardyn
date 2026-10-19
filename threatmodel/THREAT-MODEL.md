@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.4)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.5)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -150,11 +150,8 @@ coverage verdict pointing back into this document.
      [`internal/api/runs_dispatch_gitbroker.go`](../internal/api/runs_dispatch_gitbroker.go), says
      why deliberately.)
    - An **unbrokered** SSH credential — an `ssh_key` for a forge holding no `github_token` (a GitLab
-     host, or `github.com` with no repos granted) — keeps the old shape:
-     - written for the clone only (`wipe_ssh_grants` shreds it and unsets `GIT_SSH_COMMAND` before
-       the agent starts), a narrowing and not a confinement,
-     - since the grant id still rides `WARDYN_SSH_GRANTS` and an auto-mintable grant is re-mintable
-       by design — bounded by the operator who supplied it, not by Wardyn.
+     host, or `github.com` with no repos granted) — signs in through the run proxy's SSH agent
+     and is not resident; §5.1a states its bounds.
    - A token exfiltrated from the proxy itself is bounded only by whatever
      GitHub-side ruleset the operator created.
      - `VerifyRefRuleset` ([`internal/broker/ruleset.go`](../internal/broker/ruleset.go)) reads it
@@ -549,7 +546,7 @@ is not the deployment described above.**
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟢 **[shipped]** for hold runs (`internal/agentpolicy`). | AU |
-| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and bounded concurrent counts: 64 connections handshaking (one over it is closed before any handshake byte) and, counted apart, 64 authenticated connections; a refusal at either writes a throttled warning. **Residual:** the handshake bound is shared by every source, so connections that hold it until their deadline delay other people's new connections. | B9 |
+| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and bounded concurrent counts: 64 connections handshaking (one over it is closed before any handshake byte), at most 16 of them from one source address (`WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE`), and, counted apart, 64 authenticated connections (`WARDYN_SSH_MAX_CONNECTIONS`). Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and writes a throttled warning. **Residual:** behind a shared ingress or NAT every client shares one source address, and enough sources together can still fill the shared handshake bound until their deadlines. | B9 |
 | | `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. | |
 | | A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. | |
 | | These bounds are load-bearing rather than belt-and-braces: the DAEMON default is off (`WARDYN_SSH_LISTEN` unset), but the one-line installer and the desktop envelope both ship it ON at `:2222` (see B9). | |
@@ -2548,9 +2545,10 @@ hiding them would repeat the failure mode we are designed to avoid.
       - The token is minted proxy-side only (`/wardyn/gh/`), and the run's direct GitHub hosts are denied.
       - Revive and extend re-check the owner's `workspace_provider` permission. They do not notice a repository that is no longer admitted, a provider row whose GitHub App lane was turned off, or a provider row that was removed.
 
-65. **Behind a shared ingress every runner connection shares one pre-auth rate-limit bucket, so one unauthenticated peer can lock every runner out (0.9).**
-    - `handleRunnerStream` ([`internal/api/runner_stream.go`](../internal/api/runner_stream.go)) charges the peer address before any read and refunds a runner that proves its key. Behind an ingress that address is the ingress's own.
-    - A peer that never authenticates can keep that bucket empty, and every runner behind the ingress is then refused `429` before it can prove its key.
+65. **Behind a shared ingress every runner connection shares one pre-auth address, so one unauthenticated peer can hold that address's handshake bound (0.9; bounded in 0.10).**
+    - `handleRunnerStream` ([`internal/api/runner_stream.go`](../internal/api/runner_stream.go)) limits handshakes in progress per peer address (`WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS`, default 32) before any read, and refuses a peer whose rate bucket is empty. Behind an ingress that address is the ingress's own.
+    - The address and global rate buckets are charged only when a handshake ends without proving a runner key, so handshakes held open spend none of them. A failed or abandoned handshake still does.
+    - A peer that never authenticates can still keep the address's in-progress bound full, or spend its bucket with failed handshakes, and runners behind the ingress are then refused `429` until those end.
     - The mitigation is an ingress allowlist for `/api/v1/runners/*/stream` that admits only the networks runners connect from. Per-client rate limits on the ingress do not close it.
 
 66. **An extended egress baseline lowers two grades: the autonomy posture and the CC3 floor for an `api_key` [0.9].**
@@ -2814,15 +2812,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **[0.9.4]** An accepted record releases the run only for the tuple it was approved for. runnerd compares the tuple again as it stores the record and again before the record releases the run, so a holder of the node name latched after approval lapses the record; the run stays held until a record for the new tuple is accepted ([`internal/runner/k8s/evidence.go`](../internal/runner/k8s/evidence.go)).
     - Owner acceptance is pending; listing the residual here is not acceptance.
 
-92. **With local mode on, `WARDYN_LOCAL_TRUST_FORWARDER` (compose default `true`) treats every peer on the `wardyn-internal` network as the local operator [0.9.4].** ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), [`internal/api/http.go`](../internal/api/http.go).)
+92. **With local mode on, `WARDYN_LOCAL_TRUST_FORWARDER` (compose default `true`) treats chosen peers on the `wardyn-internal` network as the local operator [0.9.4; bounded in 0.10].** ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), [`internal/api/http.go`](../internal/api/http.go), [`cmd/wardynd/boot_local_peers.go`](../cmd/wardynd/boot_local_peers.go).)
     - The setting exists because traffic on the published port reaches wardynd from the bridge gateway, not from loopback. wardynd cannot tell that hop apart from another member of the network.
-    - The members are Wardyn's own containers: the per-run proxy sidecars, the registry and relay probes. The desktop tier inherits the compose default.
-    - Narrowing the trust to the gateway address is planned for 0.10, once the desktop and compose flows are proven with it on Docker and Podman. The variable and its default stay as they are.
+    - Only peers on `WARDYN_LOCAL_TRUSTED_PEERS` pass. Unset, wardynd resolves the list at boot: its own network's default gateway (Docker) and its own interface addresses (rootless Podman delivers published-port traffic from the container's own address). Any other member of the network is refused `403 local_mode_peer_not_loopback`.
+    - Local mode trusts the published port's source address on the control-plane network. The compose services there (wardynd, registry, postgres, dex and the groundtruth ingest sidecar) run with `NET_RAW` dropped, so a member cannot forge that address on the bridge. The tetragon sensor runs privileged on the host network and is host root by design; it is outside this control and not on the bridge.
+    - **Residual:** a process inside the wardynd container, or a host process that reaches the published port, still counts as the local operator, as it did before. Local mode is a single-operator posture.
 
-93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go).)
+93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4; switch in 0.10].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go), [`internal/egress/proxy/peer_listener.go`](../internal/egress/proxy/peer_listener.go).)
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
-    - The run's sandbox reaches it over the run's own network; the proxy does not yet restrict callers to its own sandbox's address.
-    - A check that serves only the run's sandbox address, with no change to how the proxy is addressed, is planned for 0.10 once proven on Docker and Podman.
+    - With `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` on, the driver writes the run's own network subnet into the proxy config (`allowed_peers`) and the proxy closes any connection from outside it before reading a byte. How the proxy is addressed does not change.
+    - The switch is off by default in 0.10 until proven on Docker and Podman; with it off the proxy serves every caller as before.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -2962,7 +2961,6 @@ exactly these terms.
 
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
-| `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time, shredded right after (`wipe_ssh_grants`, before the agent starts); mask-registered at mint. On an UNBROKERED forge that window is a narrowing, not a bound; on a BROKERED forge the grant never reaches the sandbox. Wardyn cannot down-scope or expire an SSH private key where it does remain resident ([`internal/broker/broker.go`](../internal/broker/broker.go) `mintSSHKey`, `deploy/images/*/agent-run`). An approval-gated grant is delivered once per run; [CREDENTIALS.md](../docs/CREDENTIALS.md) bounds the other cases. See below. |
 | `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg ([`internal/egress/proxy/pat_broker.go`](../internal/egress/proxy/pat_broker.go)), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no GitLab or Azure DevOps Server equivalent of a scoped installation token (Azure DevOps Services gets one through `minted_pat`, residual #62), so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists ([`docs/adoption/corp-network-onboarding-findings.md`](../docs/adoption/corp-network-onboarding-findings.md) B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
 | `file_secret` grant [0.8.9] | The stored secret's **value**, as a file under `/run/wardyn/secrets` named by the grant's scope, never by a path (`ComponentSecretDir` in [`internal/runner/managed_files.go`](../internal/runner/managed_files.go)) | Nothing structural: the `env_secret` coverage gap, for a tool that reads a credentials file instead of a variable | The `env_secret` bounds, under the same switch and role rule, for the WHOLE run, with nothing to revoke. Docker: mode `0400`, the workload's user. Kubernetes: mode `0440`, every process in the pod. See below. |
@@ -2985,6 +2983,12 @@ exactly these terms.
 - There is no off mode: with `WARDYN_AWS_SSO_PROXY_INJECT=off` the component is refused at launch and at dispatch (`component_cli_aws_inject_off`).
 - Deleting or re-pinning the component deletes every person's sign-in for it, and erasing a person's credentials removes theirs.
 - Residual: within their own run, a person granted the component holds role credentials for that role until they expire, as on the `bedrock_sso` lane.
+
+**The `ssh_key` grant (0.10) is not resident.**
+
+- The proxy holds the key and signs only an SSH sign-in for it (`isUserauthRequest`, [`internal/egress/proxy/ssh_agent.go`](../internal/egress/proxy/ssh_agent.go)); `ssh` reaches it through a per-command socket from `wardyn-git-helper ssh-exec`.
+- The mint route withholds any `ssh_key` answer, the broker issues it once per run (`checkedMintRow`), and `close_ssh_agent` closes the agent after the clone.
+- Residual: until that close, a sandbox process can have the proxy sign a sign-in with it. An image that never closes it leaves that open for the run.
 
 **Where this table is now stated to the person launching the run.**
 
@@ -3012,7 +3016,7 @@ exactly these terms.
 full, under asset #4 (§2).
 
 - Two citations that live only here:
-  - On an unbrokered forge the grant id rides `WARDYN_SSH_GRANTS` and an auto-mintable grant is re-mintable by design (`MintForGrant`), because the proxy's mint route refuses only brokered *GitHub* grant ids (`isBrokeredGitGrant`).
+  - On an unbrokered forge the grant id rides `WARDYN_SSH_GRANTS`, but the proxy's mint route withholds any `ssh_key` answer (`relayControlPlane`) and the broker refuses a second auto-mint in the run (`checkedMintRow`), so there is no key to re-mint.
   - On a brokered forge `validateGrantLaneExclusivity` ([`internal/api/policy.go`](../internal/api/policy.go)) refuses the policy at write time and `dropBrokeredGrants` withholds anything already stored, so no grant id reaches the sandbox and there is nothing to re-mint.
 
 **`git_pat` — the run lease.**
@@ -3171,13 +3175,15 @@ Claude sign-in's token, each the person's own on their model provider.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy memory vs. the prior streaming path.
   - It is bounded per-request AND in aggregate.
     - The extractor's live-heap amplification (~5.3x, and independent of which detectors are on) means two concurrent in-cap bodies would exceed the proxy sidecar's 256 MiB cgroup cap.
-    - So concurrent inspection is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
+    - So concurrent extraction is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
+    - The buffered bytes are charged to a retained-bytes budget (`maxRetainedScanBytes`) from before the read until the request is done with them.
+  - The slot and the budget belong to one engine (`scanBudget`): the sidecar's single proxy, or one run's `via_org` engine inside wardynd. One run's inspections never wait on another run's.
+  - A body is read before the slot is taken, so a body that arrives slowly holds only the bytes it has sent, never the slot.
   - An over-budget request WAITS and is still fully inspected — load never turns into unscanned egress.
   - That wait is itself BOUNDED, by the request's own context and a wall-clock cap (`scanQueueWait` in [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)), because nothing above the call bounds it:
     - the agent-facing listener sets `ReadTimeout 0` so that streaming bodies and CONNECT tunnels work,
-    - and only the inner MITM server carries a whole-request deadline.
-    - So without the cap one slow-loris POST from the sandbox, holding the single slot across the read of its own body, would park every other inspected request of the run indefinitely,
-      - each retaining a goroutine and a socket.
+    - and only the inner MITM server carries a whole-request deadline. A `via_org` engine's git broker route gets the same deadline (`ViaOrgEngine.ServeBroker`), since wardynd's listener sets none.
+    - **Residual:** a body without a declared length is charged at the per-request ceiling until it ends, so slow bodies of that kind from one run's sandbox can fill that run's own budget and delay its other inspected requests until `scanQueueWait`.
   - A wait that expires, or a client that goes away, is DENIED with a 502 — the bound is not a way to get a body forwarded unscanned.
   - The cgroup limit alone was not a bound: without a soft limit the GC targets ~2x live heap and grows into the cap, and an OOM-killed sidecar takes the run's only network path with it.
 - **TLS-MITM (`intercept_tls`) residuals:** the proxy sees DECRYPTED bodies for the intercepted hosts (added trust surface — the per-run CA private key in proxy memory).
@@ -3475,7 +3481,7 @@ The residuals particular to holding:
 - **A hold costs the sidecar a connection and its buffer.**
   - The buffer stays charged to the process-wide retained-bytes budget for the whole hold (at most 600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past that a push is refused, never forwarded.
   - The hold is taken after the inspection slot is given back, so it does not hold the slot.
-    - But the held pack stays charged to the retained-scan budget (`scanRetained`) for the whole hold, up to 600 seconds,
+    - But the held pack stays charged to the retained-scan budget (the engine's `scanBudget`) for the whole hold, up to 600 seconds,
       - so while held packs fill that budget other buffered scans on the run's sidecar (an LLM request body, another push) cannot retain theirs and fail closed (refused, never forwarded unread) until the hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   - `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before `awaitADOCapability`, so nobody is asked for `code_write` on a push the rules refuse, and a review hold is decided before any capability hold.
