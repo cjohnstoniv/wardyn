@@ -97,19 +97,19 @@ coverage verdict pointing back into this document.
 4. **Source code + the git push capability.**
    - The minted GitHub installation token is repo-scoped and permission-clamped (max
      `contents:write` + `pull_requests:write`, 1h TTL) on the git lane.
-     - A GitHub CLI grant's token is bounded by the grant's capabilities instead,
-       narrowed to the App's own permissions on the installation.
+     - A GitHub CLI grant's token carries the grant's capabilities, within the App's
+       installation permissions.
    - Bot-branch-namespace confinement (`wardyn/<run-id>/*`) is **[shipped, default-on]** at the
      git-broker proxy route: it parses the `git-receive-pack` pkt-line command section and refuses
-     every ref outside `refs/heads/wardyn/<run-id>/` (including deletes) before the token is minted.
-   - No opt-in is needed because `agent-run` checks each cloned repo out onto
+     every ref outside `refs/heads/wardyn/<run-id>/` (including deletes) before minting.
+   - No opt-in is needed: `agent-run` checks each cloned repo out onto
      `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` is the escape hatch.
    - Dispatch also subtracts and denies the broker-managed GitHub hosts — `github.com`,
      `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, plus that forge's
      `ssh.<forge>` SSH-over-443 endpoint — so the brokered route is the only route to those host
      NAMES.
-   - And `wardyn-git-helper` no longer mints an installation token into a brokered sandbox at all.
-   - It is a NAME deny: the verdict keys on the host string the sandbox asked for, so a raw-IP
+   - `wardyn-git-helper` mints no installation token into a brokered sandbox.
+   - It is a NAME deny: the verdict keys on the requested host string, so a raw-IP
      `CONNECT` is a different key, which `allow_all_egress` would permit (measured).
    - See [`docs/POLICIES.md`](../docs/POLICIES.md).
 
@@ -121,8 +121,7 @@ coverage verdict pointing back into this document.
      - The never-resident git_pat lane (default ON) removes the tunnel by design — `pat_broker.go`
        terminates the sandbox's request on the proxy's own cleartext route and `validGitRest` admits
        `POST git-receive-pack` there —
-     - so a parser COULD bind it, and whether it does is a scoping DECISION rather than an
-       impossibility.
+     - so a parser COULD bind it: binding it is a scoping DECISION, not an impossibility.
    - 0.7.2 takes that decision and wires the SAME parser (`confinePush`, one step both brokers call,
      reusing the `brokered:git:branch-ns*` rule sources)
      - to the git_pat lane behind the pat scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` (folded by

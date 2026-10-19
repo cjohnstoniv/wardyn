@@ -221,7 +221,7 @@ Three more the tier inherits rather than introduces:
 | `WARDYN_USER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
 
 > [!WARNING]
-> Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** — boot warns on `/` and on the daemon's own `$HOME` and starts anyway, but a person's home is not the containerised daemon's, so a root there gets no warning (a malformed root, by contrast, refuses boot), and a root that wide leaves the credential-dotfile deny-list as the only thing between a member and `~/.ssh`.
+> Use a dedicated projects directory. **Never `$HOME`, never `/`**: a root that wide leaves the credential-dotfile deny-list alone between a member and `~/.ssh`. Boot warns on `/` and the daemon's `$HOME`, not a person's, and starts anyway (a malformed root refuses boot).
 
 - [ENV.md](ENV.md) carries the full semantics.
 

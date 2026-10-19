@@ -383,12 +383,11 @@ stateDiagram-v2
      - *see `cmd/wardyn-git-helper`.)*
 2. **Approval mints the credential.**
    - `CredentialGrant` = eligible.
-   - For a grant with `requires_approval: true`, the credential is issued only after
-     a snapshot shows `approvals.state = 'APPROVED'` for this run+scope, and is
-     returned only when the transaction that re-verifies that approval writes
-     `approvals.minted_jti` back; a credential that commit refuses is discarded.
+   - For a grant with `requires_approval: true`, the mint needs a snapshot showing
+     `approvals.state = 'APPROVED'` for this run+scope; the re-verifying commit
+     writes `approvals.minted_jti`, or the credential is discarded.
    - A grant without `requires_approval` (the default) is auto-mintable: it creates
-     no approval row, is re-mintable by design, is capped at a 1h TTL and is audited
+     no approval row, is re-mintable by design, is capped at 1h TTL and audited
      per mint.
    - A `git_pat` approval with `decision_scope=run` is a per-run lease that covers
      re-mints for the run's life.
@@ -504,7 +503,7 @@ sequenceDiagram
 - This describes a grant with `requires_approval: true`.
 - Approval records the human decision only; the credential is minted **later**,
   when the run's own proxy or git-helper requests it (`MintForGrant`) —
-  - and is returned only from
+  - returned only from
     the Postgres transaction that re-verifies the `APPROVED` approval for that
     exact run and grant and claims `minted_jti`,
   - so the minted scope always equals

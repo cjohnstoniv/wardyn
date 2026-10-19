@@ -176,10 +176,10 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 - Watch the session live via Attach (`wardyn run attach
 <id>`, or the console's Live terminal) — the **Recording** tab plays back the captured cast only after the fact, it has no live view.
 
-- To also enable real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the credential request the agent raises —
-  - the minted installation token is 1h, repo-scoped, and permission-clamped to `contents:write` + `pull_requests:write` (a GitHub CLI grant's token to that grant's capabilities instead).
-- Branch-namespace confinement (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the brokered git path by default**: a push to any other ref is refused with 403 before the token is minted.
-- Nothing to turn on — `agent-run` checks each cloned repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
+- For real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the agent's credential request —
+  - the minted installation token is 1h, repo-scoped, and permission-clamped to `contents:write` + `pull_requests:write` (a GitHub CLI grant's: to its capabilities).
+- Branch-namespace confinement (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the brokered git path by default**: a push to any other ref is refused with 403 before minting.
+- Nothing to enable — `agent-run` checks each cloned repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
 
 > [!WARNING]
 > - What that does **not** cover, plainly.
