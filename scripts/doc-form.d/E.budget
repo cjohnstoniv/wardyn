@@ -86,6 +86,7 @@
 # 0.9.4 L3 +29: docs/ENV.md 39336 adds 29 over 39307 (the staged CA trust variable bullet: the value an organisation staged is kept on every runner substrate, #2104).
 # 0.9.4 W4-DOCS-1: docs/ENV.md 39587 adds 68 over 39519, measured: #2357 #2359 #2360 #2362: recording mount value form, PAT scope row, switch count and parser exception, OIDC scopes.
 # docs/ENV.md=39536 adds 17 (0.9.4 W4-API-B): the Azure authority host row says the Key Vault client stays on the public cloud (#2809).
-docs/ENV.md=39620 share=5
+docs/ENV.md=40042 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
+# docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.

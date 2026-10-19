@@ -105,8 +105,10 @@ Two modes place a Git credential inside the sandbox:
 ### A cloud credential made inside
 
 - On a `bedrock_sso` model provider, the AWS SDK inside the sandbox exchanges the sign-in session for short-lived role credentials and signs each request with them.
-- The signature is computed in the workload's process, so those role credentials are inside the sandbox on every such run ([`internal/api/credential_residency.go#kindResidency`](../internal/api/credential_residency.go)).
-- A proxy that re-signs SigV4 after TLS interception could keep them out. Wardyn does not do that yet.
+- The signature is computed in the workload's process, so by default those role credentials are inside the sandbox on every such run ([`internal/api/credential_residency.go#kindResidency`](../internal/api/credential_residency.go)).
+- `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) keeps them out: the sandbox's profile gets a placeholder key pair in place of the SSO session, and the proxy signs each request again with role credentials it gets itself ([`internal/egress/proxy/aws_sigv4.go`](../internal/egress/proxy/aws_sigv4.go)).
+- It applies to a lane only when the proxy can re-sign every one of its hosts: exact `<service>.<region>.amazonaws.com` hosts on port 443. A wildcard host, a private endpoint or a test endpoint keeps the lane as it was ([`internal/api/runs_dispatch_aws_sigv4.go#Server.awsSigV4Hosts`](../internal/api/runs_dispatch_aws_sigv4.go)).
+- What the proxy cannot re-sign it refuses with a named reason rather than send: presigned URLs, SigV4a, chunk-signed uploads, event-stream request bodies and STS actions other than `GetCallerIdentity`. [ENV.md](ENV.md#wardyn_aws_sigv4_at_proxy) lists them.
 - An AWS CLI component's `aws` gets them the same way, for the account and permission set the component pins, and caches them under `~/.aws/cli/cache` ([`internal/api/runs_dispatch_cli_aws.go#Server.authorAWSCLI`](../internal/api/runs_dispatch_cli_aws.go)).
 - Both come from the portal's `GetRoleCredentials`, which takes no duration, so Wardyn cannot ask for a shorter session. Their lifetime is the IAM Identity Center permission set's session duration: set it to `PT1H`, the shortest AWS allows, to bound them.
 - A Docker sandbox kept after its run ends has `~/.aws/cli/cache` and `~/.aws/sso/cache` deleted before it stops ([`internal/runner/docker/aws_cache_wipe.go#Driver.wipeAWSCaches`](../internal/runner/docker/aws_cache_wipe.go)). Every other end removes the container or the pod, and the caches with it.

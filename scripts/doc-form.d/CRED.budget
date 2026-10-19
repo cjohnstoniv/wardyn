@@ -5,4 +5,5 @@
 # 3549 adds 7: the ssh_key bullet names the key file as what is wiped and the grant as what stays.
 # 0.9.4 L8: docs/CREDENTIALS.md 3684 adds 135 over 3549: the tool-approval credential row and the SigV4 wording.
 # docs/CREDENTIALS.md 3780 adds 96 over 3684, measured: the AWS CLI role credentials, the permission-set session length and the kept-end cache wipe.
-docs/CREDENTIALS.md=3780 share=35
+# docs/CREDENTIALS.md 3869 adds 89 over 3780, measured: AWS re-signing at the proxy keeps the role credentials out, which lanes it applies to, and what it refuses.
+docs/CREDENTIALS.md=3869 share=35

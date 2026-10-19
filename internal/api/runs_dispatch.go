@@ -570,6 +570,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: azureARM,
+			// The re-signed AWS lane's grant (runs_dispatch_aws_sigv4.go): nil while
+			// WARDYN_AWS_SIGV4_AT_PROXY is off and on every lane it does not re-sign.
+			AWSSigV4: plan.awsSigV4,
 			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
 			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,

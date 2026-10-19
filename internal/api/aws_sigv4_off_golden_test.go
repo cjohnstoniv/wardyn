@@ -24,12 +24,12 @@ import (
 //
 // Regenerate with: WARDYN_UPDATE_GOLDEN=1 go test ./internal/api/ -run TestAWSSigV4Off
 func TestAWSSigV4Off_DispatchIsUnchanged(t *testing.T) {
-	for name, dispatch := range map[string]func(t *testing.T) runner.SandboxSpec{
+	for name, dispatch := range map[string]func(t *testing.T, on func(*Config)) runner.SandboxSpec{
 		"bedrock_sso": dispatchBedrockSSORun,
 		"aws_cli":     dispatchAWSCLIRun,
 	} {
 		t.Run(name, func(t *testing.T) {
-			spec := dispatch(t)
+			spec := dispatch(t, func(*Config) {})
 			raw, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 			if err != nil {
 				t.Fatal(err)
@@ -71,12 +71,14 @@ func TestAWSSigV4Off_DispatchIsUnchanged(t *testing.T) {
 	}
 }
 
-// dispatchBedrockSSORun launches a bedrock_sso run on the run owner's live session.
-func dispatchBedrockSSORun(t *testing.T) runner.SandboxSpec {
+// dispatchBedrockSSORun launches a bedrock_sso run on the run owner's live session, after set
+// adjusts the server's config.
+func dispatchBedrockSSORun(t *testing.T, set func(*Config)) runner.SandboxSpec {
 	t.Helper()
 	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(awsSSOTestProvider())}, &capStore{}, nil)
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	srv.cfg.AWSSSOProxyInject = true
+	set(&srv.cfg)
 	blob := createRenewalBlob()
 	blob.ExpiresAt = time.Now().Add(2 * time.Hour)
 	storeSSOBlobFor(t, srv, createRenewalOwner, blob)
@@ -86,10 +88,12 @@ func dispatchBedrockSSORun(t *testing.T) runner.SandboxSpec {
 	return lastDispatched(t, srv.cfg.Runner.(*fakeRunner))
 }
 
-// dispatchAWSCLIRun launches a run carrying the AWS CLI row on its owner's session.
-func dispatchAWSCLIRun(t *testing.T) runner.SandboxSpec {
+// dispatchAWSCLIRun launches a run carrying the AWS CLI row on its owner's session, after set
+// adjusts the server's config.
+func dispatchAWSCLIRun(t *testing.T, set func(*Config)) runner.SandboxSpec {
 	t.Helper()
 	f, ref := cliAWSFixture(t)
+	set(&f.srv.cfg)
 	putCLIBlob(t, f.srv.cfg.Secrets.(*memSecrets), capSub, cliAWSBlob())
 	if w := f.ask(t, componentDoors[0], componentBody(ref)); w.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())

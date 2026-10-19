@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -131,6 +133,9 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 	case b.bearer:
 		detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
 		mode = "bearer"
+	case b.sigv4Hosts != nil:
+		detail = "captured AWS SSO session redeemed proxy-side for role credentials, which re-sign every request to the run's Bedrock hosts (TLS-MITM, WARDYN_AWS_SIGV4_AT_PROXY); the sandbox holds only a placeholder key pair — neither the SSO access token nor the role credentials are resident"
+		mode = "sso-sigv4-proxy"
 	case b.ssoProxyInject:
 		// Phase B. The synthetic ~/.aws still exists — the SDK needs the
 		// profile to know WHICH account/role to ask for — but its token cache
@@ -344,6 +349,9 @@ type dispatchLLMPlan struct {
 	channelHosts map[string]string
 	// azureCLI is the Azure CLI row's share of the proxy config: its door's grant.
 	azureCLI azureCLIPlan
+	// awsSigV4 is ProxyConfig.AWSSigV4: the re-signed AWS lane's grant and hosts
+	// (runs_dispatch_aws_sigv4.go); nil while WARDYN_AWS_SIGV4_AT_PROXY is off.
+	awsSigV4 *proxy.AWSSigV4Config
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
 	// (mpNoProviderDetail). Empty => the route's own generic detail.
@@ -436,16 +444,19 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 
 	var bedrockMITMHosts []string
 	var azure azurePlan
-	if injections, bedrockMITMHosts, azure, ok = s.authorLaneGrants(ctx, run, llms, pairs, bedrockRun, sso,
+	var awsSigV4, cliSigV4 *proxy.AWSSigV4Config
+	if injections, bedrockMITMHosts, azure, awsSigV4, ok = s.authorLaneGrants(ctx, run, llms, pairs, bedrockRun, sso,
 		mitmCACertPEM, mitmCAKeyPEM, policy, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
 	// The AWS CLI row's grant and portal entry, after the Bedrock lanes it
 	// refuses to share a sandbox profile with. Same stop-on-failure contract.
+	// The two never both re-sign: the row refuses a run on the captured-SSO lane.
 	var cliMITMHosts []string
-	if injections, cliMITMHosts, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
+	if injections, cliMITMHosts, cliSigV4, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
+	awsSigV4 = cmp.Or(awsSigV4, cliSigV4)
 	bedrockMITMHosts = append(bedrockMITMHosts, cliMITMHosts...)
 	// The Azure CLI row's grant, door and the two hosts it opens. Same contract.
 	var azureCLI azureCLIPlan
@@ -481,6 +492,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		azure:                azure,
 		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,
+		awsSigV4:             awsSigV4,
 		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
 	}, true
@@ -496,7 +508,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 func (s *Server) authorLaneGrants(ctx context.Context, run types.AgentRun, llms []llmTransport, pairs []types.RunHarness,
 	bedrockRun types.AgentRun, sso awsSSOScope, mitmCACertPEM, mitmCAKeyPEM string,
 	policy *types.RunPolicySpec, injections []runner.InjectionGrant,
-) (_ []runner.InjectionGrant, mitmHosts []string, azure azurePlan, ok bool) {
+) (_ []runner.InjectionGrant, mitmHosts []string, azure azurePlan, sigv4 *proxy.AWSSigV4Config, ok bool) {
 	ok = true
 	for i, l := range llms {
 		lr := laneRun(run, pairs[i])
@@ -507,14 +519,14 @@ func (s *Server) authorLaneGrants(ctx context.Context, run types.AgentRun, llms 
 		case l.injectBedrockBearer:
 			injections, hosts, ok = s.authorBedrockBearerInjection(ctx, bedrockRun, l, injections)
 		case l.injectBedrockSSO:
-			injections, hosts, ok = s.authorBedrockSSOInjection(ctx, bedrockRun, l, sso, injections)
+			injections, hosts, sigv4, ok = s.authorBedrockSSOInjection(ctx, bedrockRun, l, sso, injections)
 		case l.azureInject():
 			injections, azure, ok = s.authorAzureInjection(ctx, lr, l, mitmCACertPEM, mitmCAKeyPEM, policy, injections)
 		}
 		if !ok {
-			return injections, nil, azurePlan{}, false
+			return injections, nil, azurePlan{}, nil, false
 		}
 		mitmHosts = append(mitmHosts, hosts...)
 	}
-	return injections, mitmHosts, azure, true
+	return injections, mitmHosts, azure, sigv4, true
 }
