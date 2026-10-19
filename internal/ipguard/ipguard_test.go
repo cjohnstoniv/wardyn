@@ -77,7 +77,7 @@ func TestGatewayIPRefused(t *testing.T) {
 		"224.0.0.1", "ff02::1", // multicast
 		"0.0.0.0", "::", // unspecified
 		"64:ff9b::a9fe:a9fe", "64:ff9b::808:808", "64:ff9b:1::a9fe:a9fe", // NAT64-embedded
-		"fd00:ec2::254", "fd00:ec2::23", "100.100.100.200", // cloud metadata inside ULA / CGNAT space
+		"fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "100.100.100.200", // cloud metadata inside ULA / CGNAT space
 	} {
 		if !GatewayIPRefused(net.ParseIP(ip)) {
 			t.Errorf("GatewayIPRefused(%s) = false, want true — a model gateway can never legitimately be this address", ip)

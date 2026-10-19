@@ -102,6 +102,7 @@ var Liftable = []netip.Prefix{
 // CGNAT ranges an operator may lift, but lifting one would hand a sandbox the host's cloud credentials.
 var NeverLift = []netip.Prefix{
 	netip.MustParsePrefix("fd00:ec2::/64"),      // AWS IMDS / ECS / DNS IPv6 endpoints
+	netip.MustParsePrefix("fd20:ce::254/128"),   // Google Compute Engine metadata server, IPv6
 	netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
 }
 

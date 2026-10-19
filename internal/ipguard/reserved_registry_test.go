@@ -85,10 +85,10 @@ func TestReservedCoversTheIANANonGloballyReachableBlocks(t *testing.T) {
 }
 
 // TestNeverLiftCarvesTheMetadataEndpointsOutOfLiftable: the AWS IPv6 metadata
-// block and the Alibaba metadata address sit inside the ULA and CGNAT ranges an
-// operator may lift, but must never be liftable.
+// block, the Google IPv6 metadata server and the Alibaba metadata address sit
+// inside the ULA and CGNAT ranges an operator may lift, but must never be liftable.
 func TestNeverLiftCarvesTheMetadataEndpointsOutOfLiftable(t *testing.T) {
-	for _, ip := range []string{"fd00:ec2::254", "fd00:ec2::23", "100.100.100.200"} {
+	for _, ip := range []string{"fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "100.100.100.200"} {
 		if InLiftable(net.ParseIP(ip)) {
 			t.Errorf("InLiftable(%s) = true, want false: a metadata endpoint is never liftable", ip)
 		}
