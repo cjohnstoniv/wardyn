@@ -698,6 +698,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-live-base-url.sh
 	./scripts/test-e2e-quarantine.sh
 	./scripts/test-e2e-recording-step.sh
+	./scripts/test-fetch-gate-tools.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gaps.sh --self-test
 	./scripts/test-gpl-source-offer.sh
@@ -705,6 +706,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-helm-schema.sh
 	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
+	./scripts/test-image-build-logs.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-follow-main.sh
