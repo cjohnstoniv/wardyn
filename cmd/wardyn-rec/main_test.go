@@ -443,3 +443,14 @@ func TestRunAsciinemaForwardsTermination(t *testing.T) {
 		t.Fatal("the child was still recording 10 s after SIGTERM: it was not forwarded")
 	}
 }
+
+// The no-asciinema fallback reports a signal-killed agent the same way: 128+signal, never -1 (255 at exit).
+func TestRecordToLogReportsASignalKilledAgentAs128PlusSignal(t *testing.T) {
+	code, err := recordToLog(filepath.Join(t.TempDir(), "r.log"), []string{"sh", "-c", "kill -TERM $$"})
+	if err != nil {
+		t.Fatalf("recordToLog: %v", err)
+	}
+	if want := 128 + int(syscall.SIGTERM); code != want {
+		t.Fatalf("exit code = %d, want %d", code, want)
+	}
+}
