@@ -164,6 +164,21 @@ describe("Effective policy card", () => {
     expect(document.querySelector("[data-policy-row=tools]")).not.toHaveTextContent(NR_REVIEW.POLICY_ACCEPTS_EDITS);
   });
 
+  // #2822: the tools row says each harness's own walls; one text when they agree, each harness's when they differ.
+  it("says the harness's inner walls on the tools row, per harness when they differ", () => {
+    const walled = (harness: string, inner_walls: object) => ({ ...harnessDefault(harness, "hold"), inner_walls });
+    const access = (...h: object[]) => ({ ...SCENARIO_ACCESS.member, harnesses: h }) as never;
+    const gated = "Inner walls: harness sandbox off, approvals in Wardyn";
+    const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: access(walled("claude-code", { sandbox_mode: "off", approvals: "wardyn" })) } as never} preview={null} />);
+    expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent(gated);
+    view.unmount();
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member,
+      access: access(walled("claude-code", { sandbox_mode: "off", approvals: "harness" }), walled("codex-cli", { approvals: "harness" })) } as never} preview={null} />);
+    const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
+    expect(tools).toHaveTextContent("claude-code: Inner walls: harness sandbox off, approvals in the harness");
+    expect(tools).toHaveTextContent("codex-cli: Inner walls: the harness's own sandbox, approvals in the harness");
+  });
+
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
     "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
       const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;

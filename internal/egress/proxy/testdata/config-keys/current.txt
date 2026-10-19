@@ -107,6 +107,9 @@ policy.first_use_approval
 policy.first_use_hold_seconds
 policy.git_push_any_branch
 policy.github_capabilities
+policy.harness_inner_walls
+policy.harness_inner_walls.approvals
+policy.harness_inner_walls.sandbox_mode
 policy.llm_inspection
 policy.llm_inspection.block_min_severity
 policy.llm_inspection.classified_markers

@@ -190,4 +190,11 @@ export const FIELD_HELP = {
     doc: "top-level",
     snippet: ["code_read", "code_write", "pr"],
   },
+  harness_inner_walls: {
+    what: "The harness's own walls inside Wardyn's: its sandbox, and where its approvals happen. Only adds walls: a choice looser than what the run launches with refuses the run.",
+    values:
+      "sandbox_mode: off (workspace-write and read-only are refused: the harness's sandbox cannot start inside Wardyn's). approvals: harness | wardyn | none. Omitted keeps what the harness and lane give.",
+    doc: "harness_inner_walls--harnessinnerwalls",
+    snippet: { approvals: "wardyn" },
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;

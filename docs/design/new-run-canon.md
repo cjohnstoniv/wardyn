@@ -766,6 +766,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (lead 2026-10-17, proposed wording awaiting approval) | Claude Code accepts file edits without asking. Every other tool asks first. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `INNER_WALLS(sandbox, approvals)` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | Inner walls: {sandbox}, {approvals} |
+| `INNER_SANDBOX_OFF` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | harness sandbox off |
+| `INNER_SANDBOX_OWN` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | the harness's own sandbox |
+| `INNER_SANDBOX_MODE(mode)` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | harness sandbox {mode} |
+| `INNER_APPROVALS_HARNESS` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | approvals in the harness |
+| `INNER_APPROVALS_WARDYN` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | approvals in Wardyn |
+| `INNER_APPROVALS_NONE` | deviation (2026-10-19, #2822, proposed wording awaiting approval) | no approvals |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |

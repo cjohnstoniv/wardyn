@@ -7,7 +7,7 @@
 // internal/api/run_access_facts.go). The policy preview and Review answer the
 // same block for the same request. Every array is always sent.
 
-import type { FirstUseMode } from "./policy";
+import type { FirstUseMode, HarnessInnerWalls } from "./policy";
 import type { ProvenanceSource } from "./policy-preview";
 import type { SetupItem } from "./preflight";
 
@@ -110,6 +110,8 @@ export interface ToolPolicyFact {
   rule_effects: EffectOption[];
   rule_tools: "any" | "mcp_only" | (string & {});
   mcp_servers: string[];
+  // The harness's own walls this run launches it with (#2822); absent for an exec run.
+  inner_walls?: HarnessInnerWalls;
 }
 
 export interface AccessFacts {

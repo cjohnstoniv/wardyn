@@ -10,7 +10,7 @@
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { Experience, RunOverrides } from "./new-run-contract";
-import type { RunPolicySpec } from "./policy";
+import type { HarnessInnerWalls, RunPolicySpec } from "./policy";
 import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -261,6 +261,9 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
+  // AgentRun.InnerWalls (#2822, migration 0192): the harness's own walls the run launched with.
+  // Absent for a run with no catalog harness, or one created before the field.
+  inner_walls?: HarnessInnerWalls;
   // Run limits captured at create (migration 0072, #567): the lease end (null =
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for

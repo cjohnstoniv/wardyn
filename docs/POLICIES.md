@@ -55,6 +55,7 @@
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
+| `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -923,6 +924,38 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
 
+
+## `harness_inner_walls` — `HarnessInnerWalls`
+
+**What it is.**
+
+- Wardyn's walls surround the run: egress, credentials, confinement and the audit trail.
+- The harness inside it, Claude Code or Codex, has walls of its own: its sandbox, and a prompt that asks before a tool runs.
+- `harness_inner_walls` lets a policy choose those inner walls. Omitted, each run keeps what its harness and lane give today.
+- It only adds walls. A choice looser than what the run launches with refuses the run (`harness_inner_walls_looser`), and so does one the run's harness and lane cannot express (`harness_inner_walls_unmet`).
+
+```json
+{ "harness_inner_walls": { "sandbox_mode": "off", "approvals": "wardyn" } }
+```
+
+| Field | Type | Values | What it does |
+|---|---|---|---|
+| `sandbox_mode` | `string` | `off` | The harness's own sandbox stays off, as Wardyn launches it today. `workspace-write` and `read-only` are refused with `harness_sandbox_unavailable`: both harnesses' sandboxes need user namespaces, which Wardyn's sandbox does not grant. |
+| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks the person at its prompt (interactive runs; refuses `seed_auto_tools`). `wardyn`: a background Claude Code run goes on the tool-approval hold lane, as `tool_approvals: hold` does. `none`: only where the run already asks nothing. |
+
+**What each run launches with.**
+
+| Run | `sandbox_mode` | `approvals` |
+|---|---|---|
+| Claude Code, background | `off` | `none`, or `wardyn` on the hold lane |
+| Claude Code, interactive | `off` | `harness`, or `none` with `seed_auto_tools` |
+| Codex, background | `off` | `none` |
+| Codex, interactive | Codex's own default | `harness`, or `off` and `none` with `seed_auto_tools` |
+
+- An exec run, and a custom image's agent, launch no harness whose walls Wardyn sets, so a policy that sets `harness_inner_walls` refuses them.
+- A member's inline policy keeps every axis the operator's ceiling chooses.
+- The walls a run launched with are on the run (`inner_walls`) and on New Run's Review.
+- A run whose policy sets `harness_inner_walls` needs the proxy image from the same release: an older proxy refuses the key.
 
 ## `push_rules` — `PushRulesSpec`
 
