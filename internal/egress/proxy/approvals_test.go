@@ -49,11 +49,48 @@ func TestApprovalStaleApprovedRevalidatesFailClosed(t *testing.T) {
 	ap.mu.Unlock()
 
 	res := ap.Resolve(context.Background(), "egress.test")
-	if res.State != apDenied {
-		t.Fatalf("stale approved -> state = %v, want apDenied (fail closed on expiry)", res.State)
+	if res.State != apExpired {
+		t.Fatalf("stale approved -> state = %v, want apExpired (refused on expiry, and asked again next time)", res.State)
 	}
 	if gets.Load() != 1 {
 		t.Fatalf("re-poll count = %d, want 1 (TTL must trigger a re-poll)", gets.Load())
+	}
+}
+
+// An approval that EXPIRES or is CANCELLED undecided is nobody's deny: the request that sees it is
+// refused as approval:expired, and the next one raises a fresh approval instead of being refused from
+// a run-long cached deny no reviewer can ever undo.
+func TestApprovalExpiredPendingIsAskedAgain(t *testing.T) {
+	for _, state := range []types.ApprovalState{types.ApprovalExpired, types.ApprovalCancelled} {
+		t.Run(string(state), func(t *testing.T) {
+			oldID, newID := uuid.New(), uuid.New()
+			var raises atomic.Int32
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					raises.Add(1)
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: newID, State: types.ApprovalPending})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: oldID, State: state})
+			}))
+			defer cp.Close()
+			ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+			ap.mu.Lock()
+			ap.hosts["egress.test"] = &hostApproval{state: apPending, approvalID: oldID, lastPoll: time.Now().Add(-2 * pollInterval)}
+			ap.mu.Unlock()
+
+			if res := ap.Resolve(context.Background(), "egress.test"); res.State != apExpired || res.ApprovalID != oldID {
+				t.Fatalf("first request after the expiry = %+v, want apExpired naming %s", res, oldID)
+			}
+			if got := approvalPendingReason(apExpired); got != "approval:expired" {
+				t.Errorf("decision reason = %q, want approval:expired", got)
+			}
+			res := ap.Resolve(context.Background(), "egress.test")
+			if res.State != apPending || res.ApprovalID != newID || raises.Load() != 1 {
+				t.Fatalf("next request = %+v after %d raises, want a fresh pending approval %s", res, raises.Load(), newID)
+			}
+		})
 	}
 }
 

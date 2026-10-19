@@ -39,6 +39,10 @@ const (
 	// apRefused: the control plane refused to raise this host's approval for good (a per-run cap, a
 	// request it will not accept). Settled like apCapped: the next request is refused without a re-POST.
 	apRefused
+	// apExpired: the approval EXPIRED or was CANCELLED undecided. Nobody said no, so it is never cached:
+	// Resolve forgets the host, this request is refused, and the next one raises a fresh approval that
+	// still needs a human yes. Only a request that saw the expiry gets this state.
+	apExpired
 )
 
 // approvalClient implements the first-use approval flow against the control
@@ -135,6 +139,8 @@ func approvalPendingReason(st approvalState) string {
 		return ruleSourceApprovalHostCap
 	case apRefused:
 		return ruleSourceApprovalRefused
+	case apExpired:
+		return ruleSourceApprovalExpired
 	}
 	return "approval:pending"
 }
@@ -147,6 +153,15 @@ const ruleSourceApprovalHostCap = "approval:host-cap"
 // ruleSourceApprovalRefused is the decision-log reason when the control plane refused the raise for good:
 // no approval row exists, so nobody is being asked.
 const ruleSourceApprovalRefused = "approval:refused"
+
+// ruleSourceApprovalExpired is the decision-log reason for a request refused because the host's
+// approval expired or was cancelled with nobody deciding it: not a human deny, and the next request asks again.
+const ruleSourceApprovalExpired = "approval:expired"
+
+// forget drops a host's entry back to never-seen, so the next Resolve raises a fresh approval.
+func (st *hostApproval) forget() {
+	*st = hostApproval{state: apNone}
+}
 
 // approvalCapWarnOnce keeps the cap's log line to once per process: the
 // condition is a run-long state, and a per-request ERROR would bury it.
@@ -272,7 +287,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		}
 		r = a.Resolve(ctx, host)
 	}
-	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.ApprovalID == uuid.Nil {
+	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.State == apRefused || r.State == apExpired || r.ApprovalID == uuid.Nil {
 		return r
 	}
 	// Bound concurrent holds: over the cap, don't park another goroutine — fall
@@ -318,6 +333,10 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 					// r.ApprovalID (never Nil, never st.approvalID) so evaluate's audit
 					// log names the approval this caller actually raised.
 					return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
+				}
+				if newState == apExpired {
+					st.forget()
+					return resolveResult{State: apExpired, ApprovalID: r.ApprovalID}
 				}
 				// (2) Publish the terminal decision to the shared cache so siblings
 				// see it without re-polling; harmless for once since step (3) clears
@@ -473,6 +492,10 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			// costs ResolveWait's retry loop one extra iteration.
 			return resolveResult{State: apPending, ApprovalID: st.approvalID}
 		}
+		if decided && newState == apExpired {
+			st.forget()
+			return resolveResult{State: apExpired, ApprovalID: id}
+		}
 		if decided {
 			// SPLIT from the id check ABOVE ON PURPOSE: !decided is a TRANSIENT
 			// control-plane error that must fall through unchanged (the
@@ -567,7 +590,7 @@ func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID
 }
 
 // poll fetches an approval's current state. Returns decided=true only for
-// terminal states; EXPIRED is treated as denied (fail closed).
+// terminal states; EXPIRED and CANCELLED are apExpired (refused, never cached).
 //
 // Also returns the DECISION'S SCOPE and expiry for the caller to store onto
 // the cache entry — without it, every scope decided while PENDING (the normal
@@ -587,11 +610,12 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	switch ar.State {
 	case types.ApprovalApproved:
 		return true, apApproved, ar.DecisionScope, exp
-	case types.ApprovalDenied, types.ApprovalExpired, types.ApprovalCancelled:
-		// EXPIRED/CANCELLED carry no scope (not a human decision); both MUST be
-		// terminal here, else a sidecar whose run ended would hold its window
-		// open against an approval nobody can ever decide.
+	case types.ApprovalDenied:
 		return true, apDenied, ar.DecisionScope, exp
+	case types.ApprovalExpired, types.ApprovalCancelled:
+		// Terminal, so a sidecar whose run ended never holds its window open against an approval nobody
+		// can decide; but not a human decision, so apExpired, which the caller never caches.
+		return true, apExpired, "", time.Time{}
 	default:
 		return false, apPending, "", time.Time{}
 	}
