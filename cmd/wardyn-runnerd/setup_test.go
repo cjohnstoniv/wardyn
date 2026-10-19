@@ -1205,3 +1205,36 @@ func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
 		})
 	}
 }
+
+// The service setup installs does not get the shell's proxy variables, so setup says so, by name and
+// never by value: a proxy URL may hold a credential.
+func TestSetupWarnsServiceMissesShellProxy(t *testing.T) {
+	const secret = "http://u:secret@p:3128"
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			t.Setenv("HTTPS_PROXY", secret)
+			t.Setenv("all_proxy", secret)
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "HTTPS_PROXY, all_proxy are set in this shell, but the service setup installs does not receive it") ||
+				!strings.Contains(out, "docs/runner-registration.md#a-runner-behind-a-corporate-proxy") {
+				t.Errorf("no proxy warning:\n%s", out)
+			}
+			if strings.Contains(out, "secret") || strings.Contains(out, "p:3128") {
+				t.Errorf("the warning prints a proxy value:\n%s", out)
+			}
+		})
+	}
+	t.Run("no proxy variable", func(t *testing.T) {
+		f := newSetupFixture(t, "linux")
+		for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			t.Setenv(k, "")
+		}
+		if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil || strings.Contains(out, "does not receive it") {
+			t.Fatalf("a shell without a proxy was warned: %v\n%s", err, out)
+		}
+	})
+}
