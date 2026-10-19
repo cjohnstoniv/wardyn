@@ -629,13 +629,19 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 
 // volumeWritable reports whether the spool's directory takes a synced write at the path compact
 // stages its rewrite at, without touching the spool itself. Caller must hold a.mu.
+// The probe is as large as the spool, the most a rewrite writes: a one-byte probe passes on a
+// nearly full volume the rewrite then fails on, and the lines behind the suspect land again.
 func (a *AuditSpool) volumeWritable() bool {
+	fi, err := os.Stat(a.path)
+	if err != nil {
+		return false
+	}
 	tmp := a.path + ".tmp"
 	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 	if err != nil {
 		return false
 	}
-	_, werr := tf.Write([]byte{'\n'})
+	_, werr := tf.Write(make([]byte, max(fi.Size(), 1)))
 	serr := tf.Sync()
 	cerr := tf.Close()
 	rerr := os.Remove(tmp)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -92,5 +93,36 @@ func TestADODisconnect_StopsAtTheFirstRowThatFails(t *testing.T) {
 	}
 	if !found {
 		t.Error("the untried row's sign-in was removed")
+	}
+}
+
+// A disconnect with a usable row also forgets the sign-ins stored under the caller's disabled
+// rows, in the same step: each row is forgotten and gets its own audit row.
+func TestADODisconnect_UsableRowAlsoForgetsDisabledRowSignIns(t *testing.T) {
+	fx := newADOConsoleLane(t, false)
+	git := fx.st.site.WorkspaceProviders.Git
+	second := git[0]
+	second.ID, second.Disabled = "ado-row-2", true
+	fx.st.site.WorkspaceProviders.Git = append(git, second)
+	held := fx.srv.cfg.Secrets.For(fx.subject)
+	if err := held.Put(context.Background(), adoEntraSecretName(second.ID), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := fx.disconnect(t, fx.subject); w.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d %s, want 204", w.Code, w.Body.String())
+	}
+	names, err := held.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{git[0].ID, second.ID} {
+		if slices.Contains(names, adoEntraSecretName(row)) {
+			t.Errorf("the sign-in under %q survived the disconnect", row)
+		}
+	}
+	rows := fx.audit.find(adoPATAuditDisconnect)
+	if len(rows) != 2 || rows[0].Target != git[0].ID || rows[1].Target != second.ID {
+		t.Errorf("ado_pat.disconnect rows = %+v, want the usable row then %q", rows, second.ID)
 	}
 }
