@@ -261,6 +261,11 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	if runErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
+			// ExitCode() is -1 for a signal-killed child, which os.Exit turns into 255; report the
+			// shell's 128+signal instead (143 for the SIGTERM forwarded above).
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				return 128 + int(ws.Signal()), nil
+			}
 			return exitErr.ExitCode(), nil
 		}
 		return 0, fmt.Errorf("asciinema: %w", runErr)
