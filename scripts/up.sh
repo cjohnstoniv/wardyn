@@ -837,7 +837,10 @@ cmd_up() {
     log "    ${_cli} run --agent claude-code --image ubuntu:24.04 --task-mode exec --task 'echo hi' --policy-file examples/policies/sandbox.yaml --wait"
   else
     open_url "${_url}"
-    log "Wardyn is up: ${_url}  (local mode — no login) — the Getting-started page is ready NOW."
+    _mode=""
+    [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ] || _mode="  (local mode — no login)"
+    log "Wardyn is up: ${_url}${_mode} — the Getting-started page is ready NOW."
+    unset _mode
     log "  Prove the sandbox boundary from the CLI (keyless):"
     log "    ${_cli} run --agent claude-code --interactive --policy-file examples/policies/sandbox.yaml"
     log "  Give it a real model:  connect one under Settings -> Model providers (then run with sandbox-claude.yaml)"

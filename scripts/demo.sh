@@ -120,7 +120,7 @@ cmd_up() {
   log "Demo complete."
   echo "    UI:        http://localhost:8080  (SSO: demo@wardyn.local / password)"
   echo "    Dex:       http://localhost:5556/.well-known/openid-configuration"
-  echo "    Admin API: Authorization: Bearer ${ADMIN_TOKEN}"
+  echo "    Admin API: Authorization: Bearer <token>  (your WARDYN_ADMIN_TOKEN, else the default at the top of scripts/demo.sh)"
   echo "    Tear down: scripts/demo.sh down"
 }
 

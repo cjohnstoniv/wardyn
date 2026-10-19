@@ -1152,7 +1152,7 @@ jobs:
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
           # The standalone binaries are copies: the verbatim licence texts travel with them.
           tar -czf assets/wardyn-licenses.tar.gz THIRD-PARTY-NOTICES.md licenses/texts
-          chmod +x assets/wardyn-* 2>/dev/null || true
+          chmod +x assets/wardyn-{linux,darwin}-* assets/wardyn-runnerd-{linux,darwin}-* 2>/dev/null || true
           # The runner's per-user service files and installer, one download.
           tar -czf assets/wardyn-runner-units.tar.gz -C deploy runner
           cd assets
