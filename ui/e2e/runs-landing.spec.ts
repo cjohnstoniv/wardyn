@@ -362,12 +362,12 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
       await page.addInitScript((t) => localStorage.setItem("wardyn-theme", t), theme);
       await mockRunsList(page, () => ({
         runs: [
-          baseRun("a1", "Approve the deploy", { state: "RUNNING", attention: { kind: "approval", by: "you", pending: 1 } }),
+          baseRun("a1", "Needs a decision", { state: "RUNNING", attention: { kind: "approval", by: "you", pending: 1 } }),
           baseRun("e1", "Failed today", { state: "FAILED", ended_at: new Date().toISOString() }),
         ],
       }));
       await gotoConsole(page);
-      await expect(page.getByText("Approve the deploy")).toBeVisible();
+      await expect(page.getByText("Needs a decision")).toBeVisible();
       await expect(page.getByText("Failed today")).toBeVisible();
       const isDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
       expect(isDark).toBe(theme === "dark");
