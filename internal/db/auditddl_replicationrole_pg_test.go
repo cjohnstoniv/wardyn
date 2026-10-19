@@ -28,9 +28,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestPG_AuditDDLProtectedCountsTheReplicationRoleGrant(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -38,8 +41,11 @@ func TestPG_AuditDDLProtectedCountsTheReplicationRoleGrant(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
 		t.Fatalf("read role: %v", err)
 	}
+	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
+	urlDSN := err == nil && u.Scheme != "" && u.Host != ""
+	mustNotSkip := probeMustNotSkip(t, super, urlDSN)
 	if !super {
-		t.Skip("WARDYN_TEST_PG role is not a superuser; GRANT SET ON PARAMETER needs it")
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG role is not a superuser; GRANT SET ON PARAMETER needs it")
 	}
 	var pg15 bool
 	if err := pool.QueryRow(ctx, `SELECT current_setting('server_version_num')::int >= 150000`).Scan(&pg15); err != nil {
@@ -48,9 +54,8 @@ func TestPG_AuditDDLProtectedCountsTheReplicationRoleGrant(t *testing.T) {
 	if !pg15 {
 		t.Skip("GRANT ... ON PARAMETER is PostgreSQL 15+; before that only a superuser can set session_replication_role, which the superuser leg already covers")
 	}
-	u, err := url.Parse(os.Getenv("WARDYN_TEST_PG"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		t.Skip("WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
+	if !urlDSN {
+		skipOrFatal(t, mustNotSkip, "WARDYN_TEST_PG is not a URL-form DSN; cannot derive an app-role DSN from it")
 	}
 
 	app := fmt.Sprintf("wardyn_f99_app_%d", time.Now().UnixNano()%1_000_000_000)
@@ -81,7 +86,7 @@ func TestPG_AuditDDLProtectedCountsTheReplicationRoleGrant(t *testing.T) {
 	u.User = url.UserPassword(app, pw)
 	appPool, err := Connect(ctx, u.String())
 	if err != nil {
-		t.Skipf("cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
+		skipOrFatal(t, mustNotSkip, "cannot connect as the app role (pg_hba may not password-auth a new role): %v", err)
 	}
 	t.Cleanup(appPool.Close)
 
