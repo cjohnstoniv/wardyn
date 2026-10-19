@@ -100,6 +100,20 @@ run_install pass --org https://wardyn.example --binary "$WORK/wardyn-runnerd-lin
 [ "$(cat "$WORK/home-pass/stub.log")" = "setup --org https://wardyn.example --token-file $WORK/token --relay-listen 127.0.0.1 --claim --pool Laptop --default --max-runs 2" ] \
   || fail "setup did not get the arguments: $(cat "$WORK/home-pass/stub.log")"
 
+# A wardyn CLI beside the runner (the release bundle's layout) is staged next to the private copy setup runs from;
+# without one, nothing is staged.
+mkdir -p "$WORK/bundle"
+cat >"$WORK/bundle/wardyn-runnerd" <<'STUB'
+#!/usr/bin/env bash
+if [ -x "$(dirname "$0")/wardyn" ]; then echo "cli staged" >>"$STUB_LOG"; else echo "no cli" >>"$STUB_LOG"; fi
+STUB
+printf '#!/bin/sh\n' >"$WORK/bundle/wardyn"; chmod 0644 "$WORK/bundle/wardyn" "$WORK/bundle/wardyn-runnerd"
+run_install bundle --org https://wardyn.example --binary "$WORK/bundle/wardyn-runnerd"
+[ "$RC" -eq 0 ] && [ "$(cat "$WORK/home-bundle/stub.log")" = "cli staged" ] || fail "install.sh did not stage the wardyn CLI beside the runner (rc=$RC): $OUT $(cat "$WORK/home-bundle/stub.log")"
+rm "$WORK/bundle/wardyn"
+run_install nobundle --org https://wardyn.example --binary "$WORK/bundle/wardyn-runnerd"
+[ "$RC" -eq 0 ] && [ "$(cat "$WORK/home-nobundle/stub.log")" = "no cli" ] || fail "install.sh staged a wardyn CLI that was not there (rc=$RC): $OUT"
+
 STUB_EXIT=3 run_install exit --org https://wardyn.example --binary "$WORK/wardyn-runnerd"
 [ "$RC" -eq 3 ] || fail "setup's exit status was lost (rc=$RC): $OUT"
 
@@ -109,9 +123,10 @@ H="$WORK/home-linux"
 mkdir -p "$H/.config/systemd/user" "$H/.config/wardyn/runner" "$H/.local/share/wardyn/bin"
 : >"$H/.config/systemd/user/wardyn-runnerd.service"; : >"$H/.config/wardyn/runnerd.env"
 : >"$H/.local/share/wardyn/bin/wardyn-runnerd"; : >"$H/.config/wardyn/runner/runner.json"
+: >"$H/.local/share/wardyn/bin/wardyn"; : >"$H/.config/wardyn/cli.json"
 run_install linux --uninstall
 [ "$RC" -eq 0 ] || fail "Linux uninstall failed (rc=$RC): $OUT"
-for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd; do
+for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.env .local/share/wardyn/bin/wardyn-runnerd .local/share/wardyn/bin/wardyn .config/wardyn/cli.json; do
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
@@ -139,7 +154,9 @@ stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 : >"$M/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$M/Library/Application Support/wardyn/bin/wardyn-runnerd"
+: >"$M/Library/Application Support/wardyn/bin/wardyn"; : >"$M/Library/Application Support/wardyn/cli.json"
 run_install mac --uninstall
-[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] || fail "macOS uninstall left the agent or binary (rc=$RC): $OUT"
+[ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] \
+  && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ ! -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall left the agent or binary (rc=$RC): $OUT"
 
 echo "test-runner-units: PASS"

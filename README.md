@@ -123,7 +123,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 - **Docker** + `compose` v2 (Postgres rides in the compose file).
   - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
 - **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source.
-- `go install …/cmd/wardyn@latest` gives the **CLI** only; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
+- The **CLI** needs no toolchain: each release publishes `wardyn-<os>-<arch>` ([runner install](docs/runner-registration.md#set-up-a-runner)). `go install …/cmd/wardyn@latest` builds it yourself; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
 
 ## What you get
 

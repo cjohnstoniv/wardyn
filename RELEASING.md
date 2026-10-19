@@ -569,7 +569,7 @@ JSON
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
     - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
-      `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
+      `wardyn-runner-units.tar.gz`, the two `wardyn-runner-linux-<arch>.tar.gz` bundles, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
   - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).

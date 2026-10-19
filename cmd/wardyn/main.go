@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -36,6 +37,9 @@ func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn:", err)
 		if hint := dialHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		}
+		if hint := noOrgHint(err, urlFromDefault); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
 		if hint := policyHint(err); hint != "" {
@@ -69,6 +73,45 @@ func dialHint(err error) string {
 		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start's token is in deploy/compose/README.md)"
 	}
 	return ""
+}
+
+// defaultURL is where the CLI dials when nothing names an organisation.
+const defaultURL = "http://localhost:8080"
+
+// urlFromDefault is whether the URL the running command dials is defaultURL because --url, WARDYN_URL and
+// the profile all named none; main reads it to tell a person with no organisation set what to do.
+var urlFromDefault bool
+
+// noOrgHint is the line printed after a refused dial against the built-in default: that dial reached no
+// organisation because none was set. A URL the person named gets none, as a typed API error does.
+func noOrgHint(err error, fromDefault bool) string {
+	var ue *url.Error
+	if !fromDefault || !errors.As(err, &ue) {
+		return ""
+	}
+	return "no organisation set: run `wardyn auth set-url <url>` with your organisation's address"
+}
+
+// resolveURL settles the control plane URL: --url, then WARDYN_URL, then the profile `wardyn auth set-url`
+// wrote, then defaultURL. current is the flag's value, which already carries WARDYN_URL. A profile that
+// cannot be read is reported and skipped, so it never blocks a command that names its own URL.
+func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefault bool) {
+	if cmd.Flags().Changed("url") || os.Getenv("WARDYN_URL") != "" {
+		return current, false
+	}
+	dir, err := cliprofile.Dir()
+	if err != nil {
+		return current, true
+	}
+	profileURL, err := cliprofile.Read(dir)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "wardyn: ignoring the CLI profile: %v\n", err)
+		return current, true
+	}
+	if profileURL == "" {
+		return current, true
+	}
+	return profileURL, false
 }
 
 // noRedirect hands a 3xx back to the caller instead of following it. A followed
@@ -139,16 +182,23 @@ func warnPlaintextToken(w io.Writer, rawURL, token string) {
 	if token == "" || cliutil.EnvBool("WARDYN_CLI_ALLOW_PLAINTEXT", false) {
 		return
 	}
+	if host := plaintextHost(rawURL); host != "" {
+		fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
+			"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+	}
+}
+
+// plaintextHost is the host of a plain http:// URL that is not loopback, else "".
+func plaintextHost(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "http" {
-		return
+		return ""
 	}
 	host := u.Hostname()
 	if host == "localhost" || net.ParseIP(host).IsLoopback() {
-		return
+		return ""
 	}
-	fmt.Fprintf(w, "wardyn: WARNING: sending the admin token in cleartext to %s over http:// — "+
-		"use https://, or set WARDYN_CLI_ALLOW_PLAINTEXT=1 if TLS terminates in front of it\n", host)
+	return host
 }
 
 func rootCmd() *cobra.Command {
@@ -177,11 +227,12 @@ func rootCmd() *cobra.Command {
 			if token == "" {
 				token = cliutil.EnvOr("WARDYN_ADMIN_TOKEN", os.Getenv("WARDYN_TOKEN"))
 			}
+			serverURL, urlFromDefault = resolveURL(cmd, serverURL)
 			warnPlaintextToken(cmd.ErrOrStderr(), serverURL, token)
 		},
 	}
-	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", "http://localhost:8080"),
-		"control plane base URL (env WARDYN_URL)")
+	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", defaultURL),
+		"control plane base URL (env WARDYN_URL; else the one `wardyn auth set-url` saved; else this default)")
 	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN — resolved in
 	// PersistentPreRun above, NOT here. A non-empty string default is echoed by
 	// cobra as `(default "<value>")` in `wardyn --help` and in the usage block
@@ -203,6 +254,7 @@ func rootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
+		authCmd(),
 		runCmd(client),
 		approvalCmd(client),
 		auditCmd(client),

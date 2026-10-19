@@ -1009,7 +1009,7 @@ jobs:
             wardyn-runnerd-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
-  # The laptop runner's macOS installer, built from the two darwin wardyn-runnerd binaries above.
+  # The laptop runner's macOS installer, built from the darwin wardyn-runnerd and wardyn binaries above.
   # pkgbuild, productbuild, productsign and notarytool exist only on macOS, hence this runner.
   # Signing turns on by secret and each step is skipped with a log line when its secrets are unset
   # (scripts/build-runner-pkg.sh header): APPLE_DEVELOPER_ID_APPLICATION_* signs the binary,
@@ -1047,11 +1047,13 @@ jobs:
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
           scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
+            --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
             --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
           payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
           grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$payload"
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn$' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1169,6 +1171,17 @@ jobs:
           chmod +x assets/wardyn-{linux,darwin}-* assets/wardyn-runnerd-{linux,darwin}-* 2>/dev/null || true
           # The runner's per-user service files and installer, one download.
           tar -czf assets/wardyn-runner-units.tar.gz -C deploy runner
+          # The Linux runner install in one download per architecture: wardyn-runnerd, the wardyn CLI that
+          # `setup` installs beside it, and install.sh, which sits where it finds them.
+          for arch in amd64 arm64; do
+            bundle="$RUNNER_TEMP/wardyn-runner-linux-$arch"
+            mkdir -p "$bundle"
+            install -m 0755 "assets/wardyn-runnerd-linux-$arch" "$bundle/wardyn-runnerd"
+            install -m 0755 "assets/wardyn-linux-$arch" "$bundle/wardyn"
+            install -m 0755 deploy/runner/install.sh "$bundle/install.sh"
+            install -m 0644 LICENSE NOTICE THIRD-PARTY-NOTICES.md "$bundle/"
+            tar -czf "assets/wardyn-runner-linux-$arch.tar.gz" -C "$RUNNER_TEMP" "wardyn-runner-linux-$arch"
+          done
           cd assets
           # One SBOM per published image, counted from the matrix of the path
           # that ran. If the matrix grows and this does not, the count assertion
@@ -1208,7 +1221,8 @@ jobs:
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
-                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do
+                      wardyn-runner-units.tar.gz wardyn-runner-linux-amd64.tar.gz wardyn-runner-linux-arm64.tar.gz \
+                      wardyn-runnerd.pkg wardyn-licenses.tar.gz; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"
