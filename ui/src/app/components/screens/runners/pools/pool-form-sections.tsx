@@ -10,12 +10,12 @@
 import type { RunnerAmounts } from "../../../../lib/types/runners";
 import { POOL_DRAWER, POOL_FORM } from "../../../wardyn/copy/runner-pools";
 import { Checkbox } from "../../../ui/checkbox";
+import { DurationField } from "../../../wardyn/duration-field";
 import { Input } from "../../../ui/input";
 import { cpus, fmtAmount, gb } from "../resources";
 import { UNIT_LABEL, UNITS, type FormErrors, type RtKey, type RtValues, type Unit } from "./pool-form-model";
 
-const SELECT =
-  "h-9 w-full min-w-[104px] rounded-md border border-input bg-input-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:opacity-50 dark:bg-input/30";
+const UNIT_OPTIONS = UNITS.map((u) => ({ value: u, label: UNIT_LABEL[u] }));
 const SUB = "text-meta text-muted-foreground";
 const ERR = "text-xs text-danger";
 
@@ -105,34 +105,22 @@ function DurPair({
   const title = rt === "bg" ? POOL_DRAWER.BACKGROUND : POOL_DRAWER.INTERACTIVE;
   const id = `f-${rt}-${pre}`;
   const unl = values[`${pre}Unl`];
-  const num = (suffix: "Dn" | "Mn", caption: string, disabled: boolean) => (
-    <Input
-      id={`${id}${suffix}`}
-      type="number"
-      min={0}
-      step="any"
+  const durPair = (n: "Dn" | "Mn", u: "Du" | "Mu", caption: string, disabled: boolean) => (
+    <DurationField
+      id={`${id}${n}`}
+      count={values[`${pre}${n}`]}
+      unit={values[`${pre}${u}`]}
+      units={UNIT_OPTIONS}
+      onCount={(raw) => onPatch({ [`${pre}${n}`]: raw })}
+      onUnit={(v) => onPatch({ [`${pre}${u}`]: v as Unit })}
+      countLabel={`${title}, ${label}, ${caption}`}
+      unitLabel={`${title}, ${label}, ${caption}, ${POOL_FORM.UNIT}`}
       disabled={disabled}
-      aria-label={`${title}, ${label}, ${caption}`}
-      aria-invalid={error && (suffix === "Mn") === !!maxError ? true : undefined}
-      aria-describedby={error && (suffix === "Mn") === !!maxError ? `${id}-e` : undefined}
-      value={values[`${pre}${suffix}`]}
-      onChange={(e) => onPatch({ [`${pre}${suffix}`]: e.target.value })}
+      unitDisabled={u === "Mu" && unl}
+      invalid={!!error && (n === "Mn") === !!maxError}
+      describedBy={error && (n === "Mn") === !!maxError ? `${id}-e` : undefined}
+      step="any"
     />
-  );
-  const unit = (suffix: "Du" | "Mu", caption: string) => (
-    <select
-      className={SELECT}
-      aria-label={`${title}, ${label}, ${caption}, ${POOL_FORM.UNIT}`}
-      disabled={suffix === "Mu" && unl}
-      value={values[`${pre}${suffix}`]}
-      onChange={(e) => onPatch({ [`${pre}${suffix}`]: e.target.value as Unit })}
-    >
-      {UNITS.map((u) => (
-        <option key={u} value={u}>
-          {UNIT_LABEL[u]}
-        </option>
-      ))}
-    </select>
   );
   return (
     <div className="space-y-2">
@@ -144,19 +132,13 @@ function DurPair({
           <span className={`${SUB} block`} aria-hidden>
             {POOL_FORM.DEFAULT}
           </span>
-          <div className="flex items-center gap-1.5">
-            {num("Dn", POOL_FORM.DEFAULT, false)}
-            {unit("Du", POOL_FORM.DEFAULT)}
-          </div>
+          {durPair("Dn", "Du", POOL_FORM.DEFAULT, false)}
         </div>
         <div className="space-y-1">
           <span className={`${SUB} block`} aria-hidden>
             {POOL_FORM.MAXIMUM}
           </span>
-          <div className="flex items-center gap-1.5">
-            {num("Mn", POOL_FORM.MAXIMUM, unl)}
-            {unit("Mu", POOL_FORM.MAXIMUM)}
-          </div>
+          {durPair("Mn", "Mu", POOL_FORM.MAXIMUM, unl)}
         </div>
       </div>
       <label className="inline-flex items-center gap-2 text-sm font-normal">
