@@ -22,11 +22,62 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func probeDriveFixture() types.DriveMount {
+// probeDriveFixture is a share home inside a fresh root, with d's runner
+// ceiling set to that root.
+func probeDriveFixture(t *testing.T, d *Driver) types.DriveMount {
+	t.Helper()
+	root, home := driveHostRoot(t)
+	d.cfg.UserDriveHostRoots = []string{root}
 	return types.DriveMount{
 		Backend:    types.DriveBackendHostPath,
-		ObjectName: "/srv/nas/homes/bob",
+		ObjectName: home,
+		HostRoot:   root,
 		Target:     runner.DriveTarget,
+	}
+}
+
+// TestProbeDrive_RunsTheMountCeilingFirst: the probe binds only what the mount
+// would, the path the runner's own ceiling resolved. A path outside the
+// runner's roots, outside the drive's own host_root, or on a runner with no
+// roots is refused before any container exists.
+func TestProbeDrive_RunsTheMountCeilingFirst(t *testing.T) {
+	f := newFakeDocker()
+	f.images[defaultDriveProbeImage] = true
+	d := newTestDriver(f)
+	drive := probeDriveFixture(t, d)
+	if _, err := d.ProbeDrive(context.Background(), drive); err != nil {
+		t.Fatalf("ProbeDrive in root: %v", err)
+	}
+	for _, c := range f.containers {
+		if m := c.host.Mounts; len(m) != 1 || m[0].Source != drive.ObjectName {
+			t.Fatalf("probe mounts = %+v, want the one resolved home %q", m, drive.ObjectName)
+		}
+	}
+
+	_, other := driveHostRoot(t)
+	otherRoot := filepath.Dir(other)
+	for name, mutate := range map[string]func(*Driver, *types.DriveMount){
+		"outside the runner's roots": func(_ *Driver, m *types.DriveMount) { m.ObjectName, m.HostRoot = other, otherRoot },
+		"outside its own host_root": func(d *Driver, m *types.DriveMount) {
+			d.cfg.UserDriveHostRoots = append(d.cfg.UserDriveHostRoots, otherRoot)
+			m.HostRoot = otherRoot
+		},
+		"no roots on the runner": func(d *Driver, _ *types.DriveMount) { d.cfg.UserDriveHostRoots = nil },
+		"a host file":            func(_ *Driver, m *types.DriveMount) { m.ObjectName = "/etc/shadow" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images[defaultDriveProbeImage] = true
+			d := newTestDriver(f)
+			m := probeDriveFixture(t, d)
+			mutate(d, &m)
+			if _, err := d.ProbeDrive(context.Background(), m); err == nil {
+				t.Fatal("ProbeDrive bound a path the mount ceiling refuses")
+			}
+			if len(f.containers) != 0 {
+				t.Fatalf("a refused probe created %d container(s)", len(f.containers))
+			}
+		})
 	}
 }
 
@@ -38,7 +89,7 @@ func TestProbeDrive_Readable(t *testing.T) {
 	f.images[defaultDriveProbeImage] = true
 	d := newTestDriver(f)
 
-	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d))
 	if err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
@@ -58,7 +109,7 @@ func TestProbeDrive_Unreadable(t *testing.T) {
 	f.probeExitCode = 1
 	d := newTestDriver(f)
 
-	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	probe, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d))
 	if err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
@@ -75,7 +126,7 @@ func TestProbeDrive_RunsAsTheAgentUID(t *testing.T) {
 	f.images[defaultDriveProbeImage] = true
 	d := newTestDriver(f)
 
-	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture()); err != nil {
+	if _, err := d.ProbeDrive(context.Background(), probeDriveFixture(t, d)); err != nil {
 		t.Fatalf("ProbeDrive: %v", err)
 	}
 	var got *createdContainer

@@ -64,10 +64,10 @@ type heldRoleMappingUpsert struct {
 // gateRoleMappingUpsert runs the gates a role-mapping upsert passes before the store, in the order a
 // direct write does: the target's shape, the collision with the chart, the email-mapping opt-in, the
 // posture-flip acknowledgement and (when checkLockout) the lockout guard against r's own snapshot.
-// listExisting is called after the cheap gates, as a direct write reads the table. A refusal is the
-// response to write; err is a store failure.
+// listExisting is called after the cheap gates, as a direct write reads the table. held marks the
+// approval of a held change. A refusal is the response to write; err is a store failure.
 func (s *Server) gateRoleMappingUpsert(r *http.Request, req roleMappingWriteRequest, value string, userTypes []types.UserType,
-	listExisting func() ([]types.RoleMapping, error), checkLockout bool) (g roleMappingUpsertGate, refuse roleMappingRefusal, err error) {
+	listExisting func() ([]types.RoleMapping, error), checkLockout, held bool) (g roleMappingUpsertGate, refuse roleMappingRefusal, err error) {
 	write, msg := accessMappingTarget(req, value, userTypes)
 	if msg != "" {
 		return g, func(w http.ResponseWriter) {
@@ -92,17 +92,22 @@ func (s *Server) gateRoleMappingUpsert(r *http.Request, req roleMappingWriteRequ
 	}
 	g.candidate = accessCandidateRows(g.existing, "", write)
 	g.effect = s.roleMappingEffect(g.existing, g.candidate, userTypes)
-	return g, s.gateRoleMappingEffect(r, req.AcknowledgeAccessChange, g.existing, g.candidate, userTypes, checkLockout), nil
+	return g, s.gateRoleMappingEffect(r, req.AcknowledgeAccessChange, g.existing, g.candidate, userTypes, checkLockout, held), nil
 }
 
 // gateRoleMappingEffect is the two guards on what a role-mapping write DOES: the posture-flip
 // guard, which fires iff the write actually moves the unmatched-human outcome (derived from the real
-// merged map, not a row count) and the caller has not acknowledged it, then the lockout guard.
+// merged map, not a row count) and the caller has not acknowledged it, then the lockout guard. On
+// the approval of a held change (held) the acknowledgement could only have come with the proposal,
+// so the flip refusal says to propose the change again.
 func (s *Server) gateRoleMappingEffect(r *http.Request, acknowledged bool, existing []types.RoleMapping, candidate []oidc.RoleMapping,
-	userTypes []types.UserType, checkLockout bool) roleMappingRefusal {
+	userTypes []types.UserType, checkLockout, held bool) roleMappingRefusal {
 	if !acknowledged {
 		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
 		after := s.accessUnmatchedOutcome(candidate, userTypes)
+		if before != after && held {
+			return func(w http.ResponseWriter) { writeHeldAccessPostureFlip(w, before, after) }
+		}
 		if before != after {
 			return func(w http.ResponseWriter) { writeAccessPostureFlip(w, before, after) }
 		}
@@ -238,7 +243,7 @@ func applyRoleMappingChange(s *Server, r *http.Request, q store.Querier, ch type
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonAccessRoleMapValueInvalid, "%s", err.Error())
 	}
 	g, refuse, err := s.gateRoleMappingUpsert(r, req, value, userTypes,
-		func() ([]types.RoleMapping, error) { return existing, nil }, true)
+		func() ([]types.RoleMapping, error) { return existing, nil }, true, true)
 	if err != nil {
 		return govApplied{}, err
 	}
@@ -280,7 +285,7 @@ func (s *Server) applyRoleMappingDelete(r *http.Request, q store.Querier, ch typ
 	if acknowledgedEffectStale(p.AcknowledgeAccessChange, p.AcknowledgedEffect, s.roleMappingEffect(existing, candidate, userTypes)) {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	if refuse := s.gateRoleMappingEffect(r, p.AcknowledgeAccessChange, existing, candidate, userTypes, true); refuse != nil {
+	if refuse := s.gateRoleMappingEffect(r, p.AcknowledgeAccessChange, existing, candidate, userTypes, true, true); refuse != nil {
 		return govApplied{}, refusalOf("role mapping gate", refuse)
 	}
 	if err := store.DeleteRoleMappingQ(r.Context(), q, p.ID); err != nil {

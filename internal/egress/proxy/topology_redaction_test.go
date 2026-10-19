@@ -187,6 +187,11 @@ func TestRedactTopologyIsEndpointScopedButBlanketOnIPLiterals(t *testing.T) {
 			want: `Post "` + redactedEndpoint + `": EOF`,
 		},
 		{
+			name: "the control plane's bare host name goes",
+			in:   `resolve trusted host "wardynd.internal.test": lookup wardynd.internal.test: no such host`,
+			want: `resolve trusted host "` + redactedEndpoint + `": lookup ` + redactedEndpoint + `: no such host`,
+		},
+		{
 			name: "the configured corp-proxy address goes, host form included",
 			in:   "dial upstream proxy: dial tcp corp-proxy.internal.test:3128: i/o timeout",
 			// The run of non-space/non-quote bytes after the endpoint (":3128:")

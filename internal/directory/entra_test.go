@@ -218,6 +218,25 @@ func TestAppRolesReadTheSignInApp(t *testing.T) {
 	}
 }
 
+// With no sign-in app there are no roles a sign-in carries: App Role
+// suggestions are absent, and the credential app's own roles are never read.
+func TestAppRolesOmittedWithNoSignInApp(t *testing.T) {
+	f := newFakeGraph(t)
+	f.appRoles = []graphAppRole{{DisplayName: "Dir Admin", Value: "Dir.Admin", IsEnabled: true}}
+	d, err := newEntra(EntraConfig{TenantID: "tenant-guid", ClientID: "dir-app", ClientSecret: "s3cret", NoSignInApp: true},
+		f.srv.URL+"/token", f.srv.URL+"/v1.0")
+	if err != nil {
+		t.Fatalf("newEntra: %v", err)
+	}
+	got, err := d.Search(context.Background(), "admin", KindAppRole)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("approle search = %v, %v; want no suggestions", got, err)
+	}
+	if f.lastSP.Load() != nil {
+		t.Fatal("a deployment with no sign-in app read the credential app's service principal")
+	}
+}
+
 func TestEntryMappingClaimValueIsTheContract(t *testing.T) {
 	f := newFakeGraph(t)
 	f.users = []graphUser{

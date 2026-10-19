@@ -158,7 +158,7 @@ metrics:
 
 ## No core dumps, no attaching
 
-wardynd and wardyn-proxy hold credentials in memory, so each sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as its first act.
+wardynd, wardyn-proxy and wardyn-runnerd hold credentials in memory, so each first sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0).
 
 - A crash writes no core file, and a `core_pattern` handler receives nothing.
 - A process of the same user can no longer `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.

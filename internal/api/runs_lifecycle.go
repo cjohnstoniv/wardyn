@@ -897,8 +897,10 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	if perr := s.dropRunProxyConfig(ctx, id); perr != nil {
 		killData["proxy_config_error"] = perr.Error()
 	}
-	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries).
+	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries),
+	// and the erase of any value its runner holds resident, as revokeRunCascade does.
 	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
+	s.kickRunResidentErase(ctx, id)
 	// (7) Its output, on a tracked goroutine: the drain barrier and the write
 	// never delay the kill's answer, and the sandbox is already gone.
 	s.finishRunOutputDetached(ctx, id)

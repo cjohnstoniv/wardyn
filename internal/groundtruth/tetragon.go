@@ -6,11 +6,14 @@ package groundtruth
 import (
 	"encoding/json"
 	"net"
+	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -317,9 +320,23 @@ func kprobePath(e *TetragonProcessKprobe) string {
 	return ""
 }
 
-// isMetadataIP reports whether ipStr is the cloud instance-metadata address
-// (169.254.169.254), flagged regardless of topology (see mapConnect).
+// linkLocalCredentialIPs are the link-local cloud credential endpoints: the
+// instance-metadata address and the ECS task-role / EKS Pod Identity agents.
+var linkLocalCredentialIPs = []netip.Addr{
+	netip.MustParseAddr("169.254.169.254"),
+	netip.MustParseAddr("169.254.170.2"),
+	netip.MustParseAddr("169.254.170.23"),
+}
+
+// isMetadataIP reports whether ipStr is a cloud instance-metadata or credential
+// endpoint (the link-local hosts above, or one of ipguard.NeverLift's), flagged
+// regardless of topology (see mapConnect).
 func isMetadataIP(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	return ip != nil && ip.Equal(net.ParseIP("169.254.169.254"))
+	addr, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	return slices.Contains(linkLocalCredentialIPs, addr) ||
+		slices.ContainsFunc(ipguard.NeverLift, func(p netip.Prefix) bool { return p.Contains(addr) })
 }

@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -148,6 +149,31 @@ func TestUnauditedRequestIsRefusedInTheSDKShape(t *testing.T) {
 		if d.Decision != egress.Deny || d.RuleSource != ruleSourceAuditRecordTooLarge || d.Request.Host != "allowed.test" ||
 			d.Request.Method != http.MethodGet || len(d.Request.Path) != tooLargeFieldBytes || strings.Contains(d.Request.Path, "secret") {
 			t.Errorf("deny = %+v", d)
+		}
+	})
+	t.Run("an MCP broker path keeps its binding out of the deny", func(t *testing.T) {
+		const binding = "bind-0123456789abcdef"
+		var mirror bytes.Buffer
+		runID := uuid.New()
+		sink, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), runID, &mirror)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { sink.close(ctx) })
+		p := &Proxy{sink: sink, now: time.Now, runID: runID}
+		rec := httptest.NewRecorder()
+		if admitted, _ := p.admitSpoolHTTP(rec, mustLocalReq(t, http.MethodPost, routeMCPBroker+binding+"/github?q="+tooLongTarget, nil), ""); admitted != nil {
+			t.Fatal("an oversized target was admitted")
+		}
+		rows, err := p.sink.local.After(ctx, 0, 2)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("spooled %d rows, %v; want the one too-large deny", len(rows), err)
+		}
+		if got := rows[0].Decision.Request.Path; got != routeMCPBroker+"<redacted>/github" || strings.Contains(got, binding) {
+			t.Errorf("deny path = %q, want the binding redacted", got)
+		}
+		if strings.Contains(mirror.String(), binding) || !strings.Contains(mirror.String(), ruleSourceAuditRecordTooLarge) {
+			t.Errorf("stdout mirror = %q, want the deny without the binding", mirror.String())
 		}
 	})
 	t.Run("bedrock tunnel, spool unavailable", func(t *testing.T) {

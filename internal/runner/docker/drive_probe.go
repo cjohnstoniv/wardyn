@@ -35,6 +35,16 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	if drive.ObjectName == "" {
 		return runner.DriveProbe{}, errors.New("docker: probe drive: empty host path")
 	}
+	// The ceiling driveMount runs before it binds the same drive: inside this
+	// runner's own roots and inside the drive's own host_root. The probe binds
+	// the path the check resolved.
+	real, err := runner.UserDriveMountSourceCheck(d.cfg.UserDriveHostRoots)(drive.ObjectName)
+	if err != nil {
+		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
+	}
+	if err := runner.UserDriveHomeWithinItsRoot(&drive, real); err != nil {
+		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
+	}
 
 	image := d.driveProbeImage()
 	// A presence check, never a pull: this runs inside driveShareProbe's
@@ -86,7 +96,7 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 			Resources:      proxyResources(false),
 			Mounts: []mount.Mount{{
 				Type:     mount.TypeBind,
-				Source:   drive.ObjectName,
+				Source:   real,
 				Target:   driveProbeTarget,
 				ReadOnly: true,
 			}},

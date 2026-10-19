@@ -3,8 +3,8 @@
 
 // Package nodump keeps a process that holds credentials from writing them to
 // disk in a core dump, or from having its memory read by another process of
-// the same user (credential-storage design §2.8, CS-4). wardynd and
-// wardyn-proxy call Disable before anything else.
+// the same user (credential-storage design §2.8, CS-4). wardynd, wardyn-proxy
+// and wardyn-runnerd call Disable before anything else.
 package nodump
 
 import (

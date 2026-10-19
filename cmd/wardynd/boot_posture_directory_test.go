@@ -208,8 +208,14 @@ func TestResolveDirectoryConfigAppRolesReadTheSignInApp(t *testing.T) {
 		"a dedicated directory app":  {"tenant.example", "dir-app", "dir-secret"},
 	} {
 		got, err := resolveDirectoryConfig("entra", dir[0], dir[1], dir[2], entraIssuer, " oidc-app ", "oidc-secret")
-		if err != nil || got.AppRolesAppID != "oidc-app" {
-			t.Errorf("%s: AppRolesAppID = %q, err %v; want oidc-app", name, got.AppRolesAppID, err)
+		if err != nil || got.AppRolesAppID != "oidc-app" || got.NoSignInApp {
+			t.Errorf("%s: AppRolesAppID = %q, NoSignInApp %v, err %v; want oidc-app", name, got.AppRolesAppID, got.NoSignInApp, err)
 		}
+	}
+	// A dedicated directory app with no OIDC sign-in at all has no app to read
+	// roles from: it says so, rather than leave the credential app to stand in.
+	got, err := resolveDirectoryConfig("entra", "tenant.example", "dir-app", "dir-secret", "", "", "")
+	if err != nil || !got.NoSignInApp || got.AppRolesAppID != "" {
+		t.Errorf("no sign-in app: AppRolesAppID = %q, NoSignInApp %v, err %v; want no sign-in app", got.AppRolesAppID, got.NoSignInApp, err)
 	}
 }

@@ -341,6 +341,22 @@ func TestMapNetworkConnect_MetadataIsFailure(t *testing.T) {
 	}
 }
 
+// Every cloud metadata or credential endpoint the guards know is flagged, not
+// only the IPv4 metadata address.
+func TestIsMetadataIP_SharedSet(t *testing.T) {
+	for _, ip := range []string{"169.254.169.254", "::ffff:169.254.169.254", "169.254.170.2", "169.254.170.23",
+		"fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "100.100.100.200"} {
+		if !isMetadataIP(ip) {
+			t.Errorf("isMetadataIP(%s) = false, want true", ip)
+		}
+	}
+	for _, ip := range []string{"172.17.0.2", "10.0.0.1", "fd00::1", "93.184.216.34", "", "not-an-ip"} {
+		if isMetadataIP(ip) {
+			t.Errorf("isMetadataIP(%q) = true, want false", ip)
+		}
+	}
+}
+
 // TestMapNetworkConnect_PrivateProxyIsNotFailure locks down FIX #17: under the
 // primary L0 topology (Internal + gatewayless) the agent's SOLE legal dst is
 // wardyn-proxy on a PRIVATE bridge IP. The old mapper stamped any private dst

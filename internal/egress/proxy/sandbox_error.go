@@ -130,8 +130,8 @@ func (p *Proxy) redactTopology(s string) string {
 
 // topologyPatterns compiles the operator-configured endpoints whose
 // appearance in a sandbox-facing error is a disclosure: the control-plane
-// base URL (with any internal path following it) and the corp upstream proxy
-// address. Built once at construction, not per request.
+// base URL (with any internal path following it), its host name, and the corp
+// upstream proxy address. Built once at construction, not per request.
 func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regexp {
 	var vals []string
 	add := func(v string) {
@@ -156,6 +156,11 @@ func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regex
 		// Consume the path/query too — the internal API route is part of what
 		// leaks from a wrapped transport error.
 		out = append(out, regexp.MustCompile(regexp.QuoteMeta(v)+`[^"\s]*`))
+	}
+	// The control plane's bare host name too (a failed resolve names only it),
+	// word-bounded as a gateway's is.
+	if u, err := url.Parse(controlPlaneURL); err == nil {
+		out = append(out, gatewayPatterns(map[string]llmUpstream{"": {host: u.Hostname()}})...)
 	}
 	return out
 }
