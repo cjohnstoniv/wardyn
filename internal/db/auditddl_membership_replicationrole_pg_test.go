@@ -26,9 +26,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func TestPG_AuditDDLProtectedFollowsMembershipToTheReplicationRoleGrant(t *testing.T) {
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
