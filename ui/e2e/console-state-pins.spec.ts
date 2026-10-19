@@ -194,7 +194,8 @@ test.describe("Admin settings: a slow first read cannot overwrite the resolved o
       route.request().method() === "GET" ? route.fulfill({ json: { upstream_proxy_url: "http://proxy.corp.example:3128" } }) : route.fallback(),
     );
     await page.goto("/admin/settings");
-    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
+    // A load that asks once waits out the four-second hold above, so the default 5 s leaves no margin on a slow runner.
+    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible({ timeout: 15_000 });
     await expandCard(page, "Host");
     await expect(page.getByTestId("host-tile-internet-pill")).toHaveText("Through the corporate proxy");
     await expect.poll(() => firstLanded).toBe(true);
