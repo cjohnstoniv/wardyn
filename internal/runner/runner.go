@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -399,6 +400,27 @@ type SandboxEnder interface {
 // ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
+
+// ErrAWSCacheWipeFailed is EndSandbox's answer when the sandbox was kept, its proxy stopped and
+// all, but the AWS credential caches could not be wiped first: the end itself succeeded, and the
+// kept layer may still hold them. A caller treats it as a successful end and records the reason.
+var ErrAWSCacheWipeFailed = errors.New("runner: the AWS credential caches could not be wiped before the sandbox was kept")
+
+// KeptDespiteAWSCacheWipe is a runner's own answer for an end it serves: an ErrAWSCacheWipeFailed
+// end succeeded, so it is logged here and answered as nil. The wire has no code for it, and an
+// error the control plane cannot read would leave the run's containment unresolved for good.
+func KeptDespiteAWSCacheWipe(ctx context.Context, ref string, err error) error {
+	if errors.Is(err, ErrAWSCacheWipeFailed) {
+		slog.WarnContext(ctx, "runner: kept an ended sandbox whose AWS credential caches could not be wiped",
+			slog.String("ref", ref), slog.Any("err", err))
+		return nil
+	}
+	return err
+}
+
+// AWSProfileRecordEnv is the sandbox env var carrying the ~/.aws files Wardyn stages for an AWS
+// sign-in lane; a sandbox that has it is one whose AWS caches a kept end wipes.
+const AWSProfileRecordEnv = "WARDYN_AWS_SSO_CONFIG_B64"
 
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).

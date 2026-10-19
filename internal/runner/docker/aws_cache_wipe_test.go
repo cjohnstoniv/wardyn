@@ -12,20 +12,38 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// A kept end wipes the AWS credential caches while the agent still runs, as the sandbox's own
-// user, before the stop that keeps its writable layer.
-func TestEndSandbox_WipesAWSCachesBeforeKeeping(t *testing.T) {
-	f := newFakeDocker()
+// awsSpec is testSpec for a run Wardyn staged an AWS profile for.
+func awsSpec() runner.SandboxSpec {
+	spec := testSpec()
+	spec.Env = map[string]string{"FOO": "bar", runner.AWSProfileRecordEnv: "LmF3cy9jb25maWcJWlhoaGJYQnNaUT09"}
+	return spec
+}
+
+// keptEnd creates spec's sandbox, lets f's execs finish with exit, and ends it.
+func keptEnd(t *testing.T, f *fakeDocker, spec runner.SandboxSpec) (string, error) {
+	t.Helper()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
-	sb, err := d.CreateSandbox(context.Background(), testSpec())
+	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
-	if err := d.EndSandbox(context.Background(), sb.Ref); err != nil {
+	f.execExited = true
+	return sb.Ref, d.EndSandbox(context.Background(), sb.Ref)
+}
+
+// A kept end wipes the AWS credential caches while the agent still runs, as the sandbox's own
+// user, before the stop that keeps its writable layer, and kills nothing first.
+func TestEndSandbox_WipesAWSCachesBeforeKeeping(t *testing.T) {
+	f := newFakeDocker()
+	ref, err := keptEnd(t, f, awsSpec())
+	if err != nil {
 		t.Fatalf("EndSandbox: %v", err)
 	}
 	i := slices.IndexFunc(f.execLog, func(e fakeExec) bool { return slices.Equal(e.cmd, awsCacheWipeArgv) })
@@ -35,26 +53,61 @@ func TestEndSandbox_WipesAWSCachesBeforeKeeping(t *testing.T) {
 	if e := f.execLog[i]; !e.running || e.user != "" {
 		t.Errorf("wipe exec = %+v, want it run in the running agent as the sandbox's own user", e)
 	}
-	if c := f.containers[sb.Ref]; c.removed || c.state.Running {
+	if strings.Contains(strings.Join(awsCacheWipeArgv, " "), "kill") {
+		t.Errorf("the wipe signals the sandbox's processes: %q", awsCacheWipeArgv)
+	}
+	if c := f.containers[ref]; c.removed || c.state.Running {
 		t.Errorf("agent after the end = %+v, want stopped and kept", c)
 	}
 }
 
-// The wipe is best effort: a sandbox the exec cannot reach is still stopped and its proxy removed.
-func TestEndSandbox_StopsWhenTheWipeCannotRun(t *testing.T) {
+// A run Wardyn staged no AWS profile for runs no exec at all at its kept end.
+func TestEndSandbox_NoExecWithoutAnAWSProfile(t *testing.T) {
 	f := newFakeDocker()
-	f.images["busybox:latest"] = true
-	d := newTestDriver(f)
-	sb, err := d.CreateSandbox(context.Background(), testSpec())
+	f.execCreateErr = errors.New("fake: an exec was attempted")
+	ref, err := keptEnd(t, f, testSpec())
 	if err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
+		t.Fatalf("EndSandbox: %v (an exec ran)", err)
 	}
-	f.execCreateErr = errors.New("Error response from daemon: container is paused")
-	if err := d.EndSandbox(context.Background(), sb.Ref); err != nil {
-		t.Fatalf("EndSandbox: %v", err)
+	if len(f.execLog) != 0 {
+		t.Fatalf("execs at a kept end without an AWS profile: %+v", f.execLog)
 	}
-	if c := f.containers[sb.Ref]; c.state.Running || !f.containers[proxyContainerName(testSpec().RunID)].removed {
-		t.Error("a failed wipe must not stop the end: the agent stops and the proxy goes")
+	if c := f.containers[ref]; c.removed || c.state.Running {
+		t.Errorf("agent after the end = %+v, want stopped and kept", c)
+	}
+}
+
+// The wipe is best effort: a sandbox the exec cannot reach, or a wipe that fails, is still
+// stopped and its proxy removed, and the end answers runner.ErrAWSCacheWipeFailed with the reason.
+func TestEndSandbox_StopsWhenTheWipeFails(t *testing.T) {
+	for name, set := range map[string]func(*fakeDocker){
+		"exec refused":    func(f *fakeDocker) { f.execCreateErr = errors.New("Error response from daemon: container is paused") },
+		"non-zero exit":   func(f *fakeDocker) { f.execExitCode = 1 },
+		"did not finish":  func(f *fakeDocker) { f.execExited = false },
+		"was not running": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
+			sb, err := d.CreateSandbox(context.Background(), awsSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			f.execExited = true
+			if set != nil {
+				set(f)
+			} else {
+				f.containers[sb.Ref].state.Running = false
+			}
+			err = d.EndSandbox(context.Background(), sb.Ref)
+			if !errors.Is(err, runner.ErrAWSCacheWipeFailed) {
+				t.Fatalf("EndSandbox = %v, want ErrAWSCacheWipeFailed", err)
+			}
+			if c := f.containers[sb.Ref]; c.removed || c.state.Running || !f.containers[proxyContainerName(testSpec().RunID)].removed {
+				t.Error("a failed wipe must not stop the end: the agent stops, is kept, and the proxy goes")
+			}
+		})
 	}
 }
 

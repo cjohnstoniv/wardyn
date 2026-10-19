@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // mavenProxyOpts builds the MAVEN_OPTS JVM proxy sysprops that route Maven
@@ -355,8 +356,8 @@ const awsSSOPlaceholderCacheTTL = 30 * 24 * time.Hour
 // newline-delimited "<home-relative-path>\t<base64(content)>" records (see
 // encodeArtifactConfig, reused here as-is). agent-run-lib.sh materializes it
 // before claude/aws-sdk runs (materialize_aws_sso_config, in
-// deploy/images/common/agent-run-lib.sh).
-const awsSSOConfigEnvVar = "WARDYN_AWS_SSO_CONFIG_B64"
+// deploy/images/common/agent-run-lib.sh). A kept Docker end reads it to tell which runs to wipe.
+const awsSSOConfigEnvVar = runner.AWSProfileRecordEnv
 
 // awsSSOCacheFileName is the AWS CLI/SDK's cache-filename convention for an
 // sso-session-based profile: the SHA1 hex digest of the session name (a
