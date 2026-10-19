@@ -227,12 +227,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 // itself lives on types.RunState so the CLI and SDK share one definition.
 func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 
-// casRunState is the ONE place a run's state CAS is issued: it delegates to
+// casRunState is the one place this package issues a run's state CAS: it delegates to
 // Store.UpdateRunStateIf and, when the transition BOTH won and NEWLY landed
 // terminal, counts it for /metrics. Every state change (dispatch claim,
 // completion watcher, kill, failAndRevoke, boot reconcile, compose reclaim)
 // routes through here, so the counter cannot drift the way a per-call-site
-// increment would — add new transitions here, not around it. The !from guard
+// increment would — add new transitions here, not around it. The one exception
+// is the idle reaper's RUNNING->STOPPED CAS, which is issued outside this
+// package and is counted in CancelTerminalRunApprovals instead. The !from guard
 // keeps handleKillRun's supported KILLED→KILLED re-kill retry from counting
 // the same run twice.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
