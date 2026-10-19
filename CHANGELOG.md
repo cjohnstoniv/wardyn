@@ -733,7 +733,7 @@ both architectures.
   container, and `setup` says when runs on the engine have no disk cap (overlayfs).
 - The release checks that every published image has linux/amd64 and linux/arm64, and `wardynd:latest` is now
   multi-arch. An image running under emulation is named with its digest, its platform, whether the digest is an
-  index, and the fix (docs/build-images.md covers building the claude-code harness image for both architectures).
+  index, and the fix (docs/operations/build-images.md covers building the claude-code harness image for both architectures).
 
 ### Fixed
 
