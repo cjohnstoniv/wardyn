@@ -40,6 +40,7 @@ func adoLocalEnv(t *testing.T, row types.GitProvider) (*placementEnv, *secretspg
 	}
 	e.srv.cfg.Secrets = sec
 	e.srv.cfg.Broker = broker.New(broker.NewPgxStore(e.pool), sec, e.h.audit, e.h.idp, nil)
+	e.srv.router = e.srv.routes() // the injection resolve is mounted only with a secret store
 	ctx := context.Background()
 	sc, err := e.pg.GetSiteConfig(ctx)
 	if err != nil {
@@ -75,7 +76,6 @@ func adoLaneGrants(t *testing.T, e *placementEnv, runID uuid.UUID) map[string]ty
 // A person's own PAT on their own runner: create admits it, dispatch writes the lane's grants as own,
 // the runner's relayed resolve is served, and the sandbox holds only the inert placeholder.
 func TestPG_LocalRun_ADOOwnPATIsDeliveredOwn(t *testing.T) {
-	t.Skip("pending fix; see PR")
 	e, sec := adoLocalEnv(t, ownPATTestRow())
 	ctx := context.Background()
 	raw, _ := json.Marshal(adoOwnPATBlob{Token: ownPATToken, Org: "contoso", ExpiresOn: time.Now().UTC().AddDate(0, 0, 5), StoredAt: time.Now().UTC()})
@@ -155,26 +155,73 @@ func TestPG_LocalRun_ADOOrgTokenGrantWriteRefuses(t *testing.T) {
 			}
 			snapshot := adoEntraScopeSnapshot{ProviderRowID: row.ID, Organisation: "contoso", OwnerSubject: e.personP,
 				CredentialSource: string(types.CredentialSourcePerUser), TokenMode: string(mode), Capabilities: row.Entra.DefaultProfile}
-			if _, ok := e.srv.createADOEntraGrants(ctx, run, snapshot, adoEntraHosts("contoso")); ok {
-				t.Fatal("a local run's organisation-minted grant was written")
-			}
-			if got := adoLaneGrants(t, e, run.ID); len(got) != 0 {
-				t.Errorf("%d grants recorded, want none", len(got))
-			}
-			refused := false
-			for _, ev := range e.h.audit.snapshot() {
-				if ev.RunID != nil && *ev.RunID == run.ID && ev.Action == "run.create" && ev.Outcome == "failure" &&
-					strings.Contains(string(ev.Data), `"reason":"grant_write"`) &&
-					strings.Contains(string(ev.Data), "could not record the Azure DevOps credential grant") {
-					refused = true
-				}
-			}
-			if !refused {
-				t.Errorf("no grant_write refusal; audit: %s", auditDump(e.h.audit.snapshot(), run.ID))
-			}
-			if stored, err := e.pg.GetRun(ctx, run.ID); err != nil || stored.State != types.RunFailed {
-				t.Errorf("run state = %q (%v), want FAILED", stored.State, err)
-			}
+			assertADOGrantWriteRefused(t, e, run, snapshot)
 		})
+	}
+}
+
+// An own PAT that is not the run owner's own (the snapshot names another person, or the PAT sits in
+// another person's namespace) is refused the same way: no grant is recorded.
+func TestPG_LocalRun_ADOOwnPATNotTheOwnersRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name, snapshotOwner, patHolder string
+	}{
+		{"snapshot owner is another person", "someone-else", ""},
+		{"PAT outside the owner's namespace", "", "someone-else"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := ownPATTestRow()
+			e, sec := adoLocalEnv(t, row)
+			ctx := context.Background()
+			owner, holder := e.personP, e.personP
+			if tc.snapshotOwner != "" {
+				owner = tc.snapshotOwner
+			}
+			if tc.patHolder != "" {
+				holder = tc.patHolder
+			}
+			raw, _ := json.Marshal(adoOwnPATBlob{Token: ownPATToken, Org: "contoso", ExpiresOn: time.Now().UTC().AddDate(0, 0, 5), StoredAt: time.Now().UTC()})
+			if err := sec.For(holder).Put(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), adoOwnPATSecretName(ownPATRowID), raw); err != nil {
+				t.Fatal(err)
+			}
+			laptop := e.claimedRunner(e.personP)
+			now := time.Now().UTC()
+			run, err := e.pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: e.personP, Agent: "claude-code",
+				ConfinementClass: types.CC1, State: types.RunStarting, SPIFFEID: "spiffe://wardyn.local/agent-run/" + uuid.NewString(),
+				RunnerTarget: "docker", Placement: types.PlacementLocal, RunnerID: &laptop})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := adoEntraScopeSnapshot{ProviderRowID: row.ID, Organisation: "contoso", OwnerSubject: owner,
+				CredentialSource: string(types.CredentialSourcePerUser), TokenMode: string(types.ADOTokenModeOwnPAT), Capabilities: row.Entra.DefaultProfile}
+			assertADOGrantWriteRefused(t, e, run, snapshot)
+		})
+	}
+}
+
+// assertADOGrantWriteRefused writes a local run's Azure DevOps grants from snapshot and asserts the write
+// refuses: no grant is recorded, a grant_write refusal is audited and the run is FAILED.
+func assertADOGrantWriteRefused(t *testing.T, e *placementEnv, run types.AgentRun, snapshot adoEntraScopeSnapshot) {
+	t.Helper()
+	ctx := context.Background()
+	if _, ok := e.srv.createADOEntraGrants(ctx, run, snapshot, adoEntraHosts("contoso")); ok {
+		t.Fatal("a local run's Azure DevOps grant was written")
+	}
+	if got := adoLaneGrants(t, e, run.ID); len(got) != 0 {
+		t.Errorf("%d grants recorded, want none", len(got))
+	}
+	refused := false
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.RunID != nil && *ev.RunID == run.ID && ev.Action == "run.create" && ev.Outcome == "failure" &&
+			strings.Contains(string(ev.Data), `"reason":"grant_write"`) &&
+			strings.Contains(string(ev.Data), "could not record the Azure DevOps credential grant") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Errorf("no grant_write refusal; audit: %s", auditDump(e.h.audit.snapshot(), run.ID))
+	}
+	if stored, err := e.pg.GetRun(ctx, run.ID); err != nil || stored.State != types.RunFailed {
+		t.Errorf("run state = %q (%v), want FAILED", stored.State, err)
 	}
 }
