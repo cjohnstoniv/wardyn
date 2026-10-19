@@ -70,7 +70,9 @@ case "$1 $2" in
     echo "prerelease=false draft=false assets=0"
     while read -r i; do echo "sbom-$i.cdx.json"; done < "${DIR}/images.txt"
     # The package exists from 0.9.3 (and a test can leave it out).
-    if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want.txt"; else cat "${DIR}/want.txt"; fi
+    # The licence tarball exists from 0.9.4.
+    if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver.txt"
+    if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
     while [ $# -gt 0 ]; do [ "$1" = "--dir" ] && out="$2"; shift; done
@@ -150,6 +152,9 @@ NO_PKG=1 run 0.9.3 v0.9.3 bundle
 run 0.9.2 v0.9.2 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.2 (no package in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-runnerd.pkg is required from 0.9.3 on"
+run 0.9.4 v0.9.4 bundle
+[ "${rc}" = 0 ] || fail "V=0.9.4 with the licence tarball exited ${rc}: $(printf '%s' "${out}" | tail -3)"
+pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle

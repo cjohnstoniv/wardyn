@@ -10,7 +10,7 @@
 # edits, deletes or retags a release or image.
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
 # expected assets are one sbom-<image>.cdx.json per image, every name on the release-assets job's `for want in`
-# list (that list includes the macOS runner package, wardyn-runnerd.pkg, which exists from 0.9.3; older versions are checked without it), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
+# list (that list includes the macOS runner package, wardyn-runnerd.pkg, which exists from 0.9.3, and the licence tarball, wardyn-licenses.tar.gz, which exists from 0.9.4; older versions are checked without them), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
 # Every image index must also contain linux/amd64 and linux/arm64; a missing platform fails with the image name.
 # WSL law: an empty DOCKER_CONFIG so the desktop credential helper cannot break anonymous pulls of public packages.
 # Exit status = the number of failures (capped at 255).
@@ -28,6 +28,8 @@ WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//
 # its job landed, never had it. (A plain sort -V on the full string cannot say this: it puts 0.9.3 before its rcs.)
 case "$V" in 0.9.3-rc.1|0.9.3-rc.2) WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT") ;; esac
 [ "$(printf '%s\n' "${V%%-*}" 0.9.3 | sort -V | head -1)" = 0.9.3 ] || WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WANT")
+# The licence tarball first shipped in 0.9.4.
+[ "$(printf '%s\n' "${V%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ] || WANT=$(grep -vx 'wardyn-licenses.tar.gz' <<<"$WANT")
 [ -n "$IMAGES" ] && [ -n "$WANT" ] || { echo "could not derive the image or asset list from $RELEASE_YML" >&2; exit 2; }
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"

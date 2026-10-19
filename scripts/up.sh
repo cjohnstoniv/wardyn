@@ -850,7 +850,12 @@ cmd_up() {
   else
     open_url "${_url}"
     _mode=""
-    [ -n "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ] || _mode="  (local mode — no login)"
+    if [ -z "$(env_get "${ENV_FILE}" WARDYN_OIDC_ISSUER)" ]; then
+      case "$(env_get "${ENV_FILE}" WARDYN_LOCAL_MODE | tr '[:upper:]' '[:lower:]')" in
+        0|false|no|off) ;;
+        *) _mode="  (local mode — no login)" ;;
+      esac
+    fi
     log "Wardyn is up: ${_url}${_mode} — the Getting-started page is ready NOW."
     unset _mode
     log "  Prove the sandbox boundary from the CLI (keyless):"

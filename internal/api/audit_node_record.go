@@ -30,7 +30,7 @@ func withoutNodeRecordSource(evs []types.AuditEvent) []types.AuditEvent {
 		switch {
 		case ev.Action == auditRunNodeRecord && data["source_id"] != nil:
 			delete(data, "source_id")
-		case ev.Action == auditRunnerActionRefuse && string(data["action"]) == `"`+string(types.RunnerActionStopProxy)+`"` && data["reason"] != nil:
+		case ev.Action == auditRunnerActionRefuse && rawJSONString(data["action"]) == string(types.RunnerActionStopProxy) && data["reason"] != nil:
 			data["reason"] = mustJSON(nodeRecordReasonWithheld)
 		default:
 			continue
@@ -42,4 +42,14 @@ func withoutNodeRecordSource(evs []types.AuditEvent) []types.AuditEvent {
 		evs[i].Data = b
 	}
 	return evs
+}
+
+// rawJSONString is v decoded as a JSON string, or "" when it is not one, so a match on the decoded value
+// holds whatever escaping or spacing the row's writer used.
+func rawJSONString(v json.RawMessage) string {
+	var s string
+	if json.Unmarshal(v, &s) != nil {
+		return ""
+	}
+	return s
 }
