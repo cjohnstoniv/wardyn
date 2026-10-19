@@ -137,8 +137,8 @@ test.describe("permissions — the admin surface, end to end", () => {
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog.getByText(PERM.ENFORCE_ON_ZERO)).toBeVisible();
     await expect(dialog.getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeVisible();
+    await expect(dialog.getByText(PERM.ENFORCE_ON_ZERO)).toHaveCount(0);
     // Walk away from it: nothing was written.
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByText(PERM.CHIP_ON, { exact: true })).toHaveCount(0);

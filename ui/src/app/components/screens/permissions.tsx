@@ -533,7 +533,7 @@ function KindRow({
       data-testid={`capability-row-${kind}`}
       className={cn(
         "grid grid-cols-[1fr_auto] items-start gap-4 border-t border-border px-6 py-4 first:border-t-0",
-        grants.length === 0 && "bg-warning-subtle",
+        !hasAllow && "bg-warning-subtle",
       )}
     >
       <div>
@@ -544,9 +544,10 @@ function KindRow({
           </Chip>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{copy.blurb}</p>
-        {/* Zero grants is the risky cell, so it says why in the row before the switch is touched. */}
-        <p className={cn("mt-1 text-body", grants.length === 0 ? "text-warning" : "text-foreground")}>
-          {grants.length === 0 ? PERM.ROW_ZERO : PERM.ROW_GRANTS(grants.length)}
+        {/* Nothing granted (no allow grant; a deny-only list counts as none, as in the confirm dialog) is the risky
+            cell, so it says why in the row before the switch is touched. */}
+        <p className={cn("mt-1 text-body", !hasAllow ? "text-warning" : "text-foreground")}>
+          {!hasAllow ? PERM.ROW_ZERO : PERM.ROW_GRANTS(grants.length)}
         </p>
         <p className={cn("mt-2 max-w-[76ch] text-body", enforced ? "text-foreground" : "text-muted-foreground")}>
           {enforced ? copy.enforced : copy.unenforced}
@@ -615,10 +616,7 @@ function ConfirmEnforcement({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {lockout && (
-          <Note tone="red">
-            <span className="block font-medium">{PERM.ENFORCE_ZERO_CONFIRM}</span>
-            <span className="block">{PERM.ENFORCE_ON_ZERO}</span>
-          </Note>
+          <Note tone="red">{PERM.ENFORCE_ZERO_CONFIRM}</Note>
         )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

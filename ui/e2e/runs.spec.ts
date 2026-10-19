@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealMember, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
 import { NO_BARRIER } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
@@ -275,6 +275,10 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
       await expect(row.getByText("1 decision needs you")).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
+      // Review opens the run on its Approvals tab, where the decision card is (#3032).
+      await row.getByRole("button", { name: "Review" }).click();
+      await expect(page).toHaveURL(/\/runs\/[^?]+\?tab=approvals/);
+      await expect(page.getByRole("tab", { name: /^Approvals/ })).toHaveAttribute("aria-selected", "true");
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
@@ -353,6 +357,8 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
     await expect(routes).toHaveCount(1); // the shell notice alone: no top-bar twin, no in-page card
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(1);
     await expect(page.getByRole("button", { name: NO_BARRIER.RECHECK })).toBeVisible();
+    // An admin gets the command to run, beside Re-check and the link.
+    await expect(page.getByText(NO_BARRIER.SETUP_COMMAND, { exact: true })).toBeVisible();
     for (const link of await routes.all()) {
       await expect(link).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
     }
@@ -368,6 +374,27 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
     await routes.first().click();
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment/);
     await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
+  });
+
+  // A member cannot fix it, so the notice says who can and offers nothing to click (#3029).
+  test("a member gets the no-action line: no command, no Re-check, no link", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      try {
+        const response = await route.fetch();
+        const json = await response.json();
+        json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+        await route.fulfill({ response, json });
+      } catch {
+        // The test ended while the real answer was in flight.
+      }
+    });
+    await asRealMember(page);
+    await gotoConsole(page);
+    await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.BANNER_MEMBER)).toBeVisible();
+    await expect(page.getByText(NO_BARRIER.SETUP_COMMAND, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: NO_BARRIER.RECHECK })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
   });
 
   // The seeded backend's own default (`-runner none`) already reads

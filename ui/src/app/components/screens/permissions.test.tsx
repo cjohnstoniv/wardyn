@@ -171,6 +171,20 @@ describe("PermissionsScreen — the capability row (#3053)", () => {
     expect(PERM.ROW_GRANTS(1)).toBe("1 grant");
   });
 
+  it("a deny-only row counts as nothing granted, the same as the confirm dialog does", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ capability: "workspace", value: "ws-1", effect: "deny" })],
+      enforcement: {},
+    });
+    renderScreen();
+    const workspace = await screen.findByTestId("capability-row-workspace");
+    expect(within(workspace).getByText(PERM.ROW_ZERO)).toBeInTheDocument();
+    expect(workspace.className).toContain("bg-warning-subtle");
+    await user.click(within(workspace).getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
+    expect(within(await screen.findByRole("alertdialog")).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+  });
+
   it("Add grant on a row chooses that capability in the add form", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -241,7 +255,9 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(PERM.ENFORCE_ON_ZERO)).toBeInTheDocument();
+    expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
+    // One lockout sentence in the dialog, not the ruled one plus a paraphrase of it.
+    expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
   });
 
   it("turning a kind off says denies still apply, and offers Stop enforcing", async () => {

@@ -56,11 +56,12 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { useSecurityOperator } from "../wardyn/operator-context";
+import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { viewerBlockedOnDecision } from "./run-detail/viewer-blocked";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
@@ -94,6 +95,8 @@ export function RunDetailScreen() {
 function RunDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
+  const securityOperator = useSecurityOperator();
+  const principal = usePrincipal();
 
   const {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,
@@ -275,6 +278,7 @@ function RunDetailPage({ id }: { id: string }) {
             terminal={terminal}
             exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
+            viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
             sandboxHeld={pending.some(isHeld)}
             // F13 — split, so the AWS-named chip never fires for an Azure
             // DevOps consent row (isAdoConsentRequest is also credential_reauth).

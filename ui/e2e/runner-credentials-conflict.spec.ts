@@ -9,6 +9,7 @@
 // reload. The PUT is refused here; the GET is the real server's.
 import type { Page } from "@playwright/test";
 import { test, expect, asRealSecurityAdmin, gotoConsole, navTo } from "./fixtures";
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { DELIVERY } from "../src/app/lib/governance-copy";
 import { UNSAVED } from "../src/app/lib/unsaved-copy";
 import { PROVIDERS, PROVIDERS_EXTRA } from "../src/app/lib/workspace-providers-copy";
@@ -22,7 +23,10 @@ async function refusedSave(page: Page): Promise<void> {
   await navTo(page, "Governance");
   await page.getByRole("tab", { name: DELIVERY.TAB }).click();
   // Change one row to a mode it is not on, so there is a draft to refuse.
+  await expect(page.getByTestId("form-actions-unsaved")).toHaveText("");
   await page.getByRole("radiogroup", { name: DELIVERY.CLASS.api_key }).getByRole("radio", { checked: false, disabled: false }).first().click();
+  // The shared form bar counts the changed row.
+  await expect(page.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
   await page.getByRole("button", { name: DELIVERY.SAVE, exact: true }).click();
   await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeVisible();
 }

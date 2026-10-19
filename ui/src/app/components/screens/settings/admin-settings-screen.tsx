@@ -387,7 +387,7 @@ export function AdminSettingsScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        // Cards sit tight (space-y-1) so the collapsed groups fit 744px (the approved mock's §4, #1200).
+        // Cards sit tight (space-y-1) so the collapsed groups fit the viewport budget set in settings-compact-viewport.spec.ts (#1200).
         <div className="space-y-5">
           <SettingsGroup title={SETTINGS_GROUPS.HOST}>
             <HostCard

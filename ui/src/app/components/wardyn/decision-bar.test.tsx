@@ -22,4 +22,10 @@ describe("DecisionBar", () => {
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     expect(onReview).toHaveBeenCalledTimes(1);
   });
+
+  it("says an admin is needed, with no Review, when the viewer cannot decide", () => {
+    render(<DecisionBar count={1} canDecide={false} onReview={() => {}} />);
+    expect(screen.getByTestId("decision-bar")).toHaveTextContent("Waiting for an admin");
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+  });
 });

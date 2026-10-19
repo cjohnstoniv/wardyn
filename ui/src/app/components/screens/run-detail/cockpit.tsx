@@ -4,9 +4,6 @@
  */
 
 import {
-  canDecideAdoCapability,
-  canDecideApproval,
-  isAdoCapabilityRequest,
   runHasWorkspace,
   type ApprovalRequest,
   type AuditEvent,
@@ -28,6 +25,7 @@ import {
 import { type ConsoleView } from "../../wardyn/console-view";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
+import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
 import { RunFailureBlock } from "./failure-block";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -100,27 +98,9 @@ export function Cockpit({
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
   const operatorResolved = useOperatorResolved();
-  // "blocked until an admin decides" is FALSE for a re-auth row (UX round B2):
-  // no admin decides it, and the person who can fix it is the credential's own
-  // owner. The kind is excluded from the predicate rather than the sentence
-  // reworded — a run whose ONLY pending row is a re-auth is not blocked on
-  // anyone's decision at all, and the strip's own heading says what it needs.
-  //
-  // S10 round 2 (F2): an Azure DevOps escalation this viewer OWNS is ALSO
-  // excluded — canDecideApproval doesn't know the ADO ownership carve-out
-  // (canDecideAdoCapability does), so without this a run's own owner read
-  // this "you're blocked" note over a card that, two lines below, lets them
-  // decide it.
+  // "blocked until an admin decides": see viewerBlockedOnDecision for what it leaves out (re-auth, an owned ADO escalation).
   const isRunOwner = run.created_by === principal;
-  const viewerBlocked =
-    pending.length > 0 &&
-    !securityOperator &&
-    pending.some((p) => p.kind !== "credential_reauth") &&
-    !pending.some(
-      (p) =>
-        p.kind !== "credential_reauth" &&
-        (canDecideApproval(false, p.kind) || (isAdoCapabilityRequest(p) && canDecideAdoCapability(false, isRunOwner))),
-    );
+  const viewerBlocked = viewerBlockedOnDecision(pending, securityOperator, isRunOwner);
 
   // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
   // session, and directly beneath it the approval that is HOLDING the session —
@@ -158,6 +138,7 @@ export function Cockpit({
           <DecisionBar
             count={notOnStrip.length}
             title={deriveTitle(notOnStrip[0].kind, notOnStrip[0].requested_scope ?? {})}
+            canDecide={!viewerBlocked}
             onReview={onGoApprovals}
           />
         </div>

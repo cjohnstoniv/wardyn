@@ -68,8 +68,9 @@ function DialogContent({
           // reach its own footer. `dvh` (not `vh`) accounts for mobile
           // browser chrome; every DialogContent gets this once, here, rather
           // than each caller re-deriving its own max-height patch.
-          // scroll-pb-24: a focused or scrolled-to field stops above the sticky DialogFooter, not under it.
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto scroll-thin scroll-pb-24 rounded-lg border p-6 shadow-floating duration-200 sm:max-w-lg",
+          // scroll-pb-32 (8rem): a focused or scrolled-to field stops above the sticky DialogFooter, not under it, even with the
+          // footer stacked on a phone (two full-width buttons, about 113px).
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto scroll-thin scroll-pb-32 rounded-lg border p-6 shadow-floating duration-200 sm:max-w-lg",
           className,
         )}
         onCloseAutoFocus={restoreOpenerFocus(opener, onCloseAutoFocus)}

@@ -53,12 +53,12 @@ function RunProviderChip({ run }: { run: RunDetail }) {
 
 // What the run is doing, as one sentence. A starting run says what it waits on; a run
 // with a decision pending says it is waiting on you; every other state says its own fact.
-function statusSentence(run: RunDetail, terminal: boolean, pendingApprovalCount: number): string {
+function statusSentence(run: RunDetail, terminal: boolean, pendingApprovalCount: number, viewerBlocked: boolean): string {
   if (run.state === "PENDING" && !run.status_detail?.trim()) return PENDING_NO_DETAIL;
   if (run.state === "STARTING" || run.state === "PENDING") {
     return statusDetailSentence(run.status_detail, run.status_reason) || RUN_HEADER.STARTING;
   }
-  if (!terminal && pendingApprovalCount > 0) return RUN_HEADER.WAITING;
+  if (!terminal && pendingApprovalCount > 0) return viewerBlocked ? RUN_HEADER.WAITING_FOR_ADMIN : RUN_HEADER.WAITING;
   switch (run.state) {
     case "RUNNING":
       return RUN_HEADER.WORKING;
@@ -84,6 +84,7 @@ export function SummaryHeader({
   terminal,
   exitCode,
   pendingApprovalCount = 0,
+  viewerBlocked = false,
   sandboxHeld = false,
   awaitingReauth = false,
   awaitingAdoConsent = false,
@@ -102,6 +103,8 @@ export function SummaryHeader({
   // this for the Approvals tab badge — same number, surfaced here too so it's
   // visible without switching tabs).
   pendingApprovalCount?: number;
+  /** The pending decision is one this viewer cannot make (viewerBlockedOnDecision). */
+  viewerBlocked?: boolean;
   // At least one of those pending approvals is HOLDING the sandbox right now
   // (a wait_for_review first-use gate — the connection is parked until someone
   // decides). Computed by the parent with live-approvals.tsx's own exported
@@ -150,7 +153,7 @@ export function SummaryHeader({
   const owned = !!run.created_by && run.created_by === principal;
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
-  const sentence = statusSentence(run, terminal, pendingApprovalCount);
+  const sentence = statusSentence(run, terminal, pendingApprovalCount, viewerBlocked);
   const startRename = () => {
     // F3 (review round 2): never seed from the WHOLE task —
     // runHeadline's own fallback chain (title, then task, then

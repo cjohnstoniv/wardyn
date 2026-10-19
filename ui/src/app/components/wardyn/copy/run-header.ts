@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { RUNS_ROW_WORD } from "./runs-landing";
+
 // The run header's status sentence and its time fact: what the run is doing, said as visible text.
 export const RUN_HEADER = {
   MORE: "More",
   REVIEW: "Review",
   WORKING: "Working. Nothing is waiting on you.",
+  /** The Runs list's wording for a decision this viewer cannot make. */
+  WAITING_FOR_ADMIN: `${RUNS_ROW_WORD.WAITING_FOR_ADMIN}.`,
   WAITING: "Waiting on you to decide.",
   FINISHED: "Finished.",
   STOPPED: "Stopped. Nothing is running.",

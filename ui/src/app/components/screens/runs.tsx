@@ -21,6 +21,7 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { setup as setupApi } from "../../lib/api/setup";
 import { usePoll } from "../../lib/use-poll";
 import { deriveReadiness } from "../../lib/readiness";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { RunsFirstRun } from "./runs-first-run";
 import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
@@ -162,18 +163,21 @@ export function RunsScreen() {
   // (internal/api/setup.go), so it is the wrong signal for a member, or an
   // admin's own User view, on a deployment that has OTHER people's runs; see
   // `trueEmpty` below, which reads this caller's own scoped fetch instead.
-  const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(null);
+  // The shell already reads /setup/status (and re-reads it on its Re-check), so that answer is used when there
+  // is one; the page fetches its own only when it renders without a shell.
+  const { status: shellStatus } = useShellSetupStatus();
+  const [ownStatus, setOwnStatus] = React.useState<SetupStatus | null>(null);
   const loadSetupStatus = React.useCallback(
-    () => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}),
+    () => setupApi.getSetupStatus().then(setOwnStatus).catch(() => {}),
     [],
   );
   React.useEffect(() => {
-    void loadSetupStatus();
-  }, [loadSetupStatus]);
+    if (!shellStatus) void loadSetupStatus();
+  }, [loadSetupStatus, shellStatus]);
+  const setupStatus = shellStatus ?? ownStatus;
   const readiness = setupStatus ? deriveReadiness(setupStatus) : null;
   const confinementClasses = setupStatus?.runner?.confinement_classes ?? [];
-  const noBarrier = !!setupStatus && !setupStatus.unreachable && confinementClasses.length === 0;
-  usePoll(loadSetupStatus, SETUP_POLL_MS, !noBarrier && !setupStatus?.unreachable);
+  usePoll(loadSetupStatus, SETUP_POLL_MS, !!shellStatus || !!setupStatus?.unreachable);
 
   const sections: RunSections = React.useMemo(() => sectionRuns(runsList), [runsList]);
   const workspaceOptions = React.useMemo(

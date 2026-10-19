@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomBytes } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, asRealMember, consoleAPI, gotoConsole, navTo } from "./fixtures";
@@ -79,7 +80,10 @@ test.describe("user pools against the real server", () => {
     await asRealMember(page);
     await page.goto("/account/pools/new");
     await expect(page.getByRole("heading", { name: POOL_FORM.TITLE_NEW })).toBeVisible();
+    // The shared form bar counts what changed since the form opened.
+    await expect(page.getByTestId("form-actions-unsaved")).toHaveText("");
     await page.locator("#f-name").fill(first);
+    await expect(page.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
     await page.getByRole("button", { name: POOL_FORM.CREATE }).click();
     await expect(page.getByText(POOL_FORM.CREATED(first))).toBeVisible();
     const created = await poolNamed(page, first);

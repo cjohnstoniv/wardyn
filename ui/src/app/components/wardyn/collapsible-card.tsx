@@ -117,7 +117,7 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
     );
     // px-4 either way (review L1): the body is p-4 — matching the horizontal inset keeps the title flush
     // with the body text once expanded (CONSOLE-RULES §11 "one grid"). Only the vertical inset is trimmed,
-    // and only while collapsed: eight collapsed cards must fit 744px (the #1200 budget), while an expanded
+    // and only while collapsed: the collapsed cards must fit the settings-compact-viewport budget (#1200), while an expanded
     // card keeps its roomier header.
     const faceClass = cn(
       "flex w-full items-start justify-between gap-3 rounded-xl px-4 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring",

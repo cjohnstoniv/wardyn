@@ -389,6 +389,50 @@ describe("RunDetailScreen — Approvals tab empty card", () => {
   });
 });
 
+// A pending git credential mint is admin-only: the Runs list says "Waiting for an admin", so the run page must
+// not tell a member it is their turn.
+describe("RunDetailScreen — who the pending decision waits on", () => {
+  const MINT = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "credential",
+    state: "PENDING",
+    requested_at: new Date().toISOString(),
+    requested_scope: { secret_name: "deploy-token", username: "ci" },
+  };
+
+  function renderAs(operator: boolean) {
+    listApprovalsMock.mockResolvedValue([MINT]);
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING" });
+    return render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={operator} securityOperator={operator} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("a member sees Waiting for an admin, and the Overview bar offers no Review", async () => {
+    renderAs(false);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting for an admin.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("Waiting for an admin");
+    expect(within(bar).queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.queryByText("Waiting on you to decide.")).toBeNull();
+  });
+
+  it("an admin sees it is their turn, with Review", async () => {
+    renderAs(true);
+    expect(await screen.findByTestId("run-status-sentence")).toHaveTextContent("Waiting on you to decide.");
+    const bar = await screen.findByTestId("decision-bar");
+    expect(bar).toHaveTextContent("1 decision needs you");
+    expect(within(bar).getByRole("button", { name: "Review" })).toBeInTheDocument();
+  });
+});
+
 // The Runs list's Review button opens a run on its Approvals tab (?tab=approvals).
 describe("RunDetailScreen — ?tab= picks the opening tab", () => {
   function renderAt(search: string) {

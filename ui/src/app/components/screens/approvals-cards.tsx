@@ -152,7 +152,7 @@ export function ApprovalCard({
   // enough to spin only the pressed button. The push card follows the same rule.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
   const [pushBusy, setPushBusy] = React.useState<"approve" | "deny" | null>(null);
-  // N1 (round 2): PendingCard only ever receives PENDING rows today
+  // N1 (round 2): ApprovalCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
   // component ever being reused for a broader list, and the single rule

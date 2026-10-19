@@ -62,7 +62,7 @@ async function waitForSettledSummaries(page: import("@playwright/test").Page, pa
   }
 }
 
-test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact cards)", () => {
+test.describe("Settings and Your account fit their viewport budget collapsed (#1200 compact cards)", () => {
   test("Admin Settings: every card collapsed, no scroll on main", async ({ page }) => {
     await page.setViewportSize(ADMIN_VIEWPORT);
     await gotoConsole(page, "admin");
@@ -95,6 +95,24 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     }
 
     expect(await mainScrolls(page)).toBe(false);
+  });
+
+  // MEASUREMENT (temporary): the viewport height Admin Settings needs, collapsed and with Host open, read at a
+  // viewport short enough that <main> scrolls: chrome around <main> + its content height.
+  test("Admin Settings: measure the height it needs", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 500 });
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
+    await waitForSettledSummaries(page, [/^Admin SSH keys \d+ admin key/, /^SCIM provisioning\s*\S/, /^Model providers \S/]);
+    const needs = () =>
+      page.evaluate(() => {
+        const el = document.querySelector("main")!;
+        return { needs: window.innerHeight - el.clientHeight + el.scrollHeight, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+      });
+    console.log(`ADMIN_SETTINGS_MEASURED collapsed ${JSON.stringify(await needs())}`);
+    await page.getByRole("button", { name: /^Host( |$)/ }).click();
+    console.log(`ADMIN_SETTINGS_MEASURED host-open ${JSON.stringify(await needs())}`);
   });
 
   test("Your account: every card collapsed, no scroll on main", async ({ page }) => {

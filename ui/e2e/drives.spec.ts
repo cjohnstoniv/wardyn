@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { randomUUID } from "node:crypto";
 import {
   test,
@@ -404,6 +405,12 @@ test.describe("drives — the editor offers what this deployment can mount, and 
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).not.toHaveClass(/bg-primary/);
     // Save waits for the one field that has no default.
     await expect(page.getByRole("button", { name: DRIVES.SAVE_CTA, exact: true })).toBeDisabled();
+
+    // The shared form bar: the count appears with the first edit, and Save is the bar's.
+    const bar = editor.getByTestId("form-actions");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText("");
+    await page.locator("#drive-name").fill("pinned-unsaved");
+    await expect(bar.getByTestId("form-actions-unsaved")).toHaveText(FORM_ACTIONS.UNSAVED(1));
 
     await page.getByRole("button", { name: PEOPLE.CANCEL, exact: true }).click();
     await expect(page.getByTestId("drives-drive-editor")).toHaveCount(0);
