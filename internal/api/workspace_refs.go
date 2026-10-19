@@ -62,6 +62,54 @@ func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool
 	return idx
 }
 
+// runCarrierRule is how one launch picks the workspace each source is judged by
+// (index) and whose member mount gate it owes. The carrier is the one the run
+// uses: an attached workspace that carries the source, else one mayLaunch
+// admits (indexWorkspacesFor), else the last carrier. nil mayLaunch admits
+// every workspace. person is the member the run is for, "" for an operator:
+// their own mount gate runs on a source a workspace of theirs carries, whichever
+// carrier judged it. The zero value is the authoring doors' rule: every
+// workspace, no person.
+type runCarrierRule struct {
+	attached  []types.Workspace
+	mayLaunch func(types.Workspace) bool
+	person    string
+}
+
+// launchCarrierRule is the rule for the caller of r launching with attached.
+func (s *Server) launchCarrierRule(r *http.Request, attached []types.Workspace) runCarrierRule {
+	rule := runCarrierRule{attached: attached, mayLaunch: func(ws types.Workspace) bool { return s.mayLaunchWorkspace(r, ws) }}
+	if !s.isOperator(r.Context()) {
+		rule.person = principalFromRequest(r)
+	}
+	return rule
+}
+
+func (c runCarrierRule) index(all []types.Workspace) workspaceSourceIndex {
+	idx := indexWorkspacesFor(all, c.mayLaunch)
+	for _, ws := range c.attached {
+		for _, src := range ws.Sources {
+			switch src.Type {
+			case types.WorkspaceSourceTypeLocalDir:
+				idx.localDir[src.Path] = ws
+			case types.WorkspaceSourceTypeRepo:
+				idx.repo[src.Source] = ws
+			}
+		}
+	}
+	return idx
+}
+
+// personMountAllowed is the person's own mount gate on wm when a workspace of
+// theirs in all carries its source and the carrier that judged it is not theirs.
+func (c runCarrierRule) personMountAllowed(policy runner.UserMountPolicy, all []types.Workspace, judged types.Workspace, wm types.WorkspaceMount) error {
+	if c.person == "" || judged.OwnedBy == c.person ||
+		!slices.ContainsFunc(localDirHolders(all, wm.Source), func(ws types.Workspace) bool { return ws.OwnedBy == c.person }) {
+		return nil
+	}
+	return userMountAllowed(policy, c.person, wm)
+}
+
 // validateWorkspaceSources fails a run closed (422) when any USER-workspace mount
 // source or repo on the spec is not a pre-ONBOARDED workspace. It is the
 // un-bypassable onboarding gate: called at run-create over the RESOLVED spec
@@ -85,7 +133,7 @@ func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool
 // across all four for the cross-member existence-oracle reason
 // authorizeSpecWorkspaceSources' doc comment explains, and a distinguishable
 // reason would reopen exactly that.
-func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec) (int, string, error) {
+func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPolicySpec, rule runCarrierRule) (int, string, error) {
 	// Fast path: nothing to gate if the run declares no user workspaces.
 	if len(spec.WorkspaceMounts) == 0 && len(spec.WorkspaceRepos) == 0 {
 		return 0, "", nil
@@ -99,7 +147,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
-	idx := indexWorkspacesBySource(all)
+	idx := rule.index(all)
 
 	for _, wm := range spec.WorkspaceMounts {
 		ws, ok := idx.localDir[wm.Source]
@@ -114,6 +162,9 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		// a symlink) AFTER the workspace was created. An operator-owned source
 		// (OwnedBy == "") is untouched.
 		if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+			return http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err
+		}
+		if err := rule.personMountAllowed(s.cfg.UserMounts, all, ws, wm); err != nil {
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err
 		}
 	}
@@ -169,7 +220,7 @@ func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
 //
 // The workspace whose row made the mount writable is held as well, whether or
 // not it is attached: a workspace pulled into the run because it holds the same
-// directory (referencedWorkspacesIn's index keeps one holder per directory) can
+// directory (referencedWorkspacesBy's index keeps one holder per directory) can
 // carry a required write row its member owner set, and the attached holders
 // alone would not answer for that member.
 // wasReadOnly is each mount's state before the fold, and suppliers the

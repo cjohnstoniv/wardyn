@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -99,11 +100,10 @@ var doorSuccess = map[string]int{"/api/v1/runs": http.StatusCreated, "/api/v1/ru
 // scan's optional write:<P> row to required on their own workspace M, by an
 // override set through the member's own POST, or through PUT on a workspace
 // created without one. An operator workspace O on the same P is created after
-// M. The member attaches O only; the source index pulls M into the run (it
-// keeps the oldest holder), and M's row is what would make P writable. P is
-// outside the member's writable roots, so every door refuses, as it does when
-// the member attaches M itself. A run that selects O read_only is not turned
-// writable by M's row, and the record door refuses M as create does.
+// M. P is outside the member's writable roots, so every door refuses M
+// attached. A run that attaches O is judged by O, the carrier it uses, not by
+// M's row: every door admits it and create binds P read-only, by default and
+// when the run selects O read_only. The record door refuses M as create does.
 func TestPG_RequirementWrite_MemberOverrideSupplierIsHeld(t *testing.T) {
 	for _, viaUpdate := range []bool{false, true} {
 		name := "override set at create"
@@ -133,23 +133,52 @@ func TestPG_RequirementWrite_MemberOverrideSupplierIsHeld(t *testing.T) {
 			}
 			o := h.workspace(t, false, "o-"+uuid.NewString()[:8], project, nil)
 
-			for door := range doorSuccess {
-				for label, ws := range map[string]uuid.UUID{"operator workspace attached": o, "member workspace attached": m} {
-					w := h.send(t, true, http.MethodPost, door, launch(ws, false))
-					if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
-						t.Errorf("%s, %s: code = %d, want 422 %s; body=%s", door, label, w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+			// specAfter waits for the n-th CreateSandbox and returns the spec it was handed.
+			specAfter := func(n int) runner.SandboxSpec {
+				t.Helper()
+				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+					h.fr.mu.Lock()
+					calls, spec := h.fr.createCalls, h.fr.lastSpec
+					h.fr.mu.Unlock()
+					if calls >= n {
+						return spec
 					}
 				}
+				t.Fatalf("CreateSandbox was not called %d time(s) within 5s", n)
+				return runner.SandboxSpec{}
 			}
-			if h.fr.createCalls != 0 {
-				t.Fatalf("CreateSandbox calls = %d, want 0", h.fr.createCalls)
+			createCalls := func() int {
+				h.fr.mu.Lock()
+				defer h.fr.mu.Unlock()
+				return h.fr.createCalls
+			}
+
+			for door := range doorSuccess {
+				w := h.send(t, true, http.MethodPost, door, launch(m, false))
+				if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
+					t.Errorf("%s, member workspace attached: code = %d, want 422 %s; body=%s", door, w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+				}
+			}
+			if n := createCalls(); n != 0 {
+				t.Fatalf("CreateSandbox calls = %d after the member workspace's refusals, want 0", n)
+			}
+
+			for door, want := range doorSuccess {
+				if w := h.send(t, true, http.MethodPost, door, launch(o, false)); w.Code != want {
+					t.Errorf("%s, operator workspace attached: code = %d, want %d; body=%s", door, w.Code, want, w.Body.String())
+				}
+			}
+			if mnt := mountFor(t, specAfter(1), composerWorkspaceTarget); !mnt.ReadOnly || !strings.HasSuffix(mnt.Source, "/app") {
+				t.Errorf("the run attached the operator workspace: bind %q read-only=%v, want P read-only; the member workspace's row must not make it writable", mnt.Source, mnt.ReadOnly)
+			}
+			if n := createCalls(); n != 1 {
+				t.Fatalf("CreateSandbox calls = %d after the operator workspace's three doors, want 1 (create only)", n)
 			}
 
 			if w := h.send(t, true, http.MethodPost, "/api/v1/runs", launch(o, true)); w.Code != http.StatusCreated {
 				t.Fatalf("operator workspace selected read_only: code = %d, want 201; body=%s", w.Code, w.Body.String())
 			}
-			h.fr.waitForSandbox(t)
-			if mnt := mountFor(t, h.fr.lastSpec, composerWorkspaceTarget); !mnt.ReadOnly {
+			if mnt := mountFor(t, specAfter(2), composerWorkspaceTarget); !mnt.ReadOnly {
 				t.Errorf("the run selected the operator workspace read_only, and the member workspace's row bound %q writable", mnt.Source)
 			}
 

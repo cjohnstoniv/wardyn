@@ -324,7 +324,7 @@ func writeGrantedElsewhere(attached []types.Workspace, selections map[string]cli
 // mayNarrow says whether a row that grants nothing may still make the mount
 // read-only: true for a workspace the run attaches, or one whose row is
 // required or enabled. A workspace that is only in the run because it stores
-// the same directory (referencedWorkspacesIn) and whose row is not enabled
+// the same directory (referencedWorkspacesBy) and whose row is not enabled
 // neither grants a write nor removes one another workspace granted.
 //
 // A row that grants nothing and carries no explicit read_only also leaves the mount alone when

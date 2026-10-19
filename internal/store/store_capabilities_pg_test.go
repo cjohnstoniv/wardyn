@@ -61,7 +61,7 @@ func TestPG_CapabilityGrants_UpsertFlipsInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	t.Cleanup(func() { _ = st.DeleteCapabilityGrant(ctx, first.ID) })
+	t.Cleanup(func() { _, _ = st.DeleteCapabilityGrant(ctx, first.ID) })
 	if first.ID == uuid.Nil {
 		t.Fatal("insert returned the nil uuid; the console would have no delete target")
 	}
@@ -97,7 +97,7 @@ func TestPG_CapabilityGrants_UpsertFlipsInPlace(t *testing.T) {
 func TestPG_CapabilityGrants_DeleteMissing(t *testing.T) {
 	pool := runsPGPool(t)
 	st := store.NewPG(pool)
-	if err := st.DeleteCapabilityGrant(context.Background(), uuid.New()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.DeleteCapabilityGrant(context.Background(), uuid.New()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete unknown id: err = %v, want ErrNotFound", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestPG_CapabilityGrants_ListForSubject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
-		t.Cleanup(func() { _ = st.DeleteCapabilityGrant(ctx, saved.ID) })
+		t.Cleanup(func() { _, _ = st.DeleteCapabilityGrant(ctx, saved.ID) })
 	}
 
 	got, err := st.ListCapabilityGrantsFor(ctx, []string{"sub-alice", "alice@example.com"}, []string{"eng"}, "")

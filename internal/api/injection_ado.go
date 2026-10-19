@@ -84,31 +84,38 @@ const adoEntraAccessReuseMargin = 10 * time.Minute
 // rendering to protect.
 //
 // Process-local. More than one replica may serve one person (WARDYN_HA), and a
-// sign-in deleted on another replica is forgotten only there, so a hit is
-// served only while the stored sign-in row still exists (adoEntraAccessFor).
+// sign-in deleted or replaced on another replica is forgotten only there, so a
+// hit is served only while the stored sign-in is still the revision the token
+// was redeemed from (adoEntraAccessFor).
 type adoEntraAccessCache struct {
 	mu sync.Mutex
-	m  map[string]ADOEntraAccess
+	m  map[string]adoEntraCached
 	// refused is when a consent_required answer was last given per (owner,
 	// row, needed scopes) — adoConsentRefusedRecently's negative cache.
 	refused map[string]time.Time
 }
 
-func (c *adoEntraAccessCache) get(key string, now time.Time) (ADOEntraAccess, bool) {
+// adoEntraCached is a cached token and the stored sign-in revision it was redeemed from.
+type adoEntraCached struct {
+	ADOEntraAccess
+	rev string
+}
+
+func (c *adoEntraAccessCache) get(key string, now time.Time) (adoEntraCached, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a, ok := c.m[key]
 	if !ok || !a.ExpiresAt.After(now.Add(adoEntraAccessReuseMargin)) {
-		return ADOEntraAccess{}, false
+		return adoEntraCached{}, false
 	}
 	return a, true
 }
 
-func (c *adoEntraAccessCache) put(key string, a ADOEntraAccess) {
+func (c *adoEntraAccessCache) put(key string, a adoEntraCached) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.m == nil {
-		c.m = map[string]ADOEntraAccess{}
+		c.m = map[string]adoEntraCached{}
 	}
 	c.m[key] = a
 }
@@ -122,7 +129,7 @@ func (c *adoEntraAccessCache) forget(owner string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	prefix := owner + "\x00"
-	maps.DeleteFunc(c.m, func(k string, _ ADOEntraAccess) bool { return strings.HasPrefix(k, prefix) })
+	maps.DeleteFunc(c.m, func(k string, _ adoEntraCached) bool { return strings.HasPrefix(k, prefix) })
 	maps.DeleteFunc(c.refused, func(k string, _ time.Time) bool { return strings.HasPrefix(k, prefix) })
 }
 
@@ -135,11 +142,11 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	key := strings.Join([]string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(scopes, " ")}, "\x00")
 	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
 		rev, guarded, err := s.entraRevision(ctx, owner, adoCapture(cfg))
-		if err == nil && (!guarded || rev != "") {
-			return a, nil
+		if err == nil && (!guarded || (rev != "" && rev == a.rev)) {
+			return a.ADOEntraAccess, nil
 		}
 		if err == nil {
-			s.adoEntraTokens.forget(owner) // deleted on another replica: what is held here came from it
+			s.adoEntraTokens.forget(owner) // deleted or replaced on another replica: what is held here came from the old one
 		}
 	}
 	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
@@ -157,7 +164,13 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	if err != nil {
 		return ADOEntraAccess{}, err
 	}
-	s.adoEntraTokens.put(key, a)
+	// Read after the redemption, which may have stored a rotated sign-in. A failed
+	// read caches under no revision, so the next hit redeems again.
+	rev, _, rerr := s.entraRevision(lctx, owner, adoCapture(cfg))
+	if rerr != nil {
+		rev = ""
+	}
+	s.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: a, rev: rev})
 	return a, nil
 }
 

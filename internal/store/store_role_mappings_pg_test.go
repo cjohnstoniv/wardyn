@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -252,4 +253,58 @@ func findRoleMapping(rows []types.RoleMapping, value string) types.RoleMapping {
 		}
 	}
 	return types.RoleMapping{}
+}
+
+// TestPG_RoleMappings_DirectWritesWaitForAnApproval: an approval of a held role-map change judges
+// the whole map under its lock, so a direct upsert or delete of any row waits for it instead of
+// landing inside it.
+func TestPG_RoleMappings_DirectWritesWaitForAnApproval(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	value := "test-value-" + uuid.NewString()
+	seeded, err := st.UpsertRoleMapping(ctx, roleMapping(value, "user"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.DeleteRoleMapping(ctx, seeded.ID) })
+	other := roleMapping("other-"+value, "admin")
+	writes := map[string]func(context.Context) error{
+		"upsert of another row": func(c context.Context) error {
+			saved, err := st.UpsertRoleMapping(c, other)
+			if err == nil {
+				t.Cleanup(func() { _ = st.DeleteRoleMapping(ctx, saved.ID) })
+			}
+			return err
+		},
+		"delete": func(c context.Context) error { return st.DeleteRoleMapping(c, seeded.ID) },
+	}
+
+	approval, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LockGovernanceTarget(ctx, approval, "role_mapping"); err != nil {
+		t.Fatal(err)
+	}
+	for name, write := range writes {
+		// Another goroutine, as another request would be: this one holds the approval's connection.
+		done := make(chan error, 1)
+		go func() {
+			c, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			defer cancel()
+			done <- write(c)
+		}()
+		if err := <-done; err == nil {
+			t.Errorf("%s landed while an approval held the role map", name)
+		}
+	}
+	if err := approval.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"upsert of another row", "delete"} {
+		if err := writes[name](ctx); err != nil {
+			t.Errorf("%s after the approval: %v", name, err)
+		}
+	}
 }
