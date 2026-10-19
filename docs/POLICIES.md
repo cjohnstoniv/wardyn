@@ -571,6 +571,16 @@ What the check does and does not settle:
 >   - allow-list it port-qualified instead of leaving it to first-use approval,
 >   - or deny it outright and accept that the deny is host-wide (the proxy returns on a deny before it ever considers an approval).
 
+> [!IMPORTANT]
+> **The port rule closes the other ports** (`WARDYN_EGRESS_PORT_RULE`, [docs/ENV.md](ENV.md#wardyn_egress_port_rule); [`internal/egress/proxy/port_rule.go`](../internal/egress/proxy/port_rule.go)).
+>
+> - With it on, a bare host, a wildcard, `allow_all_egress` and every approval scope above reach ports 80 and 443 only.
+> - Another port needs an allowlist entry that names it (`db.example.org:5432`); that entry opens that port and no other.
+> - A refused request is `403` with `rule_source` `policy:port`, decided after `policy:denied` and before the method check and any first-use approval, so no human is asked about a port an approval could never open.
+> - It is **off by default for container runs** (today's every-port behaviour) and `dry_run` marks, without refusing, each allow it would refuse.
+> - The proxy turns it **on for every run dispatched as a desktop VM** (`vm` in its config). For such a run, every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest.
+> - The relay checks the TLS server name only when a connection opens with TLS. On a granted port it carries without that check plain HTTP (except on port 80), a protocol whose server speaks first, and a STARTTLS-style protocol (cleartext first, TLS later).
+
 - An unrecognised `decision_scope` is rejected at write time, same as `first_use_approval` above — `Valid()` only accepts empty or one of the four values in the table.
 - The one place an unrecognised value can still appear is a proxy reading a decision made by a *newer* control plane.
 - There it floors to `once` rather than widening to `run`, which is fail-closed for an **allow**.

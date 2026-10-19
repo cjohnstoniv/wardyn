@@ -102,6 +102,8 @@ type bootFlags struct {
 	// governAdminRunsExempt is WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes left
 	// ungoverned under the switch. The only value is "recording".
 	governAdminRunsExempt *string
+	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
+	egressPortRule *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -461,6 +463,7 @@ func parseBootFlags() *bootFlags {
 		scimLeaverWorkspaces:   flagEnv("scim-leaver-workspaces", "WARDYN_SCIM_LEAVER_WORKSPACES", scimWorkspacesReassign, "what a purge does with the workspaces a purged person owns: reassign hands them to the operator (default), keep leaves them"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
+		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
@@ -701,6 +704,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
+	exitOnBadPortRule(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted

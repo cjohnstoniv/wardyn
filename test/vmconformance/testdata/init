@@ -1,0 +1,13 @@
+#!/bin/busybox sh
+# The conformance guest's /init: bring eth0 up the way a desktop guest's
+# kernel ip= line does (10.0.2.15/24, gateway 10.0.2.2), run the probe, power off.
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+for m in failover net_failover virtio_net; do insmod /lib/$m.ko; done
+ip link set lo up
+ip link set eth0 up
+ip addr add 10.0.2.15/24 dev eth0
+ip route add default via 10.0.2.2
+/vmprobe
+poweroff -f

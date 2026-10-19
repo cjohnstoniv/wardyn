@@ -46,6 +46,11 @@ const controlPlaneCallTimeout = 130 * time.Second
 type Proxy struct {
 	runID  uuid.UUID
 	policy *Policy
+	// vm, portRule and vmFlows: the port rule and wardyn-vmnet's flow
+	// contract (port_rule.go, vmnet_flows.go).
+	vm       bool
+	portRule string
+	vmFlows  vmFlows
 	// evaluator decides the host allow/deny/unknown verdict + method (pluggable
 	// seam). Defaults to the builtin RunPolicySpec evaluator. The IP guard,
 	// approval FSM, IP vetting, and injection stay hardwired in evaluate().
@@ -610,6 +615,18 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		log := decisionLog(req, egress.Deny, "policy:denied")
 		return egress.Deny, "", &log
 	}
+	// The port rule (port_rule.go) sits below policy:denied and above the method
+	// check and the approval raise: an approval is host-wide and never opens a
+	// port, so asking for one the rule refuses is a question the answer cannot
+	// change.
+	portDryRun := false
+	if p.portRuleRefuses(host, port) {
+		if p.portRule == PortRuleOn {
+			log := decisionLog(req, egress.Deny, ruleSourcePort)
+			return egress.Deny, "", &log
+		}
+		portDryRun = true
+	}
 
 	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
 	// the first-use approval flow below.
@@ -714,6 +731,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		if approvalID == uuid.Nil {
 			log.RuleSource = ruleSourceEgressRedirect
 		}
+		markPortDryRun(&log, portDryRun)
 		return egress.Allow, target, &log
 	}
 	target, ruleSource, terr := p.egressTarget(host, port)
@@ -745,6 +763,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	if ruleSource != "" && approvalID == uuid.Nil {
 		log.RuleSource = ruleSource
 	}
+	markPortDryRun(&log, portDryRun)
 	return egress.Allow, target, &log
 }
 
@@ -773,7 +792,12 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host, port = splitHostPort(r.RequestURI, 443)
 	}
 
-	decision, target, log := p.evaluate(r.Context(), host, port, http.MethodConnect, "")
+	// A desktop VM's relay asks before it completes the guest's handshake and
+	// tunnels after it has read the first flight (vmnet_flows.go): the tunnel
+	// stage resumes the decision the ask parked, so one flow is decided, held
+	// and dialled once.
+	flow, stage := p.vmnetStage(r)
+	decision, target, log := p.decideConnect(r.Context(), flow, stage, host, port)
 	// Deny/Pending are emitted now. The ALLOW decision is deferred until the
 	// tunnel is actually established (E3): emitting it before the dial would
 	// over-report an allow when the dial then fails.
@@ -792,6 +816,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
+		return
+	}
+	if stage == vmnetStageAsk {
+		p.parkVMFlow(w, flow, host, port, target, log)
 		return
 	}
 

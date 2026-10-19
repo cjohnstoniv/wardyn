@@ -358,6 +358,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `vm-conformance` (not required) | – | pending | pending | 30 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |

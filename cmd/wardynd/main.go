@@ -426,6 +426,7 @@ func run() error {
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
+		EgressPortRule:      egressPortRule(*f.egressPortRule),
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,

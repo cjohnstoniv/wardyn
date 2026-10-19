@@ -88,8 +88,8 @@ func refusedByPreviousProxy(t *testing.T, raw []byte) string {
 // the previous proxy lacks is refused there naming the key (want), the
 // fail-closed half: dispatch hands the policy to the proxy whole, so an older
 // proxy stops the run instead of enforcing it without, say, its push rules.
-// Every key below reached v0.9.3, so each case loads ("") until the next
-// release adds one; add a case beside the key that does.
+// Every key below reached v0.9.3 except the port rule and the VM flag, which
+// load only while absent; add a case beside each key a release adds.
 func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	base := runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
 	pushRules := base
@@ -109,6 +109,12 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
 	innerWalls := base
 	innerWalls.Policy.HarnessInnerWalls = &types.HarnessInnerWalls{Approvals: types.InnerApprovalsWardyn}
+	portRuleOn := base
+	portRuleOn.PortRule = proxy.PortRuleOn
+	portRuleDryRun := base
+	portRuleDryRun.PortRule = proxy.PortRuleDryRun
+	vmRun := base
+	vmRun.VM = true
 
 	for _, tc := range []struct {
 		name string
@@ -125,6 +131,11 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		{"github capabilities chosen by the policy", ghCaps, ""},
 		// Only a run whose policy chooses inner walls carries the key, and the previous proxy refuses it.
 		{"harness inner walls chosen by the policy", innerWalls, "policy.harness_inner_walls"},
+		// wardynd sends the port rule's "off" as no key (cmd/wardynd egressPortRule).
+		{"port rule off, sent as no key", base, ""},
+		{"port rule on", portRuleOn, "port_rule"},
+		{"port rule dry run", portRuleDryRun, "port_rule"},
+		{"a desktop VM run", vmRun, "vm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)

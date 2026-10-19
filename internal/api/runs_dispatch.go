@@ -624,6 +624,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// the run has no profile and the site sets no policy_help, because an
 			// older proxy refuses the key.
 			Attribution: s.runAttribution(ctx, run, siteCfg, p.PolicyOverridden),
+			// WARDYN_EGRESS_PORT_RULE, "" when off: an older proxy refuses the key.
+			PortRule: s.cfg.EgressPortRule,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

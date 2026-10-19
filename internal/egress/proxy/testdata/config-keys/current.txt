@@ -159,6 +159,7 @@ policy.workspace_repos
 policy.workspace_repos.ref
 policy.workspace_repos.repo
 policy.workspace_repos.target
+port_rule
 push_rule_base
 push_rule_base.deny_new_executables
 push_rule_base.deny_paths
@@ -196,3 +197,4 @@ upstream_proxy_url
 via_org_routes
 via_org_routes.grant_id
 via_org_routes.host
+vm
