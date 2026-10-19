@@ -429,3 +429,33 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and no UI apps", def.GovernanceProfileName, def.UIApps)
 	}
 }
+
+// namedDeleteStore is a store that deletes and names the row in one call, as PG does.
+type namedDeleteStore struct {
+	*govCrudStore
+	name string
+}
+
+func (s namedDeleteStore) DeleteGovernanceProfileNamed(context.Context, uuid.UUID) (string, error) {
+	return s.name, nil
+}
+
+// A direct delete's audit row carries the name the delete itself returned (read in the delete's
+// transaction), not a name from an earlier separate read.
+func TestGovernanceCRUD_ProfileDeleteAuditNamesTheRowTheDeleteRemoved(t *testing.T) {
+	id := uuid.New()
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, namedDeleteStore{govCrudStore: &govCrudStore{}, name: "interns"}))
+	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/profiles/"+id.String(), adminToken, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	var data string
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "governance.profile.delete" {
+			data = string(ev.Data)
+		}
+	}
+	if !strings.Contains(data, `"name":"interns"`) {
+		t.Fatalf("delete audit data = %q, want the name the delete returned", data)
+	}
+}

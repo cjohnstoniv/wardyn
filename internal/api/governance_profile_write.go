@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -574,12 +575,23 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		s.holdProfileDelete(w, r, id)
 		return
 	}
-	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
-		row, err := store.GetGovernanceProfileQ(r.Context(), q, id, false)
-		return map[string]any{"name": row.Name}, err
-	})
-	if err == nil {
-		err = s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
+	var data map[string]any
+	var err error
+	if named, ok := s.cfg.Store.(interface {
+		DeleteGovernanceProfileNamed(context.Context, uuid.UUID) (string, error)
+	}); ok {
+		// The name is read in the delete's own transaction, so the audit row names the row removed.
+		var name string
+		name, err = named.DeleteGovernanceProfileNamed(r.Context(), id)
+		data = map[string]any{"name": name}
+	} else {
+		data, err = s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
+			row, err := store.GetGovernanceProfileQ(r.Context(), q, id, false)
+			return map[string]any{"name": row.Name}, err
+		})
+		if err == nil {
+			err = s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
+		}
 	}
 	if s.writeProfileDeleteError(w, r, err) {
 		return

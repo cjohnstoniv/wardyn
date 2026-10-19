@@ -262,15 +262,33 @@ func (s PG) GetGovernanceProfileChain(ctx context.Context, id uuid.UUID) ([]type
 // instead of a 500. *ErrProfileHasChildren when other profiles still compose on it
 // (named under the graph lock, so the answer matches what the delete saw).
 func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
+	_, err := s.DeleteGovernanceProfileNamed(ctx, id)
+	return err
+}
+
+// DeleteGovernanceProfileNamed is DeleteGovernanceProfile that also returns the name of the row it
+// removed, read in the same transaction under the graph lock, so an audit row names the profile that
+// was deleted rather than whichever one a separate read saw. The name is empty on error.
+func (s PG) DeleteGovernanceProfileNamed(ctx context.Context, id uuid.UUID) (string, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	if err := DeleteGovernanceProfileQ(ctx, tx, id); err != nil {
-		return err
+	if err := LockGovernanceGraph(ctx, tx); err != nil {
+		return "", err
 	}
-	return tx.Commit(ctx)
+	row, err := GetGovernanceProfileQ(ctx, tx, id, false)
+	if err != nil {
+		return "", err
+	}
+	if err := DeleteGovernanceProfileQ(ctx, tx, id); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return row.Name, nil
 }
 
 // DeleteGovernanceProfileQ is DeleteGovernanceProfile's body on a caller's transaction (q must be a
