@@ -418,7 +418,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - That frees about 60 runner-minutes by median and 12 job slots (counted before `k6-kind-conformance`). What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
-- `ci.yml` can call the nightly (`workflow_call`, input `scope`). A called run's group ends in the caller's run id, so it never cancels a dispatched one. Its jobs restore the `go-<suite>-` caches `ci.yml` saves and never save one, because the repository's cache is full.
+- `ci.yml` can call the nightly (`workflow_call`, inputs `scope` and `publish`). A called run's group ends in the caller's run id, so it never cancels a dispatched one. It restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only a dispatch with `publish` on (the default) stages and attests images.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 

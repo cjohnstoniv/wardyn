@@ -16,6 +16,10 @@ on:
         type: choice
         options: [full, candidate]
         default: full
+      publish:
+        description: "Stage the multi-arch images and attest them. Leave on for a release candidate; a hand run that must not touch the registry turns it off."
+        type: boolean
+        default: true
   # ci.yml's train-gate calls this with scope=candidate on a train PR's head. The input is a
   # string here (workflow_call has no choice type); a value other than candidate runs every lane.
   workflow_call:
@@ -24,6 +28,10 @@ on:
         description: "full = every lane; candidate = only the lanes a release is gated on"
         type: string
         default: full
+      publish:
+        description: "Stage and attest the multi-arch images. A called run builds them and pushes nothing, whatever event the caller ran on."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -824,7 +832,7 @@ jobs:
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -835,7 +843,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'workflow_dispatch' && matrix.stage == 'true' }}
+          push: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true' }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
@@ -847,7 +855,7 @@ jobs:
       # line at build time (which also covers a scheduled run that pushes
       # nothing); this reads it back out of what was pushed. Gated on the exit code.
       - name: Assert the staged digest carries the pinned GOFIPS140 snapshot
-        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true' && contains(matrix.build-args, 'GOFIPS140=')
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true' && contains(matrix.build-args, 'GOFIPS140=')
         env:
           BUILD_ARGS: ${{ matrix.build-args }}
           IMAGE_REF: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}@${{ steps.build.outputs.digest }}
@@ -857,7 +865,7 @@ jobs:
           test -n "$pin"
           ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Attest the staged digest's build provenance
-        if: github.event_name == 'workflow_dispatch' && matrix.stage == 'true'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && matrix.stage == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
@@ -871,7 +879,7 @@ jobs:
   buildx-smoke-ui-sandbox:
     name: multi-arch build (${{ matrix.name }})
     needs: buildx-smoke
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
