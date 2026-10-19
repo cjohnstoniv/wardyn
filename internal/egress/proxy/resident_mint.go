@@ -106,4 +106,3 @@ func (p *Proxy) answerResidentMint(w http.ResponseWriter, r *http.Request, m Res
 		KnownHosts string          `json:"known_hosts,omitempty"`
 	}{m.Kind, m.Token, m.Username, m.ExpiresAt.UTC().Format(time.RFC3339), m.KnownHosts})
 }
-

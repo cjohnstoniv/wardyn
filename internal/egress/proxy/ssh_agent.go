@@ -241,12 +241,12 @@ func (a *userauthAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agen
 	return a.key.ring.SignWithFlags(key, data, flags)
 }
 
-func (a *userauthAgent) Add(agent.AddedKey) error         { return errSSHAgentRefused }
-func (a *userauthAgent) Remove(ssh.PublicKey) error       { return errSSHAgentRefused }
-func (a *userauthAgent) RemoveAll() error                 { return errSSHAgentRefused }
-func (a *userauthAgent) Lock([]byte) error                { return errSSHAgentRefused }
-func (a *userauthAgent) Unlock([]byte) error              { return errSSHAgentRefused }
-func (a *userauthAgent) Signers() ([]ssh.Signer, error)   { return nil, errSSHAgentRefused }
+func (a *userauthAgent) Add(agent.AddedKey) error       { return errSSHAgentRefused }
+func (a *userauthAgent) Remove(ssh.PublicKey) error     { return errSSHAgentRefused }
+func (a *userauthAgent) RemoveAll() error               { return errSSHAgentRefused }
+func (a *userauthAgent) Lock([]byte) error              { return errSSHAgentRefused }
+func (a *userauthAgent) Unlock([]byte) error            { return errSSHAgentRefused }
+func (a *userauthAgent) Signers() ([]ssh.Signer, error) { return nil, errSSHAgentRefused }
 func (a *userauthAgent) Extension(string, []byte) ([]byte, error) {
 	return nil, agent.ErrExtensionUnsupported
 }

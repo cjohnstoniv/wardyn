@@ -34,7 +34,7 @@ func TestClaudeAgentRun_SSHLaneUsesTheProxyAgent(t *testing.T) {
 			"[ -e \"$HOME/.ssh/wardyn_ssh_config\" ] && echo config-left >> \"$CLAUDE_LOG\"\nexit 0\n",
 		// Each curl call logs its argv, the GIT_SSH_COMMAND it sees and the ssh
 		// config as it stands at that moment.
-		"curl": "#!/bin/sh\n{ echo \"ARGV $*\"; echo \"GIT_SSH_COMMAND=$GIT_SSH_COMMAND\"; cat \"$HOME/.ssh/wardyn_ssh_config\" 2>/dev/null; } >> \"$CURL_LOG\"\n",
+		"curl":              "#!/bin/sh\n{ echo \"ARGV $*\"; echo \"GIT_SSH_COMMAND=$GIT_SSH_COMMAND\"; cat \"$HOME/.ssh/wardyn_ssh_config\" 2>/dev/null; } >> \"$CURL_LOG\"\n",
 		"ssh":               "#!/bin/sh\nexit 0\n",
 		"corkscrew":         "#!/bin/sh\nexit 0\n",
 		"wardyn-git-helper": "#!/bin/sh\nexit 0\n",
