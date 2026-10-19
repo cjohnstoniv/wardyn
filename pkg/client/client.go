@@ -87,6 +87,8 @@
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
+//   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
+//     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base

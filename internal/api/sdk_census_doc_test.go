@@ -5,6 +5,7 @@ package api
 
 import (
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -68,7 +69,8 @@ func TestSDKCensusNamesEveryRouteFamily(t *testing.T) {
 
 	var missing []string
 	for lit, example := range want {
-		if !strings.Contains(census, lit) {
+		// On a path boundary: a plain Contains lets /api/v1/token pass on /api/v1/tokens.
+		if !regexp.MustCompile(regexp.QuoteMeta(lit) + `(?:[^A-Za-z0-9_-]|$)`).MatchString(census) {
 			missing = append(missing, lit+" (e.g. "+example+")")
 		}
 	}
