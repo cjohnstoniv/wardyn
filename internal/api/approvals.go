@@ -243,7 +243,9 @@ func (s *Server) refuseIfRunEnded(
 			run, haveRun = got, true
 		}
 	}
-	if haveRun && isTerminalRunState(run.State) {
+	// An approval already decided is not stranded by the run's end: it falls through to Decide, whose
+	// already_decided answer is the true one. (An empty state is a row no store writes; treated as open.)
+	if haveRun && isTerminalRunState(run.State) && (ap.State == "" || ap.State == types.ApprovalPending) {
 		s.cancelRunApprovals(r.Context(), ap.RunID)
 		writeErrorReason(w, http.StatusConflict, reasonApprovalRunEnded, approvalRunEndedBody)
 		return ap, run, haveAP, haveRun, false
@@ -418,6 +420,15 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// The run row it loads is only consulted for the terminal check itself;
 	// nothing below reads it, so only the approval is taken back.
 	if ap, _, haveAP, _, ok = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
+		// The admin token got past the four-eyes gate above before this refusal, so the break-glass
+		// leaves its failure row here as it does when Decide fails (docs/ENV.md: every bypass writes one).
+		if bypassSwitch != "" {
+			decidedByType, decidedBy := actorFromRequest(r)
+			s.recordAudit(r.Context(), s.auditEvent(bypassRunID(ap, haveAP), decidedByType, decidedBy,
+				"approval.second_human.bypass", id.String(), "failure", mustJSON(map[string]any{
+					"reason": "admin_token_break_glass", "switch": bypassSwitch, "error": "run_ended",
+				})))
+		}
 		return
 	}
 
