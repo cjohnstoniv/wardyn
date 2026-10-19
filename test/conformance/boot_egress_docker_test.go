@@ -236,12 +236,10 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	// auto-install among them) room to happen before the proxy log is read.
 	time.Sleep(20 * time.Second)
 
-	// Give the sink's async worker a moment after the read window closes.
 	// The agent may dial nothing here (hosted CI has no model credential), so the test
 	// dials one known host itself: that decision is what proves the log was read.
 	control := bootEgressControl(t, sub, sb.Ref, claudeImage)
-	time.Sleep(3 * time.Second)
-	logs := bootEgressProxyLogs(t, runID)
+	logs := bootEgressLogsAfterControl(t, runID, control)
 	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs, control)
 
 	// PHASE 3 — the AUTONOMOUS shape, which meets no dialog at all and is what the
@@ -258,8 +256,7 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	}
 	time.Sleep(45 * time.Second)
 	control = bootEgressControl(t, sub, sb.Ref, claudeImage)
-	time.Sleep(3 * time.Second)
-	autoLogs := bootEgressProxyLogs(t, runID)
+	autoLogs := bootEgressLogsAfterControl(t, runID, control)
 	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs, control)
 }
 
@@ -447,6 +444,27 @@ func bootEgressDecisions(logs string) (hosts, pending, denied []string) {
 		}
 	}
 	return bootEgressKeys(seen), bootEgressKeys(pend), bootEgressKeys(den)
+}
+
+// bootEgressLogsAfterControl re-reads the proxy log until the control host's decision shows
+// (the sink writes asynchronously) or 30s pass, and returns the last read either way; the
+// caller's assertions then decide. With no control there is nothing to wait for, so it keeps
+// the short fixed wait.
+func bootEgressLogsAfterControl(t *testing.T, runID uuid.UUID, control string) string {
+	t.Helper()
+	if control == "" {
+		time.Sleep(3 * time.Second)
+		return bootEgressProxyLogs(t, runID)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		logs := bootEgressProxyLogs(t, runID)
+		hosts, _, _ := bootEgressDecisions(logs)
+		if bootEgressDialled(hosts, control) || time.Now().After(deadline) {
+			return logs
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // bootEgressDialled reports whether hosts holds control, with or without a port.
