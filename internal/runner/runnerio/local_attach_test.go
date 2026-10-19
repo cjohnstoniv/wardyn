@@ -324,7 +324,18 @@ func TestLocalAttachStaleAckDoesNotShrinkTheWindow(t *testing.T) {
 	if got := cli.data(8, 5*time.Second); string(got) != "aaaaaaaa" {
 		t.Fatalf("first shown = %q", got)
 	}
-	if err := ls.AckTee(ctx5(t), 4); err != nil {
+	// Straight to the runner: the org's own end already drops a stale acknowledgement.
+	r.server.mu.Lock()
+	var stream uint32
+	for k := range r.server.locals {
+		stream = k.id
+	}
+	r.server.mu.Unlock()
+	ack := func(offset int64) error {
+		raw, _ := json.Marshal(runnerwire.LocalAttachTeeAckArgs{Stream: stream, Offset: offset})
+		return r.server.localTeeAck(r.rp, raw)
+	}
+	if err := ack(4); err != nil {
 		t.Fatalf("a stale acknowledgement was refused: %v", err)
 	}
 	cli.send(t, LocalData, []byte("bbbbbbbb"))
@@ -332,14 +343,7 @@ func TestLocalAttachStaleAckDoesNotShrinkTheWindow(t *testing.T) {
 	if got := cli.data(8, 300*time.Millisecond); string(got) != "bbbbbbbb" {
 		t.Fatalf("shown after a stale ack = %q, want the whole window", got)
 	}
-	r.server.mu.Lock()
-	var stream uint32
-	for k := range r.server.locals {
-		stream = k.id
-	}
-	r.server.mu.Unlock()
-	raw, _ := json.Marshal(runnerwire.LocalAttachTeeAckArgs{Stream: stream, Offset: 17})
-	if err := r.server.localTeeAck(r.rp, raw); err == nil {
+	if err := ack(17); err == nil {
 		t.Fatal("an acknowledgement past the bytes sent was accepted")
 	}
 }
