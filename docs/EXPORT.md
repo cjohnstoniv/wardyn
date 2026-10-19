@@ -47,6 +47,8 @@
 | Egress-proxy TLS interception | `crypto/x509` — the proxy mints a local CA and leaf certificates for hosts it is configured to inspect |
 | SSH gateway | `golang.org/x/crypto/ssh` |
 | Identity / SSO | `github.com/coreos/go-oidc/v3`, `github.com/go-jose/go-jose/v4` (JOSE, JWT) |
+| Secret envelope (data keys, key wrapping) | `crypto/aes` and `crypto/cipher` (AES-256-GCM), `crypto/hkdf` (HKDF-SHA-256) |
+| `wardynd-fips` image | the same code built against a pinned Go Cryptographic Module snapshot (`GOFIPS140`); no algorithm of its own |
 | Signing, hashing, key handling | `crypto/{ecdsa,ed25519,rsa,elliptic,hmac,sha256,sha1,subtle,rand}` |
 
 > [!NOTE]
