@@ -266,18 +266,23 @@ func (w *WebhookSink) Run(ctx context.Context) {
 }
 
 // drainAndFlush pulls every event still buffered in the queue (non-blocking)
-// into batch and flushes once so the final partial batch is delivered before
-// Run exits. It runs under a fresh bounded context rather than the (already
-// cancelled) Run ctx, so the last POST can still deliver.
+// into batch and flushes it, BatchSize events at a time, so the final batches
+// are delivered before Run exits. It runs under a fresh bounded context rather
+// than the (already cancelled) Run ctx, so the last POSTs can still deliver; a
+// queue larger than a collector's body cap goes out in cap-sized requests, not
+// as one oversized one.
 func (w *WebhookSink) drainAndFlush(batch *[]types.AuditEvent, flush func(context.Context)) {
+	fctx, cancel := context.WithTimeout(context.Background(), w.client.Timeout)
+	defer cancel()
 	for {
 		select {
 		case ev := <-w.queue:
 			*batch = append(*batch, ev)
+			if len(*batch) >= w.cfg.BatchSize {
+				flush(fctx)
+			}
 		default:
-			fctx, cancel := context.WithTimeout(context.Background(), w.client.Timeout)
 			flush(fctx)
-			cancel()
 			return
 		}
 	}
