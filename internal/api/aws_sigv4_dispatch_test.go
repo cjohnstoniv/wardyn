@@ -5,7 +5,9 @@ package api
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -57,11 +59,12 @@ func TestAWSSigV4On_LanesDispatchThePlaceholder(t *testing.T) {
 				t.Fatalf("AWS_PROFILE = %q, want %q", spec.Env[envAWSProfile], awsSSOProfileName)
 			}
 			files := decodeSSOFiles(t, spec.Env[awsSSOConfigEnvVar])
-			if len(files) != 1 || files[".aws/config"] != awsSigV4ConfigFileContents(tc.region) {
-				t.Fatalf("staged ~/.aws = %q, want only the placeholder profile", files)
+			if len(files) != 2 || files[".aws/config"] != awsSigV4ConfigFileContents(tc.region) ||
+				files[".aws/"+awsSigV4CredentialFile] != awsSigV4CredentialFileContents() {
+				t.Fatalf("staged ~/.aws = %q, want only the placeholder profile and its credential file", files)
 			}
 			cfg := files[".aws/config"]
-			if !strings.Contains(cfg, "credential_process = echo '{") || !strings.Contains(cfg, `"AccessKeyId":"`+proxy.AWSSigV4PlaceholderAccessKeyID+`"`) ||
+			if !strings.Contains(cfg, "credential_process = cat "+sandboxAWSDir+"/"+awsSigV4CredentialFile+"\n") ||
 				strings.Contains(cfg, "sso_") || (tc.region != "" && !strings.Contains(cfg, "region = "+tc.region+"\n")) {
 				t.Fatalf("~/.aws/config does not hold just the placeholder profile:\n%s", cfg)
 			}
@@ -116,8 +119,8 @@ func TestResolveAWSSigV4AtProxy(t *testing.T) {
 	}
 }
 
-// The profile's credential_process, run by a shell as the AWS SDKs and the CLI run it, prints
-// the placeholder pair in the process-credential shape.
+// The profile's credential_process, run by a shell as the AWS SDKs and the CLI run it over the
+// staged files, prints the placeholder pair in the process-credential shape.
 func TestAWSSigV4ConfigFile_ProcessPrintsThePlaceholder(t *testing.T) {
 	cfg := awsSigV4ConfigFileContents("eu-west-2")
 	_, rest, ok := strings.Cut(cfg, "credential_process = ")
@@ -125,7 +128,11 @@ func TestAWSSigV4ConfigFile_ProcessPrintsThePlaceholder(t *testing.T) {
 		t.Fatalf("no credential_process:\n%s", cfg)
 	}
 	cmd, _, _ := strings.Cut(rest, "\n")
-	out, err := exec.Command("sh", "-c", cmd).Output()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, awsSigV4CredentialFile), []byte(awsSigV4CredentialFileContents()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("sh", "-c", strings.ReplaceAll(cmd, sandboxAWSDir, dir)).Output()
 	if err != nil {
 		t.Fatal(err)
 	}

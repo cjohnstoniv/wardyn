@@ -61,18 +61,27 @@ func (s *Server) awsSigV4Hosts(hosts []string) ([]string, bool) {
 	return out, true
 }
 
+// awsSigV4CredentialFile is the file, beside ~/.aws/config, that holds the placeholder pair in
+// the process-credential shape.
+const awsSigV4CredentialFile = "wardyn-placeholder-credentials.json"
+
 // awsSigV4ConfigFileContents is a re-signed lane's ~/.aws/config: the one profile, whose
 // credential_process prints the placeholder pair the SDK signs with (the proxy replaces the
 // signature on every request), and the Region when the lane names one. A process credential
 // rather than environment keys, so the profile still decides, as it does on the SSO lane.
 func awsSigV4ConfigFileContents(region string) string {
-	creds, _ := json.Marshal(map[string]any{"Version": 1,
-		"AccessKeyId": proxy.AWSSigV4PlaceholderAccessKeyID, "SecretAccessKey": proxy.AWSSigV4PlaceholderSecretAccessKey})
-	cfg := fmt.Sprintf("[profile %s]\ncredential_process = echo '%s'\noutput = json\n", awsSSOProfileName, creds)
+	cfg := fmt.Sprintf("[profile %s]\ncredential_process = cat %s/%s\noutput = json\n", awsSSOProfileName, sandboxAWSDir, awsSigV4CredentialFile)
 	if region != "" {
 		cfg += "region = " + region + "\n"
 	}
 	return cfg
+}
+
+// awsSigV4CredentialFileContents is the placeholder pair as a credential_process prints it.
+func awsSigV4CredentialFileContents() string {
+	b, _ := json.Marshal(map[string]any{"Version": 1,
+		"AccessKeyId": proxy.AWSSigV4PlaceholderAccessKeyID, "SecretAccessKey": proxy.AWSSigV4PlaceholderSecretAccessKey})
+	return string(b)
 }
 
 // stageAWSSigV4Files is the sandbox side of a re-signed lane: stageAWSSSOFiles's profile with
@@ -81,5 +90,6 @@ func stageAWSSigV4Files(env map[string]string, region string) {
 	env[envAWSConfigFile] = sandboxAWSDir + "/config"
 	env[envAWSSharedCredsFile] = sandboxAWSDir + "/credentials"
 	env[envAWSProfile] = awsSSOProfileName
-	env[awsSSOConfigEnvVar] = encodeArtifactConfig(map[string]string{".aws/config": awsSigV4ConfigFileContents(region)})
+	env[awsSSOConfigEnvVar] = encodeArtifactConfig(map[string]string{".aws/config": awsSigV4ConfigFileContents(region),
+		".aws/" + awsSigV4CredentialFile: awsSigV4CredentialFileContents()})
 }
