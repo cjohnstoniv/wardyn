@@ -44,10 +44,14 @@ var mustGoRed = []string{
 	"udp-dns-external", "udp-quic", "udp-ntp",
 }
 
+// The origin's network is internal like the run network, but its addresses
+// are outside every range the proxy's private-address guard refuses: the
+// guard's internal-host lift never applies to the proxy's own subnet, and the
+// proxy has to sit on the origin's network to reach it.
 const (
 	runSubnet = "10.231.0.0/24"
-	upSubnet  = "10.231.1.0/24"
-	originIP  = "10.231.1.10"
+	upSubnet  = "11.231.1.0/24"
+	originIP  = "11.231.1.10"
 	proxyIP   = "10.231.0.2"
 )
 
@@ -130,7 +134,6 @@ func setup(t *testing.T) *env {
 			"allowed_methods":    []string{"GET", "HEAD", "CONNECT"},
 			"first_use_approval": "always_deny",
 		},
-		"internal_hosts": []map[string]any{{"host_suffix": "origin.test", "cidrs": []string{upSubnet}}},
 	}
 	raw, _ := json.Marshal(cfg)
 	if err := os.WriteFile(filepath.Join(cfgDir, "proxy.json"), raw, 0o644); err != nil {
@@ -229,11 +232,13 @@ func (e *env) boot(t *testing.T, pinned bool) map[string]probeRow {
 	done := false
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "VMPROBE-DONE" {
+		// Kernel messages can share a serial line with the probe's output.
+		line := sc.Text()
+		if strings.Contains(line, "VMPROBE-DONE") {
 			done = true
 		}
-		if j, ok := strings.CutPrefix(line, "VMPROBE "); ok {
+		if i := strings.Index(line, "VMPROBE {"); i >= 0 {
+			j := strings.TrimSpace(line[i+len("VMPROBE "):])
 			var r probeRow
 			if json.Unmarshal([]byte(j), &r) == nil {
 				rows[r.Row] = r
