@@ -52,7 +52,7 @@ scripts/ci-run.sh
 | `WARDYN_SETUP_RUNNER_DISK_GB` | throwaway stack: GB of disk free for runs, where this host cannot see Docker's data root (Docker Desktop); the stack's runner takes no run without it there | measured on this host |
 | `WARDYN_SETUP_RUNNER_LIMITS` | throwaway stack: the runner's whole limit set as `wardyn runner set` flags, instead of half this host | unset |
 | `WARDYN_DOCKER_SOCK` | throwaway stack: which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
-| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | `demo-admin-token` |
+| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | a random value per job |
 
 > [!NOTE]
 > `WARDYN_CI_SECRETS` is gone: `ci-run.sh` refuses it rather than seed a credential into the operator's namespace for every run to share.
