@@ -111,10 +111,16 @@ func TestProxyHopTLSK8s(t *testing.T) {
 			t.Cleanup(func() { _ = sub.KillSandbox(context.Background(), sb.Ref) })
 			t.Fatal("CreateSandbox succeeded with a control-plane CA the fake does not chain to: the proxy must exit at its startup resolve, so the create must fail")
 		}
-		// The proxy's startup resolve is the one TLS call; it died there, not in an image pull or a
-		// scheduling stall (those read "stuck waiting" or a deadline, never an exit before ready).
-		if !strings.Contains(err.Error(), "proxy container") || !strings.Contains(err.Error(), "exited before the proxy was ready") {
-			t.Fatalf("CreateSandbox failed, but not because the proxy exited at startup (the TLS refusal); a different failure would pass this subtest vacuously: %v", err)
+		// The proxy's startup resolve is the one TLS call; the MAIN container died there, not the
+		// stage-proxy-config init container, an image pull or a scheduling stall. Its termination
+		// message is the log tail (FallbackToLogsOnError), so the error also names the certificate
+		// refusal.
+		msg := err.Error()
+		if !strings.Contains(msg, "proxy container wardyn-proxy exited before the proxy was ready") {
+			t.Fatalf("CreateSandbox failed, but not because the wardyn-proxy container exited at startup; a different failure would pass this subtest vacuously: %v", err)
+		}
+		if !strings.Contains(msg, "x509") && !strings.Contains(msg, "certificate") {
+			t.Fatalf("the proxy exited at startup, but the error does not name the certificate refusal: %v", err)
 		}
 		time.Sleep(10 * time.Second) // past the proxy's startup resolve and its first restart
 		if after := resolves(); after != before {
