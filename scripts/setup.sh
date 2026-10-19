@@ -416,10 +416,12 @@ ensure_postgres() {
 # one (a new index on a large table) hit the "not healthy" branch below while
 # wardynd was still working, not stuck.
 launch_wardynd() {
+  # run-host.sh defaults WARDYN_LISTEN to :8080 and never reads WARDYN_UP_PORT; hand it the port the
+  # health probe below (URL) polls, so a non-default WARDYN_UP_PORT gets a listener there. Unset = :8080.
   if command -v setsid >/dev/null 2>&1; then
-    setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+    WARDYN_LISTEN="${WARDYN_LISTEN:-:${WARDYN_UP_PORT:-8080}}" setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
   else
-    nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
+    WARDYN_LISTEN="${WARDYN_LISTEN:-:${WARDYN_UP_PORT:-8080}}" nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
   fi
   WPID=$!
   echo "$WPID" > "$PIDFILE"
