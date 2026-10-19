@@ -541,6 +541,23 @@ func TestDelegation_ScopeIsTheRegisteredGroup(t *testing.T) {
 	}
 }
 
+// A refusal for a person whose group snapshot was partial says so in its audit
+// row (#2764): the reason stays outside_scope, the row gains groups_truncated.
+func TestDelegation_OutsideScopeRowFlagsATruncatedGroupSnapshot(t *testing.T) {
+	e := newDelegationPG(t)
+	portal, cred := e.registerPortal(t, delegGroup)
+	subject := e.subjectToken(t, delegPerson, delegPersonEmail, nil, func(c map[string]any) {
+		c["_claim_names"] = map[string]any{"groups": "src1"}
+	})
+	if w := e.exchange(t, portal, cred, subject); w.Code != http.StatusForbidden {
+		t.Fatalf("%d %s, want 403", w.Code, w.Body.String())
+	}
+	rows := e.rows("delegation.exchange")
+	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"outside_scope"`) || !strings.Contains(string(rows[0].Data), `"groups_truncated":true`) {
+		t.Fatalf("rows = %+v, want one outside_scope row with groups_truncated", rows)
+	}
+}
+
 // TestDelegation_PersonCutoffEndsDelegation is acceptance test 5: POST
 // /sessions/revoke for the person ends their outstanding delegated tokens on
 // the next request and refuses a new exchange of a token issued before it.
