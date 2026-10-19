@@ -165,9 +165,10 @@ test.describe("Docs screenshots", () => {
   // rather than "Incompatible here" (that split is a hardware fact).
   test("getting-started.png — barrier picker", async ({ page }) => {
     await serveReadySetupStatus(page);
-    // Straight to /setup rather than gotoConsole: this shot is the funnel, and
-    // the fixture only routes /setup/status.
-    await page.goto("/setup");
+    // Straight to /admin/setup (the Admin view is the /admin/* URL space; bare /setup is the
+    // member funnel) rather than gotoConsole: this shot is the funnel, and the fixture only
+    // routes /setup/status.
+    await page.goto("/admin/setup");
     await expect(page.getByRole("heading", { name: "Getting started", level: 1 })).toBeVisible();
     const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
     await expect(matrix.getByText("Ready", { exact: true })).toHaveCount(1);
@@ -182,7 +183,7 @@ test.describe("Docs screenshots", () => {
   test("runs-board.png — populated runs board", async ({ page }) => {
     await restagePresentableRuns(page);
     await serveReadySetupStatus(page);
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
     // Wait for the re-staged cards to render (first + last of the set).
     await expect(page.getByText("Fix flaky webhook retry test")).toBeVisible();
