@@ -377,39 +377,6 @@ describe("RunDetailScreen — Audit tab row shape", () => {
   });
 });
 
-// #3035: a run's Audit tab speaks the Audit screen's sentences, keeps the raw key in title=, and does not
-// repeat the viewed run's own id on every row.
-describe("RunDetailScreen — Audit tab sentences", () => {
-  it("shows the plain-English action with the raw key in title=, and blanks the viewed run's id", async () => {
-    const ev = (id: string, action: string, target: string) => ({
-      id,
-      time: new Date().toISOString(),
-      actor_type: "system",
-      actor: "wardynd",
-      action,
-      outcome: "success",
-      run_id: "run-1",
-      target,
-    });
-    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
-      Promise.resolve(action ? [] : [ev("e1", "run.create", "run-1"), ev("e2", "egress.allow", "api.example.com")]),
-    );
-    renderRun(RUN);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(await screen.findByRole("tab", { name: /audit/i }));
-
-    const rows = await screen.findAllByTestId("run-audit-row");
-    const created = within(rows[0]).getByTestId("run-audit-action");
-    expect(created).toHaveTextContent("Created the run");
-    expect(created).toHaveAttribute("title", "run.create");
-    expect(within(rows[0]).getByTestId("run-audit-target")).not.toHaveTextContent("run-1");
-    const allowed = within(rows[1]).getByTestId("run-audit-action");
-    expect(allowed).toHaveTextContent(/^Allowed egress$/);
-    expect(allowed).toHaveAttribute("title", "egress.allow");
-    expect(within(rows[1]).getByTestId("run-audit-target")).toHaveTextContent("api.example.com");
-  });
-});
-
 // #2925: the empty card has the populated list's width, so the content does not jump between tabs.
 describe("RunDetailScreen — Approvals tab empty card", () => {
   it("is capped at the populated list's width", async () => {
@@ -761,7 +728,7 @@ describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
       "Erased on request. The event and its place in the log remain.",
     );
     expect(screen.queryByText("[erased]")).toBeNull();
-    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "approval.decide");
+    expect(screen.getByText("approval.decide")).toBeInTheDocument();
   });
 
   it("a row with nothing erased shows no Erased note", async () => {

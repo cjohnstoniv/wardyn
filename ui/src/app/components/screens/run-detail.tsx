@@ -51,7 +51,7 @@ import {
 } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
 import { newRunHref } from "./new-run-flow/draft/new-run-url";
-import { AUDIT, describeAction } from "./audit-copy";
+import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -489,11 +489,10 @@ function AuditTab({
                   <ActorTypeChip type={e.actor_type} />
                 </span>
                 <span
-                  className="min-w-0 grow basis-[120px] truncate text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
                   title={e.action}
-                  data-testid="run-audit-action"
                 >
-                  {describeAction(e)}
+                  {e.action}
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
@@ -508,7 +507,7 @@ function AuditTab({
                       </span>
                     ) : (
                       <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                        {e.target === runId ? "" : e.target || "—"}
+                        {e.target || "—"}
                       </span>
                     )}
                     <RuleSourceChip event={e} />
