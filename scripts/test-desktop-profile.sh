@@ -539,7 +539,7 @@ md="$(f185_fixture 0600)"
 mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
 printf '#!/usr/bin/env bash\necho 4242\n' > "${F185_TMP}/bin/id"; chmod +x "${F185_TMP}/bin/id"
 out="$(f185_run "${md}")"; rm -f "${F185_TMP}/bin/id"
-printf '%s' "${out}" | grep -q 'wardyn.env is a symlink owned by uid' \
+grep -q 'wardyn.env is a symlink owned by uid' <<<"${out}" \
   || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env that another account owns. Got: $(printf '%s' "${out}" | tail -1)"
 echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
 
