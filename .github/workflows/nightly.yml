@@ -1865,6 +1865,18 @@ jobs:
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
           restore-keys: |
             cache-trivy-
+      # Direct asset URL + literal sha256 (from trivy_0.70.0_checksums.txt): no
+      # release-API lookup, so a GitHub lookup failure cannot block the scan.
+      - name: Install trivy 0.70.0 (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
       - name: Trivy strict scan of the published image (CRITICAL, fixed or not)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -1875,6 +1887,7 @@ jobs:
           trivyignores: .trivyignore
           exit-code: '1'
           cache: false
+          skip-setup-trivy: true
 
   notify-published-image-scan:
     needs: [published-image-scan]
