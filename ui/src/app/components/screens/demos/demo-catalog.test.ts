@@ -63,7 +63,7 @@ describe("demo catalog", () => {
       "key-never-in-the-box",
       "authorized-not-issued",
       // The per-KIND cards, in the ladder the section teaches: header-injected
-      // -> piped -> resident -> re-originated -> refused.
+      // -> piped -> signed at the proxy -> re-originated -> refused.
       "rest-api-token",
       "pat-stdout-only",
       "ssh-at-the-proxy",
