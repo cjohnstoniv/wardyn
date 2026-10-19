@@ -17,8 +17,8 @@
 #   3. hostile base  (ENTRYPOINT curl attacker; USER root): docker inspect shows
 #                    the entrypoint CLEARED + the idle Cmd, ZERO contact to the
 #                    attacker host, no default route, mount deny-list unchanged.
-#   4. honesty       (nonexistent ref, and a distroless base): run FAILED with a
-#                    run.build / run.selftest failure audit — never a 500 or hang.
+#   4. honesty       (nonexistent ref): run FAILED with a run.build failure
+#                    audit — never a 500 or hang.
 #
 # GUARD: Docker-dependent + BYOI needs the envbuild path. No-op unless
 # WARDYN_TEST_DOCKER=1. Requires a native docker daemon (envbuilder finalize +
@@ -75,7 +75,6 @@ WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-c
 log "pre-pulling test base images"
 docker pull -q ubuntu:24.04 >/dev/null || die "pull ubuntu:24.04"
 docker pull -q node:20 >/dev/null || die "pull node:20"
-docker pull -q gcr.io/distroless/static:latest >/dev/null 2>&1 || log "distroless pull skipped (offline?)"
 
 # A one-off harness base: node:20 + the claude CLI, arbitrary USER/HOME.
 HARNESS_TAG="wardyn-byoi-test/harness:latest"
@@ -236,6 +235,9 @@ ID4="$(jq -r .id <<<"$R4")"
 wait_run "$ID4" "$TERMINAL" || warn "run4 did not reach a terminal state within 60s"
 ST4="$(jq -r '.state // ""' <<<"$RUN_JSON")"
 check "run4 nonexistent ref is FAILED (no 500)" '[[ "$ST4" == "FAILED" ]]'
+wait_audit "$ID4" '.[] | select(.action=="run.build" and .outcome=="failure")' || warn "run4 audit never showed a run.build failure row within 30s"
+AUD4="$AUD_JSON"
+check "run4 has a run.build failure audit row" 'jq -e ".[] | select(.action==\"run.build\" and .outcome==\"failure\")" <<<"$AUD4" >/dev/null'
 
 log "BYOI e2e: ${pass} passed, ${fail} failed, ${skipped} skipped"
 [[ ${fail} -eq 0 ]] || exit 1

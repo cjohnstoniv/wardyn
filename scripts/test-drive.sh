@@ -31,10 +31,12 @@
 #     fail-closed mint error (no GitHub App configured in the demo); assert no
 #     token in sandbox env (invariant 1).
 #
-# (6) Kill cascade             wardyn run kill -> container gone + run token 401 +
-#     run.kill audit event.
+# (6) Kill cascade             wardyn run kill -> container gone + run state
+#     KILLED + run.kill audit event (the run token's post-kill 401 is covered
+#     by the Go tests: the token is not readable from the proxy container).
 #
-# (7) Recording                GET the asciicast artifact for the run -> 200.
+# (7) Recording                GET the recording endpoint with no auth -> 401
+#     (upload and serve are covered by the e2e recording run).
 #
 # Usage
 # ─────
@@ -110,6 +112,10 @@ teardown() {
     return
   fi
   for rid in "${TD_RUN_IDS[@]+"${TD_RUN_IDS[@]}"}"; do
+    # Best-effort API kill first, so wardynd records KILLED instead of a run whose container vanished.
+    if [[ -n "${ADMIN_HDR:-}" && -n "${WARDYN_URL:-}" ]]; then
+      hc -o /dev/null --max-time 10 -X POST "${WARDYN_URL}/api/v1/runs/${rid}/kill" -H "${ADMIN_HDR}" >/dev/null 2>&1 || true
+    fi
     docker rm -f "wardyn-agent-${rid}" "wardyn-proxy-${rid}" >/dev/null 2>&1 || true
     docker network rm "wardyn-int-${rid}" >/dev/null 2>&1 || true
   done
@@ -118,7 +124,7 @@ trap teardown EXIT
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 # hc: host-side curl against the published port; no auth header unless given.
-hc() { curl -sS "$@"; }
+hc() { curl -sS --connect-timeout 5 --max-time 120 "$@"; }
 
 # api: call the wardyn admin API.
 api() { hc -H "${ADMIN_HDR}" "${WARDYN_URL}$1" "${@:2}"; }

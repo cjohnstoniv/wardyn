@@ -220,7 +220,7 @@ crash or a usage limit resumes with the same command:
 - A final `X.Y.Z` fast-forwards `release/X.Y`.
 - A real `X.Y.Z-rc.N` never does: it is tagged and published as a pre-release from the candidate branch, and the next final's `--from` is the newest tag `release/X.Y` itself contains.
 
-- A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s promote preflight refuses staging older than that.
+- A dispatched nightly older than 23 hours counts as absent, because `release.yml`'s promote preflight refuses staging older than that.
 - prepare dispatches a fresh one, wait does not accept the old one,
   - and publish checks again before it pushes `release/X.Y` and before it pushes the tag, so a cut resumed the next day stops instead of going red in `release.yml` after the push.
 
@@ -263,7 +263,7 @@ crash or a usage limit resumes with the same command:
 - **Recovery.** Every recovery is the same command again, or a rerun it printed.
   - A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the tree, so a newer red is not hidden by an older green.
     - Rerun the failed jobs with the printed `gh run rerun <id> --failed`, or dispatch a fresh one (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it when the newest finished run is not green).
-    - A rerun does not refresh image age: staging is judged by the run's creation time, so a nightly created more than 24 hours ago needs a fresh dispatch, never a rerun.
+    - A rerun does not refresh image age: staging is judged by the run's creation time, so a nightly created more than 23 hours ago needs a fresh dispatch, never a rerun.
     - Re-dispatching is the deliberate recovery.
   - A red `release.yml` run: rerun its failed jobs, then run the command again.
   - The tag, the branch push and the published Release are each skipped once they exist.

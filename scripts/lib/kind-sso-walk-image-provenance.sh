@@ -62,7 +62,8 @@ IMAGES_AGREE=1
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
     printf '  %-34s %s\n' "${img}" "$(docker image inspect "${img}" --format '{{.Created}}' 2>/dev/null || echo '(not present locally)')"
   done
-} | tee "${EVIDENCE_DIR}/images.txt"
+} > "${EVIDENCE_DIR}/images.txt"   # not `| tee`: the pipe would run the group in a subshell and IMAGES_AGREE=0 would be lost
+cat "${EVIDENCE_DIR}/images.txt"
 if [[ "${IMAGES_AGREE}" != "1" ]]; then
   echo "" >&2
   echo "WARNING: an image the node runs is NOT the one this daemon holds (see ${EVIDENCE_DIR}/images.txt)." >&2

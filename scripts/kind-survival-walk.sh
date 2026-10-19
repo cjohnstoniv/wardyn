@@ -262,9 +262,14 @@ ca_after="$(psql1 "${CA_ROW_SQL}")"
 # ── B. a RUNNING run's OWN agent pod, evicted by a cordon of its node ──────
 step "B: launching a second run, then cordoning its node and deleting its pod directly (single-node drain — see this file's header)"
 RUN_B_ID="$(create_running_run)"
-pod_b="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -l "wardyn.run-id=${RUN_B_ID}" \
-  -o jsonpath='{.items[0].metadata.name}')"
-[[ -n "${pod_b}" ]] || die "could not resolve run ${RUN_B_ID}'s own pod"
+# By NAME (internal/runner/k8s/naming.go agentPodNamePrefix): the run-id label also matches the run's proxy pod,
+# and .items[0] may be that one, which would make this scenario delete the wrong pod.
+pod_b="wardyn-agent-${RUN_B_ID}"
+for _ in $(seq 1 60); do
+  kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${pod_b}" >/dev/null 2>&1 && break
+  sleep 2
+done
+kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${pod_b}" >/dev/null 2>&1 || die "run ${RUN_B_ID}'s agent pod ${pod_b} never appeared"
 # create_running_run only waits for the pod OBJECT to exist, not for the
 # scheduler to place it — on the single node this cluster has, a still-RUNNING
 # run A (scenario A, above) can leave no room, and a plain scheduling race
@@ -276,6 +281,9 @@ kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" wait --for=condition=PodSc
 node_b="$(kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pod "${pod_b}" -o jsonpath='{.spec.nodeName}')"
 [[ -n "${node_b}" ]] || die "run ${RUN_B_ID}'s pod ${pod_b} reports PodScheduled but carries no .spec.nodeName"
 pass "run ${RUN_B_ID} scheduled as pod ${pod_b} on node ${node_b}"
+# Delete a RUNNING agent pod, not one still starting: wait for the phase before cordoning.
+kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" wait --for=jsonpath='{.status.phase}'=Running "pod/${pod_b}" --timeout=180s \
+  || { kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" describe pod "${pod_b}" >&2; die "agent pod ${pod_b} never reached Running within 180s"; }
 
 kubectl --context "${CONTEXT}" cordon "${node_b}" || die "cordoning ${node_b} failed"
 CORDONED_NODE="${node_b}"

@@ -53,6 +53,12 @@ command -v jq >/dev/null 2>&1 || die "jq not found"
 
 # ── dedicated stack identity — NEVER the operator's/another job's stack ──────
 PROJECT="wardynv06uisbx"
+# Fixed project name and ports, and an unconditional `down --volumes` at the end: a second concurrent run would
+# tear down the first. Hold a per-host lock for the whole run (fd 9 closes on exit).
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"/tmp/wardyn-run-e2e-ui-sandbox.lock"
+  flock -n 9 || die "another run-e2e-ui-sandbox.sh is already running on this host (project ${PROJECT}); wait for it"
+fi
 COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
 API_PORT=18081
 PG_PORT=15433

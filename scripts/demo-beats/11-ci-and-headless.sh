@@ -201,7 +201,7 @@ say "And an agent job follows the same model."
 # extra say beat. Three says in, three says out — the typist's budget for this
 # stretch is unchanged, and the trio still reads pipeline → Wardyn → workload.
 say "The pipeline names the secret the run is allowed to use."
-say "Wardyn injects it at the boundary. For a from-scratch stack the pipeline seeds the value once, at stack start — the workload never holds it."
+say "Wardyn injects it at the boundary. The value is stored once, as the CI principal, on the control plane — the workload never holds it."
 say "Point ci-run.sh at an existing Wardyn and the pipeline never handles the value at all."
 say "The workload doesn't have to carry the credential itself."
 
@@ -242,9 +242,12 @@ say "Zero — the code for success."
 # run's artifacts must never land in ${ART_DIR}, which beat 4 and the browser
 # half both read as B2's run.
 say "Now let's give it a destination the policy doesn't allow."
+# A run.json left by an earlier take must not satisfy the state check at the bottom.
+rm -f "${CI_RED_OUT}/run.json"
 type_cmd "WARDYN_CI_TASK='${CI_RED_TASK}' WARDYN_CI_TASK_MODE=exec WARDYN_CI_IMAGE=${CI_IMAGE} WARDYN_CI_SKIP_BUILD=1 WARDYN_CI_PROJECT=${CI_RED_PROJECT} WARDYN_UP_PORT=${CI_RED_PORT} WARDYN_CI_OUT=${CI_RED_OUT} scripts/ci-run.sh"
-type_cmd 'echo $?'
+# Captured right after the ci-run command, as B2 does: after the echo below it would be the echo's own status (0).
 CI_RED_RC="${TYPIST_RC}"
+type_cmd 'echo $?'
 say "No reviewer."
 say "No approval screen."
 say "No waiting."
@@ -314,6 +317,8 @@ fi
 # above, kept separate so a broken take names WHICH run it is unhappy about.
 [[ "${CI_RED_RC}" -ne 0 ]] \
   || fail "beat 3b says 'the build goes red' but the second ci-run.sh (WARDYN_CI_OUT=${CI_RED_OUT}) exited 0."
+[[ -s "${CI_RED_OUT}/run.json" ]] \
+  || fail "beat 3b: ${CI_RED_OUT}/run.json is missing or empty — this take's second ci-run.sh wrote no run record."
 if command -v jq >/dev/null 2>&1 && [[ -s "${CI_RED_OUT}/run.json" ]]; then
   _red_state="$(jq -r '.state // ""' "${CI_RED_OUT}/run.json")"
   [[ "${_red_state}" == "FAILED" ]] \

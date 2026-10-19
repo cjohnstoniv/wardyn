@@ -26,8 +26,9 @@
 # Both are pure-Go CGO_ENABLED=0 builds so the binaries are fully static and
 # run inside the node:24-trixie-slim stage without any extra libc.
 #
-# Stage 2: node:24-trixie-slim installs the Claude Code CLI plus the OS
-# packages needed by wardyn-rec (asciinema) and the agent (git, curl, ca-certs).
+# Stage 2: node:24-trixie-slim installs the OS packages needed by wardyn-rec
+# (asciinema) and the agent (git, curl, ca-certs). No agent CLI: the
+# claude-code image adds it.
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see deploy/images/README.md):
 #   - NO ENTRYPOINT: the Wardyn docker driver sets Cmd=["sleep","infinity"];
@@ -193,22 +194,10 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
     fi
 ENV NODE_EXTRA_CA_CERTS=/corp-ca/node-extra-ca.pem
 
-# Install the Claude Code CLI. DEFAULT: npm (@anthropic-ai/claude-code, installs
-# the `claude` binary). Behind a corp proxy where public npm is blocked, set
-# CLAUDE_INSTALL=native to install the native `claude` binary instead — from a
-# host-staged file if present (fully offline / strict allowlist mirror; stage it
-# with scripts/stage-agent-binary.sh), else downloaded checksum-verified from the
-# official downloads.claude.ai surface (the ONLY host that path needs reachable
-# through the corp proxy). See docs/adoption/corp-image-authoring.md "Native-binary agent installs".
-#
-# CLAUDE_CODE_VERSION is a PINNED exact version, not a channel — a released
-# agent image must be reproducible, and a floating `stable`/`latest` means two
-# builds of the same git tag ship different agents (D3, supply chain). The SAME
-# value drives BOTH install paths: npm takes it as the version specifier, and
-# the native path passes a bare semver straight through as a release id (its
-# `stable|latest` arm below resolves a channel and is what a deliberate opt-out
-# would name). Bump it deliberately, exactly like AWS_CLI_VERSION in the
-# sibling aws-sso image.
+# No agent CLI is installed in this image. The Claude Code CLI (CLAUDE_INSTALL,
+# CLAUDE_CODE_VERSION) is installed by deploy/images/claude-code/Dockerfile, not
+# here; the ARGs below are only the proxy and npm settings this image's own npm
+# pin and apt/npm steps use.
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=

@@ -179,7 +179,8 @@ nodes:
 EOF
 
 step "creating throwaway kind cluster ${CLUSTER}"
-kind create cluster --name "${CLUSTER}" --config "${WORK}/kind-config.yaml" --kubeconfig "${WORK}/kubeconfig" --wait 120s >/dev/null
+kind create cluster --name "${CLUSTER}" --config "${WORK}/kind-config.yaml" --kubeconfig "${WORK}/kubeconfig" --wait 120s >/dev/null \
+  || die "kind create cluster ${CLUSTER} failed"   # set -e is off: without this CREATED_CLUSTER would still be set and cleanup could delete a cluster this run did not create
 CREATED_CLUSTER="${CLUSTER}"
 export KUBECONFIG="${WORK}/kubeconfig"
 

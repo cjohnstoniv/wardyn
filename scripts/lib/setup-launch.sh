@@ -48,11 +48,12 @@ host_runner_limits() {
 }
 
 # local_build_needed — true when ./bin/wardynd, ./bin/wardyn or the UI bundle is missing, or any
-# non-test Go source (or go.mod/go.sum) is newer than ./bin/wardyn. An old CLI left by an earlier
+# non-test Go source, embedded migration (.sql), go.mod/go.sum or UI source/package file is newer than ./bin/wardyn. An old CLI left by an earlier
 # checkout lacks the flags setup.sh passes it, so a present binary is not enough.
 local_build_needed() {
   [ ! -x ./bin/wardynd ] || [ ! -x ./bin/wardyn ] || [ ! -f ./ui/dist/index.html ] && return 0
-  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
+  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name '*.sql' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ] \
+    || [ -n "$(find ui/src ui/public ui/index.html ui/package.json ui/pnpm-lock.yaml ui/vite.config.ts -type f -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
 }
 
 # stale_secrets_wipe_consent ENV_FILE — may setup.sh TRUNCATE the secrets table after
