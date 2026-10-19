@@ -71,6 +71,22 @@ func (q *govCovQuerier) writes() []string {
 	return out
 }
 
+// govCovEmptyTable is a querier whose every SELECT returns no rows, like the real read of an empty
+// table: with it the code under test builds the empty map the store hands back, not a nil one.
+type govCovEmptyTable struct{ govCovQuerier }
+
+func (q *govCovEmptyTable) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	_, _ = q.govCovQuerier.Query(ctx, sql, args...)
+	return govCovNoRows{}, nil
+}
+
+// govCovNoRows is a pgx.Rows with nothing in it.
+type govCovNoRows struct{ pgx.Rows }
+
+func (govCovNoRows) Close()     {}
+func (govCovNoRows) Next() bool { return false }
+func (govCovNoRows) Err() error { return nil }
+
 type govCovRow struct{ err error }
 
 func (r govCovRow) Scan(...any) error { return r.err }

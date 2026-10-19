@@ -280,8 +280,12 @@ func TestGovCovHoldAndApplyEnforcement(t *testing.T) {
 	body := map[string]bool{capEgressHost: true, capSecret: false}
 	r := govCovHumanReq(http.MethodPut, "/x", "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin)
 
-	t.Run("a replacement is held with the map as payload and each changed kind in the diff, over the nil map the skipped read leaves", func(t *testing.T) {
-		st := &govCovStore{proposeSaved: saved}
+	// The read runs, as the store runs it, and finds the empty map an empty table gives: GET
+	// /permissions hashes {}, never null.
+	readsEmpty := func(fn func(store.Querier) error) error { return fn(&govCovEmptyTable{}) }
+
+	t.Run("a replacement is held with the map as payload and each changed kind in the diff, over the empty map the read returns", func(t *testing.T) {
+		st := &govCovStore{proposeSaved: saved, dryRunFn: readsEmpty}
 		s, _ := govCovServer(t, st)
 		w := httptest.NewRecorder()
 		s.holdEnforcement(w, r, body)
@@ -289,16 +293,16 @@ func TestGovCovHoldAndApplyEnforcement(t *testing.T) {
 		if ch.TargetKind != govKindEnforcement || ch.Op != "replace" || ch.TargetKey != govEnforcementKey || string(ch.Payload) != `{"egress_host":true,"secret":false}` {
 			t.Errorf("stored change = %+v payload %s", ch, ch.Payload)
 		}
-		if ch.BaseHash != computeETag(map[string]bool(nil)) {
-			t.Errorf("base hash = %s, want the hash of the nil map the skipped read left", ch.BaseHash)
+		if ch.BaseHash != computeETag(map[string]bool{}) {
+			t.Errorf("base hash = %s, want the hash of the empty map the read returned", ch.BaseHash)
 		}
 		if d := govCovDiff(t, ch); !reflect.DeepEqual(d.Changed, []string{capEgressHost, capSecret}) {
 			t.Errorf("changed = %v", d.Changed)
 		}
 	})
 
-	t.Run("an If-Match that is not the hash of the map the read left is the direct write's 412 and holds nothing", func(t *testing.T) {
-		st := &govCovStore{}
+	t.Run("an If-Match that is not the hash of the map the read returned is the direct write's 412 and holds nothing", func(t *testing.T) {
+		st := &govCovStore{dryRunFn: readsEmpty}
 		s, _ := govCovServer(t, st)
 		req := r.Clone(r.Context())
 		req.Header.Set("If-Match", `"not-the-current-etag"`)
@@ -309,11 +313,11 @@ func TestGovCovHoldAndApplyEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("with the read skipped, an If-Match equal to the hash of the nil map the read left is accepted", func(t *testing.T) {
-		st := &govCovStore{proposeSaved: saved}
+	t.Run("an If-Match equal to the hash of the empty map the read returned is accepted", func(t *testing.T) {
+		st := &govCovStore{proposeSaved: saved, dryRunFn: readsEmpty}
 		s, _ := govCovServer(t, st)
 		req := r.Clone(r.Context())
-		req.Header.Set("If-Match", computeETag(map[string]bool(nil)))
+		req.Header.Set("If-Match", computeETag(map[string]bool{}))
 		w := httptest.NewRecorder()
 		s.holdEnforcement(w, req, body)
 		govCovHoldAnswer(t, w, st)
