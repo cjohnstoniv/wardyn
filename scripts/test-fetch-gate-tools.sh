@@ -16,7 +16,7 @@ for pin in "honnef.co/go/tools/cmd/staticcheck@$(grep -oP '^STATICCHECK_VERSION\
            "github.com/google/addlicense@v1.1.1"; do
   grep -qF -- " ${pin}" <<<"${list}" || fail "--list lacks ${pin}: ${list}"
 done
-[[ "$(wc -l <<<"${list}")" -eq 5 ]] || fail "want 5 tools, got: ${list}"
+[[ "$(wc -l <<<"${list}")" -eq 7 ]] || fail "want 7 tools, got: ${list}"
 
 "${REPO_ROOT}/scripts/fetch-gate-tools.sh" no-such-tool >/dev/null 2>&1
 [[ $? -eq 2 ]] || fail "an unknown tool name did not exit 2"

@@ -12,9 +12,10 @@
 # holds the modules (and the checksum-database tiles that vouch for them).
 #
 # NAME is one of: govulncheck staticcheck licenses (alias: notices) gitleaks
-# license-headers. No NAME fetches all of them. --list prints "NAME package@version"
+# license-headers golangci-lint actionlint. No NAME fetches all of them. --list prints "NAME package@version"
 # per tool, which CI hashes into the module cache key so a version bump re-saves it.
 # Versions come from the pins the gates themselves use (Makefile, license-headers.sh).
+# golangci-lint and actionlint are `make lint`'s, run in ci.yml's go (lint) leg.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -24,7 +25,9 @@ TOOLS="govulncheck golang.org/x/vuln/cmd/govulncheck@$(mkver GOVULNCHECK_VERSION
 staticcheck honnef.co/go/tools/cmd/staticcheck@$(mkver STATICCHECK_VERSION)
 licenses github.com/google/go-licenses@$(mkver GO_LICENSES_VERSION)
 gitleaks github.com/zricethezav/gitleaks/v8@$(mkver GITLEAKS_VERSION)
-license-headers $(grep -oP '^ADDL=\K\S+' scripts/license-headers.sh)"
+license-headers $(grep -oP '^ADDL=\K\S+' scripts/license-headers.sh)
+golangci-lint github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(mkver GOLANGCI_LINT_VERSION)
+actionlint github.com/rhysd/actionlint/cmd/actionlint@$(mkver ACTIONLINT_VERSION)"
 
 if [[ "${1:-}" == "--list" ]]; then
   printf '%s\n' "${TOOLS}"
@@ -32,7 +35,7 @@ if [[ "${1:-}" == "--list" ]]; then
 fi
 
 want=("$@")
-[[ ${#want[@]} -gt 0 ]] || want=(govulncheck staticcheck licenses gitleaks license-headers)
+[[ ${#want[@]} -gt 0 ]] || want=(govulncheck staticcheck licenses gitleaks license-headers golangci-lint actionlint)
 for name in "${want[@]}"; do
   [[ "${name}" == notices ]] && name=licenses
   spec="$(awk -v n="${name}" '$1 == n {print $2}' <<<"${TOOLS}")"

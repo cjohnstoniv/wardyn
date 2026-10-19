@@ -272,6 +272,21 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        if: matrix.suite == 'lint'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -294,6 +309,12 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
+      # golangci-lint and actionlint are `go run tool@version` in `make lint`. Fetched here so a
+      # stall fails fast under this name; the measured cold fetch is at most 9.3 s, so 3 min.
+      - name: Fetch lint tools
+        if: matrix.suite == 'lint'
+        timeout-minutes: 3
+        run: scripts/fetch-gate-tools.sh golangci-lint actionlint
       # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
       # chromium download.
       - name: make ${{ matrix.target }}
@@ -2000,6 +2021,14 @@ jobs:
           path: ~/go/pkg/mod
           key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: gomod-${{ runner.os }}-
+      # The gate tools' own module downloads (go-gate-tools saves them): the exact key never
+      # exists, so the newest entry is restored by prefix. Fetch gate tools below fills any gap.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
       - name: Restore Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -2293,12 +2322,9 @@ jobs:
   # ~/go/pkg/mod depends only on go.mod/go.sum, so one entry serves every job
   # instead of a copy in each job's build cache. This job saves it on a push to
   # main when no entry has the key yet. No restore-keys, so a new entry never
-  # carries modules an older go.sum needed. It also holds the modules of the
-  # pinned `go run tool@version` gate tools (scripts/fetch-gate-tools.sh), which
-  # add about 365 MB compressed: their cold fetch from the network stalled one gate
-  # past its job timeout and failed another on a checksum-database read. The key
-  # hashes the tool versions too, so a bump re-saves the entry; the other jobs
-  # restore the newest `gomod-<os>-` entry by prefix, as before.
+  # carries modules an older go.sum needed. The `go run tool@version` tools are
+  # left out: they would triple the entry (200 to 630 MB compressed) for a few
+  # seconds of download in the jobs that run them.
   go-modules:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -2311,39 +2337,69 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Name the module cache entry (go.mod, go.sum and the gate tool versions)
-        id: key
-        run: |
-          set -euo pipefail
-          sum="$({ cat go.mod go.sum; scripts/fetch-gate-tools.sh --list; } | sha256sum | cut -d' ' -f1)"
-          echo "key=gomod-${RUNNER_OS}-${sum}" >> "$GITHUB_OUTPUT"
       - name: Is this module cache saved already?
         id: have
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
-          key: ${{ steps.key.outputs.key }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
           lookup-only: true
       - name: Download the modules
         if: steps.have.outputs.cache-hit != 'true'
         run: go mod download && du -sh ~/go/pkg/mod
-      - name: Fetch gate tools
-        if: steps.have.outputs.cache-hit != 'true'
-        timeout-minutes: 4
-        run: scripts/fetch-gate-tools.sh && du -sh ~/go/pkg/mod
       - name: Save the module cache
         id: save
         if: steps.have.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
-          key: ${{ steps.key.outputs.key }}
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
       - name: Name the entry this run saved
         id: saved
         if: steps.save.outcome == 'success'
-        env:
-          KEY: ${{ steps.key.outputs.key }}
-        run: echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+        run: echo "key=gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+
+  # ── the gate tools' module downloads ─────────────────────────────────────
+  # The `go run tool@version` gate tools (scripts/fetch-gate-tools.sh) fetched their
+  # own modules cold inside the make step: one gate stalled past its job timeout and
+  # another failed reading the checksum database. This job saves just their
+  # cache/download tree (about 250 MB compressed) as its own entry, so the shared
+  # module cache above stays as small as it was; only the jobs that run those tools
+  # restore it. The key hashes the tool pins, so a bump re-saves it. go-cache-prune
+  # never marks a `gotools-` entry as superseded, so it leaves these alone.
+  go-gate-tools:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Name the cache entry (the gate tool pins)
+        id: key
+        run: |
+          set -euo pipefail
+          sum="$(scripts/fetch-gate-tools.sh --list | sha256sum | cut -d' ' -f1)"
+          echo "key=gotools-${RUNNER_OS}-${sum}" >> "$GITHUB_OUTPUT"
+      - name: Is this entry saved already?
+        id: have
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Fetch gate tools
+        if: steps.have.outputs.cache-hit != 'true'
+        timeout-minutes: 4
+        run: scripts/fetch-gate-tools.sh && du -sh ~/go/pkg/mod/cache/download
+      - name: Save the gate tools' downloads
+        if: steps.have.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: ${{ steps.key.outputs.key }}
 
   # ── one Go cache generation per job ───────────────────────────────────────
   # Each green push to main saves its Go caches under its run id. The
