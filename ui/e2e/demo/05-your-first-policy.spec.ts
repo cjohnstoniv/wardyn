@@ -103,6 +103,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
 import { SPEC_LABEL } from "../policy-source";
+import { POLICIES_PAGE } from "../../src/app/components/wardyn/copy/policy-dialog";
 import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
@@ -505,7 +506,7 @@ test("A4 — save, then reuse", async () => {
   // act 3's floor — rung here on the list, where the card is actually visible
   // (act 3 speaks the floor inside the editor dialog; delta lane 1.1). The card
   // is a collapsed <details>, so the click opens its YAML on camera.
-  const ceiling = page.getByText("Default (ceiling) policy", { exact: false }).first();
+  const ceiling = page.getByText(POLICIES_PAGE.CEILING_CAPTION).first();
   await centerInFrame(ceiling);
   await act(page, ceiling, "One more thing on this page, for teams: a default policy that caps what anyone's run may do — the ceiling every other policy sits under.");
   await caption(page, "On a single-user install you can ignore it.");

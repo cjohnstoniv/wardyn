@@ -95,12 +95,19 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     expect(v.body).toHaveLength(1);
   });
   it("sign in again, whichever cause ended the connection, offers Connect", () => {
-    for (const cause of ["ended", "consent_needed", "permissions_missing", undefined]) {
+    for (const cause of ["ended", "consent_needed", undefined]) {
       const v = patCardView(access({ ...minted, state: "expired_signin", cause, source: "org" }), "Azure DevOps")!;
       expect(v.chip).toEqual({ label: "Sign in again", tone: "warning" });
       expect(v.body).toEqual(["Your organisation asked you to sign in again before Wardyn can create tokens."]);
       expect(v.action).toBe("connect");
     }
+  });
+  it("permissions missing is the admin's to fix: the member sentence, nothing to press", () => {
+    const v = patCardView(access({ ...minted, state: "expired_signin", cause: "permissions_missing", source: "org" }), "Azure DevOps")!;
+    const needsApp = patCardView(access({ ...minted, state: "expired_signin", cause: "ado_pat_needs_console_app", source: "org" }), "Azure DevOps")!;
+    expect(v.chip).toEqual({ label: "Not connected", tone: "neutral" });
+    expect(v.body).toEqual(needsApp.body);
+    expect(v.action).toBeNull();
   });
   it("blocked by the organisation (the blocked cause) names the fix and offers nothing to press", () => {
     const v = patCardView(access({ ...minted, state: "expired_signin", cause: "blocked" }), "Azure DevOps")!;

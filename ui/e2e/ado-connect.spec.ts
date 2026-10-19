@@ -147,6 +147,13 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
     await expect(page.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeVisible();
   });
 
+  test("permissions missing: an admin must act, so the card says so and offers nothing to press", async ({ page }) => {
+    await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "expired_signin", cause: "permissions_missing", source: "org" }));
+    await openAccountCard(page);
+    await expect(page.getByText(ADO_PAT.MEMBER_NEEDS_ADMIN)).toBeVisible();
+    await expect(page.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toHaveCount(0);
+  });
+
   test("blocked by the organisation: the card names the allow list and offers nothing to press", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "expired_signin", cause: "blocked" }));
     await openAccountCard(page);
