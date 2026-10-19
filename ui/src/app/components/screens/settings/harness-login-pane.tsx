@@ -23,6 +23,7 @@ import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, CornerDownLeft } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { modelProviderSignIn } from "../../../lib/api/model-provider-signin";
+import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { isTerminalRunState, type AgentRun } from "../../../lib/types";
 import { usePoll } from "../../../lib/use-poll";
@@ -56,7 +57,7 @@ import { openSignInTab } from "./auth-tab-handle";
 import { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER, SIGNIN_PROGRESS } from "./login-pane-copy";
 export { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
 import RunSignInStrip from "../run-detail/run-sign-in-strip";
-import { SignInDoorState, SignInSteps, isImagePullFailure } from "./signin-progress";
+import { SignInDoorState, SignInSteps, isImagePullFailure, signInStepOf } from "./signin-progress";
 // review-1 S4: the per-provider flow table is pure data — EXTRACTED to
 // login-flows.tsx to keep this file under the size cap. Re-exported so this
 // pane's own pinned tests keep their import path.
@@ -210,6 +211,9 @@ export function HarnessLoginPane({
   const pullingRef = React.useRef(false);
   const [imageFailed, setImageFailed] = React.useState(false);
   const [tabOpened, setTabOpened] = React.useState(false);
+  // The run's run.interactive.start audit row has landed: the sandbox is up, whatever the last state read said.
+  const [interactiveStarted, setInteractiveStarted] = React.useState(false);
+  const interactiveStartedRef = React.useRef(false);
   // When this launch began, as the run page's sign-in read wants it (its grace window counts from here).
   const [launchedAt, setLaunchedAt] = React.useState("");
   // Finding 7b: the CLI's own success line — a HINT (S-13's own reasoning), never trusted alone.
@@ -300,6 +304,8 @@ export function HarnessLoginPane({
     setAuthUrl("");
     pullingRef.current = false;
     setPulling(false);
+    interactiveStartedRef.current = false;
+    setInteractiveStarted(false);
     setImageFailed(false);
     setTabOpened(false);
     try {
@@ -406,6 +412,14 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     if (verdict !== waitNoteRef.current) {
       waitNoteRef.current = verdict;
       setWaitNote(verdict);
+    }
+    // The audit row is a second witness to the same fact, read even when the state read failed.
+    if (!interactiveStartedRef.current && (!run || (run.state !== "RUNNING" && !isTerminalRunState(run.state)))) {
+      const rows = await auditApi.listAudit(runId, { action: "run.interactive.start" }).catch(() => []);
+      if (rows.some((e) => e.outcome === "success")) {
+        interactiveStartedRef.current = true;
+        setInteractiveStarted(true);
+      }
     }
     if (!run) return;
     if (run.state === "RUNNING") {
@@ -705,17 +719,19 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           killed on arrival; after it, the id is killed directly. */}
       {(phase === "launching" || phase === "starting") && (
         <div className="space-y-2" data-testid="login-sandbox-starting">
-          <SignInSteps step={pulling ? "download" : "start"} provider={flow.providerName} />
+          <SignInSteps step={signInStepOf({ pulling, interactiveStarted })} provider={flow.providerName} />
           {/* A failing read outranks everything; a download says so plainly;
               otherwise only a slow start earns a line — the substrate's
               reason when it has one, the clock's hedged guess when not. */}
-          {(waitNote === "retrying" || pulling || waitNote === "slow") && (
+          {(waitNote === "retrying" || pulling || interactiveStarted || waitNote === "slow") && (
             <p role="status" className="text-xs leading-relaxed text-muted-foreground">
               {waitNote === "retrying"
                 ? LOGIN_SANDBOX_READ_RETRYING
-                : pulling
-                  ? SIGNIN_PROGRESS.DOWNLOAD_HINT
-                  : startingSentence || LOGIN_SANDBOX_SLOW_START}
+                : interactiveStarted
+                  ? SIGNIN_PROGRESS.WAIT_HINT(flow.providerName)
+                  : pulling
+                    ? SIGNIN_PROGRESS.DOWNLOAD_HINT
+                    : startingSentence || LOGIN_SANDBOX_SLOW_START}
             </p>
           )}
           {/* The sandbox's own device code, as the run page shows it, from the moment the
