@@ -36,7 +36,7 @@ jobs:
           # that branch would run arbitrary shell in front of your secrets.
           # Bump it deliberately, to a release you verified (docs/VERIFY.md);
           # a full commit sha pins harder still.
-          ref: v0.9.3
+          ref: v0.9.4
           path: wardyn
 
       - name: Run the governed sandboxed task

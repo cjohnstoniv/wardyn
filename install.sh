@@ -4,7 +4,7 @@
 #
 # install.sh — install Wardyn on this machine.
 #
-#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.3/install.sh | sh
+#   curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.4/install.sh | sh
 #
 # That URL is a release asset covered by the signed SHA256SUMS. Curling this
 # file from `main` also works, but nothing signs tip-of-main. README.md carries
@@ -142,9 +142,9 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 is required (do
 # Resolve the version. The GitHub API needs no token for a public repo; if it is
 # rate-limited or offline, say so rather than silently installing something else.
 #
-# NOT `releases/latest`: that endpoint EXCLUDES pre-releases, and RELEASING.md
-# mandates `--prerelease` on every Wardyn release — so it returns HTTP 404 and
-# this script used to die two lines below on every install. `releases?per_page=1`
+# NOT `releases/latest`: that endpoint EXCLUDES pre-releases, and a Wardyn
+# release may be one — so it can skip the newest release or return HTTP 404 (this
+# script used to die two lines below on every install). `releases?per_page=1`
 # is the newest release of any kind. RELEASING.md says the same thing about
 # `releases/latest/download/`.
 VERSION="${WARDYN_VERSION:-}"
