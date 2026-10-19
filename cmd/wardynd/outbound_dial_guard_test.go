@@ -59,15 +59,16 @@ var dialScanDirs = []string{
 // dialSite is one occurrence of a hand-rolled dial/transport/client shape.
 type dialSite struct {
 	relFile string // repo-relative, forward-slashed
-	kind    string // "net.Dial*", "tls.Dial*", "http.Transport", "http.Client"
+	kind    string // "net.Dial*", "tls.Dial*", "tls.Dialer", "http.Transport", "http.Client"
 	line    int
 }
 
 // classifyDialSite reports the kind of an AST node the checklist cares about,
 // or "" for anything else. Only a CALL to net.Dial*/tls.Dial* and a COMPOSITE
-// LITERAL of http.Transport/http.Client count — exactly the four shapes the
-// spec names, no more (a `&net.Dialer{}` that only ever feeds one of these two
-// literals is not itself one of them, and is not double-counted here).
+// LITERAL of http.Transport/http.Client/tls.Dialer count — the shapes the
+// spec names plus the tls.Dialer a hand-rolled TLS dial builds, no more (a
+// `&net.Dialer{}` that only ever feeds one of these literals is not itself one
+// of them, and is not double-counted here).
 func classifyDialSite(n ast.Node) string {
 	switch v := n.(type) {
 	case *ast.CallExpr:
@@ -88,6 +89,9 @@ func classifyDialSite(n ast.Node) string {
 			return ""
 		}
 		id, ok := sel.X.(*ast.Ident)
+		if ok && id.Name == "tls" && sel.Sel.Name == "Dialer" {
+			return "tls.Dialer"
+		}
 		if !ok || id.Name != "http" {
 			return ""
 		}
@@ -172,6 +176,12 @@ var sanctionedDialHomes = []dialAllowance{
 		why: "NewServer builds the control-plane client when its caller passes nil, so no callee " +
 			"can fall back to a client on http.DefaultTransport; the client then rides the pinned " +
 			"transport NewServer owns (internal CA only, Proxy stripped) like any caller-supplied one.",
+	},
+	{
+		relFile: "internal/egress/proxy/remote_sink.go",
+		kinds:   kindSet("tls.Dialer"),
+		why: "the remote decision sink's dial to its configured, SPKI-pinned sink address: a " +
+			"control-plane stream to a fixed endpoint, never a sandbox's forward egress.",
 	},
 	{
 		relFile: "cmd/wardyn-proxy/main.go",
