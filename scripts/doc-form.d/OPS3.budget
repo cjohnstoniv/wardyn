@@ -119,7 +119,8 @@ docs/operations/api-tokens.md=5582 share=35
 # docs/operations/denials.md 5191 adds 3 (0.9.4 final review): node_record_human_only also names the API token, as the code and docs/sdk.md do.
 # docs/operations/denials.md 5304 adds 113 (0.10 LAY-C, #2951): the refusal `layer` and the run policy `provenance`.
 # docs/operations/denials.md 5318 adds 14 (0.10 LAY-C r2): the authz.denied layer keys and the operator cap naming the deployment.
-docs/operations/denials.md=5318 share=35
+# 0.10: docs/operations/denials.md 5200 adds 9, measured: user_view_preview names the security admin case.
+docs/operations/denials.md=5327 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

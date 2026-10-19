@@ -442,6 +442,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 			return err
 		}
 	}
+	if err := validatePositiveBounds(f); err != nil {
+		return err
+	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}

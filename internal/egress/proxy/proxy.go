@@ -57,6 +57,8 @@ type Proxy struct {
 	// scanner is the OPTIONAL outbound content-inspection engine. Nil == off
 	// (the common case). It is consulted only on the brokered LLM routes.
 	scanner *contentscan.Engine
+	// scan is this engine's inspection slot and retained-bytes budget.
+	scan scanBudget
 	// ca is the OPTIONAL TLS-MITM certificate authority. Non-nil only when both a
 	// scanner and a CA are configured; it makes opaque CONNECT tunnels to known
 	// LLM hosts inspectable (subscription-OAuth path). Nil == opaque passthrough.

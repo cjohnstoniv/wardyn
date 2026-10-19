@@ -7,7 +7,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -149,8 +153,8 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 
 // TestLocalTrustForwarderAllowsGatewayPeer pins the compose topology:
 // with LocalTrustForwarder set (the compose topology — wardynd bound 0.0.0.0 behind
-// a loopback-only publish, so the peer is always the docker gateway), a non-loopback
-// peer must PASS the peer gate, while the Host gate still rejects DNS-rebinding.
+// a loopback-only publish, so the peer is the docker gateway), the gateway peer
+// must PASS the peer gate, while the Host gate still rejects DNS-rebinding.
 func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	srv := New(Config{
 		Identity:            mustIDP(t),
@@ -159,6 +163,7 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 		Audit:               &recRecorder{},
 		LocalMode:           true,
 		LocalTrustForwarder: true,
+		LocalTrustedPeers:   []netip.Prefix{netip.MustParsePrefix("172.18.0.1/32")},
 		LocalOperator:       "local:tester",
 		DefaultPolicy:       types.RunPolicySpec{MinConfinementClass: types.CC2},
 	})
@@ -181,6 +186,37 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("trusted-forwarder + rebinding Host: code = %d, want 403 (Host gate must still fire)", w.Code)
+	}
+}
+
+// With LocalTrustForwarder set, a peer on wardynd's network that is not the
+// gateway the published port arrives from is refused by the peer gate, on the
+// REST surface and on the attach upgrade alike, whatever Host it sends.
+func TestLocalTrustForwarderRefusesOtherNetworkPeers(t *testing.T) {
+	srv := New(Config{
+		Identity:            mustIDP(t),
+		Approvals:           newFakeApprovals(),
+		Broker:              &fakeBroker{},
+		Audit:               &recRecorder{},
+		LocalMode:           true,
+		LocalTrustForwarder: true,
+		LocalTrustedPeers:   []netip.Prefix{netip.MustParsePrefix("172.18.0.1/32")},
+		LocalOperator:       "local:tester",
+		DefaultPolicy:       types.RunPolicySpec{MinConfinementClass: types.CC2},
+	})
+	for _, door := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/me"},
+		{http.MethodPost, "/api/v1/runs"},
+		{http.MethodGet, "/api/v1/runs/" + uuid.NewString() + "/attach"},
+	} {
+		req := httptest.NewRequest(door.method, door.path, nil)
+		req.Host = "127.0.0.1"
+		req.RemoteAddr = "172.18.0.5:44444" // another member of the network
+		w := httptest.NewRecorder()
+		panicFails(t, srv.Handler()).ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonLocalModePeerNotLoopback) {
+			t.Errorf("%s %s from a non-gateway network peer: %d %s; want 403 %s", door.method, door.path, w.Code, w.Body.String(), reasonLocalModePeerNotLoopback)
+		}
 	}
 }
 
