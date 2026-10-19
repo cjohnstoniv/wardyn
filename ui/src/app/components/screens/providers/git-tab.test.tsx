@@ -153,7 +153,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["ssh"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).toBeDisabled();
     expect(within(row).getByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).toBeInTheDocument();
   });
 
@@ -162,7 +162,7 @@ describe("GitTab", () => {
       <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["pat"] }]} />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByRole("checkbox", { name: /SSH · resident/ })).not.toBeDisabled();
+    expect(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeDisabled();
     expect(screen.queryByText(PROVIDERS.LANE_SSH_PATH_SCOPED)).not.toBeInTheDocument();
   });
 
@@ -369,7 +369,7 @@ describe("GitTab", () => {
       render(<Harness initial={[adoServices]} />);
       const row = screen.getByTestId("provider-row-azure_devops");
       expect(within(row).queryByRole("checkbox", { name: /PAT · brokered/ })).not.toBeInTheDocument();
-      expect(within(row).queryByRole("checkbox", { name: /SSH · resident/ })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("checkbox", { name: /SSH · at the proxy/ })).not.toBeInTheDocument();
       expect(within(row).getByLabelText(E.FIELD_TENANT)).toBeInTheDocument();
     });
 
@@ -508,7 +508,7 @@ describe("GitTab", () => {
         />,
       );
       const row = screen.getByTestId("provider-row-github");
-      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · resident/ }));
+      await userEvent.click(within(row).getByRole("checkbox", { name: /SSH · at the proxy/ }));
       expect(latest[0].lanes).toEqual([]);
     });
   });

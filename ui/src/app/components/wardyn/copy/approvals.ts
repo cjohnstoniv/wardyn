@@ -251,8 +251,8 @@ export type CredentialKind = "git_pat" | "github_token" | "api_key" | "ssh_key" 
 // only the wire-level "credential"/"egress_domain"/"tool_call"), so this stays a
 // key-sniffing heuristic. Order matters:
 //  - key_secret_ref is UNIQUE to ssh_key (broker.sshKeyScope) — must be checked
-//    before the git_pat fallback, or every ssh_key approval (a resident,
-//    agent-readable PRIVATE KEY, not a PAT) rendered the git_pat banner.
+//    before the git_pat fallback, or every ssh_key approval (a PRIVATE KEY
+//    the proxy signs with, not a PAT) rendered the git_pat banner.
 //  - api_key's scope ALSO carries secret_name (the broker requires it), so the
 //    api_key discriminators (header/format) must be checked before the git_pat
 //    fallback — otherwise every api_key approval renders the git_pat banner,

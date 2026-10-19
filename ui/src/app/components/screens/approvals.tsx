@@ -228,12 +228,11 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
       }
       if (ck === "ssh_key") {
         return {
-          what: `A private SSH key${host ? ` for ${host}` : ""} is written to disk in the sandbox for a git-over-SSH clone${ttl}.`,
+          what: `Approving lets the proxy sign this run's Git SSH sign-in${host ? ` for ${host}` : ""}${ttl}; the key stays at the proxy.`,
           // ssh_key has no credential-helper seam (git's SSH transport can't
-          // take an injected credential), so unlike a brokered credential the
-          // key MUST become a resident file the agent's process can read
-          // during the clone — and, like a PAT, Wardyn can't expire or
-          // down-scope it from its side.
+          // take an injected credential), so the proxy holds the key and signs
+          // the sign-in as the sandbox's ssh agent — and, like a PAT, Wardyn
+          // can't expire or down-scope it from its side.
           blast: `${CAPABILITY.sshKeyLine} Wardyn can't expire or down-scope it — it stays live until you revoke it on ${host ?? "the git host"}.`,
         };
       }
