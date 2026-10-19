@@ -22,6 +22,7 @@ import { RUN_PLACEMENT, RUN_RECORDING, runnerLabel } from "../../../wardyn/copy/
 import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
+import { ComputerFolderRows } from "./identity-computer-folder";
 import { SyncRows } from "./identity-sync";
 
 export function IdentityWidget({
@@ -183,6 +184,7 @@ export function IdentityWidget({
           </>
         )}
 
+        <ComputerFolderRows run={run} />
         <SyncRows run={run} audit={audit} onGoAudit={onGoAudit} />
       </dl>
       {local && run.evidence_source === "runner_asserted" && (

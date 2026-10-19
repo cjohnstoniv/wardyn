@@ -472,6 +472,17 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
   egress policy and works identically on every deployment regardless of what
   that policy allows.
 
+### Editors over the gateway
+
+| Editor | What it needs from the gateway | Tested |
+|---|---|---|
+| VS Code Remote-SSH | Exec channels, an sftp transfer of the server it downloaded, and `-L` to the server's port | The gateway side, on one connection ([`sshgateway_remote_ssh_test.go`](../internal/api/sshgateway_remote_ssh_test.go)) |
+| JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Not yet tested |
+| Mutagen | Exec channels and a file transfer for its agent | Not yet tested |
+
+- A folder on your computer can also reach a remote sandbox with no editor and no `wardyn sync`: see
+  [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
+
 ## 6. Other tools over SSH (scripted access)
 
 - Everything above assumes a human typing `ssh` or pasting a `Host` block by

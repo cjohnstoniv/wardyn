@@ -280,7 +280,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if _, refusal := runRequestEnums(req); refusal.write(s, w, r) {
 		return
 	}
-	if s.localFolderRefusal(&req).write(s, w, r) {
+	if s.localFolderRefusal(r.Context(), &req).write(s, w, r) {
 		return
 	}
 	// Same free-text field caps + control-character check launch runs over every

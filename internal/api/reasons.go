@@ -201,6 +201,10 @@ const (
 	reasonTaskModeUnknown                      = "task_mode_unknown"                        // task_mode is not "harness" or "exec"
 	reasonLocalFolderInvalid                   = "local_folder_invalid"                     // local_folder's name or remote_dir is malformed
 	reasonLocalFolderUnsupported               = "local_folder_unsupported"                 // local_folder on a run or deployment that cannot hold the agent for it
+	reasonComputerFoldersOff                   = "computer_folders_off"                     // WARDYN_COMPUTER_FOLDERS is off: no folder from a personal computer
+	reasonComputerRunnerOffline                = "computer_runner_offline"                  // the runner holding the folder is not connected, or did not answer
+	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
+	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)

@@ -125,6 +125,10 @@ type Caps struct {
 	// (it is no runner.SandboxEnder: Kubernetes deletes a stopped pod). Absent
 	// (a runner older than 0.9.4) reads as keeps, as before.
 	EndsUnkept bool `json:"ends_unkept,omitempty"`
+	// Folders says the runner serves list_folders and sync_folder: a folder-only
+	// runner (0.10 on). Absent (an older runner) reads as none, so a person sees
+	// "no runner on your computer" rather than a refused call.
+	Folders bool `json:"folders,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.
@@ -226,6 +230,8 @@ const (
 	KindExecStderr = "exec_stderr"
 	KindRelay      = "relay"
 	KindOutput     = "output"
+	// KindFolder is the sftp stream of one sync_folder pass.
+	KindFolder = "folder"
 )
 
 // Open is the OPEN payload.
@@ -241,7 +247,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

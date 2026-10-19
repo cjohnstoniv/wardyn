@@ -14,30 +14,17 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 	"golang.org/x/crypto/ssh"
 )
 
 // The sandbox chooses every remote name, and the report is read in a terminal.
 
-func TestSyncEntryName_RefusesControlCharacters(t *testing.T) {
-	for _, n := range []string{"a\x1bb", "a\rb", "a\nb", "a\x07", "\x1b]52;c;ZXZpbA==\x07", "a\tb", "a\x7f", "a\u0085b"} {
-		err := syncEntryName(n)
-		if err == nil || !strings.Contains(err.Error(), "control character") {
-			t.Errorf("syncEntryName(%q) = %v, want a control-character refusal", n, err)
-		}
-	}
-	for _, n := range []string{"plain.txt", "a b", "héllo wörld.txt", "日本語", "emoji-\U0001F600"} {
-		if err := syncEntryName(n); err != nil {
-			t.Errorf("syncEntryName(%q) refused: %v", n, err)
-		}
-	}
-}
-
 func TestPrintSyncReport_PlainNamesPrintAsTheyAre(t *testing.T) {
-	rep := newSyncReport()
+	rep := foldersync.NewReport()
 	rep.Pushed = []string{"a.txt"}
 	rep.Conflicts = []string{"dir/héllo wörld.txt"}
-	rep.refuse("日本語/x", "symlink")
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "日本語/x", Reason: "symlink"})
 	var b bytes.Buffer
 	printSyncReport(&b, rep)
 	want := "pushed 1 file(s) (0 bytes), pulled 0 file(s) (0 bytes)\n" +
@@ -49,10 +36,10 @@ func TestPrintSyncReport_PlainNamesPrintAsTheyAre(t *testing.T) {
 }
 
 func TestPrintSyncReport_QuotesNamesWithNonPrintableCharacters(t *testing.T) {
-	rep := newSyncReport()
+	rep := foldersync.NewReport()
 	rep.Conflicts = []string{"c\x1b[2J\rfake"}
-	rep.refuse("r\nrefused (x): fake", "symlink")
-	rep.refuse("bidi\u202eexe", "symlink")
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "r\nrefused (x): fake", Reason: "symlink"})
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "bidi\u202eexe", Reason: "symlink"})
 	var b bytes.Buffer
 	printSyncReport(&b, rep)
 	want := "pushed 0 file(s) (0 bytes), pulled 0 file(s) (0 bytes)\n" +
@@ -115,12 +102,12 @@ func TestSyncGateway_AHugeDirectoryListingIsCutOffByItsByteBudget(t *testing.T) 
 	g.mkSandboxDir(syncRemote)
 	g.rn.bigDir = syncRemote
 	sy, _, _ := g.syncer(syncRemote, false)
-	_, err := sy.pass(context.Background())
+	_, err := sy.Pass(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "the listing is larger than") {
 		t.Fatalf("err = %v, want the listing refused for its size", err)
 	}
-	if n := g.rn.served.Load(); n >= maxSyncEntries {
-		t.Errorf("the sandbox served %d entries, want the listing cut off before the %d entry cap", n, maxSyncEntries)
+	if n := g.rn.served.Load(); n >= foldersync.MaxEntries {
+		t.Errorf("the sandbox served %d entries, want the listing cut off before the %d entry cap", n, foldersync.MaxEntries)
 	}
 }
 
@@ -134,10 +121,10 @@ func rawControl(s string) bool {
 }
 
 func TestPrintSyncReport_ReasonsPrintAsTheyAreOrQuoted(t *testing.T) {
-	rep := newSyncReport()
-	rep.refuse("a", "unreadable: open /x: permission denied")
-	rep.refuse("b", "list é: "+"日本語 ok")
-	rep.refuse("c", hostileText)
+	rep := foldersync.NewReport()
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "a", Reason: "unreadable: open /x: permission denied"})
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "b", Reason: "list é: " + "日本語 ok"})
+	rep.Refused = append(rep.Refused, foldersync.Refusal{Path: "c", Reason: hostileText})
 	var b bytes.Buffer
 	printSyncReport(&b, rep)
 	want := "pushed 0 file(s) (0 bytes), pulled 0 file(s) (0 bytes)\n" +

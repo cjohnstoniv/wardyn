@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/foldersync"
 )
 
 func TestSyncGateway_LaptopDeletesReachTheSandbox(t *testing.T) {
@@ -68,13 +70,13 @@ func TestSyncGateway_ARenameIsARenameInTheSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := mustPass(t, sy)
-	if !slices.Equal(rep.Renamed, []syncRename{{From: "docs/plan.md", To: "notes/plan.md"}}) || len(rep.Pushed)+len(rep.DeletedRemote) != 0 {
+	if !slices.Equal(rep.Renamed, []foldersync.Rename{{From: "docs/plan.md", To: "notes/plan.md"}}) || len(rep.Pushed)+len(rep.DeletedRemote) != 0 {
 		t.Fatalf("renamed %v, pushed %v, deleted %v: want one rename and nothing else", rep.Renamed, rep.Pushed, rep.DeletedRemote)
 	}
 	if got := getSyncFile(t, filepath.Join(box, "notes/plan.md")); got != "the plan" {
 		t.Errorf("renamed file = %q", got)
 	}
-	if rep := mustPass(t, sy); !rep.empty() {
+	if rep := mustPass(t, sy); !rep.Empty() {
 		t.Errorf("the pass after a rename did something: %+v", rep)
 	}
 	if err := sess.close(); err != nil {
@@ -125,7 +127,7 @@ func TestSyncGateway_SandboxDeletesNeedPullDeletes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sy.o.maxPullDeletes, sy.o.trash = 20, t.TempDir() // the CLI's defaults
+	sy.Opts.MaxPullDeletes, sy.Opts.Trash = 20, t.TempDir() // the CLI's defaults
 	if rep := mustPass(t, sy); len(rep.DeletedLocal)+len(rep.Refused) != 0 {
 		t.Fatalf("--pull alone deleted %v (refused %v) on the laptop", rep.DeletedLocal, rep.Refused)
 	}
@@ -134,8 +136,8 @@ func TestSyncGateway_SandboxDeletesNeedPullDeletes(t *testing.T) {
 	}
 
 	var listed strings.Builder
-	sy.o.pullDeletes, sy.o.maxPullDeletes, sy.o.notify = true, 5, &listed
-	sy.o.trash = filepath.Join(t.TempDir(), "deleted")
+	sy.Opts.PullDeletes, sy.Opts.MaxPullDeletes, sy.Opts.Notify = true, 5, &listed
+	sy.Opts.Trash = filepath.Join(t.TempDir(), "deleted")
 	rep := mustPass(t, sy)
 	if !slices.Equal(rep.DeletedLocal, []string{"drop.txt"}) {
 		t.Fatalf("deleted on the laptop = %v", rep.DeletedLocal)
@@ -143,7 +145,7 @@ func TestSyncGateway_SandboxDeletesNeedPullDeletes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "drop.txt")); err == nil {
 		t.Error("the file is still on the laptop")
 	}
-	if got := getSyncFile(t, filepath.Join(sy.o.trash, "drop.txt")); got != "d" {
+	if got := getSyncFile(t, filepath.Join(sy.Opts.Trash, "drop.txt")); got != "d" {
 		t.Errorf("the deleted file was not kept: %q", got)
 	}
 	if !strings.Contains(listed.String(), "drop.txt") {
@@ -165,7 +167,7 @@ func TestSyncGateway_PullDeletesAreBoundedPerPass(t *testing.T) {
 	for _, p := range []string{"a", "b", "c"} {
 		_ = os.Remove(filepath.Join(box, p))
 	}
-	sy.o.pullDeletes, sy.o.maxPullDeletes, sy.o.trash = true, 2, t.TempDir()
+	sy.Opts.PullDeletes, sy.Opts.MaxPullDeletes, sy.Opts.Trash = true, 2, t.TempDir()
 	rep := mustPass(t, sy)
 	if len(rep.DeletedLocal) != 0 || len(rep.Refused) != 3 {
 		t.Fatalf("over the bound: deleted %v, refused %v; want none deleted and all three refused", rep.DeletedLocal, rep.Refused)

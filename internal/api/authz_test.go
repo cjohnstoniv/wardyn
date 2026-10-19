@@ -244,6 +244,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
+	// A folder-only runner's folders (run_computer_folder.go), the caller's own runner only.
+	"GET /api/v1/me/runners/{id}/folders": {class: classMember},
 	// The owner's change of their own runner's runs at once (runner_limits.go), scoped to the caller's
 	// own runners inside the handler.
 	"PUT /api/v1/me/runners/{id}": {class: classMember},
@@ -1073,6 +1075,8 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
+	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
+	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
 	for _, f := range shape {
 		f(&cfg)

@@ -2571,7 +2571,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 68. **Sync lets agent-authored content reach files the developer later executes [0.9].**
     - `wardyn sync` copies between a laptop directory and a remote run over the SSH gateway's dedicated `wardyn-sync` subsystem; a pull from the sandbox needs `--pull`, per run.
-    - The CLI applies the safety defaults on the laptop (`syncDenied`, [`cmd/wardyn/sync_rules.go`](../cmd/wardyn/sync_rules.go)): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
+    - The CLI applies the safety defaults on the laptop (`syncDenied`, [`internal/foldersync/rules.go`](../internal/foldersync/rules.go)): nothing is deleted, no symlinks either way, no exec bit on a pulled file, never `.git/`, `.envrc`, `.direnv/` or editor task and launch files, and the laptop wins a conflict ([design §9.3](../docs/design/0.9/PLAN.md#93-safety-defaults)).
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).

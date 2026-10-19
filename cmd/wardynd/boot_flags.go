@@ -380,6 +380,8 @@ type bootFlags struct {
 	syncDeny *string
 	// localFolderSeedWait is api.Config.LocalFolderSeedWait.
 	localFolderSeedWait *time.Duration
+	// computerFolders is api.Config.ComputerFolders.
+	computerFolders *bool
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -667,6 +669,7 @@ func parseBootFlags() *bootFlags {
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
 		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
+		computerFolders:        flagBool("computer-folders", "WARDYN_COMPUTER_FOLDERS", false, "let a run take a folder from its creator's own folder-only runner ('wardyn-runnerd serve --substrate folders'), which Wardyn seeds before the agent starts (default false)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),

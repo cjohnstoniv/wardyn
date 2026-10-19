@@ -21,6 +21,7 @@ import (
 //	DELETE /runners/tokens/{id}                                        security
 //	PUT /runners/settings                                              admin (SUPER)
 //	GET /me/runners, /me/runners/{id}                                  the caller's own runners only
+//	GET /me/runners/{id}/folders                                       a folder-only runner's folders (run_computer_folder.go)
 //	PUT /me/runners/{id}                                               the runner's owner (runner_limits.go)
 func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Router) {
 	securityOps.Get("/runners", s.handleListRunners)
@@ -31,6 +32,7 @@ func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Rou
 	securityOps.Get("/runners/{id}", s.handleGetRunner)
 	r.Get("/me/runners", s.handleListMyRunners)
 	r.Get("/me/runners/{id}", s.handleGetMyRunner)
+	r.Get("/me/runners/{id}/folders", s.handleListMyRunnerFolders)
 	r.Put("/me/runners/{id}", s.handleUpdateMyRunner)
 }
 
@@ -82,8 +84,21 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 	}
 	if row.State == types.RunnerClaimed {
 		v.Capacity, v.Classes, v.AllowedRoots = s.runnerReportedCaps(row.ID)
+		v.Folders = s.runnerSharesFolders(row.ID)
 	}
 	return v
+}
+
+// runnerSharesFolders is the runner's last caps event's folders flag, read like runnerReportedCaps.
+func (s *Server) runnerSharesFolders(id uuid.UUID) bool {
+	s.runnerStreams.subsMu.Lock()
+	ep, ok := s.runnerStreams.subs[id]
+	s.runnerStreams.subsMu.Unlock()
+	if !ok {
+		return false
+	}
+	caps, ok := ep.sub.Caps()
+	return ok && caps.Folders
 }
 
 // runnerReportedCaps is the runner's last caps event as this process holds it. It reads the endpoint

@@ -535,6 +535,7 @@ func run() error {
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
 		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
+		ComputerFolders:      *f.computerFolders,
 		APITokenMaxTTL:       *f.apiTokenMaxTTL,
 		RoleStampTTL:         *f.roleStampTTL,
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.

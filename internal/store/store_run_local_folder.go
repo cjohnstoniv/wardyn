@@ -75,3 +75,43 @@ func (s PG) SetRunLocalFolderSeed(ctx context.Context, id uuid.UUID, errText str
 	}
 	return tag.RowsAffected() == 1, nil
 }
+
+// RunLocalFolderStatuses is the computer-folder pass record (0196), optional like RunLocalFolders.
+type RunLocalFolderStatuses interface {
+	// RunLocalFolderStatus reads run id's record, zero while no pass has ended.
+	RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error)
+	// SetRunLocalFolderStatus replaces run id's record. False when the run has no local folder.
+	SetRunLocalFolderStatus(ctx context.Context, id uuid.UUID, st types.RunLocalFolderStatus) (bool, error)
+}
+
+// RunLocalFolderStatus implements RunLocalFolderStatuses.
+func (s PG) RunLocalFolderStatus(ctx context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	var raw []byte
+	err := s.Pool.QueryRow(ctx, `SELECT local_folder_status FROM agent_runs WHERE id = $1`, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.RunLocalFolderStatus{}, ErrNotFound
+	}
+	if err != nil {
+		return types.RunLocalFolderStatus{}, fmt.Errorf("store: read run local folder status: %w", err)
+	}
+	var st types.RunLocalFolderStatus
+	if raw != nil {
+		if err := json.Unmarshal(raw, &st); err != nil {
+			return types.RunLocalFolderStatus{}, fmt.Errorf("store: unmarshal run local folder status: %w", err)
+		}
+	}
+	return st, nil
+}
+
+// SetRunLocalFolderStatus implements RunLocalFolderStatuses.
+func (s PG) SetRunLocalFolderStatus(ctx context.Context, id uuid.UUID, st types.RunLocalFolderStatus) (bool, error) {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return false, fmt.Errorf("store: marshal run local folder status: %w", err)
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET local_folder_status = $2 WHERE id = $1 AND local_folder IS NOT NULL`, id, raw)
+	if err != nil {
+		return false, fmt.Errorf("store: record run local folder status: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
