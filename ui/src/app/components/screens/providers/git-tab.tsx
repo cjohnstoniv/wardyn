@@ -429,7 +429,7 @@ function Row({
                 <CredentialLane
                   id={`${uid}lane-${kind}-ssh`}
                   title="SSH key"
-                  hint="A per-run key file is written inside the sandbox for the clone and shredded after; an approval-gated grant is delivered once."
+                  hint="The proxy holds the key and signs the clone's SSH sign-in; no key file enters the sandbox. An approval-gated grant is issued once."
                   connected={!!host && present.includes(sshName)}
                   connectedDetail={`${host} · stored as ${sshName}`}
                   selected={!!host && credLane === "ssh"}

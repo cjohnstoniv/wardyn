@@ -183,6 +183,8 @@ type syncState struct {
 	Local  string                  `json:"local"`
 	Remote string                  `json:"remote"`
 	Files  map[string]syncFileSeen `json:"files"`
+	// GitSent is what --git last sent; --pull-commits brings back what came after it.
+	GitSent *syncGitSent `json:"git_sent,omitempty"`
 }
 
 type syncFileSeen struct {

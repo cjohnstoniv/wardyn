@@ -68,8 +68,8 @@ no admin route opens whatever the type.
   launch), and the view turns off.
 - `GET /me` then answers as your real tier with `user_view_dropped`
   naming the type.
-- With `WARDYN_GOVERN_ADMIN_RUNS` on, looking through a type other than
-  your own stamped type is a **read-only preview**. Any request that is not
+- For a security admin, and for a super admin with `WARDYN_GOVERN_ADMIN_RUNS` on,
+  looking through a type other than your own stamped type is a **read-only preview**. Any request that is not
   a `GET`, `HEAD` or `OPTIONS` (a run launch, a preflight, a workspace
   create) answers `409` with reason `user_view_preview`. The picker never
   chooses the profile your runs are governed by. Switching the view
@@ -77,7 +77,7 @@ no admin route opens whatever the type.
   (`POST /policies/grade`, a read-only computation) still work. Viewing
   your own type launches as usual. The refusal is audited as `authz.denied`
   with the viewed and stamped types.
-- With `WARDYN_GOVERN_ADMIN_RUNS` off (the default), the picked type is the type the view's runs resolve against, for either admin tier.
+- With `WARDYN_GOVERN_ADMIN_RUNS` off (the default), a super admin's picked type is the type the view's runs resolve against. A security admin's runs always resolve against their stamped type.
   - Your stamped type does not limit which type you pick.
   - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
   - Turn the switch on when an admin's own stamped type must bound the runs they launch.

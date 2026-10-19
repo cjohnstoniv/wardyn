@@ -160,6 +160,13 @@ RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go buil
 ARG HOST_GOOS=linux
 ARG HOST_GOARCH=amd64
 RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardyn-host ./cmd/wardyn
+# One CLI per host platform, always. A published image is built once (linux/amd64
+# above), yet `make setup` pulls it on macOS and arm64 hosts too, where up.sh must
+# extract a binary that runs there rather than overwrite bin/wardyn with a foreign
+# one (scripts/up.sh seed_host_proxy picks /host/wardyn-<os>-<arch>).
+RUN for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -ldflags "-s -w" -o /out/host/wardyn-${t%/*}-${t#*/} ./cmd/wardyn || exit 1; \
+    done
 
 # Runtime stage: resolves to $TARGETPLATFORM (no --platform pin) and runs NO
 # commands — every instruction below is COPY or ENV — so a linux/arm64 build of
@@ -199,6 +206,7 @@ COPY --from=builder /out/wardyn /usr/local/bin/wardyn
 # Host-native build of the same CLI, for scripts/up.sh to extract and run ON THE
 # HOST (host-side proxy detection). Never executed inside this image.
 COPY --from=builder /out/wardyn-host /host/wardyn
+COPY --from=builder /out/host/ /host/
 # Ship the example policies AND point -default-policy at them: the Go default
 # is the RELATIVE examples/policies/default.json (correct for `go run` from the
 # repo root) which does not resolve from this distroless image's WorkingDir —

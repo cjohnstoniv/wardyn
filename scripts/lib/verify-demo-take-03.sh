@@ -427,22 +427,21 @@ rm -rf "${V03_DIR}"
 # ---------------------------------------------------------------------------
 check_video_03d() {
 head_ "Video 03d · narration"
-_v03_cues 34
+_v03_cues 26
 
 head_ "Video 03d · the runs this take launched"
-_v03_load ssh-briefly-resident || return
+_v03_load ssh-at-the-proxy || return
 _v03_absent github-app-broker "Start stays disabled without a configured GitHub App, so no sandbox is ever built (the closed door IS the beat)"
 _v03_absent sts-fail-closed "the 422 fires at run-create, before any sandbox exists (the refusal IS the demo)"
 _v03_no_canary
 
 head_ "Video 03d · the audit trail"
 _v03_run_py /tmp/_demo_v03d.$$ <<'PYEOF'
-D2 = "ssh-briefly-resident"
+D2 = "ssh-at-the-proxy"
 # The ssh_key grant's scope names github.com, but ssh is re-originated through
 # the proxy's CONNECT lane: the server UNIONS ssh.github.com:443 onto the run's
 # allowlist (run.egress.add, kind=ssh) and the sandbox dials THAT. Port 22 is never
-# reached — which is the point of "briefly resident", and the reason this
-# episode can film a real ssh handshake at all.
+# reached, and that union is what lets this episode film a real ssh handshake.
 un = [e for e in rows(D2, "run.egress.add") if (e.get("data") or {}).get("kind") == "ssh"]
 added = (un[0].get("data") or {}).get("added_domains") if un else []
 out("V03D_SSH_UNION", "ssh.github.com:443" in (added or []))
@@ -463,7 +462,7 @@ while read -r k v; do
     V03D_SSH_ALLOW) [[ "$v" == True ]] && ok "ssh: ssh.github.com:443 allowed — the re-originated handshake really went out" || bad "ssh: no egress.allow for ssh.github.com:443 — the ssh command never reached GitHub" ;;
     V03D_SSH_NO_22) [[ "$v" == True ]] && ok "ssh: nothing ever dialed github.com:22 — port 22 stayed shut" || bad "ssh: an egress decision names github.com / port 22 — the sandbox dialed the bare ssh port, which the allowlist does not carry" ;;
     V03D_SSH_BARE)  [[ "$v" == "-" ]] || printf '    bare-host rows: %s\n' "$v" ;;
-    V03D_SSH_MINT)  [[ "$v" == True ]] && ok "ssh: credential.mint for the wardyn-demo-ssh-key grant" || bad "ssh: no credential.mint naming wardyn-demo-ssh-key — the key that 'touches disk, briefly' was never issued" ;;
+    V03D_SSH_MINT)  [[ "$v" == True ]] && ok "ssh: credential.mint for the wardyn-demo-ssh-key grant" || bad "ssh: no credential.mint naming wardyn-demo-ssh-key — the mint-route step never reached the control plane" ;;
   esac
 done < /tmp/_demo_v03d.$$
 rm -f /tmp/_demo_v03d.$$

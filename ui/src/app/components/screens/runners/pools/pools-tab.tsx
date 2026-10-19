@@ -9,6 +9,7 @@
 // column name over each cell. A pool opens in the details sheet; Edit goes to the pool form. Making a pool the
 // default keeps the organization's default barrier: the write sends back the barrier it just read.
 import * as React from "react";
+import { Server } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { runnerPools } from "../../../../lib/api/runner-pools";
@@ -18,7 +19,7 @@ import type { RunnerView } from "../../../../lib/types/runners";
 import { POOLS, RUNNER_KIND } from "../../../wardyn/copy/runner-pools";
 import { useOperator } from "../../../wardyn/operator-context";
 import { Chip } from "../../../wardyn/primitives";
-import { STATES } from "../../../wardyn/states";
+import { EmptyState, STATES } from "../../../wardyn/states";
 import { Button } from "../../../ui/button";
 import { OnlineDot } from "../resource-table";
 import { barriersText, membersOf, narrowShort, poolRes, runTypesText } from "../resources";
@@ -46,6 +47,14 @@ function Card({ title, body, action }: { title: string; body: string; action?: R
       <h3 className="mb-1 text-foreground">{title}</h3>
       <p className={`text-sm text-muted-foreground ${action ? "mb-3" : ""}`}>{body}</p>
       {action}
+    </div>
+  );
+}
+
+function EmptyCard({ title, body }: { title: string; body: string }) {
+  return (
+    <div role="group" aria-label={title} className="mb-4 rounded-xl border border-border bg-card">
+      <EmptyState size="compact" icon={Server} title={title} description={body} />
     </div>
   );
 }
@@ -257,7 +266,7 @@ export function PoolsTab({
       </Note>
       {!superAdmin && <Note>{POOLS.ORG_SECURITY}</Note>}
       {org.length === 0 ? (
-        <Card title={POOLS.ORG_EMPTY_TITLE} body={POOLS.ORG_EMPTY_BODY} />
+        <EmptyCard title={POOLS.ORG_EMPTY_TITLE} body={POOLS.ORG_EMPTY_BODY} />
       ) : (
         <>
           {defaultsError && (
@@ -281,7 +290,7 @@ export function PoolsTab({
         </Link>
       </Note>
       {user.length === 0 ? (
-        <Card title={POOLS.USER_EMPTY_TITLE} body={POOLS.USER_EMPTY_BODY} />
+        <EmptyCard title={POOLS.USER_EMPTY_TITLE} body={POOLS.USER_EMPTY_BODY} />
       ) : (
         <div role="table" aria-label={POOLS.USER_TITLE} className="border-t border-border">
           <Header user />

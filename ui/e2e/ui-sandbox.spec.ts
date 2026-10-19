@@ -106,11 +106,14 @@ test.describe("Run detail — UI apps lane", () => {
       await route.fulfill({ status: 200, contentType: "text/plain", body: "stopped for the test" });
     });
 
+    // #2780: the ticket is asked for a UI app, so a run whose terminal sessions are all open still opens it.
+    const mint = page.waitForRequest((req) => req.url().includes(`/runs/${runId}/attach/ticket`));
     const [popup] = await Promise.all([
       context.waitForEvent("page"),
       page.getByRole("button", { name: "Open vscode" }).click(),
     ]);
     await popup.waitForLoadState("domcontentloaded").catch(() => {});
+    expect(new URL((await mint).url()).searchParams.get("purpose")).toBe("ui");
 
     expect(captured).not.toBeNull();
     const { url: openedURL, postData, cookie } = captured!;

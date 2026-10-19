@@ -235,6 +235,7 @@ export function AccessPanel({
   if (state === "sso_unavailable") {
     return (
       <EmptyState
+        size="compact"
         icon={ShieldOff}
         title={ACCESS_STATE.SSO_UNAVAILABLE_TITLE}
         description={ACCESS_STATE.SSO_UNAVAILABLE_BODY}
@@ -244,6 +245,7 @@ export function AccessPanel({
   if (state === "fetch_failed" || !access) {
     return (
       <EmptyState
+        size="compact"
         icon={AlertTriangle}
         title={ACCESS_STATE.FETCH_FAILED_TITLE}
         description={ACCESS_STATE.FETCH_FAILED_BODY}
@@ -347,7 +349,7 @@ function MappingsTable({ access, onReload }: { access: AccessResponse; onReload:
 
       <div className="mt-4 flex flex-col gap-2">
         {access.mappings.length === 0 ? (
-          <EmptyState icon={ShieldOff} title={PEOPLE.EMPTY_TITLE} description={PEOPLE.EMPTY_BODY} />
+          <EmptyState size="compact" icon={ShieldOff} title={PEOPLE.EMPTY_TITLE} description={PEOPLE.EMPTY_BODY} />
         ) : (
           access.mappings.map((m) => (
             <MappingCard

@@ -17,6 +17,7 @@
 // llmLabel names the first such provider. Since 0.8 (#548) a run's model
 // credential comes only from its model provider, so an operator key or login
 // is no model path at all.
+import { shortTime } from "./format";
 import type { SetupStatus } from "./types";
 
 // Whether a coding agent (Claude Code / Codex CLI) has somewhere to call: the
@@ -80,5 +81,5 @@ export function lastCheckedLabel(at: Date | null): string {
   const s = Math.round((Date.now() - at.getTime()) / 1000);
   if (s < 5) return "Checked just now";
   if (s < 60) return `Checked ${s}s ago`;
-  return `Last checked ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `Last checked ${shortTime(at.toISOString())}`;
 }

@@ -78,7 +78,7 @@ export interface ApprovalRequest {
   sla_due_at?: string;
 }
 
-// canDecideApproval mirrors internal/api/approvals.go's decide() exactly: an
+// canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an
 // operator/admin may decide anything; a member may decide only an
 // egress_domain approval — credential and tool_call stay admin-only
 // REGARDLESS of ownership (self-approving your own run's credential mint or
@@ -87,7 +87,10 @@ export interface ApprovalRequest {
 // only ever render rows the caller owns (the list itself is server-scoped —
 // see handleListApprovals's creator-pager branch / a run-detail page's
 // getRunAuthorized gate), so ownership is a precondition of the row existing
-// at all, not something this predicate needs to re-check.
+// at all, not something this predicate needs to re-check. It does NOT know the
+// egress_host capability: when an admin withholds that grant the server refuses
+// a member's egress_domain decision with capability_egress_host, and the strip
+// turns the row's buttons off on that first refusal.
 export function canDecideApproval(operator: boolean, kind: ApprovalKind): boolean {
   // credential_reauth is NOT DECIDABLE BY ANYONE, security operator included:
   // it is resolved by its owner signing in, and the server answers 409 to an

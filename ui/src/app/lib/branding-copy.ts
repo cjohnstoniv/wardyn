@@ -18,6 +18,7 @@ export const BRAND_HEADER = {
 
 export const BRANDING = {
   TITLE: "Branding",
+  LOAD_FAILED_SUMMARY: "Couldn't load",
   LEDE: "How this Wardyn console looks and introduces itself to the people who sign in.",
   ORG_NAME_LABEL: "Organisation name",
   NAME_FORMAT_LABEL: "How the product name appears",

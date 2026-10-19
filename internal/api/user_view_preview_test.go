@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -32,12 +33,17 @@ func uvPreviewServer(t *testing.T, govern bool) (*Server, *govEscapeStore, *recR
 	return New(cfg), st, audit
 }
 
+// A security admin is bounded by the stamped type with the switch off too.
 func TestUserViewPreview_RefusesWrites(t *testing.T) {
 	const runBody = `{"agent":"claude-code","task":"t"}`
-	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin} {
+	for _, c := range []struct {
+		role   string
+		govern bool
+	}{{oidc.RoleAdmin, true}, {oidc.RoleSecurityAdmin, true}, {oidc.RoleSecurityAdmin, false}} {
+		role := c.role
 		for _, stamped := range []string{types.UserTypeStandard, utPM} {
-			t.Run(role+" stamped "+stamped, func(t *testing.T) {
-				srv, st, audit := uvPreviewServer(t, true)
+			t.Run(fmt.Sprintf("%s govern %v stamped %s", role, c.govern, stamped), func(t *testing.T) {
+				srv, st, audit := uvPreviewServer(t, c.govern)
 				view := uvSession(t, previewSub, role, stamped, utDev)
 				for _, door := range []struct{ method, path, body string }{
 					{http.MethodPost, "/api/v1/runs", runBody},

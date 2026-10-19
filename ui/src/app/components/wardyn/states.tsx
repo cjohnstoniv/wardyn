@@ -49,7 +49,8 @@ export function EmptyState({
   description,
   action,
   className,
-  as = "h2",
+  as,
+  size = "page",
   tileClassName,
 }: {
   icon: React.ElementType;
@@ -63,14 +64,17 @@ export function EmptyState({
   description?: React.ReactNode;
   action?: React.ReactNode;
   className?: string;
-  /** Heading level for `title` — see the module note above. Default h2. */
+  /** Heading level for `title` — see the module note above. Default h2, or h4 for a compact one. */
   as?: HeadingTag;
+  /** "compact" is the quieter in-card look (#2873, about 160px tall); "page" is for a whole-page empty state. */
+  size?: "page" | "compact";
   /** Overrides the icon tile's colours, for the one caller whose icon carries a meaning of its own (#2873). */
   tileClassName?: string;
 }) {
-  const Heading = as;
+  const compact = size === "compact";
+  const Heading = as ?? (compact ? "h4" : "h2");
   return (
-    <div className={cn("flex flex-col items-center justify-center gap-3 px-6 py-16 text-center", className)}>
+    <div data-size={size} className={cn("flex flex-col items-center justify-center gap-3 px-6 text-center", compact ? "py-8" : "py-16", className)}>
       <div
         data-testid="empty-state-tile"
         className={cn(

@@ -6,11 +6,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	neturl "net/url"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -171,7 +169,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		// redirectPort (80 for an explicit http://, 443 otherwise), so the credential
 		// and the SSRF trust are scoped to one port; a mirror on another port needs
 		// that port in the To.
-		entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))
+		entry := redirectToEntry(to, r.To)
 		if !added[entry] {
 			added[entry] = true
 			add = append(add, entry)
@@ -509,9 +507,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	for _, d := range ws.DeniedEgress {
 		skip[strings.ToLower(strings.TrimSpace(d))] = true
 	}
-	for d := range s.deadApprovedEgressHosts() {
-		skip[d] = true
-	}
+	dead := s.deadApprovedEgressHosts()
 	if p, ok := workspaceProfile(ws); ok {
 		for _, d := range p.EgressDomains {
 			skip[d] = true
@@ -555,7 +551,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || skip[host] || !hostrules.ValidApprovedHost(host) {
+			if host == "" || skip[host] || deadApprovedEgressHost(dead, host) || !hostrules.ValidApprovedHost(host) {
 				continue
 			}
 			// Policy allowed these hosts and the network lost the connection:

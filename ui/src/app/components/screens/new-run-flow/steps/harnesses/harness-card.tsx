@@ -54,7 +54,7 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
     <section aria-label={NR_HARNESSES.EYEBROW(index + 1)} className="flex flex-col rounded-[11px] border border-border bg-card p-[18px]">
       <div className="mb-[17px] flex items-start justify-between gap-3 border-b border-border pb-3.5">
         <div className="flex flex-col gap-0.5">
-          <span className="mb-[3px] text-meta font-semibold tracking-[0.12em] text-primary uppercase">{NR_HARNESSES.EYEBROW(index + 1)}</span>
+          <span className="mb-[3px] label-eyebrow label-eyebrow-primary">{NR_HARNESSES.EYEBROW(index + 1)}</span>
           <strong className="text-sm">{name}</strong>
         </div>
         <Button type="button" variant="ghost" disabled={!removable} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>

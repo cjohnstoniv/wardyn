@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// E2E coverage for the admin "Stored credentials" page (design F-1/F-2,
+// E2E coverage for the admin "Credentials" page (design F-1/F-2,
 // packet F §4) and its erase flow (F-5/F-6, packet F §5) —
 // src/app/components/screens/credentials.tsx.
 //
@@ -49,12 +49,12 @@ function seedPerson(): { auth: { Authorization: string }; subject: string; email
 async function openCredentials(page: Page): Promise<void> {
   await gotoConsole(page, "admin");
   await navTo(page, "Credentials");
-  await expect(page.getByRole("heading", { name: "Stored credentials", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Credentials", exact: true })).toBeVisible();
 }
 
 test.describe.configure({ mode: "serial" });
 
-test.describe("Stored credentials (Admin view)", () => {
+test.describe("Credentials (Admin view)", () => {
   test.beforeEach(async ({ page }) => {
     // Reset the model-providers block so this spec's fixture is the only
     // provider on it, whatever an earlier spec file left behind.
@@ -219,6 +219,28 @@ test.describe("Stored credentials (Admin view)", () => {
     await retryDialog.getByRole("button", { name: "Erase credentials" }).click();
     await expect(retryDialog.getByText(/doesn't match anyone this deployment knows/i)).toBeVisible();
     await expect(retryDialog).toBeVisible();
+  });
+
+  test("Escape while an erase is in flight keeps the dialog open so the result is seen", async ({ page }) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/people/*/credentials", async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      await held;
+      await route.fulfill({ status: 200, json: { count: 3, deleted: 3 } });
+    });
+    await asRealSecurityAdmin(page);
+    await openCredentials(page);
+
+    await page.getByRole("button", { name: "Erase someone's credentials" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Email or subject").fill("held-erase@e2e.wardyn.invalid");
+    await dialog.getByRole("button", { name: "Erase credentials" }).click();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog.getByText("Erased 3 credentials for held-erase@e2e.wardyn.invalid.")).toBeVisible();
   });
 
   test("a member is refused at the route", async ({ page }) => {

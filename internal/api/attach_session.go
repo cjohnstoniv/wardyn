@@ -170,7 +170,41 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			key, outcome, mustJSON(data)))
 	}
 
-	return tee, finish
+	return &sessionTee{maskPipe: tee, cast: cast}, finish
+}
+
+// sessionTee is a session recording's output tee. Resize records a terminal size change into the
+// cast after the output teed before it, so a replay redraws at the new size where the terminal did.
+type sessionTee struct {
+	*maskPipe
+	cast *recording.CastWriter
+}
+
+func (t *sessionTee) Resize(cols, rows uint16) {
+	t.flush()
+	// Under the masker's lock, which serialises every write into the cast; the masker's retained
+	// tail (a possible secret's head) stays held and lands after the event.
+	t.mw.mu.Lock()
+	_ = t.cast.Resize(int(cols), int(rows))
+	t.mw.mu.Unlock()
+}
+
+// keepCast files castTee (from newSessionRecorder) as h's session recording; an unrecorded
+// session files nothing.
+func (h *attachHolder) keepCast(castTee io.Writer) {
+	if t, ok := castTee.(*sessionTee); ok {
+		h.cast.Store(t)
+	}
+}
+
+// recordResize records that h's PTY was resized into h's session recording, if it has one.
+func (h *attachHolder) recordResize(cols, rows uint16) {
+	if h == nil {
+		return
+	}
+	if t := h.cast.Load(); t != nil {
+		t.Resize(cols, rows)
+	}
 }
 
 // liveMaskWriter masks PTY output before it lands in the interactive-session

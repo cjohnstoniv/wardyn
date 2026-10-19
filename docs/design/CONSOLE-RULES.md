@@ -11,7 +11,7 @@ theme lacks names the token to add — it never invents a value.
 | Tokens | `ui/src/styles/theme.css` — `:root` light, `.dark` | Every color, radius, font family, weight |
 | Utility bindings | `theme.css` `@theme inline` | Token → utility class (`--color-primary` → `bg-primary`) |
 | Element defaults | `theme.css` `@layer base` | `body`, `h1`–`h4`, `label`, `button`, `input` |
-| Utilities | `theme.css` `@layer utilities` | `.scroll-thin`, `.label-eyebrow` |
+| Utilities | `theme.css` `@layer utilities` | `.scroll-thin`, `.label-eyebrow`, `.label-eyebrow-primary` |
 | Primitives | `ui/src/app/components/ui/` | Role shells: `Button`, `Input`, `Dialog`, `DropdownMenu`, … |
 | Pattern layer | `ui/src/app/components/wardyn/` | Wardyn's vocabulary: `Chip`, `RunStateBadge`, `ConfinementChip`, `Field`, `OptionCard`, `EmptyState` |
 
@@ -92,9 +92,11 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   deliberate exception class is a glyph in fixed chrome (the `AgentBadge` monogram, the
   tile-size pill), which sits at the 11px rung today; give it its own token if it ever
   needs to be smaller than text.
-- Two 11px uppercase labels disagree on tracking: `.label-eyebrow` is `0.06em`,
-  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx#SectionCard`). Use `.label-eyebrow`,
-  as `WidgetCard` does (`primitives.tsx#WidgetCard`).
+- Every muted uppercase section label is `.label-eyebrow` (or `SectionLabel`, which wraps it):
+  `SectionCard`'s title and the setup, sign-in and policy micro-labels no longer carry their own
+  tracking. The primary-colour step eyebrow is `.label-eyebrow` plus `.label-eyebrow-primary`
+  (`theme.css#.label-eyebrow-primary`), the only other variant. Uppercase inside a `Chip` is the chip's
+  own and stays.
 
 ## 4. Radius and elevation
 

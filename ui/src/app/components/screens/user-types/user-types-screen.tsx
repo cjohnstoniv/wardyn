@@ -152,6 +152,7 @@ export function UserTypesScreen() {
               <TableSkeleton rows={3} cols={5} />
             ) : noTypes ? (
               <EmptyState
+                size="compact"
                 icon={UsersRound}
                 title={UT.EMPTY_TITLE}
                 description={UT.EMPTY_BODY}

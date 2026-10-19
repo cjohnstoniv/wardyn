@@ -101,7 +101,7 @@ async function toHarnesses(page: Page, workload: "agent" | "environment" | "appl
 /** Files and Tools with nothing extra, then Review once the server's check has landed. */
 async function toReview(page: Page) {
   await next(page, NR_SHARED.STEP_FILES);
-  await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
+  await page.getByRole("checkbox", { name: NR_FILES.NO_EXTRA }).check();
   await fillMainDriveSize(page);
   await next(page, NR_SHARED.STEP_TOOLS);
   await press(page, NR_TOOLS.REVIEW_RUN);

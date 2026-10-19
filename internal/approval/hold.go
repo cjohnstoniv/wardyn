@@ -28,7 +28,7 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	// HoldWindowADOCapability while the row stays PENDING. TallyKey is the same structural
 	// test CancelForRun uses, reused so the two can never disagree about which rows are ADO escalations.
 	if TallyKey(ap) == TallyToolCallADO {
-		return boundedHold(ap.RequestedAt, now, types.HoldWindowADOCapability)
+		return boundedHold(holdStart(ap), now, types.HoldWindowADOCapability)
 	}
 	// PENDING alone is live for both of these, at any age: only the row's own server-side
 	// expiry (approval.ExpireStale) ends it — no client-side ceiling belongs here.
@@ -39,14 +39,14 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	// PENDING-is-live: the proxy refuses with a timeout after push_rules.hold_seconds (at
 	// most HoldWindowPush), and a retry of the same push rejoins the row and re-enters the hold.
 	if ap.Kind == types.ApprovalPushContent {
-		return boundedHold(ap.RequestedAt, now, types.HoldWindowPush)
+		return boundedHold(holdStart(ap), now, types.HoldWindowPush)
 	}
 	// Every other kind is held only while requested_scope carries wait_for_review — a
 	// passive deny_with_review (or no mode) is never held, at any age.
 	if approvalMode(ap) != "wait_for_review" {
 		return false, time.Time{}
 	}
-	return boundedHold(ap.RequestedAt, now, egressHoldWindow(ap))
+	return boundedHold(holdStart(ap), now, egressHoldWindow(ap))
 }
 
 // egressHoldWindow is the hold the proxy stamped into requested_scope.hold_seconds when it is within the
@@ -70,6 +70,16 @@ func approvalMode(ap types.ApprovalRequest) string {
 	}
 	_ = json.Unmarshal(ap.RequestedScope, &sc)
 	return sc.Mode
+}
+
+// holdStart is when the row's current hold began: the later of requested_at and the last time a
+// held request rejoined the PENDING row (a retried push or egress connection, a deduplicated raise),
+// each of which the proxy holds for a full window again.
+func holdStart(ap types.ApprovalRequest) time.Time {
+	if ap.LastRejoinedAt != nil && ap.LastRejoinedAt.After(ap.RequestedAt) {
+		return *ap.LastRejoinedAt
+	}
+	return ap.RequestedAt
 }
 
 // boundedHold is TS's isStale, inverted: held is true strictly before requestedAt+window (a

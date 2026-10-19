@@ -347,11 +347,23 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 		if ws.OwnedBy == "" || !slices.ContainsFunc(targets, func(t string) bool { return strings.EqualFold(t, ws.OwnedBy) }) {
 			continue
 		}
-		if _, err := s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, ""); err != nil {
+		data := map[string]any{"from_owner": ws.OwnedBy, "reason": "scim_purge"}
+		_, err := s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, "")
+		if errors.Is(err, store.ErrConflict) {
+			// An operator-owned workspace already has this name (names are per owner): an offboarding
+			// must not stop on it, so the reassigned one takes its id as a suffix, which names nobody.
+			renamed := ws
+			renamed.Name = ws.Name + " (" + ws.ID.String()[:8] + ")"
+			if _, err = s.cfg.Store.UpdateWorkspace(ctx, ws.ID, renamed, false); err == nil {
+				data["renamed_to"] = renamed.Name
+				_, err = s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, "")
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "workspace.reassign", ws.ID.String(), "success",
-			mustJSON(map[string]any{"from_owner": ws.OwnedBy, "reason": "scim_purge"})))
+			mustJSON(data)))
 		n++
 	}
 	return map[string]int{"workspaces_reassigned": n}, nil

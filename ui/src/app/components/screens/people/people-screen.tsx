@@ -141,6 +141,7 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
       ) : rows.length === 0 ? (
         // The unfiltered title is not "People": it would repeat the section label right above (#2902).
         <EmptyState
+          size="compact"
           icon={Users}
           title={q || filter !== "all" ? P.EMPTY_FILTERED_TITLE : P.EMPTY_TITLE}
           description={q || filter !== "all" ? P.EMPTY_FILTERED : P.EMPTY}

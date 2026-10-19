@@ -166,6 +166,9 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "ssh-exec" || os.Args[1] == "ssh-known-hosts") {
+		os.Exit(runSSHVerb(os.Args[1], os.Args[2:], os.Stdout, os.Stderr)) // sshagent.go
+	}
 	secretFile, op, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-git-helper:", err)

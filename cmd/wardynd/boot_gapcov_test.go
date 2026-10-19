@@ -91,6 +91,38 @@ func TestGapCovMaintenanceModeRefusesModesThatAreModesOfTheirOwn(t *testing.T) {
 	}
 }
 
+// The four store-maintenance modes each return on their own, so a combination used to run only the
+// first in line and exit 0 (-migrate-secrets -reconcile ran only the reconcile); -to without
+// -migrate-secrets was ignored. Both now refuse before anything opens.
+func TestMaintenanceModeRefusesCombinedStoreModes(t *testing.T) {
+	flags := func(set func(f *bootFlags)) *bootFlags {
+		f := rekeyFlags("", "", "")
+		f.rewrap, f.migrateOnly, f.rewrapPrincipalKeys = new(bool), new(bool), new(bool)
+		f.migrateSecrets, f.reconcile, f.auditSplitLegacy = new(bool), new(bool), new(bool)
+		f.rotateAgeKey, f.migrateDSN = new(string), new(string)
+		set(f)
+		return f
+	}
+	for _, tc := range []struct {
+		name    string
+		set     func(f *bootFlags)
+		wantErr string
+	}{
+		{"-migrate-secrets beside -reconcile", func(f *bootFlags) { *f.migrateSecrets, *f.reconcile = true, true; *f.migrateTo = "vaultkv" }, "each run alone"},
+		{"-rewrap beside -migrate-secrets", func(f *bootFlags) { *f.rewrap, *f.migrateSecrets = true, true }, "each run alone"},
+		{"-rotate-age-key beside -rewrap", func(f *bootFlags) { *f.rotateAgeKey = "k"; *f.rewrap = true }, "each run alone"},
+		{"-to without -migrate-secrets", func(f *bootFlags) { *f.migrateTo = "vaultkv"; *f.reconcile = true }, "-to is the target of -migrate-secrets"},
+		{"-to alone", func(f *bootFlags) { *f.migrateTo = "vaultkv" }, "-to is the target of -migrate-secrets"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ran, err := maintenanceMode(flags(tc.set))
+			if !ran || err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("maintenanceMode = (%v, %v), want a refusal containing %q", ran, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // With high availability on, no single-instance lock is taken: the claim never dials the database
 // (lazyPool) and its release does nothing.
 func TestGapCovClaimSingleInstanceUnderHAHoldsNothing(t *testing.T) {
