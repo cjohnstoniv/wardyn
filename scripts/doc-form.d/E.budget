@@ -101,7 +101,8 @@
 # docs/ENV.md 40416 = ours 39707 + theirs 40329 - base 39620 at the 0.10.0 SEC-1 merge of main; re-measured below if higher.
 # docs/ENV.md 40943 is 40856 + 40416 - 40329: both sides' additions over the merge base.
 # docs/ENV.md 40993 adds 50 over 40943, measured: AWS re-signing covers the lanes the proxy re-signs, GovCloud IAM stays on the old path, and what the role may still obtain.
-docs/ENV.md=40993 share=5
+# docs/ENV.md 41033 adds 40 over 40993, measured: the AWS re-signing refusal list names all eight IAM deny actions, the case-blind compare, and the Content-Type, Action and parameter-name shape refusals.
+docs/ENV.md=41033 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
 # docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # docs/ENV.md 40042 adds 422 over 39620, measured: the WARDYN_AWS_SIGV4_AT_PROXY row and section: which lanes and hosts are re-signed, the named refusals, and the no-hold, placement and new-dispatch notes.
