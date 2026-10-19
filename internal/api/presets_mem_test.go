@@ -437,3 +437,68 @@ func TestPreset_UnappliedFieldSaysItCannotBeStored(t *testing.T) {
 		})
 	}
 }
+
+const presetOverlayWithOperatorDetails = `{"allowed_domains":["a.example"],` +
+	`"workspace_mounts":[{"source":"/home/operator/.claude","target":"/home/agent/.claude"}],` +
+	`"eligible_grants":[{"kind":"git_pat","scope":{"host":"git.corp.example","secret_name":"corp-git-pat"}}],` +
+	`"llm_inspection":{"mode":"alert","workspace_secret_names":["corp-llm-key"]}}`
+
+// A stored policy_overlay is redacted on the two reads a member reaches exactly where inline_policy is: the
+// operator-only details (mount source paths, secret names) go, everything else stays. The author, an admin,
+// reads it whole, and a GET -> edit -> PUT round trip of theirs stores it unchanged.
+func TestPresetPolicyOverlayIsRedactedForMembersOnly(t *testing.T) {
+	f := newMemPresetFixture(t)
+	req := client.PresetRequest{Request: client.CreateRunRequest{
+		Agent: "claude-code", Repo: "acme/widgets", PolicyOverlay: json.RawMessage(presetOverlayWithOperatorDetails)}}
+	if w := f.put(t, "widgets", req); w.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", w.Code, w.Body.String())
+	}
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+
+	read := func(cookie *http.Cookie, path string) string {
+		t.Helper()
+		w := doSSO(t, f.srv, http.MethodGet, path, cookie, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", path, w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	for _, path := range []string{"/api/v1/presets/widgets", "/api/v1/presets"} {
+		got := read(member, path)
+		for _, leak := range []string{"/home/operator", "corp-git-pat", "corp-llm-key"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("member GET %s leaks %q: %s", path, leak, got)
+			}
+		}
+		for _, kept := range []string{"a.example", "git.corp.example"} {
+			if !strings.Contains(got, kept) {
+				t.Errorf("member GET %s lost %q, which is not operator-only: %s", path, kept, got)
+			}
+		}
+		whole := read(admin, path)
+		for _, want := range []string{"/home/operator/.claude", "corp-git-pat", "corp-llm-key"} {
+			if !strings.Contains(whole, want) {
+				t.Errorf("admin GET %s lost %q: %s", path, want, whole)
+			}
+		}
+	}
+
+	// The author's round trip: read it back, send it back, nothing changes.
+	var got client.Preset
+	if err := json.Unmarshal([]byte(read(admin, "/api/v1/presets/widgets")), &got); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(client.PresetRequest{Description: got.Description, UserTypes: got.UserTypes, Request: got.Request})
+	w := doSSO(t, f.srv, http.MethodPut, "/api/v1/presets/widgets", admin, string(body))
+	var again client.Preset
+	if err := json.Unmarshal(w.Body.Bytes(), &again); err != nil || w.Code != http.StatusOK || again.Version != 1 {
+		t.Fatalf("round-trip PUT = %d %s, want 200 at version 1 (the stored overlay unchanged)", w.Code, w.Body.String())
+	}
+	f.store.mu.Lock()
+	stored := f.store.rows["widgets"].Request
+	f.store.mu.Unlock()
+	if !strings.Contains(string(stored), "corp-git-pat") || !strings.Contains(string(stored), "/home/operator/.claude") {
+		t.Errorf("stored request after the round trip = %s, lost operator details", stored)
+	}
+}
