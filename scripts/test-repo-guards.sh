@@ -80,6 +80,8 @@
 #      release.yml checks a pinned sha256 — those jobs hold the signing identity.
 #  22. .dockerignore excludes every secret-bearing local file .gitignore names, so
 #      a repo-root `COPY . .` cannot layer one into a builder stage or its cache.
+#  23. an agent image that sets npm's proxy keys for an install deletes them again
+#      in the same RUN, so a build proxy URL never stays in the shipped layer.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -757,6 +759,25 @@ if [ -n "$missing" ]; then
     bad "$DOCKERIGNORE does not exclude:${missing} — a repo-root COPY . . would layer it into a builder stage"
 else
     ok ".dockerignore excludes every secret-bearing local file .gitignore names"
+fi
+
+# ── 23. a build proxy never stays in an agent image's npm config ────────────
+# `npm config set proxy` writes the image user's .npmrc; the RUN that sets it
+# for an install deletes it again, so the layer keeps no (possibly credentialed)
+# build proxy and in-sandbox npm keeps wardyn-proxy.
+IMAGES_DIR="${IMAGES_DIR:-deploy/images}"
+leaky=""
+for f in "$IMAGES_DIR"/*/Dockerfile; do
+    sets=$(grep -c 'npm config set https\?-\?proxy' "$f" || true)
+    [ "$sets" = 0 ] && continue
+    awk '/^RUN /{r=""} {r=r $0 "\n"} !/\\$/ && r!="" {print r; r=""}' "$f" \
+        | awk -v RS='' '/npm config set (https-)?proxy/ && !/npm config delete proxy https-proxy/ {bad=1} END {exit bad}' \
+        || leaky="$leaky $f"
+done
+if [ -n "$leaky" ]; then
+    bad "an agent image keeps npm's build proxy in its layer:${leaky} — delete proxy https-proxy in the RUN that sets them"
+else
+    ok "every agent image that sets npm's proxy keys deletes them in the same RUN"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

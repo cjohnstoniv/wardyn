@@ -70,7 +70,9 @@ Empty is identical to unset — the go command falls back to `$GOROOT/go.env`
 
 **3. npm/pnpm builds:** declare these **build-only ARGs** (never persistent ENV —
 a runtime proxy ENV would leak into agent runs, whose only egress is wardyn-proxy)
-and apply them before the install:
+and apply them before the install. Delete the proxy keys again in the same `RUN`:
+`npm config set` writes them to the image user's `.npmrc`, which would keep a
+credentialed proxy URL in the layer and point in-sandbox npm at it:
 
 ```dockerfile
 ARG NPM_REGISTRY=
@@ -80,7 +82,8 @@ ARG NO_PROXY=
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
  && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm install -g <pkg>
+ && npm install -g <pkg> \
+ && npm config delete proxy https-proxy
 ```
 
 **4. Wire the knobs to the build entrypoints.** The Makefile threads

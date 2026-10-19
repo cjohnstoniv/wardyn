@@ -242,6 +242,7 @@ RUN set -eu; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
         npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
+        npm config delete proxy https-proxy; \
         echo "installed claude $CLAUDE_CODE_VERSION via npm"; \
     fi
 
