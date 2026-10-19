@@ -107,6 +107,9 @@ Two modes place a Git credential inside the sandbox:
 - On a `bedrock_sso` model provider, the AWS SDK inside the sandbox exchanges the sign-in session for short-lived role credentials and signs each request with them.
 - The signature is computed in the workload's process, so those role credentials are inside the sandbox on every such run ([`internal/api/credential_residency.go#kindResidency`](../internal/api/credential_residency.go)).
 - A proxy that re-signs SigV4 after TLS interception could keep them out. Wardyn does not do that yet.
+- An AWS CLI component's `aws` gets them the same way, for the account and permission set the component pins, and caches them under `~/.aws/cli/cache` ([`internal/api/runs_dispatch_cli_aws.go#Server.authorAWSCLI`](../internal/api/runs_dispatch_cli_aws.go)).
+- Both come from the portal's `GetRoleCredentials`, which takes no duration, so Wardyn cannot ask for a shorter session. Their lifetime is the IAM Identity Center permission set's session duration: set it to `PT1H`, the shortest AWS allows, to bound them.
+- A Docker sandbox kept after its run ends has `~/.aws/cli/cache` and `~/.aws/sso/cache` deleted before it stops ([`internal/runner/docker/aws_cache_wipe.go#Driver.wipeAWSCaches`](../internal/runner/docker/aws_cache_wipe.go)). Every other end removes the container or the pod, and the caches with it.
 - The session they come from is a header credential. With `WARDYN_AWS_SSO_PROXY_INJECT=on`, the default, the proxy adds it and the sandbox's token cache holds a placeholder ([`internal/api/runs_bedrock.go#awsSSOCacheFileContents`](../internal/api/runs_bedrock.go)).
 - A sign-in sandbox is the other case: its purpose is to obtain a credential that does not exist yet, so there is nothing to add ([`internal/api/provider_signin.go#Server.handleProviderSignIn`](../internal/api/provider_signin.go)).
 
