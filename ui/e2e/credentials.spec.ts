@@ -17,7 +17,7 @@
 // the console built on top of them.
 import { createHash, randomBytes } from "node:crypto";
 import type { APIRequestContext, Page } from "@playwright/test";
-import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, navTo, sql } from "./fixtures";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -46,6 +46,19 @@ function seedPerson(): { auth: { Authorization: string }; subject: string; email
   return { auth: { Authorization: `Bearer ${raw}` }, subject, email };
 }
 
+// Removes every key-domain assignment, as the signed-in security admin. The assignments are site-wide
+// state, so one a failed attempt left behind would reach its retries and every later spec in the shard.
+async function clearKeyDomainAssignments(page: Page): Promise<void> {
+  const list = await consoleAPI(page, "GET", "/api/v1/key-domains");
+  expect(list.status, list.text).toBe(200);
+  const { assignments } = JSON.parse(list.text) as { assignments: { subject_type: string; subject: string }[] };
+  for (const a of assignments) {
+    const subject = a.subject_type === "all" ? "all" : encodeURIComponent(a.subject);
+    const res = await consoleAPI(page, "DELETE", `/api/v1/key-domains/assignments/${a.subject_type}/${subject}`);
+    expect(res.status, res.text).toBe(204);
+  }
+}
+
 async function openCredentials(page: Page): Promise<void> {
   await gotoConsole(page, "admin");
   await navTo(page, "Credentials");
@@ -63,6 +76,14 @@ test.describe("Credentials (Admin view)", () => {
 
   test.afterAll(async ({ request }) => {
     await putModelProviders(request, []);
+  });
+
+  // Set once the key-domain test is signed in and has cleared the assignments; it leaves them cleared even when it fails.
+  let clearKeyDomainsAfter = false;
+  test.afterEach(async ({ page }) => {
+    if (!clearKeyDomainsAfter) return;
+    clearKeyDomainsAfter = false;
+    await clearKeyDomainAssignments(page);
   });
 
   test("a security admin sees the row's email and provider name, and erases it with the typed confirm", async ({
@@ -145,6 +166,8 @@ test.describe("Credentials (Admin view)", () => {
     expect(put.status(), await put.text()).toBe(204);
 
     await asRealSecurityAdmin(page);
+    await clearKeyDomainAssignments(page);
+    clearKeyDomainsAfter = true;
     await openCredentials(page);
     const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Key domains", exact: true }) });
     await expect(card).toBeVisible();
@@ -179,10 +202,11 @@ test.describe("Credentials (Admin view)", () => {
     await card.getByRole("row").filter({ hasText: "everyone" }).getByRole("button", { name: "Remove" }).click();
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toContainText('Remove the domain assignment for "everyone"?');
+    // The open dialog hides the page behind it from the accessibility tree, so a row count read now is
+    // vacuously 0. Wait for the DELETE itself, then for the dialog to close, before trusting the card or reloading.
+    const removed = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/key-domains/assignments/all/"));
     await confirm.getByRole("button", { name: "Remove" }).click();
-    // The dialog closes only once the DELETE has answered. Until then the modal hides the page from role
-    // queries, so a row count taken first reads 0 with the assignment still there, and the reload below
-    // cancels the DELETE.
+    expect((await removed).status()).toBe(204);
     await expect(confirm).toHaveCount(0);
     await expect(card.getByRole("row").filter({ hasText: "everyone" })).toHaveCount(0);
     await page.reload();
