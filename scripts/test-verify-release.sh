@@ -72,8 +72,6 @@ case "$1 $2" in
     # The package exists from 0.9.3 (and a test can leave it out).
     # The licence tarball exists from 0.9.4.
     if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver.txt"
-    # The Linux runner bundles exist from 0.10.0 (and a test can leave them out).
-    if [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ] || [ -n "${NO_BUNDLE:-}" ]; then grep -vxE 'wardyn-runner-linux-(amd64|arm64)\.tar\.gz' "${DIR}/want-ver.txt" > "${DIR}/want-ver2.txt"; mv "${DIR}/want-ver2.txt" "${DIR}/want-ver.txt"; fi
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
@@ -102,7 +100,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_BUNDLE="${NO_BUNDLE:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -157,16 +155,6 @@ pass "wardyn-runnerd.pkg is required from 0.9.3 on"
 run 0.9.4 v0.9.4 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.4 with the licence tarball exited ${rc}: $(printf '%s' "${out}" | tail -3)"
 pass "wardyn-licenses.tar.gz is required from 0.9.4 on, and not before"
-
-# 3b'. the Linux runner bundles are required from 0.10.0 and not before.
-grep -qx 'wardyn-runner-linux-amd64.tar.gz' <<<"${WANT}" && grep -qx 'wardyn-runner-linux-arm64.tar.gz' <<<"${WANT}" || fail "the Linux runner bundles are not on release.yml's required-asset list, so verify-release would not check them"
-run 0.10.0 v0.10.0 bundle
-[ "${rc}" = 0 ] || fail "V=0.10.0 with the Linux runner bundles exited ${rc}: $(printf '%s' "${out}" | tail -3)"
-NO_BUNDLE=1 run 0.10.0 v0.10.0 bundle
-[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-runner-linux-amd64.tar.gz' >/dev/null || fail "V=0.10.0 without the Linux runner bundles was accepted"
-run 0.9.5 v0.9.5 bundle
-[ "${rc}" = 0 ] || fail "V=0.9.5 (no Linux runner bundles in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
-pass "the Linux runner bundles are required from 0.10.0 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle

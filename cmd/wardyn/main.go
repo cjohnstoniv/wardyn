@@ -89,10 +89,10 @@ func noOrgHint(err error, fromDefault bool) string {
 	if !fromDefault || !errors.As(err, &ue) {
 		return ""
 	}
-	return "no organisation set: run `wardyn auth set-url <url>` with your organisation's address"
+	return "no organisation set: run `wardyn login <url>` with your organisation's address"
 }
 
-// resolveURL settles the control plane URL: --url, then WARDYN_URL, then the profile `wardyn auth set-url`
+// resolveURL settles the control plane URL: --url, then WARDYN_URL, then the profile `wardyn login`
 // wrote, then defaultURL. current is the flag's value, which already carries WARDYN_URL. A profile that
 // cannot be read is reported and skipped, so it never blocks a command that names its own URL.
 func resolveURL(cmd *cobra.Command, current string) (resolved string, fromDefault bool) {
@@ -232,7 +232,7 @@ func rootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVar(&serverURL, "url", cliutil.EnvOr("WARDYN_URL", defaultURL),
-		"control plane base URL (env WARDYN_URL; else the one `wardyn auth set-url` saved; else this default)")
+		"control plane base URL (env WARDYN_URL; else the one `wardyn login` saved; else this default)")
 	// WARDYN_ADMIN_TOKEN takes precedence, then WARDYN_TOKEN — resolved in
 	// PersistentPreRun above, NOT here. A non-empty string default is echoed by
 	// cobra as `(default "<value>")` in `wardyn --help` and in the usage block
@@ -254,7 +254,7 @@ func rootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
-		authCmd(),
+		loginCmd(),
 		runCmd(client),
 		approvalCmd(client),
 		auditCmd(client),

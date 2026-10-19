@@ -8,8 +8,7 @@ docs/PLUGGABILITY.md=3229 share=35
 # docs/VERIFY.md 1532 measured after F-588 M1 merge.
 # docs/VERIFY.md 1547 adds 15 over 1532 (0.9.3 PKG), measured: the runner-package release-asset bullet.
 # docs/VERIFY.md 1559 adds 12 over 1547 (0.9.4 L9, #2472): the licence bundle among the release assets, measured.
-# docs/VERIFY.md 1571 adds 12 over 1559 (ATT-PKG), measured: the Linux runner bundles and the CLI in the package.
-docs/VERIFY.md=1571 share=35
+docs/VERIFY.md=1559 share=35
 docs/EXPORT.md=507 share=35
 docs/RECORDING-ROOT-READ.md=332 share=35
 docs/adoption/README.md=249 share=35

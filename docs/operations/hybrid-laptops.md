@@ -215,7 +215,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
 3. Deliver each person's registration token to a file only they can read ([Claiming a runner](#claiming-a-runner), step 2).
 4. As that person, run `wardyn-runnerd register --org <url> --token-file <file>`, then `launchctl kickstart gui/$(id -u)/com.wardyn.runnerd.managed` (or log out and in).
-5. The person claims the runner as usual, then runs `wardyn auth set-url <url>` once (`setup` does that itself).
+5. The person claims the runner as usual, then runs `wardyn login <url>` once (`setup` does that itself).
 
 - **Without MDM** install the package, then run `wardyn-runnerd setup --token-file <file>`, adding `--org <url>` when no profile is installed.
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.

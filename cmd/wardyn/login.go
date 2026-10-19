@@ -13,13 +13,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 )
 
-// authCmd is `wardyn auth`: where this computer's CLI points. Sign-in joins it in a later change.
-func authCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "auth", Short: "Point this computer's CLI at your organisation"}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "set-url <url>",
-		Short: "Save your organisation's address, so commands need no --url",
-		Long: `Save your organisation's address in this computer's CLI profile (a file holding the URL and nothing else).
+// noSignInLine is what login says about signing in while no control plane offers a browser sign-in.
+const noSignInLine = "This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
+	"A Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+
+// loginCmd is `wardyn login <url>`: where this computer's CLI points. The browser sign-in joins it in a later
+// change; until then it saves the URL and says how to sign in without one.
+func loginCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "login <url>",
+		Short: "Point this computer's CLI at your organisation",
+		Long: `Save your organisation's address in this computer's CLI profile (a file holding the URL and nothing secret).
 Commands then use it unless --url or WARDYN_URL names another. Run it once on a computer where the CLI was
 installed on its own; a computer set up with wardyn-runnerd setup already has it.`,
 		Args: cobra.ExactArgs(1),
@@ -41,9 +45,9 @@ installed on its own; a computer set up with wardyn-runnerd setup already has it
 			if err := cliprofile.Write(dir, u); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wardyn now points at %s (saved in %s). --url and WARDYN_URL still take precedence.\n", u, filepath.Join(dir, cliprofile.FileName))
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s. %s\nThe profile is %s; --url and WARDYN_URL still take precedence.\n",
+				u, noSignInLine, filepath.Join(dir, cliprofile.FileName))
 			return err
 		},
-	})
-	return subcommandGroup(cmd)
+	}
 }

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestWriteReadRoundTripIsWorldReadableAndHoldsOnlyTheURL(t *testing.T) {
+func TestProfileWriteReadRoundTripIsWorldReadableAndHoldsOnlyTheURL(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wardyn")
 	if got, err := Read(dir); err != nil || got != "" {
 		t.Fatalf("Read with no profile = %q, %v; want empty and no error", got, err)
@@ -35,7 +35,7 @@ func TestWriteReadRoundTripIsWorldReadableAndHoldsOnlyTheURL(t *testing.T) {
 	}
 }
 
-func TestReadNamesTheFileItCouldNotParse(t *testing.T) {
+func TestProfileReadNamesTheFileItCouldNotParse(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, FileName), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestReadNamesTheFileItCouldNotParse(t *testing.T) {
 	}
 }
 
-func TestNormalize(t *testing.T) {
+func TestProfileNormalize(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://wardyn.example.com":          "https://wardyn.example.com",
 		" https://wardyn.example.com/ ":       "https://wardyn.example.com",
@@ -60,5 +60,53 @@ func TestNormalize(t *testing.T) {
 		if got, err := Normalize(in); err == nil {
 			t.Errorf("Normalize(%q) = %q; want a refusal", in, got)
 		}
+	}
+}
+
+// Writing one field keeps the other, in either order, and a broken profile is replaced rather than blocking
+// the write that would fix it.
+func TestProfileWriteKeepsTheOtherField(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "wardyn")
+	if err := Write(dir, "https://wardyn.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteArtifactBase(dir, " https://downloads.example.com/wardyn/ "); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := Read(dir); got != "https://wardyn.example.com" {
+		t.Errorf("url after writing the artifact base = %q, want it kept", got)
+	}
+	if got, _ := ReadArtifactBase(dir); got != "https://downloads.example.com/wardyn" {
+		t.Errorf("artifact base = %q, want the normalised one", got)
+	}
+	if err := Write(dir, "https://org.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReadArtifactBase(dir); got != "https://downloads.example.com/wardyn" {
+		t.Errorf("artifact base after writing the url = %q, want it kept", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(dir, "https://org.example.com"); err != nil {
+		t.Fatalf("Write over a broken profile: %v", err)
+	}
+	if got, err := Read(dir); err != nil || got != "https://org.example.com" {
+		t.Errorf("url after replacing a broken profile = %q, %v", got, err)
+	}
+}
+
+func TestProfileArtifactBaseIsHTTPSOnly(t *testing.T) {
+	dir := t.TempDir()
+	for _, in := range []string{"http://downloads.example.com", "http://localhost:9000", "downloads.example.com", "https://u:p@downloads.example.com"} {
+		if err := WriteArtifactBase(dir, in); err == nil {
+			t.Errorf("WriteArtifactBase(%q) succeeded; want a refusal", in)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, FileName)); err == nil {
+		t.Error("a refused artifact base still wrote the profile")
+	}
+	if got, err := NormalizeArtifactBase("https://downloads.example.com/w/?x=1#f"); err != nil || got != "https://downloads.example.com/w" {
+		t.Errorf("NormalizeArtifactBase = %q, %v", got, err)
 	}
 }

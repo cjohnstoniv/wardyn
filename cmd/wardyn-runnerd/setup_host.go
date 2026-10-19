@@ -80,9 +80,9 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 // setupPaths are where setup puts things.
 type setupPaths struct {
 	installed, stateDir, envFile, unitFile, plistFile, logFile string
-	// cliInstalled is where the wardyn CLI is installed beside the runner, and cliProfile the directory of the
-	// CLI profile the wardyn command reads: wherever os.UserConfigDir puts it for this person.
-	cliInstalled, cliProfile string
+	// cliProfile is the directory of the CLI profile the wardyn command reads: wherever os.UserConfigDir puts it
+	// for this person.
+	cliProfile string
 }
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
@@ -100,7 +100,7 @@ func (h setupHost) paths() (setupPaths, error) {
 		cfg := filepath.Join(h.home, ".config")
 		p := setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(cfg, "wardyn", "runner"),
 			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit),
-			cliInstalled: filepath.Join(data, "bin", "wardyn"), cliProfile: filepath.Join(cmp.Or(h.xdgConfig, cfg), "wardyn")}
+			cliProfile: filepath.Join(cmp.Or(h.xdgConfig, cfg), "wardyn")}
 		holds := func(dir string) bool { _, err := os.Stat(filepath.Join(dir, "runner.json")); return err == nil }
 		if dir := p.setting("WARDYN_RUNNER_STATE_DIR"); filepath.IsAbs(dir) && holds(dir) {
 			p.stateDir = dir
@@ -122,7 +122,7 @@ func (h setupHost) paths() (setupPaths, error) {
 		data := filepath.Join(h.home, "Library", "Application Support", "wardyn")
 		return setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(data, "runner"),
 			plistFile: filepath.Join(h.home, "Library", "LaunchAgents", serviceLabel+".plist"), logFile: filepath.Join(h.home, "Library", "Logs", "wardyn", "runnerd.log"),
-			cliInstalled: filepath.Join(data, "bin", "wardyn"), cliProfile: data}, nil
+			cliProfile: data}, nil
 	}
 	return setupPaths{}, fmt.Errorf("unsupported OS: %s", h.goos)
 }

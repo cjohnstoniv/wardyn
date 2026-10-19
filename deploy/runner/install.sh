@@ -5,8 +5,7 @@
 # install.sh — a thin wrapper over `wardyn-runnerd setup`, which does the work: it registers this
 # computer (once), makes the proxy network, writes the service files and starts the service from
 # login (a systemd user unit on Linux, a LaunchAgent on macOS). This script only finds a wardyn-runnerd
-# and runs it; a wardyn CLI beside that binary (the release bundle has both) is installed with it.
-# Every other argument goes to `setup` unchanged; `wardyn-runnerd setup --help` lists them.
+# and runs it. Every other argument goes to `setup` unchanged; `wardyn-runnerd setup --help` lists them.
 # Run it as the person who owns the runner, not as root.
 #
 # Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup flags...]
@@ -25,7 +24,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
        install.sh --uninstall
 
   --binary <path>   wardyn-runnerd to install (default: beside this script, else on PATH)
-  --uninstall       stop and remove the service, the installed binaries and the CLI profile; keeps the runner identity
+  --uninstall       stop and remove the service and the installed wardyn-runnerd; keeps the runner identity, and the wardyn CLI and its cli.json (they are yours)
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network, --trusted-ca-file,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
@@ -50,7 +49,6 @@ uninstall() {
   case "$(uname -s)" in
     Linux)
       data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
-      profile_dir="${XDG_CONFIG_HOME:-$HOME/.config}/wardyn"
       identity_dir="$HOME/.config/wardyn/runner"
       # Setup names the identity directory in the env file, which can be under a custom XDG_CONFIG_HOME; read it before the file goes.
       kept="$(sed -n 's/^WARDYN_RUNNER_STATE_DIR=//p' "$HOME/.config/wardyn/runnerd.env" 2>/dev/null | tail -n 1)" || true
@@ -63,15 +61,14 @@ uninstall() {
       ;;
     Darwin)
       data_dir="$HOME/Library/Application Support/wardyn"
-      profile_dir="$data_dir"
       identity_dir="$data_dir/runner"
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
       ;;
     *) die "unsupported OS: $(uname -s)" ;;
   esac
-  rm -f "$data_dir/bin/wardyn-runnerd" "$data_dir/bin/wardyn" "$profile_dir/cli.json"
-  echo "Removed the wardyn-runnerd service and the wardyn-runnerd and wardyn binaries, and the wardyn CLI profile."
+  rm -f "$data_dir/bin/wardyn-runnerd"
+  echo "Removed the wardyn-runnerd service and binary. The wardyn CLI and its cli.json are yours and stay."
   echo "Kept the runner identity in: $identity_dir"
   echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."
 }
@@ -95,10 +92,5 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp "$BINARY" "$STAGE/wardyn-runnerd"
 chmod 0755 "$STAGE/wardyn-runnerd"
-# The CLI that travels with the runner goes in the same private directory, where setup looks for it.
-if [ -f "$(dirname "$BINARY")/wardyn" ]; then
-  cp "$(dirname "$BINARY")/wardyn" "$STAGE/wardyn"
-  chmod 0755 "$STAGE/wardyn"
-fi
 
 "$STAGE/wardyn-runnerd" setup ${PASS[@]+"${PASS[@]}"}

@@ -49,10 +49,10 @@ func execCaptureErr(t *testing.T, args ...string) (stderr string, err error) {
 	return errOut.String(), err
 }
 
-// TestAuthSetURL pins `wardyn auth set-url`: it saves the normalised URL, and for a plain-http,
+// TestLoginURL pins `wardyn login <url>`: it saves the normalised URL, and for a plain-http,
 // non-loopback one it warns exactly as a command's token warning does (silenced by
 // WARDYN_CLI_ALLOW_PLAINTEXT) and never refuses.
-func TestAuthSetURL(t *testing.T) {
+func TestLoginURL(t *testing.T) {
 	for _, tc := range []struct {
 		name, arg, env, want string
 		warns                bool
@@ -65,9 +65,9 @@ func TestAuthSetURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := isolateProfile(t)
 			t.Setenv("WARDYN_CLI_ALLOW_PLAINTEXT", tc.env)
-			stderr, err := execCaptureErr(t, "auth", "set-url", tc.arg)
+			stderr, err := execCaptureErr(t, "login", tc.arg)
 			if err != nil {
-				t.Fatalf("auth set-url refused %q: %v (it warns, it never refuses)", tc.arg, err)
+				t.Fatalf("login refused %q: %v (it warns, it never refuses)", tc.arg, err)
 			}
 			if warned := strings.Contains(stderr, "WARNING"); warned != tc.warns {
 				t.Errorf("warned = %v, want %v (stderr %q)", warned, tc.warns, stderr)
@@ -77,13 +77,29 @@ func TestAuthSetURL(t *testing.T) {
 			}
 		})
 	}
+	t.Run("it saves, then says the control plane's sign-in is a token", func(t *testing.T) {
+		isolateProfile(t)
+		root := rootCmd()
+		root.SetArgs([]string{"login", "https://wardyn.example.com"})
+		var stdout strings.Builder
+		root.SetOut(&stdout)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		want := "Saved https://wardyn.example.com. This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
+			"A Wardyn admin can invite you to create one, and you claim it under Your account in the console.\n"
+		if !strings.HasPrefix(stdout.String(), want) {
+			t.Errorf("login printed %q, want it to start %q", stdout.String(), want)
+		}
+	})
 	t.Run("a value that is no URL is refused and saves nothing", func(t *testing.T) {
 		dir := isolateProfile(t)
-		if _, err := execCaptureErr(t, "auth", "set-url", "wardyn.example.com"); err == nil {
-			t.Fatal("auth set-url accepted a value with no scheme")
+		if _, err := execCaptureErr(t, "login", "wardyn.example.com"); err == nil {
+			t.Fatal("login accepted a value with no scheme")
 		}
 		if _, err := os.Stat(filepath.Join(dir, cliprofile.FileName)); err == nil {
-			t.Error("a refused set-url still wrote the profile")
+			t.Error("a refused login still wrote the profile")
 		}
 	})
 }
@@ -113,14 +129,14 @@ func TestURLPrecedence(t *testing.T) {
 }
 
 // TestURLPrecedence_DefaultWithNoProfile pins the last rung and its hint: with no flag, no env and no
-// profile the CLI dials the built-in default and a refused dial names `wardyn auth set-url`; a URL the
+// profile the CLI dials the built-in default and a refused dial names `wardyn login <url>`; a URL the
 // person named, by the profile or the environment, gets no such line.
 func TestURLPrecedence_DefaultWithNoProfile(t *testing.T) {
 	dir := isolateProfile(t)
 	refused := &url.Error{Op: "Get", URL: defaultURL, Err: errors.New("connection refused")}
 
 	root := rootCmd()
-	root.SetArgs([]string{"auth"})
+	root.SetArgs([]string{"device"})
 	root.SetOut(&strings.Builder{})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
@@ -128,8 +144,8 @@ func TestURLPrecedence_DefaultWithNoProfile(t *testing.T) {
 	if !urlFromDefault {
 		t.Fatal("no flag, env or profile, yet the URL is not marked as the built-in default")
 	}
-	if hint := noOrgHint(refused, urlFromDefault); !strings.Contains(hint, "wardyn auth set-url") {
-		t.Errorf("hint for a refused dial against the default = %q, want it to name `wardyn auth set-url`", hint)
+	if hint := noOrgHint(refused, urlFromDefault); !strings.Contains(hint, "wardyn login <url>") {
+		t.Errorf("hint for a refused dial against the default = %q, want it to name `wardyn login <url>`", hint)
 	}
 	if hint := noOrgHint(errors.New("not a dial failure"), true); hint != "" {
 		t.Errorf("hint for an error that is no dial failure = %q, want none", hint)
@@ -138,7 +154,7 @@ func TestURLPrecedence_DefaultWithNoProfile(t *testing.T) {
 	if err := cliprofile.Write(dir, "https://wardyn.example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := execCmd(t, "auth"); err != nil {
+	if err := execCmd(t, "device"); err != nil {
 		t.Fatal(err)
 	}
 	if urlFromDefault {
